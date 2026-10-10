@@ -413,7 +413,7 @@ impl EntryMode {
                 });
             }
         }
-        let value = bytes.iter().fold(0u32, |acc, &b| acc * 10 + (b - b'0') as u32);
+        let value = bytes.iter().fold(0u32, |acc, &b| acc * 8 + (b - b'0') as u32);
         Ok(match value {
             0o100755 => EntryMode::BlobExecutable,
             0o100644 => EntryMode::Blob,
@@ -545,5 +545,67 @@ impl std::fmt::Display for ObjectKind {
     /// is the on-disk keyword, not a pretty label — do not be tempted to capitalise it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EntryMode;
+    use crate::error::Error;
+
+    #[test]
+    fn from_bytes_canonical_modes() {
+        assert_eq!(
+            EntryMode::from_bytes(b"100644").unwrap(),
+            EntryMode::Blob
+        );
+        assert_eq!(
+            EntryMode::from_bytes(b"100755").unwrap(),
+            EntryMode::BlobExecutable
+        );
+        assert_eq!(
+            EntryMode::from_bytes(b"120000").unwrap(),
+            EntryMode::Link
+        );
+        assert_eq!(
+            EntryMode::from_bytes(b"40000").unwrap(),
+            EntryMode::Tree
+        );
+        assert_eq!(
+            EntryMode::from_bytes(b"160000").unwrap(),
+            EntryMode::Commit
+        );
+    }
+
+    #[test]
+    fn from_bytes_leading_zero_normalises() {
+        assert_eq!(
+            EntryMode::from_bytes(b"040000").unwrap(),
+            EntryMode::Tree
+        );
+    }
+
+    #[test]
+    fn from_bytes_rejects_non_canonical_permissions() {
+        assert!(matches!(
+            EntryMode::from_bytes(b"100664"),
+            Err(Error::InvalidEntryMode { .. })
+        ));
+    }
+
+    #[test]
+    fn from_bytes_round_trip() {
+        for m in [
+            EntryMode::BlobExecutable,
+            EntryMode::Blob,
+            EntryMode::Tree,
+            EntryMode::Link,
+            EntryMode::Commit,
+        ] {
+            assert_eq!(
+                EntryMode::from_bytes(m.to_string().as_bytes()).unwrap(),
+                m
+            );
+        }
     }
 }

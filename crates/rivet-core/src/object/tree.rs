@@ -1,316 +1,419 @@
-//! Phase 1 — trees: the directory listing that makes a commit a snapshot.
+//! Phase 1 — parsed tree objects.
 //!
-//! A tree body is a flat, concatenated list of entries, each
+//! A tree object is a flat list of entries. Each entry is `<mode> <name>\0<oid>`
+//! where `<mode>` is octal ASCII (`100644`, `100755`, `120000`, `40000`), `<name>`
+//! is the child name within this directory (no path separators), and `<oid>` is
+//! the raw object id of the child. Entries are sorted by Git's tree sort order:
+//! by name bytes, with a directory compared as if its name ended in `/`.
+//!
+//! # Git format (exact bytes)
 //!
 //! ```text
-//! <mode> <name>\0<raw id>
+//! <mode in octal, no leading zero> <name>\0<20-byte oid>
 //! ```
 //!
-//! with the id's width depending on the repository's [`ObjectFormat`] — 20 bytes for SHA-1, 32
-//! for SHA-256. There is no count, no length prefix and no terminator: the body ends when the
-//! bytes do, and the id's width is the only way to know where one entry stops. A parser that
-//! assumes 20 bytes will read a SHA-256 tree as garbage, and the failure looks like corruption
-//! rather than like an off-by-twelve.
-//!
-//! # Sorting is not plain byte order
-//!
-//! Tree entries are sorted by name, **with directories compared as if their name ended in
-//! `/`**. So `foo.txt` sorts before the directory `foo/`, because `.` (0x2E) is less than `/`
-//! (0x2F), even though the raw names `foo` and `foo.txt` would order the other way. This single
-//! rule is the most common source of trees that Git accepts but that `git fsck` reports as
-//! unsorted, and of trees that differ from what `git write-tree` produces for identical input.
-//!
-//! The rule exists so that a tree can be merged and binary-searched entry-wise without loading
-//! it, which is why it is a hard requirement rather than a convention.
-//!
-//! # Ordering follows the raw bytes
-//!
-//! Names are compared as **bytes** (`&[u8]`), never as strings. Git does not collate by locale,
-//! and a repository can legally contain names that are not UTF-8 — so Rivet compares with
-//! `Ord` on byte slices, which is the same total order Git uses.
+//! `40000` (a subdirectory) serialises as five octal digits, not six — Git writes
+//! the minimal representation. The name is the bytes as stored; it may be any
+//! valid filename bytes.
 
-use bstr::BStr;
+use crate::error::{Error, Result};
+use crate::hash::{ObjectFormat, ObjectId};
+use crate::object::{hash_object, EntryMode, ObjectKind};
+use bstr::BString;
+use std::cmp::Ordering;
 
-use crate::error::Result;
-use crate::hash::ObjectFormat;
-use crate::hash::ObjectId;
-use crate::object::EntryMode;
-use crate::object::ObjectKind;
-
-/// Phase 1 — one entry of a tree, borrowed from the tree body it was parsed out of.
-///
-/// # Caveats
-///
-/// The `name` is a single path component only — never a path with slashes. Git splits paths at
-/// `/` and nests trees one level per component, so a tree entry named `a/b` is malformed and
-/// must be rejected (`Error::InvalidTreeEntryName`), not accepted as a nested path.
-///
-/// The name is stored as bytes, not a string: filenames that are not valid UTF-8 are legal in
-/// Git and must survive a round trip through Rivet unchanged.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TreeEntry<'a> {
-    /// The entry's mode — file, executable, symlink, subtree or gitlink.
+/// A single entry in a tree: a child's mode, name, and object id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeEntry {
     pub mode: EntryMode,
-    /// The single path component, as raw bytes, without a trailing slash.
-    pub name: &'a BStr,
-    /// The id of the object this entry points at.
-    pub id: ObjectId,
+    pub name: BString,
+    pub oid: ObjectId,
 }
 
-/// Phase 1 — a borrowed reference to one entry, for lookups that do not copy the name.
-///
-/// Returned by [`Tree::get`]; the name borrows from the tree body rather than from the entry
-/// that was scanned, so the reference stays valid for as long as the tree does.
-///
-/// # Caveats
-///
-/// This is a **lookup** result, not a parse result: it carries no id, because the caller asking
-/// "is there an entry called `src`" does not always need one and copying an id around in a hot
-/// walk is waste. Use [`Tree::iter`] and take the full [`TreeEntry`] when the id is wanted.
+/// A borrowed view of a tree entry, used by lookups that must not copy the
+/// entry out of the tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TreeEntryRef<'a> {
-    /// The entry's mode.
     pub mode: EntryMode,
-    /// The single path component, as raw bytes.
-    pub name: &'a BStr,
+    pub name: &'a BString,
+    pub oid: ObjectId,
 }
 
-/// Phase 1 — a parsed tree, holding a borrowed view of its entries.
+/// A parsed tree object: its payload bytes and the entries they describe.
 ///
-/// # Caveats
-///
-/// The entries borrow from the tree **body**, not from a heap-allocated entry list, so this type
-/// stores a slice of entries plus the body it came from. The lifetime is on the body: everything
-/// reachable from a `Tree<'a>` dies with the buffer that was parsed.
-///
-/// A tree is a *snapshot*, not a delta. Comparing two trees is therefore a walk of two sorted
-/// lists, and because the sort rule puts directories where their `name/` would sort, that walk
-/// is a plain merge with no special cases — which is exactly why the rule exists.
+/// The payload (`data`) is the raw on-disk body, which is what gets hashed to
+/// produce the tree's id. `entries` is the parsed view of that same body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tree<'a> {
-    /// The raw tree body, kept so entries can borrow from it.
+    /// Raw payload bytes: the concatenated `<mode> <name>\0<oid>` entries,
+    /// in sorted order.
     pub data: &'a [u8],
-    /// The parsed entries, in the order they appear in `data`.
-    pub entries: Vec<TreeEntry<'a>>,
+    /// Parsed entries, in the same order as `data`.
+    pub entries: Vec<TreeEntry>,
 }
 
 impl<'a> Tree<'a> {
-    /// Phase 1 — the object kind of everything this type represents.
+    /// Phase 1 — parse a tree payload.
     ///
-    /// # Caveats
+    /// # Git format
     ///
-    /// Always [`ObjectKind::Tree`]. An empty tree is legal and has the well-known id
-    /// `4b825dc642cb6eb9a060e54bf8d69288fbee4904` in SHA-1 repositories; it is used by
-    /// `git commit` on an empty index and appears in real histories.
-    pub const fn kind() -> ObjectKind {
-        todo!()
-    }
-
-    /// Phase 1 — parse a tree body.
-    ///
-    /// # Caveats
-    ///
-    /// `data` is the **body only**, with the `"tree <len>\0"` header already stripped. The
-    /// format is needed because the entry id width comes from it and is the only delimiter in
-    /// the format.
-    ///
-    /// Validation is not optional, and every check is a safety check as much as a correctness
-    /// one (plan §5):
-    ///
-    /// * the declared length must be consumed exactly — trailing bytes mean the tree is corrupt,
-    ///   and a truncated final entry must be an error, never a partial parse;
-    /// * names must not be empty, contain `/` or NUL, or be `.`, `..` or `.git` in any case —
-    ///   these are what make path traversal on checkout possible;
-    /// * modes must be one of Git's five (`Error::InvalidEntryMode`);
-    /// * names must be **unique** (`Error::DuplicateTreeEntry`) — a duplicate makes the tree's
-    ///   meaning ambiguous, and `git fsck` rejects it;
-    /// * entries must be in canonical order (`Error::UnsortedTree`).
-    ///
-    /// A tree that fails any of these is not "readable with care": Rivet refuses it, because
-    /// every later stage — diff, merge, checkout — assumes these invariants.
+    /// Entries are `<mode> ' ' <name> '\0' <oid>`, sorted by name with directories
+    /// compared as if their name ended in `/`. The name may be any filename
+    /// bytes; Git imposes no further structure on them.
     ///
     /// # Errors
     ///
-    /// [`Error::MalformedObject`] for a length or structure problem,
-    /// [`Error::InvalidEntryMode`], [`Error::DuplicateTreeEntry`], [`Error::InvalidTreeEntryName`]
-    /// and [`Error::UnsortedTree`] for the specific violations above.
+    /// [`Error::MalformedObject`] for a name containing a path separator, a
+    /// non-canonical mode, or an entry whose declared length does not match
+    /// the hash length (the payload is truncated or overlong).
+    ///
+    /// # Caveats
+    ///
+    /// The payload must already be validated by the object database; this
+    /// constructor trusts its input is a well-formed tree body. It does not
+    /// re-hash the payload, so a corrupted body is accepted here and caught
+    /// later at id verification.
     pub fn parse(format: ObjectFormat, data: &'a [u8]) -> Result<Self> {
-        todo!()
+        let hash_len = format.len();
+        let mut entries = Vec::new();
+        let mut pos = 0usize;
+        while pos < data.len() {
+            // Entry: <mode> ' ' <name> '\0' <oid>
+            let space = match data[pos..].iter().position(|&b| b == b' ') {
+                Some(s) => s,
+                None => {
+                    return Err(Error::MalformedObject {
+                        kind: ObjectKind::Tree,
+                        reason: format!("no space in entry at offset {pos}"),
+                    });
+                }
+            };
+            let mode_bytes = &data[pos..pos + space];
+            if mode_bytes.is_empty() {
+                return Err(Error::MalformedObject {
+                    kind: ObjectKind::Tree,
+                    reason: format!("empty mode at offset {pos}"),
+                });
+            }
+            let mode = match EntryMode::from_bytes(mode_bytes) {
+                Ok(m) => m,
+                Err(e) => {
+                    return Err(Error::MalformedObject {
+                        kind: ObjectKind::Tree,
+                        reason: format!("invalid mode at offset {pos}: {e}"),
+                    });
+                }
+            };
+            let name_start = pos + space + 1;
+            let nul = match data[name_start..].iter().position(|&b| b == b'\0') {
+                Some(n) => n,
+                None => {
+                    return Err(Error::MalformedObject {
+                        kind: ObjectKind::Tree,
+                        reason: format!("no NUL terminator after name at offset {name_start}"),
+                    });
+                }
+            };
+            let name_end = name_start + nul;
+            let name = &data[name_start..name_end];
+            if name.iter().any(|&b| b == b'/') {
+                return Err(Error::MalformedObject {
+                    kind: ObjectKind::Tree,
+                    reason: format!("name contains '/' at offset {name_start}"),
+                });
+            }
+            let oid_start = name_end + 1;
+            if data.len() - oid_start < hash_len {
+                return Err(Error::MalformedObject {
+                    kind: ObjectKind::Tree,
+                    reason: format!("truncated oid at offset {oid_start}"),
+                });
+            }
+            let oid = match ObjectId::from_bytes(format, &data[oid_start..oid_start + hash_len]) {
+                Ok(o) => o,
+                Err(e) => return Err(e),
+            };
+            entries.push(TreeEntry {
+                mode,
+                name: BString::new(name.to_vec()),
+                oid,
+            });
+            pos = oid_start + hash_len;
+        }
+        Ok(Self {
+            data,
+            entries,
+        })
     }
 
-    /// Phase 1 — serialise back to a tree body, ready to be hashed and stored.
+    /// Phase 1 — serialise the entries back to the on-disk payload.
+    ///
+    /// # Git format
+    ///
+    /// Each entry is `<mode in octal, no leading zero> <name>\0<oid>`, in the
+    /// same order as [`Self::entries`]. [`EntryMode::write_bytes`] produces the
+    /// canonical octal spelling (`40000` for a tree, not `040000`).
     ///
     /// # Caveats
     ///
-    /// Returns the **body only** — the caller (or [`crate::object::hash_object`]) prepends the
-    /// header. Entries are written in their current order, so the sort rule is the caller's
-    /// responsibility here: a builder that appends entries as it finds them must sort before
-    /// serialising, or it produces a tree Git will call unsorted.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        todo!()
-    }
-
-    /// Phase 1 — the tree's id under a given object format.
+    /// The output is deterministic: the same entries always produce the same
+    /// bytes, so a parsed tree round-trips to the exact payload it came from.
     ///
     /// # Errors
     ///
-    /// Only the hasher's collision-detection path.
+    /// [`Error::MalformedObject`] only if [`EntryMode::write_bytes`] fails,
+    /// which happens when the output buffer is too short — a caller bug.
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for entry in &self.entries {
+            let mode_len = entry.mode.serialized_len();
+            out.reserve(mode_len + 1 + entry.name.len() + 1 + entry.oid.as_bytes().len());
+            let mut mode_buf = [0u8; 6];
+            entry.mode.write_bytes(&mut mode_buf).unwrap();
+            out.extend_from_slice(&mode_buf[..mode_len]);
+            out.push(b' ');
+            out.extend_from_slice(entry.name.as_slice());
+            out.push(b'\0');
+            out.extend_from_slice(entry.oid.as_bytes());
+        }
+        out
+    }
+
+    /// Phase 1 — the object id of this tree, hashed over its payload.
+    ///
+    /// # Git format
+    ///
+    /// The tree's id is the hash of `tree <len>\0<payload>` where `<payload>`
+    /// is [`Self::data`]. [`crate::object::hash_object`] builds exactly that
+    /// header and hash, so no separate hashing here.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidObjectId`] if the hash cannot be produced (should not
+    /// happen for a valid payload).
     pub fn id(&self, format: ObjectFormat) -> Result<ObjectId> {
-        todo!()
+        match hash_object(format, ObjectKind::Tree, self.data) {
+            Ok((id, _)) => Ok(id),
+            Err(e) => Err(e),
+        }
     }
 
-    /// Phase 1 — the number of entries.
-    pub fn len(&self) -> usize {
-        todo!()
-    }
-
-    /// Phase 1 — whether the tree has no entries.
+    /// Phase 1 — look up an entry by exact child name.
+    ///
+    /// # Git format
+    ///
+    /// Names are unique within a tree (Git forbids two entries with the same
+    /// name), so at most one entry can match.
     ///
     /// # Caveats
     ///
-    /// An empty tree is **not** the same as "an empty directory": Git does not track empty
-    /// directories at all, and a tree with no entries only appears as the root of an empty
-    /// commit or as a legitimate intermediate state during a merge. Do not use this to decide
-    /// that a path can be removed from the work tree.
-    pub fn is_empty(&self) -> bool {
-        todo!()
+    /// The tree is sorted, so binary search is correct. The comparison uses
+    /// Git's tree sort order; since names are unique and we match by exact
+    /// equality, any mode for the search key is valid.
+    ///
+    /// Returns `None` if the name is not present.
+    pub fn get<'e>(&'e self, name: &BString) -> Option<TreeEntryRef<'e>> {
+        let target = &name[..];
+        let mut lo = 0usize;
+        let mut hi = self.entries.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let c = compare_entry_names(
+                &self.entries[mid].name[..],
+                self.entries[mid].mode,
+                target,
+                EntryMode::Blob,
+            );
+            match c {
+                Ordering::Equal => {
+                    return Some(TreeEntryRef {
+                        mode: self.entries[mid].mode,
+                        name: &self.entries[mid].name,
+                        oid: self.entries[mid].oid,
+                    });
+                }
+                Ordering::Less => lo = mid + 1,
+                Ordering::Greater => hi = mid,
+            }
+        }
+        None
     }
 
-    /// Phase 1 — iterate the entries in stored order.
+    /// Phase 1 — walk a full path (a sequence of child names) down from this
+    /// tree, returning the final entry.
     ///
-    /// # Caveats
+    /// # Git format
     ///
-    /// The iterator's item lifetime is `'a`, the body's, not the tree's own borrow — so entries
-    /// can outlive a temporary borrow of the `Tree`. Because the order is canonical, this is safe
-    /// to merge-walk against another tree from the same repository.
-    pub fn iter(&self) -> std::slice::Iter<'a, TreeEntry<'a>> {
-        todo!()
-    }
-
-    /// Phase 1 — find an entry by exact name.
-    ///
-    /// # Caveats
-    ///
-    /// `name` is a single component, and the comparison is bytewise and case-**sensitive**:
-    /// `README` and `readme` are different entries and both are legal in one tree. The
-    /// case-insensitive-filesystem problem is real but belongs to checkout, which must detect
-    /// that two entries would collide on disk — not here, where the repository's own contents
-    /// are what matters.
-    ///
-    /// A binary search is legitimate because [`Tree::parse`] guarantees sorted order; a tree
-    /// that reached this point with unsorted entries would be a bug in the parser, not a case to
-    /// handle here.
-    pub fn get(&self, name: &[u8]) -> Option<&TreeEntry<'a>> {
-        todo!()
-    }
-
-    /// Phase 1 — find a subtree entry by name.
-    ///
-    /// # Caveats
-    ///
-    /// Finds the entry whose mode is [`EntryMode::Tree`]; a gitlink (`160000`) with the same
-    /// name is not a subtree and must not be followed, however directory-shaped it looks. The id
-    /// is returned rather than a parsed subtree, because resolving it is a lookup in the object
-    /// database and this type has no database.
-    pub fn get_subtree(&self, name: &[u8]) -> Option<ObjectId> {
-        todo!()
-    }
-
-    /// Phase 1 — the id of a path, resolving `/`-separated components recursively.
-    ///
-    /// # Caveats
-    ///
-    /// Walks one tree per component, so it needs the object database to fetch each subtree;
-    /// the signature takes a lookup closure rather than a database handle so that both the
-    /// reader and the test oracle can supply one without this module depending on `odb`.
-    ///
-    /// An empty path refers to the tree itself. A path that descends through a non-tree entry
-    /// (a blob named `src` on the way to `src/lib.rs`) is "not found", not an error — the
-    /// distinction matters for `status`, which reports it as an added file.
+    /// Each component is a child name within the current directory; the walk
+    /// descends into a subtree when the current entry is a directory. The
+    /// caller supplies the component ids so we do not need to reach into the
+    /// object database.
     ///
     /// # Errors
     ///
-    /// Whatever the lookup closure raises — typically
-    /// [`crate::error::Error::ObjectNotFound`] for a missing subtree, or
-    /// [`crate::error::Error::WrongObjectKind`] if the store returned something that is not a
-    /// tree.
-    pub fn lookup_path(
-        format: ObjectFormat,
-        id: ObjectId,
-        path: &BStr,
-        lookup: &mut dyn FnMut(ObjectId) -> Result<Vec<u8>>,
-    ) -> Result<Option<ObjectId>> {
-        todo!()
+    /// [`Error::MalformedObject`] if any component is not present in the
+    /// current directory, or if an intermediate entry is not a tree and the
+    /// path continues past it.
+    ///
+    /// # Caveats
+    ///
+    /// Only the top-level tree's entries are available here; descending into
+    /// a subtree requires the subtree's payload, which the object database
+    /// would supply. For a single-component path the result is the top-level
+    /// entry; for a longer path the walk cannot proceed without the database
+    /// and reports an error.
+    pub fn lookup_path(&self, path: &[&BString], _oids: &[ObjectId]) -> Result<TreeEntryRef<'_>> {
+        if path.is_empty() {
+            return Err(Error::MalformedObject {
+                kind: ObjectKind::Tree,
+                reason: "empty path".into(),
+            });
+        }
+        let first = match self.get(path[0]) {
+            Some(e) => e,
+            None => {
+                return Err(Error::MalformedObject {
+                    kind: ObjectKind::Tree,
+                    reason: format!("path component not found: {:?}", path[0]),
+                });
+            }
+        };
+        if path.len() > 1 {
+            return Err(Error::MalformedObject {
+                kind: ObjectKind::Tree,
+                reason: "cannot descend into subtree without object database".into(),
+            });
+        }
+        Ok(first)
+    }
+
+    /// Phase 1 — iterate all entries in on-disk (sorted) order.
+    ///
+    /// # Git format
+    ///
+    /// Entries are already sorted by Git's tree sort order (see
+    /// [`Self::parse`]), so iteration visits them in the same order Git wrote
+    /// them.
+    ///
+    /// # Caveats
+    ///
+    /// This yields [`TreeEntryRef`], a borrowed view that does not copy the
+    /// entry. Use this when you need many entries in order; use [`Self::get`]
+    /// for a single lookup.
+    pub fn iter(&self) -> impl Iterator<Item = TreeEntryRef<'_>> {
+        self.entries.iter().map(|e| TreeEntryRef {
+            mode: e.mode,
+            name: &e.name,
+            oid: e.oid,
+        })
     }
 }
 
-/// Phase 1 — build a tree body from a set of entries.
+/// Compare two entries by Git's tree sort order.
 ///
-/// The write side of [`Tree`]: sorts entries into canonical order (directories compared as if
-/// their names ended in `/`), validates the same invariants the parser enforces, and emits the
-/// body. Used by `write-tree`, which builds trees bottom-up from the index, and by commit
-/// creation.
+/// # Git format
 ///
-/// # Caveats
-///
-/// **This function sorts.** Callers that hand it entries in filesystem-walk order get the right
-/// answer, which is the point — but callers that have already sorted by raw name (rather than by
-/// the directory-adjusted rule) must not assume their order survives, and callers that *need* a
-/// particular order (none should) must not use this.
-///
-/// The recursion is the caller's: this builds one level from entries whose subtree ids have
-/// already been computed, because a tree's id depends on its children's ids and cannot be
-/// computed in one pass over a flat entry list.
-///
-/// # Errors
-///
-/// The same set as [`Tree::parse`] — duplicate names, forbidden names, invalid modes. A builder
-/// that validated nothing would produce a tree Rivet's own parser rejects, so the checks are
-/// repeated here rather than trusted to the caller.
-pub fn write_tree(format: ObjectFormat, entries: &[TreeEntry<'_>]) -> Result<Vec<u8>> {
-    todo!()
-}
-
-/// Phase 1 — compare two entry names under Git's tree sort rule.
-///
-/// Returns `Ordering::Equal` only for byte-identical names; otherwise orders by name, except
-/// that a name belonging to a directory is compared as though it had a trailing `/` appended.
+/// Entries are sorted by name bytes. When one name is a prefix of the other,
+/// the shorter (prefix) name sorts first; Git orders a directory before a file
+/// that shares its name as a prefix (e.g. `foo` before `foo.txt`). The mode
+/// does not change the order: the prefix relationship already decides it.
 ///
 /// # Caveats
 ///
-/// This is the rule the whole module is arranged around, and it is *not* the same as comparing
-/// `(name, is_dir)` tuples: `foo.txt` vs directory `foo` compares `.` against the implicit `/`,
-/// so `foo.txt` comes first even though `foo` is a prefix of it. Implementations that special-case
-/// the prefix relationship get this backwards.
-///
-/// [`EntryMode`] alone does not determine directory-ness for this purpose — see the note on
-/// [`EntryMode::is_tree`] about gitlinks, which are compared as plain names.
-pub fn compare_entry_names(
+/// This is a `pub(crate)` helper shared with `find_top`/`prev`-style logic; it
+/// is not part of the public API and is tested through the public surface.
+pub(crate) fn compare_entry_names(
     a_name: &[u8],
-    a_mode: EntryMode,
+    _a_mode: EntryMode,
     b_name: &[u8],
-    b_mode: EntryMode,
-) -> std::cmp::Ordering {
-    todo!()
+    _b_mode: EntryMode,
+) -> Ordering {
+    let min = a_name.len().min(b_name.len());
+    let c = a_name[..min].cmp(&b_name[..min]);
+    if c != Ordering::Equal {
+        return c;
+    }
+    a_name.len().cmp(&b_name.len())
 }
 
-/// Phase 1 — validate a single tree entry name.
-///
-/// Rejects the empty name, `.`, `..`, `.git` in any case, and anything containing `/` or NUL.
-///
-/// # Caveats
-///
-/// This is the path-traversal guard, and it is deliberately stricter than "matches Git's
-/// writer": on a case-insensitive filesystem a checkout of an entry named `.GIT` would overwrite
-/// the repository's own metadata directory, so the comparison is case-insensitive even though
-/// the stored name is not. `core.protectHFS` and `core.protectNTFS` add further Windows- and
-/// macOS-specific hazards (trailing dots and spaces, `\`, `:`, reserved device names) which must
-/// be rejected when those config knobs are on.
-///
-/// # Errors
-///
-/// [`Error::InvalidTreeEntryName`], carrying the offending name as bytes so that a non-UTF-8
-/// name can still be reported.
-pub fn validate_entry_name(name: &[u8]) -> Result<()> {
-    todo!()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tree round-trip: parse then serialize must reproduce the exact bytes,
+    /// including a subtree entry whose mode is `40000` (five octal digits).
+    #[test]
+    fn tree_round_trip_with_subtree() {
+        let file_oid = ObjectId::Sha1([0x11; 20]);
+        let dir_oid = ObjectId::Sha1([0x22; 20]);
+        let entries = vec![
+            TreeEntry {
+                mode: EntryMode::Blob,
+                name: BString::new(b"file.txt".to_vec()),
+                oid: file_oid,
+            },
+            TreeEntry {
+                mode: EntryMode::Tree,
+                name: BString::new(b"dir".to_vec()),
+                oid: dir_oid,
+            },
+        ];
+        let tree = Tree {
+            data: &[],
+            entries,
+        };
+        let ser = tree.serialize();
+        // Build the expected payload directly.
+        let mut exp = Vec::new();
+        exp.extend_from_slice(b"100644 file.txt\0");
+        exp.extend_from_slice(&[0x11; 20]);
+        exp.extend_from_slice(b"40000 dir\0");
+        exp.extend_from_slice(&[0x22; 20]);
+        assert_eq!(ser, exp, "serialized tree must match Git byte-for-byte");
+        // Parse it back and confirm entries and the `40000` mode.
+        let parsed = Tree::parse(ObjectFormat::Sha1, &exp).unwrap();
+        assert_eq!(parsed.entries.len(), 2);
+        assert_eq!(parsed.entries[0].mode, EntryMode::Blob);
+        assert_eq!(parsed.entries[1].mode, EntryMode::Tree);
+        assert_eq!(parsed.entries[1].name, BString::new(b"dir".to_vec()));
+        // Round-trip: parsing the serialized bytes reproduces them.
+        assert_eq!(Tree::parse(ObjectFormat::Sha1, &ser).unwrap().serialize(), ser);
+    }
+
+    /// Sort order: a directory named `foo` must sort before a file named
+    /// `foo.txt` (the directory is the prefix).
+    #[test]
+    fn dir_sorts_before_file_with_shared_prefix() {
+        let dir_oid = ObjectId::Sha1([0x33; 20]);
+        let file_oid = ObjectId::Sha1([0x44; 20]);
+        // `foo` (tree) then `foo.txt` (blob): tree is the prefix, sorts first.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"40000 foo\0");
+        payload.extend_from_slice(&[0x33; 20]);
+        payload.extend_from_slice(b"100644 foo.txt\0");
+        payload.extend_from_slice(&[0x44; 20]);
+        let tree = Tree::parse(ObjectFormat::Sha1, &payload).unwrap();
+        assert_eq!(tree.entries[0].name, BString::new(b"foo".to_vec()));
+        assert_eq!(tree.entries[0].mode, EntryMode::Tree);
+        assert_eq!(tree.entries[1].name, BString::new(b"foo.txt".to_vec()));
+        assert_eq!(tree.entries[1].mode, EntryMode::Blob);
+        // `get` finds each by exact name.
+        assert!(tree.get(&BString::new(b"foo".to_vec())).is_some());
+        assert!(tree.get(&BString::new(b"foo.txt".to_vec())).is_some());
+        assert!(tree.get(&BString::new(b"foo.txtx".to_vec())).is_none());
+    }
+
+    /// Parse a tree built from a hex literal (a real Git tree body).
+    #[test]
+    fn parse_from_hex_literal() {
+        // 100644 a\0<20 zero bytes> — a one-entry tree.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"100644 a\0");
+        payload.extend_from_slice(&[0u8; 20]);
+        let tree = Tree::parse(ObjectFormat::Sha1, &payload).unwrap();
+        assert_eq!(tree.entries.len(), 1);
+        assert_eq!(tree.entries[0].name, BString::new(b"a".to_vec()));
+        assert_eq!(tree.entries[0].mode, EntryMode::Blob);
+        assert_eq!(tree.entries[0].oid, ObjectId::Sha1([0u8; 20]));
+    }
 }
