@@ -57,6 +57,11 @@ echo '* Work FILE BY FILE. For each target file: Read ONLY the line range you ar
 echo '* The context window is 64K. Older tool results are replaced by a "[shim context note]" that lists what you already read and edited -- trust it and act on it instead of re-reading.' >> $promptfile
 echo '* Replace EVERY todo!() in the target files, and never leave a stub behind. Scaffold signatures, types, lifetimes and doc comments are FROZEN: do not add, rename or remove public items, and do not add dependencies.' >> $promptfile
 echo '* Finish by adding #[cfg(test)] tests that would fail if the logic were wrong, then run `cargo check --workspace --all-targets` and `cargo test -p rivet-core`.' >> $promptfile
+# T01b2 PATCH: two runs in a row hit the 120-turn ceiling with the work ALREADY DONE (T01b2 had
+# blob.rs implemented and the workspace compiling, then kept reading until the cap, and the
+# harness reported failure). Give the model a stop condition it can recognise so "done" is a
+# state, not a turn count.
+echo '* STOP when done. DONE means: no todo!() left in your target files, `cargo check --workspace --all-targets` clean, `cargo test -p rivet-core` GREEN. Once that is true, stop touching files and write the report in your next message.' >> $promptfile
 claude-qwen --permission-mode acceptEdits --allowedTools 'Read,Edit,Bash' --max-turns 120 --output-format stream-json --verbose -p "$(cat $promptfile)" 2>&1 | tee $log
 set st $pipestatus[1]
 echo "=== end: "(date -Iseconds)" ==="

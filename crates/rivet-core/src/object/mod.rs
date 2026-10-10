@@ -25,7 +25,8 @@
 //! does not index, unwrap or slice without bounds checks (plan §5). Objects come from the
 //! network and from other people's repositories, and this is the first code to touch them.
 
-use crate::error::Result;
+use bstr::BString;
+use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
 
 pub mod blob;
@@ -142,6 +143,7 @@ pub fn hash_object(
     // body length — never the whole buffer.
     let mut buf = Vec::with_capacity(kind.as_bytes().len() + 1 + data.len());
     buf.extend_from_slice(kind.as_bytes());
+    buf.push(b' ');
     buf.extend_from_slice(data.len().to_string().as_bytes());
     buf.push(0);
     buf.extend_from_slice(data);
@@ -317,8 +319,8 @@ impl<'a> AnyObject<'a> {
         match self {
             Self::Blob(b) => b.data,
             Self::Tree(t) => t.data,
-            Self::Commit(c) => c.data,
-            Self::Tag(t) => t.data,
+            Self::Commit(c) => c.raw,
+            Self::Tag(t) => t.raw,
         }
     }
 
@@ -327,8 +329,8 @@ impl<'a> AnyObject<'a> {
         match self {
             AnyObject::Blob(b) => Object::Blob(b.data.to_vec()),
             AnyObject::Tree(t) => Object::Tree(t.data.to_vec()),
-            AnyObject::Commit(c) => Object::Commit(c.data.to_vec()),
-            AnyObject::Tag(t) => Object::Tag(t.data.to_vec()),
+            AnyObject::Commit(c) => Object::Commit(c.raw.to_vec()),
+            AnyObject::Tag(t) => Object::Tag(t.raw.to_vec()),
         }
     }
 }
@@ -375,10 +377,10 @@ impl EntryMode {
     pub const fn to_u32(self) -> u32 {
         match self {
             EntryMode::BlobExecutable => 0o100755,
-            EntryMode::BlobNonExecutable => 0o100644,
+            EntryMode::Blob => 0o100644,
             EntryMode::Tree => 0o40000,
             EntryMode::Link => 0o120000,
-            EntryMode::GitLink => 0o160000,
+            EntryMode::Commit => 0o160000,
         }
     }
 
@@ -397,7 +399,32 @@ impl EntryMode {
     /// [`Error::InvalidEntryMode`] if the digits are not a number, overflow, or name no legal
     /// Git mode. The error carries the raw value so the caller can report it in octal.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        todo!()
+        if bytes.is_empty() || bytes.len() > 6 {
+            return Err(Error::InvalidEntryMode {
+                name: BString::default(),
+                mode: 0,
+            });
+        }
+        for &b in bytes {
+            if !b.is_ascii_digit() {
+                return Err(Error::InvalidEntryMode {
+                    name: BString::default(),
+                    mode: 0,
+                });
+            }
+        }
+        let value = bytes.iter().fold(0u32, |acc, &b| acc * 10 + (b - b'0') as u32);
+        Ok(match value {
+            0o100755 => EntryMode::BlobExecutable,
+            0o100644 => EntryMode::Blob,
+            0o40000 => EntryMode::Tree,
+            0o120000 => EntryMode::Link,
+            0o160000 => EntryMode::Commit,
+            _ => return Err(Error::InvalidEntryMode {
+                name: BString::default(),
+                mode: value,
+            }),
+        })
     }
 
     /// Phase 1 — write the canonical octal ASCII form into `out`.
@@ -414,7 +441,26 @@ impl EntryMode {
     /// than bad repository data, but it is still an error and not a panic, and it cannot
     /// truncate — a truncated mode would produce a valid-looking tree with a different hash.
     pub fn write_bytes(self, out: &mut [u8]) -> Result<()> {
-        todo!()
+        let s = self.to_string();
+        if out.len() < s.len() {
+            return Err(Error::MalformedObject {
+                kind: ObjectKind::Tree,
+                reason: "output buffer too short".to_string(),
+            });
+        }
+        out[..s.len()].copy_from_slice(s.as_bytes());
+        Ok(())
+    }
+
+    /// Phase 1 — the canonical octal string form of this mode.
+    pub const fn to_string(self) -> &'static str {
+        match self {
+            EntryMode::BlobExecutable => "100755",
+            EntryMode::Blob => "100644",
+            EntryMode::Tree => "40000",
+            EntryMode::Link => "120000",
+            EntryMode::Commit => "160000",
+        }
     }
 
     /// Phase 1 — how many bytes [`EntryMode::write_bytes`] will write for this mode.
@@ -424,7 +470,10 @@ impl EntryMode {
     /// Five for a tree (`40000`), six for everything else — size a buffer with this rather than
     /// assuming six, or a tree entry will be padded and the tree will not match what Git wrote.
     pub const fn serialized_len(self) -> usize {
-        todo!()
+        match self {
+            EntryMode::Tree => 5,
+            _ => 6,
+        }
     }
 
     /// Phase 1 — whether this mode can hold a nested tree.
@@ -435,7 +484,7 @@ impl EntryMode {
     /// filesystem sense — [`EntryMode::Commit`] (a gitlink) looks like a directory to a
     /// checkout but is never descended into, and must not be reported as one.
     pub const fn is_tree(self) -> bool {
-        todo!()
+        matches!(self, EntryMode::Tree)
     }
 
     /// Phase 1 — the POSIX mode bits to apply when writing this entry to the work tree.
@@ -447,7 +496,11 @@ impl EntryMode {
     /// `0o644`/`0o755` regardless of umask. Symlinks and gitlinks are not files to be mode-set
     /// and return `None`.
     pub const fn to_file_mode(self) -> Option<u32> {
-        todo!()
+        match self {
+            EntryMode::BlobExecutable => Some(0o755),
+            EntryMode::Blob => Some(0o644),
+            _ => None,
+        }
     }
 
     /// Phase 1 — classify a work tree file's mode as one of the stored modes.
@@ -460,7 +513,11 @@ impl EntryMode {
     /// mode changes. On Windows, `core.symlinks = false` means links were checked out as plain
     /// files and must classify as blobs.
     pub const fn from_file_mode(mode: u32) -> Self {
-        todo!()
+        if mode & 0o111 != 0 {
+            EntryMode::BlobExecutable
+        } else {
+            EntryMode::Blob
+        }
     }
 }
 
@@ -468,7 +525,13 @@ impl std::fmt::Display for EntryMode {
     /// Phase 1 — the canonical octal spelling, identical to what [`EntryMode::write_bytes`]
     /// produces. Note that a tree prints as `40000`, not `040000`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        f.write_str(match self {
+            EntryMode::BlobExecutable => "100755",
+            EntryMode::Blob => "100644",
+            EntryMode::Tree => "40000",
+            EntryMode::Link => "120000",
+            EntryMode::Commit => "160000",
+        })
     }
 }
 
@@ -481,6 +544,6 @@ impl std::fmt::Display for ObjectKind {
     /// messages (`"expected a blob object, found a commit"`), so every kind has to render. It
     /// is the on-disk keyword, not a pretty label — do not be tempted to capitalise it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        f.write_str(self.as_str())
     }
 }
