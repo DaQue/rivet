@@ -1,0 +1,549 @@
+//! Snapshot commands: `add`, `rm`, `commit`, `status`, `restore` and `reset`.
+//!
+//! This is the group that moves work between the three states a Git user thinks in — the work
+//! tree, the index and the commit history. Together with [`crate::cmd::history`] it is the
+//! tinyvcs feature set (plan §4, Phases 3 and 4), which is milestone **M1**.
+//!
+//! *Phase 3 for `add`/`rm`/`commit`/`status`, Phase 4 for `restore`/`reset`.*
+
+use std::path::PathBuf;
+
+use anyhow::Result;
+
+use crate::cli::{GlobalArgs, UntrackedModeArg};
+
+/// Arguments to `rivet add`.
+///
+/// # Caveats
+///
+/// * **`force` is not "add an ignored file by accident".** Without it, adding a path that
+///   `.gitignore` matches is refused with [`rivet_core::Error::PathIgnored`]; with it, the file
+///   is staged and stays ignored for every later command, which is the difference between a
+///   one-off and a policy change.
+/// * **`all` and `update` are mutually exclusive in effect, not in the grammar.** Git refuses
+///   the pair; expressing that needs `conflicts_with`, or the handler must choose. `--all`
+///   stages untracked and modified files; `--update` stages only paths already tracked, which is
+///   the form that is safe to run in a script.
+/// * **A path that does not exist and is not tracked is
+///   [`rivet_core::Error::PathNotFound`]** — Git's `fatal: pathspec 'x' did not match any
+///   files`. A path that does not exist but *is* tracked stages a deletion, which is the
+///   asymmetry that makes `rivet add` and `rivet rm` not mirror images.
+/// * **The pathspec is a list, and an empty list means nothing, not everything.** Git's
+///   "nothing specified, nothing added" behaviour is the correct one; `--all` is how a caller
+///   says "everything", and inferring it from an empty list would make a script that computed
+///   its file list and produced none of them delete the user's staging area.
+#[derive(Debug, clap::Args)]
+pub struct AddArgs {
+    /// The paths to stage. Interpreted relative to the current directory.
+    #[arg(value_name = "PATHSPEC")]
+    pub paths: Vec<PathBuf>,
+
+    /// Stage every untracked and modified file in the work tree.
+    #[arg(short = 'A', long = "all")]
+    pub all: bool,
+
+    /// Stage modifications and deletions of files already tracked, and no others.
+    #[arg(short = 'u', long = "update")]
+    pub update: bool,
+
+    /// Stage an ignored file.
+    #[arg(short = 'f', long = "force")]
+    pub force: bool,
+
+    /// Record a path whose content should be added on the next commit.
+    #[arg(short = 'N', long = "intent-to-add")]
+    pub intent_to_add: bool,
+
+    /// Report what would be staged, and change nothing.
+    #[arg(short = 'n', long = "dry-run")]
+    pub dry_run: bool,
+}
+
+/// Arguments to `rivet rm`.
+///
+/// # Caveats
+///
+/// * **`cached` is the flag that makes this command safe.** Without it the work tree file is
+///   deleted as well; with it only the index entry goes. A user who meant to untrack a file and
+///   forgot `--cached` has lost the file, so the confirmation path matters.
+/// * **A file that has staged content differing from `HEAD` is refused without `--force`.** The
+///   check is against the *index*, not the work tree: an unstaged modification is not a reason
+///   to refuse, because it is about to be deleted anyway, and a staged one is the work `rm`
+///   would otherwise silently discard.
+/// * **A directory is only removed with `-r`.** A directory pathspec without it is an error even
+///   when the directory is empty, matching Git.
+#[derive(Debug, clap::Args)]
+pub struct RmArgs {
+    /// The paths to remove.
+    #[arg(value_name = "PATHSPEC", required = true)]
+    pub paths: Vec<PathBuf>,
+
+    /// Remove the path from the index only, leaving the work tree file in place.
+    #[arg(long = "cached")]
+    pub cached: bool,
+
+    /// Recurse into a directory pathspec.
+    #[arg(short = 'r')]
+    pub recursive: bool,
+
+    /// Remove the path even when its staged content differs from `HEAD`.
+    #[arg(short = 'f', long = "force")]
+    pub force: bool,
+
+    /// Report what would be removed, and change nothing.
+    #[arg(short = 'n', long = "dry-run")]
+    pub dry_run: bool,
+}
+
+/// Arguments to `rivet commit`.
+///
+/// # Caveats
+///
+/// * **`message` and `reuse_message` are mutually exclusive**, and the grammar must say so —
+///   two places supplying the message would otherwise be resolved by an arbitrary precedence
+///   rule. `-C` reuses another commit's message verbatim (message *and* authorship);
+///   `-c` opens the editor with it, which is not implemented.
+/// * **`author` overrides only the author; the committer is always the ambient identity.**
+///   The two are separate fields in the object and a command that set both from `--author`
+///   would produce a commit whose reflog and whose object disagree about who made it.
+/// * **`amend` with an unborn `HEAD` is an error**, not a root commit. Amending nothing is a
+///   mistake; a caller that wants a first commit says `commit`.
+/// * **`--allow-empty` is off by default and must stay off.** A commit with no change relative
+///   to its parent is almost always a typo, and the flag exists for the deliberate cases.
+/// * **`pathspec` after `--` commits only those paths**, bypassing the index for them and
+///   leaving the rest of the index untouched. That mode is the one where a commit *does*
+///   partially stage, and it is the exception to "the index is what gets committed".
+/// * **A merge in progress supplies the parents and the default message.** With `MERGE_HEAD`
+///   present, the parents are `HEAD` and `MERGE_HEAD` and the message defaults to `MERGE_MSG`;
+///   the handler must read that state rather than deriving parents from `HEAD` alone, or the
+///   merge commit loses a parent and the history forks silently.
+/// * **`signoff` and `gpg_sign` are accepted and not implemented** (commit signing is a
+///   non-goal for v1, plan §1). Accepting the flag and ignoring it would produce an unsigned
+///   commit that the user believes is signed, so it must fail loudly instead.
+#[derive(Debug, clap::Args)]
+pub struct CommitArgs {
+    /// The commit message. Without one, and without `-C`, the editor would be opened.
+    #[arg(short = 'm', long = "message", value_name = "MESSAGE")]
+    pub message: Option<String>,
+
+    /// Take the message, and the authorship, from an existing commit.
+    #[arg(short = 'C', long = "reuse-message", value_name = "COMMIT")]
+    pub reuse_message: Option<String>,
+
+    /// Take the message from an existing commit, and open the editor with it.
+    #[arg(short = 'c', long = "reedit-message", value_name = "COMMIT")]
+    pub reedit_message: Option<String>,
+
+    /// Read the message from a file, or from standard input with `-`.
+    #[arg(short = 'F', long = "file", value_name = "FILE")]
+    pub file: Option<PathBuf>,
+
+    /// Record this author instead of the ambient identity.
+    #[arg(long = "author", value_name = "AUTHOR")]
+    pub author: Option<String>,
+
+    /// Commit the named paths only, bypassing the index for them.
+    #[arg(value_name = "PATHSPEC", last = true)]
+    pub paths: Vec<PathBuf>,
+
+    /// Replace `HEAD`'s commit rather than adding a child.
+    #[arg(long = "amend")]
+    pub amend: bool,
+
+    /// Record a commit that changes nothing.
+    #[arg(long = "allow-empty")]
+    pub allow_empty: bool,
+
+    /// Record a commit whose tree equals its parent's.
+    #[arg(long = "allow-empty-message")]
+    pub allow_empty_message: bool,
+
+    /// Include every tracked file's current content, as if `add -u` had run first.
+    #[arg(short = 'a', long = "all")]
+    pub all: bool,
+
+    /// Add a `Signed-off-by` trailer to the message.
+    #[arg(short = 's', long = "signoff")]
+    pub signoff: bool,
+
+    /// Sign the commit with a GPG key. Not implemented (plan §1 non-goals).
+    #[arg(short = 'S', long = "gpg-sign", value_name = "KEY")]
+    pub gpg_sign: Option<Option<String>>,
+
+    /// Print what would be committed and skip the commit itself.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+
+    /// Print a summary of the change in the commit message editor.
+    #[arg(long = "status")]
+    pub with_status: bool,
+
+    /// Exit non-zero if there is nothing to commit, instead of doing nothing.
+    #[arg(long = "porcelain")]
+    pub porcelain: bool,
+}
+
+/// Arguments to `rivet status`.
+///
+/// # Caveats
+///
+/// * **`porcelain` is a stable interface and the human output is not.** The `--porcelain` format
+///   is what a script parses and it must not change; the default format is a user interface and
+///   may. Every field below that only affects the human format must be ignored under
+///   `--porcelain`, not merely unused.
+/// * **`untracked` changes the work done, not just the printing.** See
+///   [`crate::cli::UntrackedModeArg`]; `--untracked-files=no` must skip the walk entirely, which
+///   is the whole reason a script on a huge work tree passes it.
+/// * **The exit code does not report dirtiness.** `rivet status` exits `0` on a dirty work tree;
+///   a caller that wants the answer as a code wants `rivet diff --quiet` or
+///   `--porcelain | grep -q .`.
+/// * **A path with conflict stages is reported once, not three times.** The index holds stages
+///   1/2/3 for an unmerged path and the output must show a single `UU` entry; iterating the index
+///   entries directly produces three lines per conflict, which is the classic version of this
+///   bug.
+#[derive(Debug, clap::Args)]
+pub struct StatusArgs {
+    /// The paths to report on, or all of them.
+    #[arg(value_name = "PATHSPEC")]
+    pub paths: Vec<PathBuf>,
+
+    /// A stable, script-readable format. Takes precedence over every display flag below.
+    #[arg(long = "porcelain", value_name = "VERSION")]
+    pub porcelain: Option<Option<String>>,
+
+    /// A terser human format that fits one line per path.
+    #[arg(short = 's', long = "short")]
+    pub short: bool,
+
+    /// Include or exclude untracked files: `no`, `normal` or `all`.
+    #[arg(short = 'u', long = "untracked-files", value_enum, value_name = "MODE")]
+    pub untracked: Option<UntrackedModeArg>,
+
+    /// List ignored files as well as untracked ones.
+    #[arg(long = "ignored")]
+    pub ignored: bool,
+
+    /// Do not consult the index's stat cache; re-hash every file.
+    #[arg(long = "no-refresh")]
+    pub no_refresh: bool,
+
+    /// Print branch information in the human format.
+    #[arg(short = 'b', long = "branch")]
+    pub branch: bool,
+
+    /// Print the branch's upstream and how far ahead and behind it is.
+    #[arg(long = "ahead-behind")]
+    pub ahead_behind: bool,
+
+    /// Show a column for the index and one for the work tree, as the long format does.
+    #[arg(long = "column", value_name = "WHEN")]
+    pub column: Option<Option<String>>,
+
+    /// Print no paths, only the branch header.
+    #[arg(long = "no-lock-index")]
+    pub no_lock_index: bool,
+}
+
+/// Arguments to `rivet restore`.
+///
+/// # Caveats
+///
+/// * **`staged` inverts the source and the destination.** Without it, files are copied from the
+///   index into the work tree; with it, they are copied from `--source` (default `HEAD`) into
+///   the index. A caller who confuses the two overwrites their work tree, so the two modes must
+///   never share a code path that does not name both ends explicitly.
+/// * **`worktree` and `staged` together means "reset both to `--source`"**, which is Git's
+///   `restore --source=X --staged --worktree`. It is the only combination that can discard a
+///   staged change *and* an unstaged one in the same command, and it is not the default.
+/// * **Restoring a path that does not exist in the source removes it**, rather than erroring.
+///   `rivet restore deleted.txt` after deleting a tracked file brings it back; the same command
+///   for a path that is not in `HEAD` at all must fail with
+///   [`rivet_core::Error::PathNotFound`], and distinguishing the two is the whole check.
+#[derive(Debug, clap::Args)]
+pub struct RestoreArgs {
+    /// The paths to restore, or every path when combined with a source.
+    #[arg(value_name = "PATHSPEC")]
+    pub paths: Vec<PathBuf>,
+
+    /// Restore the index from `--source` instead of the work tree from the index.
+    #[arg(short = 'S', long = "staged")]
+    pub staged: bool,
+
+    /// Restore the work tree as well as the index.
+    #[arg(short = 'W', long = "worktree")]
+    pub worktree: bool,
+
+    /// Restore from this commit instead of the index or `HEAD`.
+    #[arg(long = "source", value_name = "TREE", short = 's')]
+    pub source: Option<String>,
+
+    /// Overwrite a work tree file that has staged changes.
+    #[arg(long = "overlay")]
+    pub overlay: bool,
+
+    /// Discard local modifications without a safety check.
+    #[arg(short = 'f', long = "force")]
+    pub force: bool,
+
+    /// Read the paths to restore, one per line, from standard input.
+    #[arg(long = "pathspec-from-file", value_name = "FILE")]
+    pub pathspec_from_file: Option<PathBuf>,
+}
+
+/// Arguments to `rivet reset`.
+///
+/// # Caveats
+///
+/// * **The three modes are a strict sequence of increasing destruction**: `soft` moves the
+///   branch only, `mixed` also resets the index, `hard` also overwrites the work tree. `hard`
+///   discards uncommitted work permanently, and it is the only mode where the pre-operation
+///   safety check is deliberately *not* applied — a caller who wants that check wants
+///   `checkout`.
+/// * **`hard` is the mode `merge --abort` and a failed rebase are built on.** It must remove
+///   files that are in the current tree and not the target, not merely overwrite the ones that
+///   differ; leaving an orphaned file behind produces a work tree that matches neither commit.
+/// * **`reset` with a pathspec is not a mode of the above.** `git reset <paths>` unstages the
+///   named paths against `HEAD` and touches neither the branch nor the work tree; it is
+///   `restore --staged` under another name, and sharing the mode enum with it is the classic
+///   way to get `reset --hard <path>` to delete files.
+/// * **The reflog is written before the work tree is touched.** If the reset fails midway, the
+///   branch must be recoverable from the reflog, so the ref update happens first and the reset
+///   of the index and work tree is the part that can be retried.
+#[derive(Debug, clap::Args)]
+pub struct ResetArgs {
+    /// The commit to reset to. Defaults to `HEAD`.
+    #[arg(value_name = "COMMIT", default_value = "HEAD")]
+    pub commit: String,
+
+    /// The paths to unstage, instead of resetting the branch.
+    #[arg(value_name = "PATHSPEC", last = true)]
+    pub paths: Vec<PathBuf>,
+
+    /// Move the branch only; leave the index and the work tree alone.
+    #[arg(long = "soft")]
+    pub soft: bool,
+
+    /// Move the branch and reset the index, leaving the work tree alone. The default.
+    #[arg(long = "mixed")]
+    pub mixed: bool,
+
+    /// Move the branch, reset the index, and overwrite the work tree.
+    #[arg(long = "hard")]
+    pub hard: bool,
+
+    /// Reset the index to match `HEAD` without moving the branch.
+    #[arg(long = "keep")]
+    pub keep: bool,
+
+    /// Reset the index and the work tree, keeping unstaged changes.
+    #[arg(long = "merge")]
+    pub merge: bool,
+
+    /// Do not write a reflog entry for the branch move.
+    #[arg(long = "no-reflog")]
+    pub no_reflog: bool,
+}
+
+/// Phase 3 — stage file contents into the index.
+///
+/// # Purpose
+///
+/// Hash the named paths and write their entries into `.git/index`, so that the next `commit`
+/// records them. This is the only command that adds a path to the index; everything else either
+/// removes one or reads one.
+///
+/// # Exit codes
+///
+/// * `0` — the paths were staged (or, under `--dry-run`, would have been).
+/// * `128` — a path is outside the work tree, an ignored path was named without `--force`, a
+///   path matches nothing and is not tracked, or the index could not be written.
+///
+/// # Caveats
+///
+/// * **Nothing is persisted until the index is written back.** The handler mutates
+///   [`rivet_core::Repository::index_mut`] and *must* call
+///   [`rivet_core::Repository::write_index`] afterwards; forgetting it stages nothing while
+///   printing success, and is the single most likely way to lose work with this API.
+/// * **A `--all` walk must honour ignore rules**, including the rule that a tracked file is
+///   never ignored. Re-adding tracked files that a `.gitignore` matches is normal and must
+///   succeed; skipping them silently makes a commit quietly drop a file.
+/// * **Symlinks are staged as their target's bytes with mode `120000` and are never followed.**
+///   A symlink to a directory is a blob, not a tree; following it produces a snapshot of
+///   whatever it points at, which is both wrong and a path-traversal risk.
+/// * **The executable bit is read from the filesystem only when `core.filemode` is true.**
+///   On Windows and on a `core.filemode=false` repository the bit comes from the existing index
+///   entry, and a fresh file defaults to `100644`; reading the filesystem anyway produces an
+///   index that differs from `git add`'s on every file.
+/// * **A path that is already conflicted resolves the conflict.** `add` on an unmerged path
+///   drops its stages 1/2/3 and installs the current file as stage 0, which is *how a merge is
+///   resolved*. Writing all four stages instead leaves the merge permanently in progress.
+pub fn run_add(global: &GlobalArgs, args: &AddArgs) -> Result<i32> {
+    todo!()
+}
+
+/// Phase 3 — remove files from the work tree and the index.
+///
+/// # Purpose
+///
+/// The inverse of `add`: drop the index entry for each named path, and delete the work tree file
+/// unless `--cached` was given.
+///
+/// # Exit codes
+///
+/// * `0` — the paths were removed.
+/// * `128` — a path is not tracked, is outside the work tree, or has staged content that
+///   differs from `HEAD` and `--force` was not given.
+///
+/// # Caveats
+///
+/// * **The safety check compares the index against `HEAD`, not the work tree against the
+///   index.** An unstaged modification is not a reason to refuse — the file is being deleted
+///   anyway — whereas a staged one is work that no reflog can recover.
+/// * **A tracked file that is already missing from the work tree is removed without error.**
+///   That is the common case after `rm` by hand, and erroring makes the command unusable for
+///   the thing users actually do with it.
+/// * **`--cached` on a path that is untracked is an error**, even though it "removes nothing";
+///   a silent success hides a mistyped path, and the pathspec-not-matching error is what tells
+///   the user which one.
+/// * **The index must be written back**, exactly as for `add`.
+pub fn run_rm(global: &GlobalArgs, args: &RmArgs) -> Result<i32> {
+    todo!()
+}
+
+/// Phase 3 — record the index as a commit.
+///
+/// # Purpose
+///
+/// Write the staged tree as a tree object, build the commit object with the right parents and
+/// the right identity, write it, and move `HEAD`'s branch to it — in that order, so a failure
+/// leaves an unreferenced object rather than a dangling ref.
+///
+/// # Exit codes
+///
+/// * `0` — the commit was recorded; prints `[main abc1234] <summary>`.
+/// * `1` — `--porcelain` was given and there is nothing to commit. The requested negative.
+/// * `128` — nothing is staged (without `--allow-empty`), the identity is not configured, a
+///   merge is unresolved, or `--signoff`/`-S` was given and signing is not implemented.
+///
+/// # Caveats
+///
+/// * **A missing `user.name` or `user.email` is an error, never an invented identity.** A
+///   fabricated `rivet@localhost` produces a commit the user cannot fix without rewriting
+///   history, and `git fsck` will not complain about it.
+/// * **The message is written byte for byte, including its trailing newline.** Normalising it
+///   here produces a different commit id from the one `git commit` writes for the same message,
+///   which breaks every differential test at once.
+/// * **A merge in progress changes the parents and the default message**, per [`CommitArgs`].
+///   `MERGE_HEAD` and `MERGE_MSG` must be read and then *cleared* — as must `MERGE_HEAD`'s
+///   index stages — or the next commit is a merge of the same parents.
+/// * **`--amend` rewrites rather than appends**, and the old commit stays in the reflog. A
+///   handler that amended and then reported the old id would be reporting a commit that is no
+///   longer reachable from the branch.
+/// * **The commit is written to the object database before the ref moves.** Reversing the order
+///   is the one bug that can leave `HEAD` pointing at an object that does not exist, which is a
+///   repository `git fsck` reports as broken.
+pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
+    todo!()
+}
+
+/// Phase 3 — report the state of the work tree and the index.
+///
+/// # Purpose
+///
+/// The command a user runs to ask "where am I". Prints the branch, staged changes, unstaged
+/// changes and untracked files, or those four in the `--porcelain` format a script parses.
+///
+/// # Exit codes
+///
+/// * `0` — the status was reported. **Dirtiness does not change the exit code.**
+/// * `128` — not a repository, or the index could not be read.
+///
+/// # Caveats
+///
+/// * **The work tree is only compared against the index where the stat cache says it must be.**
+///   A file whose size and mtime match the index entry is assumed unchanged, which is why the
+///   index's stat data is written at all; hashing everything would make `status` unusable on a
+///   large repository, and *not* rehashing a racy entry (mtime equal to or newer than the
+///   index's own) reports a modified file as clean. See `rivet_core::worktree::StatData`.
+/// * **An unborn `HEAD` is not detached and must be reported as a branch.** A fresh repository
+///   prints `On branch main` with no commits yet, not `HEAD detached`.
+/// * **A conflicted path is reported once with `UU`, `AA`, `DD` or `AU`/`UA`/`DU`/`UD` as the
+///   stages dictate** — not three times, per [`StatusArgs`].
+/// * **`--porcelain` must be byte-exact**, including the trailing space on an unmodified
+///   work-tree column and the quoting of paths containing non-ASCII bytes. The path is printed
+///   with C-style quoting when it contains a byte that is not printable, exactly as Git does,
+///   or a script consuming the output splits on a byte that is part of a filename.
+pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
+    todo!()
+}
+
+/// Phase 4 — restore work tree files from the index, or the index from a commit.
+///
+/// # Purpose
+///
+/// Copy the named paths (or all of them) from one of the three states to another — the
+/// work-tree-restoring half of `checkout` split out as its own command, without the branch
+/// switching and without the "this will detach HEAD" warning.
+///
+/// # Exit codes
+///
+/// * `0` — the paths were restored.
+/// * `128` — a path is not in the source, the source revision does not resolve, a work tree file
+///   has staged changes and neither `--overlay` nor `--force` was given, or the path is outside
+///   the work tree.
+///
+/// # Caveats
+///
+/// * **The source and destination depend on the flags**, per [`RestoreArgs`]; `--staged` alone
+///   touches the index and never the work tree, and getting this backwards destroys uncommitted
+///   work rather than declining to.
+/// * **Restoring a path that does not exist in the source deletes it from the destination.**
+///   That is correct and is how a file deleted in `HEAD` is brought back into agreement, but it
+///   means an empty or mistyped pathspec must not be treated as "all paths" — an empty
+///   pathspec with a source means an empty restore, not a full one.
+/// * **The write is two-phase**: every path is validated first, then written. A restore that
+///   fails halfway through leaves a work tree matching neither the old state nor the new one,
+///   which is exactly the half-checked-out state `checkout` is designed to avoid.
+/// * **`--force` skips the safety check and only the safety check.** It does not skip the
+///   path-traversal validation, the symlink handling, or the work-tree containment check.
+pub fn run_restore(global: &GlobalArgs, args: &RestoreArgs) -> Result<i32> {
+    todo!()
+}
+
+/// Phase 4 — move a branch, and optionally the index and the work tree, to a commit.
+///
+/// # Purpose
+///
+/// Reposition the current branch at a commit chosen by the user, then unwind the index and the
+/// work tree to match as far as the mode asks — `--soft`, `--mixed` (the default), `--hard`,
+/// `--keep` or `--merge`.
+///
+/// # Exit codes
+///
+/// * `0` — the branch (and whatever else the mode named) was moved.
+/// * `128` — the revision does not resolve, a merge is in progress, `--hard` would overwrite an
+///   untracked file, or the ref update failed.
+///
+/// # Caveats
+///
+/// * **The mode is a sequence of increasing destruction**: `--soft` moves a ref and touches
+///   nothing else; `--hard` permanently discards uncommitted work. The two are the same command
+///   name with the same arguments and the difference is one flag, so a handler must decide the
+///   mode once, up front, and not re-derive it per operation.
+/// * **`--hard` refuses to overwrite an untracked file** that would be clobbered, and says which
+///   one. That check is what makes the command safe to run without looking, and it is
+///   [`rivet_core::Error::UntrackedOverwrite`].
+/// * **`--keep` and `--merge` differ in what they do about local modifications**: `--keep`
+///   refuses if a file that differs between the two commits has local changes, `--merge`
+///   carries the changes forward into the new tree. Implementing one as the other silently
+///   loses or preserves work depending on which way round it is.
+/// * **A pathspec makes this `restore --staged`, not a mode of the above**, per [`ResetArgs`].
+///   The branch must not move at all in that form.
+/// * **The reflog entry is written for the branch move and must be informative** —
+///   `reset: moving to HEAD~1` — because it is how a user undoes an accidental `--hard`.
+///   A reflog that records only the ids cannot be searched, which is most of its value.
+/// * **`ORIG_HEAD` is written**, so `rivet reset --hard ORIG_HEAD` after a bad reset works and
+///   so does a rescue from a lost merge.
+pub fn run_reset(global: &GlobalArgs, args: &ResetArgs) -> Result<i32> {
+    todo!()
+}

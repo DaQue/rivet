@@ -1,0 +1,21 @@
+[package]
+name = "rivet-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Core library for Rivet, a Git-compatible version control system."
+
+[dependencies]
+thiserror.workspace = true
+flate2.workspace = true
+sha1-checked.workspace = true
+sha2.workspace = true
+bstr.workspace = true
+globset.workspace = true
+jiff.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true

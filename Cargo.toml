@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/rivet-core", "crates/rivet-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.88"
+
+[workspace.dependencies]
+# Runtime
+thiserror = "2"
+flate2 = "1"
+sha1-checked = "0.10"
+sha2 = "0.10"
+bstr = "1"
+globset = "0.4"
+jiff = "0.2"
+ureq = "3"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+
+# Dev / tests
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+proptest = "1"
+
+[profile.release]
+lto = "thin"
