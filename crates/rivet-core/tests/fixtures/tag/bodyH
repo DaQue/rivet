@@ -1,0 +1,8 @@
+object 6c10adea0154176475fc1cb755abc97582228dda
+type commit
+tag t_mid
+tagger Tag Ger <tg@example.com> 1759708800 +0200
+
+x -----BEGIN PGP SIGNATURE-----
+y
+-----END PGP SIGNATURE-----

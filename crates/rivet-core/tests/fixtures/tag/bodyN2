@@ -1,0 +1,12 @@
+object b9697325bbdffef07cfc6ed190e286b0c4a0dbc5
+type commit
+tag v1.0
+tagger T <t@t.example> 1700000000 +0000
+
+msg
+-----BEGIN PGP SIGNATURE-----
+fake
+-----END PGP SIGNATURE-----
+-----BEGIN SSH SIGNATURE-----
+real
+-----END SSH SIGNATURE-----
