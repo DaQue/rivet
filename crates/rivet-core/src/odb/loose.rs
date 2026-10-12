@@ -44,11 +44,16 @@
 //! filesystem metadata, and nothing is shared between two similar objects. That is why `git gc`
 //! exists and why [`crate::odb::Odb`] reads packs first for anything it did not just write.
 
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
+use flate2::read::ZlibDecoder;
+
+use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
-use crate::object::{Object, ObjectKind};
+use crate::object::{hash_object, Object, ObjectKind};
+use bstr::BString;
 
 /// Phase 10 — the loose half of the object database: `objects/xx/yyy…` files.
 ///
@@ -91,17 +96,17 @@ impl LooseObjectStore {
     /// `.git` directory above it. Nothing is checked to exist: the store is a path and a width, and
     /// a repository with no loose objects is the state every clone is in after `gc`.
     pub fn open(objects_dir: &Path, format: ObjectFormat) -> Self {
-        todo!()
+        Self { objects_dir: objects_dir.to_path_buf(), format }
     }
 
     /// Phase 10 — the objects directory this store reads and writes.
     pub fn objects_dir(&self) -> &Path {
-        todo!()
+        &self.objects_dir
     }
 
     /// Phase 10 — the repository's id width, as it was supplied.
     pub fn format(&self) -> ObjectFormat {
-        todo!()
+        self.format
     }
 
     /// Phase 10 — the path an object with this id has, or would have.
@@ -119,7 +124,9 @@ impl LooseObjectStore {
     /// * The parent directory is not created. Writing is what creates it, because a read that
     ///   created directories would make a read-only repository writable.
     pub fn path_for(&self, oid: &ObjectId) -> PathBuf {
-        todo!()
+        let hex = oid.to_hex();
+        let hex_str = std::str::from_utf8(&hex).unwrap();
+        self.objects_dir.join(&hex_str[..2]).join(&hex_str[2..])
     }
 
     /// Phase 10 — whether the object file exists.
@@ -133,7 +140,7 @@ impl LooseObjectStore {
     ///   exist, so the answer is `false` — indistinguishable from "not present", which is the best
     ///   that can be done without checking the format at every call.
     pub fn contains(&self, oid: &ObjectId) -> bool {
-        todo!()
+        fs::metadata(&self.path_for(oid)).is_ok()
     }
 
     /// Phase 10 — read and verify one loose object.
@@ -162,7 +169,62 @@ impl LooseObjectStore {
     /// [`crate::error::Error::MalformedObject`] if the body does not follow its kind's grammar —
     /// though note that this last one requires parsing, which a read does not do.
     pub fn read(&self, oid: &ObjectId) -> Result<Object> {
-        todo!()
+        let path = self.path_for(oid);
+        let path_str = path.to_string_lossy();
+        let data = match fs::read(&path) {
+            Ok(data) => data,
+            // A loose object that is not on disk is a plain miss, not an I/O failure.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(Error::ObjectNotFound { oid: *oid })
+            }
+            Err(e) => {
+                return Err(Error::IoAtPath {
+                    path: BString::from(path_str.as_ref()),
+                    source: e,
+                })
+            }
+        };
+
+        let mut inflator = ZlibDecoder::new(data.as_slice());
+        let mut body = Vec::with_capacity(data.len());
+        inflator
+            .read_to_end(&mut body)
+            .map_err(|e| Error::CorruptObject { oid: *oid, reason: format!("bad zlib stream: {e}") })?;
+
+        let (kind, declared, header_len) =
+            parse_loose_header(&body).map_err(|e| match e {
+                Error::CorruptObject { reason, .. } => Error::CorruptObject { oid: *oid, reason },
+                other => other,
+            })?;
+
+        let actual = u64::try_from(body.len()).unwrap() - u64::try_from(header_len).unwrap();
+        if actual != declared {
+            return Err(Error::CorruptObject {
+                oid: *oid,
+                reason: format!("declared length {declared} does not match actual body length {actual}"),
+            });
+        }
+
+        let payload = &body[header_len..];
+        let (actual_id, _) = hash_object(self.format, kind, payload).map_err(|e| match e {
+            Error::CorruptObject { reason, .. } => Error::CorruptObject { oid: *oid, reason },
+            other => other,
+        })?;
+
+        if actual_id != *oid {
+            return Err(Error::CorruptObject {
+                oid: *oid,
+                reason: format!("content hashes to {actual_id}, expected {oid}"),
+            });
+        }
+
+        let obj = match kind {
+            ObjectKind::Blob => Object::Blob(payload.to_vec()),
+            ObjectKind::Tree => Object::Tree(payload.to_vec()),
+            ObjectKind::Commit => Object::Commit(payload.to_vec()),
+            ObjectKind::Tag => Object::Tag(payload.to_vec()),
+        };
+        Ok(obj)
     }
 
     /// Phase 10 — read only an object's kind and size, inflating as little as possible.
@@ -187,7 +249,69 @@ impl LooseObjectStore {
     /// [`crate::error::Error::CorruptObject`] as in [`LooseObjectStore::read`], but never
     /// [`crate::error::Error::HashMismatch`].
     pub fn read_header(&self, oid: &ObjectId) -> Result<(ObjectKind, u64)> {
-        todo!()
+        let path = self.path_for(oid);
+        let path_str = path.to_string_lossy();
+        let data = match fs::read(&path) {
+            Ok(data) => data,
+            // A loose object that is not on disk is a plain miss, not an I/O failure.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(Error::ObjectNotFound { oid: *oid })
+            }
+            Err(e) => {
+                return Err(Error::IoAtPath {
+                    path: BString::from(path_str.as_ref()),
+                    source: e,
+                })
+            }
+        };
+
+        let mut inflator = ZlibDecoder::new(data.as_slice());
+        let mut buf = [0u8; 8192];
+        let mut header = Vec::new();
+        let mut nul_seen = false;
+        let mut remaining = 0u64;
+        loop {
+            let n = inflator
+                .read(&mut buf)
+                .map_err(|e| Error::CorruptObject {
+                    oid: *oid,
+                    reason: format!("bad zlib stream: {e}"),
+                })?;
+            if n == 0 {
+                break;
+            }
+            if !nul_seen {
+                let chunk = &buf[..n];
+                match chunk.iter().position(|&b| b == 0) {
+                    Some(i) => {
+                        header.extend_from_slice(&chunk[..=i]);
+                        remaining = u64::from(n as u64 - (i + 1) as u64);
+                        nul_seen = true;
+                    }
+                    None => {
+                        header.extend_from_slice(chunk);
+                    }
+                }
+            } else {
+                remaining += n as u64;
+            }
+        }
+
+        let (kind, declared, _header_len) =
+            parse_loose_header(&header).map_err(|e| match e {
+                Error::CorruptObject { reason, .. } => Error::CorruptObject { oid: *oid, reason },
+                other => other,
+            })?;
+
+        let actual = remaining;
+        if actual != declared {
+            return Err(Error::CorruptObject {
+                oid: *oid,
+                reason: format!("declared length {declared} does not match actual body length {actual}"),
+            });
+        }
+
+        Ok((kind, actual))
     }
 
     /// Phase 10 — write an owned [`Object`], returning its id.
@@ -215,7 +339,7 @@ impl LooseObjectStore {
     /// [`crate::error::Error::IoAtPath`] if the directory cannot be created, the temp file cannot be
     /// written or the rename fails, and hasher collision detection from computing the id.
     pub fn write(&self, object: &Object) -> Result<ObjectId> {
-        todo!()
+        self.write_raw(object.kind(), object.data())
     }
 
     /// Phase 10 — write from a kind and a raw body.
@@ -234,7 +358,79 @@ impl LooseObjectStore {
     ///
     /// As [`LooseObjectStore::write`].
     pub fn write_raw(&self, kind: ObjectKind, data: &[u8]) -> Result<ObjectId> {
-        todo!()
+        let (oid, uncompressed) = hash_object(self.format, kind, data)?;
+
+        let path = self.path_for(&oid);
+        if path.exists() {
+            return Ok(oid);
+        }
+
+        let dir = path.parent().unwrap();
+        let dir_str = dir.to_string_lossy();
+        fs::create_dir_all(&dir).map_err(|e| Error::IoAtPath {
+            path: BString::from(dir_str.as_ref()),
+            source: e,
+        })?;
+
+        // Temp name is not derived from the object id, so two concurrent writers
+        // of different objects cannot collide on it.
+        let tmp = dir.join(format!(
+            "tmp_obj_{}_{}",
+            std::process::id(),
+            std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_nanos()
+        ));
+        let tmp_str = tmp.to_string_lossy();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .map_err(|e| Error::IoAtPath {
+                path: BString::from(tmp_str.as_ref()),
+                source: e,
+            })?;
+        // Loose objects live on disk zlib-compressed. The id is over the
+        // *uncompressed* `<kind> <len>\0<body>` bytes, so compress only here,
+        // at the last step before the bytes hit the filesystem.
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&uncompressed).map_err(|e| Error::IoAtPath {
+            path: BString::from(tmp_str.as_ref()),
+            source: e,
+        })?;
+        let compressed = enc.finish().map_err(|e| Error::IoAtPath {
+            path: BString::from(tmp_str.as_ref()),
+            source: e,
+        })?;
+        file.write_all(&compressed).map_err(|e| Error::IoAtPath {
+            path: BString::from(tmp_str.as_ref()),
+            source: e,
+        })?;
+        // Set the file read-only (0444), Git's convention for loose objects.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o444);
+            file.set_permissions(perms).map_err(|e| Error::IoAtPath {
+                path: BString::from(tmp_str.as_ref()),
+                source: e,
+            })?;
+        }
+        file.flush().map_err(|e| Error::IoAtPath {
+            path: BString::from(tmp_str.as_ref()),
+            source: e,
+        })?;
+        drop(file);
+
+        let path_str = path.to_string_lossy();
+        fs::rename(&tmp, &path).map_err(|e| {
+            // Best-effort cleanup of the temp file on rename failure.
+            let _ = fs::remove_file(&tmp);
+            Error::IoAtPath {
+                path: BString::from(path_str.as_ref()),
+                source: e,
+            }
+        })?;
+
+        Ok(oid)
     }
 
     /// Phase 10 — delete a loose object.
@@ -258,7 +454,26 @@ impl LooseObjectStore {
     /// [`crate::error::Error::ObjectNotFound`] if it is not there, and
     /// [`crate::error::Error::IoAtPath`] if it cannot be removed.
     pub fn remove(&self, oid: &ObjectId) -> Result<()> {
-        todo!()
+        let path = self.path_for(oid);
+        if !path.exists() {
+            return Err(Error::ObjectNotFound { oid: *oid });
+        }
+
+        let path_str = path.to_string_lossy();
+        // Files are read-only (0444), so the mode must be cleared first.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o644);
+            fs::set_permissions(&path, perms).map_err(|e| Error::IoAtPath {
+                path: BString::from(path_str.as_ref()),
+                source: e,
+            })?;
+        }
+        fs::remove_file(&path).map_err(|e| Error::IoAtPath {
+            path: BString::from(path_str.as_ref()),
+            source: e,
+        })
     }
 
     /// Phase 10 — every loose object id present.
@@ -284,7 +499,78 @@ impl LooseObjectStore {
     /// [`crate::error::Error::IoAtPath`] if `objects/` or a subdirectory cannot be listed, and
     /// [`crate::error::Error::InvalidHash`] never — a malformed name is skipped, not reported.
     pub fn oids(&self) -> Result<Vec<ObjectId>> {
-        todo!()
+        let mut ids = Vec::new();
+        let objects_str = self.objects_dir.to_string_lossy();
+        let entries = match fs::read_dir(&self.objects_dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
+            Err(e) => return Err(Error::IoAtPath {
+                path: BString::from(objects_str.as_ref()),
+                source: e,
+            }),
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => return Err(Error::IoAtPath {
+                    path: BString::from(objects_str.as_ref()),
+                    source: e,
+                }),
+            };
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = match path.file_name() {
+                Some(name) => name,
+                None => continue,
+            };
+            let name = match name.to_str() {
+                Some(name) if name.len() == 2 => name,
+                _ => continue,
+            };
+            if !name.bytes().all(|b| b.is_ascii_hexdigit()) {
+                continue;
+            }
+            let dir_str = path.to_string_lossy();
+            for file in fs::read_dir(&path).map_err(|e| Error::IoAtPath {
+                path: BString::from(dir_str.as_ref()),
+                source: e,
+            })? {
+                let file = match file {
+                    Ok(file) => file,
+                    Err(e) => return Err(Error::IoAtPath {
+                        path: BString::from(dir_str.as_ref()),
+                        source: e,
+                    }),
+                };
+                let path = file.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let fname = match path.file_name() {
+                    Some(fname) => fname,
+                    None => continue,
+                };
+                let fname = match fname.to_str() {
+                    Some(fname) => fname,
+                    None => continue,
+                };
+                if fname.len() != self.format.hex_len() - 2 {
+                    continue;
+                }
+                if !fname.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    continue;
+                }
+                let full = name.to_string() + fname;
+                if let Ok(oid) = ObjectId::from_hex(self.format, full.as_bytes().into()) {
+                    ids.push(oid);
+                }
+            }
+        }
+
+        Ok(ids)
     }
 }
 
@@ -313,5 +599,227 @@ impl LooseObjectStore {
 /// [`crate::error::Error::CorruptObject`] if there is no NUL byte, the keyword is not one of the
 /// four kinds, or the length is empty, non-numeric, or overflows a `u64`.
 pub(crate) fn parse_loose_header(data: &[u8]) -> Result<(ObjectKind, u64, usize)> {
-    todo!()
+    let nul = data
+        .iter()
+        .position(|&b| b == 0)
+        .ok_or_else(|| Error::CorruptObject {
+            oid: ObjectId::zero(ObjectFormat::Sha1),
+            reason: "no NUL byte terminating the header".to_string(),
+        })?;
+
+    let header = &data[..nul];
+
+    // Split "kind len" — the space is the only separator.
+    let space = header
+        .iter()
+        .position(|&b| b == b' ')
+        .ok_or_else(|| Error::CorruptObject {
+            oid: ObjectId::zero(ObjectFormat::Sha1),
+            reason: "no space in header".to_string(),
+        })?;
+
+    let kind_bytes = &header[..space];
+    let kind = ObjectKind::from_bytes(kind_bytes).map_err(|e| Error::CorruptObject {
+        oid: ObjectId::zero(ObjectFormat::Sha1),
+        reason: format!("invalid kind {kind_bytes:?}: {e}"),
+    })?;
+
+    let len_bytes = &header[space + 1..];
+    if len_bytes.is_empty() {
+        return Err(Error::CorruptObject {
+            oid: ObjectId::zero(ObjectFormat::Sha1),
+            reason: "empty length in header".to_string(),
+        });
+    }
+    if !len_bytes.iter().all(|&b| b.is_ascii_digit()) {
+        return Err(Error::CorruptObject {
+            oid: ObjectId::zero(ObjectFormat::Sha1),
+            reason: "non-numeric length in header".to_string(),
+        });
+    }
+    // No leading zeros beyond a bare "0": the shortest form is what Git writes.
+    if len_bytes.len() > 1 && len_bytes[0] == b'0' {
+        return Err(Error::CorruptObject {
+            oid: ObjectId::zero(ObjectFormat::Sha1),
+            reason: "leading zero in header length".to_string(),
+        });
+    }
+
+    let declared: u64 = len_bytes.iter().try_fold(0u64, |acc, &b| {
+        acc.checked_mul(10)
+            .and_then(|a| a.checked_add(u64::from(b - b'0')))
+    })
+    .ok_or_else(|| Error::CorruptObject {
+        oid: ObjectId::zero(ObjectFormat::Sha1),
+        reason: "length overflows u64".to_string(),
+    })?;
+
+    Ok((kind, declared, nul + 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::write::ZlibEncoder;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn store(dir: &Path, fmt: ObjectFormat) -> LooseObjectStore {
+        LooseObjectStore::open(dir, fmt)
+    }
+
+    fn write_and_read_roundtrip(dir: &Path, fmt: ObjectFormat, kind: ObjectKind, data: &[u8]) {
+        let s = store(dir, fmt);
+        let oid = s.write_raw(kind, data).expect("write failed");
+        let obj = s.read(&oid).expect("read failed");
+        assert_eq!(obj.kind(), kind);
+        assert_eq!(obj.data(), data);
+        assert!(s.contains(&oid));
+        // path layout: objects/xx/yyyy…
+        let hex = oid.to_hex();
+        let hex_str = std::str::from_utf8(&hex).expect("oid hex is utf-8");
+        let expected = dir.join(&hex_str[..2]).join(&hex_str[2..]);
+        assert_eq!(s.path_for(&oid), expected);
+    }
+
+    #[test]
+    fn roundtrip_all_kinds_sha1() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("objects");
+        let fmt = ObjectFormat::Sha1;
+        write_and_read_roundtrip(&dir, fmt, ObjectKind::Blob, b"hello\n");
+        write_and_read_roundtrip(&dir, fmt, ObjectKind::Tree, b"\x0100000000blob\0hello\n");
+        write_and_read_roundtrip(&dir, fmt, ObjectKind::Commit, b"tree 0000000000000000000000000000000000000000\nauthor A <a@b> 0 +0000\ncommitter A <a@b> 0 +0000\n\nmsg\n");
+        write_and_read_roundtrip(&dir, fmt, ObjectKind::Tag, b"object 0000000000000000000000000000000000000000\ntype commit\n");
+    }
+
+    #[test]
+    fn roundtrip_all_kinds_sha256() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("objects");
+        let fmt = ObjectFormat::Sha256;
+        write_and_read_roundtrip(&dir, fmt, ObjectKind::Blob, b"hello\n");
+        write_and_read_roundtrip(&dir, fmt, ObjectKind::Tree, b"\x0100000000blob\0hello\n");
+        write_and_read_roundtrip(&dir, fmt, ObjectKind::Commit, b"tree 0000000000000000000000000000000000000000000000000000000000000000\nauthor A <a@b> 0 +0000\ncommitter A <a@b> 0 +0000\n\nmsg\n");
+        write_and_read_roundtrip(&dir, fmt, ObjectKind::Tag, b"object 0000000000000000000000000000000000000000000000000000000000000000\ntype commit\n");
+    }
+
+    #[test]
+    fn known_git_id_sha1() {
+        // blob "hello\n" must hash to Git's canonical id
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("objects");
+        let s = store(&dir, ObjectFormat::Sha1);
+        let oid = s.write_raw(ObjectKind::Blob, b"hello\n").unwrap();
+        assert_eq!(oid.to_hex(), "ce013625030ba8dba906f756967f9e9ca394464a");
+    }
+
+    #[test]
+    fn read_truncated_file_is_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("objects");
+        let s = store(&dir, ObjectFormat::Sha1);
+        let oid = s.write_raw(ObjectKind::Blob, b"hello\n").unwrap();
+        let path = s.path_for(&oid);
+
+        // Truncate the file to half its size.
+        let data = fs::read(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(&path, &data[..data.len() / 2]).unwrap();
+
+        let err = s.read(&oid).unwrap_err();
+        match err {
+            Error::CorruptObject { oid: eoid, .. } => assert_eq!(eoid, oid),
+            _ => panic!("expected CorruptObject, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn corrupt_object_error_names_requested_id() {
+        // Write a valid object, then corrupt its content so it no longer hashes to its id.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("objects");
+        let s = store(&dir, ObjectFormat::Sha1);
+        let oid = s.write_raw(ObjectKind::Blob, b"hello\n").unwrap();
+        let path = s.path_for(&oid);
+
+        // Replace the file content with a zlib stream whose decompressed body
+        // has the same header but a different payload.
+        let mut compressed = Vec::new();
+        let mut enc = ZlibEncoder::new(&mut compressed, flate2::Compression::default());
+        enc.write_all(b"blob 5\0XXXXX").unwrap();
+        enc.finish().unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(&path, &compressed).unwrap();
+
+        let err = s.read(&oid).unwrap_err();
+        match err {
+            Error::CorruptObject { oid: eoid, .. } => assert_eq!(eoid, oid),
+            _ => panic!("expected CorruptObject, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn write_same_object_twice_no_rewrite() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("objects");
+        let s = store(&dir, ObjectFormat::Sha1);
+        let oid = s.write_raw(ObjectKind::Blob, b"hello\n").unwrap();
+        let path = s.path_for(&oid);
+        let mtime1 = fs::metadata(&path).unwrap().modified().unwrap();
+        // small sleep so mtime would differ if rewritten
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let oid2 = s.write_raw(ObjectKind::Blob, b"hello\n").unwrap();
+        assert_eq!(oid, oid2);
+        let mtime2 = fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(mtime1, mtime2);
+    }
+
+    #[test]
+    fn remove_then_read_is_not_found() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("objects");
+        let s = store(&dir, ObjectFormat::Sha1);
+        let oid = s.write_raw(ObjectKind::Blob, b"hello\n").unwrap();
+        s.remove(&oid).unwrap();
+        assert!(!s.contains(&oid));
+        let err = s.read(&oid).unwrap_err();
+        match err {
+            Error::ObjectNotFound { oid: eoid, .. } => assert_eq!(eoid, oid),
+            _ => panic!("expected ObjectNotFound, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn oids_lists_written_ids_and_skips_junk() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("objects");
+        let s = store(&dir, ObjectFormat::Sha1);
+        let oid1 = s.write_raw(ObjectKind::Blob, b"hello\n").unwrap();
+        let oid2 = s.write_raw(ObjectKind::Blob, b"world\n").unwrap();
+
+        // Drop a stray junk file at the top level and inside a two-hex dir.
+        fs::write(dir.join("junk"), b"not hex").unwrap();
+        let hex1 = oid1.to_hex();
+        let hex1_str = std::str::from_utf8(&hex1).expect("oid hex is utf-8");
+        let sub = dir.join(&hex1_str[..2]);
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("junk2"), b"also not valid").unwrap();
+        // A subdirectory inside a two-hex dir (not a file) — skipped.
+        fs::create_dir_all(sub.join("subdir")).unwrap();
+
+        let ids = s.oids().unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&oid1));
+        assert!(ids.contains(&oid2));
+    }
+
+    #[test]
+    fn oids_empty_when_dir_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("objects");
+        // dir does not exist
+        let s = store(&dir, ObjectFormat::Sha1);
+        let ids = s.oids().unwrap();
+        assert!(ids.is_empty());
+    }
 }
