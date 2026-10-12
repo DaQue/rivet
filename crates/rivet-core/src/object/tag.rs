@@ -263,8 +263,12 @@ impl<'a> Tag<'a> {
             b"-----BEGIN SSH SIGNATURE-----",
         ];
         let mut sig_start: Option<usize> = None;
+        // The bound must use the LONGEST marker: bounding on the shortest let a marker that
+        // begins inside the final 29 bytes slice past the end of the region and panic. A marker
+        // needs its own full length to be a match, so the longest one is the correct limit.
+        let longest = armour.iter().map(|m| m.len()).max().unwrap_or(0);
         let mut i = 0usize;
-        while i + armour[0].len() <= msg_region.len() {
+        while i + longest <= msg_region.len() {
             let at_line_start = i == 0 || msg_region[i - 1] == b'\n';
             if at_line_start {
                 for marker in &armour {
@@ -722,6 +726,48 @@ mod tests {
         assert_eq!(tag.to_bytes(), out);
         let (expected_id, _) = crate::object::hash_object(ObjectFormat::Sha1, ObjectKind::Tag, &out).unwrap();
         assert_eq!(tag.id(ObjectFormat::Sha1).unwrap(), expected_id);
+    }
+
+    /// A marker that runs to the very end of the body is still recognised, and a *truncated*
+    /// marker ending the body must not slice past the end of the message region. The scan used to
+    /// be bounded by the 29-byte shortest marker while the longest marker is 30 bytes, so a
+    /// truncated SIGNED MESSAGE tail made `parse` panic on an out-of-range slice.
+    #[test]
+    fn signature_scan_handles_the_tail_of_the_message() {
+        let obj = sha1_id("4b825d6d2417e751203d05853896f2f6e2a25748");
+        let tagger = test_tagger();
+        let mut headers = Vec::new();
+        headers.extend_from_slice(b"object ");
+        headers.extend_from_slice(&obj.to_hex()[..]);
+        headers.push(b'\n');
+        headers.extend_from_slice(b"type commit\n");
+        headers.extend_from_slice(b"tag v1.0\n");
+        headers.extend_from_slice(b"tagger ");
+        headers.extend_from_slice(&tagger.to_bytes());
+        headers.push(b'\n');
+        headers.push(b'\n');
+
+        // The 29-byte prefix of the 30-byte SIGNED MESSAGE marker, ending the body.
+        let truncated = b"-----BEGIN SIGNED MESSAGE----";
+        assert_eq!(truncated.len(), 29);
+        let mut out = headers.clone();
+        out.extend_from_slice(b"the tag message\n");
+        out.extend_from_slice(truncated);
+        let tag = Tag::parse(ObjectFormat::Sha1, &out).unwrap();
+        // Not a marker, so the whole region stays message text.
+        assert_eq!(tag.message(), b"the tag message\n-----BEGIN SIGNED MESSAGE----");
+        assert_eq!(tag.signature(), None);
+        assert!(!tag.is_signed());
+
+        // A full marker that ends the body is still a signature: the bound must not stop short of
+        // a marker that only just fits.
+        let mut out2 = headers.clone();
+        out2.extend_from_slice(b"the tag message\n");
+        out2.extend_from_slice(b"-----BEGIN SIGNED MESSAGE-----");
+        let tag2 = Tag::parse(ObjectFormat::Sha1, &out2).unwrap();
+        assert_eq!(tag2.message(), b"the tag message\n");
+        assert_eq!(tag2.signature(), Some(BStr::new(b"-----BEGIN SIGNED MESSAGE-----")));
+        assert!(tag2.is_signed());
     }
 
     #[test]
