@@ -54,6 +54,13 @@ echo '' >> $promptfile
 echo '---' >> $promptfile
 echo 'HARNESS OPERATING RULES (mandatory; override any instinct to explore):' >> $promptfile
 echo '* Work FILE BY FILE. For each target file: Read ONLY the line range you are about to change, then apply the Edit in the SAME turn. Never re-read a file you have already read.' >> $promptfile
+# T03d PATCH: the run burned 121 turns on 119 Bash `sed`/`grep` reads and 10 Reads, with ZERO
+# Edits. Cause found in the shim: _work_digest() records a file as "already read" only for
+# name == "Read", so every file qwen opened through Bash was invisible to the digest, got
+# elided from the 64K window, and was re-read on the next turn -- a carousel that consumes the
+# whole cap before the first Edit. Read-tool-only is now mandatory, with a turn-40 tripwire.
+echo '* Read files with the READ TOOL ONLY. Never inspect a file through Bash (`sed`, `cat`, `head`, `tail`, `grep`, `awk`, `wc`): the context digest records Read-tool reads only, so a file opened through Bash is not marked as read, its contents are elided, and the next turn re-reads it -- an endless carousel (T03d: 119 Bash reads, 0 Edits, 121 turns, nothing written). Bash is for `cargo`, `git` and running compiled probes ONLY.' >> $promptfile
+echo '* TRIPWIRE: if you reach turn 40 without having made a single Edit, STOP reading and make the first change with what you already have. Reading is not progress; an Edit is.' >> $promptfile
 echo '* The context window is 64K. Older tool results are replaced by a "[shim context note]" that lists what you already read and edited -- trust it and act on it instead of re-reading.' >> $promptfile
 echo '* Replace EVERY todo!() in the target files, and never leave a stub behind. Scaffold signatures, types, lifetimes and doc comments are FROZEN: do not add, rename or remove public items, and do not add dependencies.' >> $promptfile
 echo '* Finish by adding #[cfg(test)] tests that would fail if the logic were wrong, then run `cargo check --workspace --all-targets` and `cargo test -p rivet-core`.' >> $promptfile
