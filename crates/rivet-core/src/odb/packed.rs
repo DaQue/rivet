@@ -327,17 +327,20 @@ impl DeltaBaseCache {
     /// require knowing each entry's size, which is only known after the miss it was meant to
     /// prevent.
     pub(crate) fn new(capacity: usize) -> Self {
-        todo!()
+        Self {
+            entries: Vec::new(),
+            capacity,
+        }
     }
 
     /// Phase 10 — how many entries are currently held.
     pub(crate) fn len(&self) -> usize {
-        todo!()
+        self.entries.len()
     }
 
     /// Phase 10 — whether nothing is cached.
     pub(crate) fn is_empty(&self) -> bool {
-        todo!()
+        self.entries.is_empty()
     }
 
     /// Phase 10 — look up a base, returning an owned copy on a hit.
@@ -350,7 +353,10 @@ impl DeltaBaseCache {
     /// reentrant `borrow_mut`. Cloning keeps the lock discipline trivial at the cost of a
     /// memcpy per hit.
     pub(crate) fn get(&self, pack: &ObjectId, offset: u64) -> Option<(ObjectKind, Vec<u8>)> {
-        todo!()
+        self.entries
+            .iter()
+            .find(|e| e.pack == *pack && e.offset == offset)
+            .map(|e| (e.kind, e.data.clone()))
     }
 
     /// Phase 10 — insert a resolved base, evicting if full.
@@ -362,7 +368,20 @@ impl DeltaBaseCache {
     /// same base can be resolved twice under different chain walks and keeping both would halve the
     /// effective capacity.
     pub(crate) fn insert(&mut self, pack: ObjectId, offset: u64, kind: ObjectKind, data: Vec<u8>) {
-        todo!()
+        // Replace an existing entry with the same key rather than duplicating it.
+        let pos = self
+            .entries
+            .iter()
+            .position(|e| e.pack == pack && e.offset == offset);
+        if let Some(pos) = pos {
+            self.entries[pos] = DeltaBaseEntry { pack, offset, kind, data };
+        } else {
+            self.entries.push(DeltaBaseEntry { pack, offset, kind, data });
+            // Evict the oldest entries until back within capacity.
+            while self.entries.len() > self.capacity {
+                self.entries.remove(0);
+            }
+        }
     }
 
     /// Phase 10 — discard everything.
@@ -374,6 +393,6 @@ impl DeltaBaseCache {
     /// clearing on every read would make the cache worse than useless, and the ordinary reason to
     /// hold a database open is to keep its packs' bases warm.
     pub(crate) fn clear(&mut self) {
-        todo!()
+        self.entries.clear();
     }
 }

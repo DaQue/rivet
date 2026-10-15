@@ -49,12 +49,15 @@
 //! is what makes "not found" mean "not in this repository".
 
 use std::cell::RefCell;
+use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{Object, ObjectKind};
 use crate::pack::BaseProvider;
+
+const DELTA_CACHE_CAPACITY: usize = 1024;
 
 pub mod loose;
 pub mod packed;
@@ -63,6 +66,45 @@ use packed::DeltaBaseCache;
 
 pub use loose::LooseObjectStore;
 pub use packed::PackedObjectStore;
+
+/// The `.pack` path an entry in `objects/pack/` names, or `None` for anything else.
+///
+/// Git names the two halves of a pack `pack-<hex>.pack` and `pack-<hex>.idx`, so the index file
+/// name already carries the `pack-` prefix. Stripping only the suffix and re-adding the prefix
+/// would look up `pack-pack-<hex>.pack`, which never exists — every pack would be skipped in
+/// silence and its objects would report as absent. An index whose pack is missing — a half-copied
+/// or pruned pack — is also `None`, so it is skipped rather than reported.
+fn pack_path_for(pack_dir: &Path, file_name: &str) -> Option<PathBuf> {
+    let stem = file_name.strip_suffix(".idx")?.strip_prefix("pack-")?;
+    Some(pack_dir.join(format!("pack-{stem}.pack")))
+}
+
+/// List `objects/pack/`, treating a missing directory as an empty one.
+///
+/// A fresh or gc'd repository has no `pack/`, so its absence is not an error. Any other failure to
+/// list it is: an unreadable `pack/` would otherwise look exactly like a repository with no packs,
+/// and every packed object in it would report as absent instead of failing loudly.
+fn read_pack_dir(pack_dir: &Path) -> Result<Vec<fs::DirEntry>> {
+    let entries = match fs::read_dir(pack_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(Error::IoAtPath {
+                path: bstr::BString::from(pack_dir.to_string_lossy().as_ref()),
+                source: err,
+            })
+        }
+    };
+    // An entry that cannot be read is a real failure, not an entry to skip.
+    let mut found = Vec::new();
+    for entry in entries {
+        found.push(entry.map_err(|err| Error::IoAtPath {
+            path: bstr::BString::from(pack_dir.to_string_lossy().as_ref()),
+            source: err,
+        })?);
+    }
+    Ok(found)
+}
 
 /// Phase 10 — the object database for one repository.
 ///
@@ -135,7 +177,7 @@ impl Odb {
     /// [`crate::error::Error::CorruptPackIndex`] or
     /// [`crate::error::Error::UnsupportedPackIndexVersion`] for an index that does not parse.
     pub fn open(git_dir: &Path, format: ObjectFormat) -> Result<Self> {
-        todo!()
+        Self::open_objects_dir(&git_dir.join("objects"), format)
     }
 
     /// Phase 10 — open a database directly over an `objects` directory.
@@ -153,12 +195,40 @@ impl Odb {
     ///
     /// As [`Odb::open`].
     pub fn open_objects_dir(objects_dir: &Path, format: ObjectFormat) -> Result<Self> {
-        todo!()
+        let loose = loose::LooseObjectStore::open(objects_dir, format);
+
+        let mut packs = Vec::new();
+        let pack_dir = objects_dir.join("pack");
+        // A missing `pack` directory is not an error: a fresh or gc'd repository has none.
+        for entry in read_pack_dir(&pack_dir)? {
+            let Ok(file_name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let Some(pack_path) = pack_path_for(&pack_dir, &file_name) else {
+                continue;
+            };
+            if !pack_path.is_file() {
+                continue;
+            }
+            let data = fs::read(&pack_path)?;
+            let index = fs::read(&entry.path())?;
+            let pack = packed::PackedObjectStore::open(data, index, format)?;
+            packs.push(pack);
+        }
+        packs.sort_by_key(|pack| pack.checksum());
+
+        Ok(Self {
+            objects_dir: objects_dir.to_path_buf(),
+            format,
+            loose,
+            packs,
+            delta_cache: RefCell::new(DeltaBaseCache::new(DELTA_CACHE_CAPACITY)),
+        })
     }
 
     /// Phase 10 — the `objects` directory this database is over.
     pub fn objects_dir(&self) -> &Path {
-        todo!()
+        self.loose.objects_dir()
     }
 
     /// Phase 10 — the repository's id width, as it was supplied at open.
@@ -169,7 +239,7 @@ impl Odb {
     /// and produces wrong reads rather than errors — the one place it is caught is the final hash
     /// check, which is a [`crate::error::Error::HashMismatch`] that looks like corruption.
     pub fn format(&self) -> ObjectFormat {
-        todo!()
+        self.format
     }
 
     /// Phase 10 — the loose object store, for code that must write.
@@ -181,7 +251,7 @@ impl Odb {
     /// pack fallback, so an object that `gc` has packed reports as absent — which is exactly right
     /// for a caller asking about loose storage and wrong for a caller asking about objects.
     pub fn loose(&self) -> &LooseObjectStore {
-        todo!()
+        &self.loose
     }
 
     /// Phase 10 — the packs this database knows about, in discovery order.
@@ -192,7 +262,7 @@ impl Odb {
     /// relied on for anything but reporting. A prefix that appears in two packs is ambiguous
     /// regardless of this order, and [`Odb::resolve_prefix`] says so rather than picking the first.
     pub fn packs(&self) -> &[PackedObjectStore] {
-        todo!()
+        &self.packs
     }
 
     /// Phase 10 — rescan `objects/pack/` and pick up packs that appeared since the last scan.
@@ -216,7 +286,29 @@ impl Odb {
     /// [`crate::error::Error::IoAtPath`] if the directory cannot be listed, and the index-parse
     /// errors of [`Odb::open`] for a newly appeared pack whose `.idx` is bad.
     pub fn refresh(&mut self) -> Result<()> {
-        todo!()
+        let pack_dir = self.loose.objects_dir().join("pack");
+        // No packs directory: there is nothing new to pick up.
+        for entry in read_pack_dir(&pack_dir)? {
+            let Ok(file_name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let Some(pack_path) = pack_path_for(&pack_dir, &file_name) else {
+                continue;
+            };
+            if !pack_path.is_file() {
+                continue;
+            }
+            let data = fs::read(&pack_path)?;
+            let index = fs::read(&entry.path())?;
+            let pack = packed::PackedObjectStore::open(data, index, self.format)?;
+            // Already seen: a pack that vanished is a race, and we only add, not rescan.
+            // Identity is the pack's own checksum, which is stable and unique per pack.
+            if self.packs.iter().any(|existing| existing.checksum() == pack.checksum()) {
+                continue;
+            }
+            self.packs.push(pack);
+        }
+        Ok(())
     }
 
     /// Phase 10 — whether the object is present, without reading it.
@@ -231,7 +323,7 @@ impl Odb {
     ///   read.
     /// * **A `false` is only as fresh as the last refresh.** See [`Odb::refresh`].
     pub fn contains(&self, oid: &ObjectId) -> bool {
-        todo!()
+        self.loose.contains(oid) || self.packs.iter().any(|pack| pack.contains(oid))
     }
 
     /// Phase 10 — read one object, hash-verified.
@@ -405,7 +497,15 @@ impl Odb {
     /// [`crate::error::Error::IoAtPath`] if a loose subdirectory cannot be read, and the
     /// index-decode errors of the packs.
     pub fn oids(&self) -> Result<Vec<ObjectId>> {
-        todo!()
+        let mut ids = self.loose.oids()?;
+        for pack in &self.packs {
+            for id in pack.oids()? {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        Ok(ids)
     }
 
     /// Phase 10 — add a pack that was just fetched and indexed.
@@ -430,7 +530,21 @@ impl Odb {
     /// [`crate::error::Error::CorruptPackIndex`] for an index that does not parse or does not
     /// describe this pack.
     pub fn add_pack(&mut self, pack: Vec<u8>, index: Option<Vec<u8>>) -> Result<()> {
-        todo!()
+        let Some(index) = index else {
+            return Err(Error::CorruptPackIndex {
+                reason: "a pack cannot be registered without its index".to_string(),
+            });
+        };
+        let new = packed::PackedObjectStore::open(pack, index, self.format)?;
+        // The pack's checksum is verified against the index's copy inside `open`; a mismatch
+        // already surfaced as `CorruptPack` or `CorruptPackIndex`.
+        if self.packs.iter().any(|existing| existing.checksum() == new.checksum()) {
+            return Err(Error::CorruptPack {
+                reason: "a pack with this checksum is already registered".to_string(),
+            });
+        }
+        self.packs.push(new);
+        Ok(())
     }
 }
 
@@ -453,6 +567,193 @@ impl BaseProvider for Odb {
     /// the caller as [`crate::error::Error::ThinPack`] or
     /// [`crate::error::Error::MissingDeltaBase`] depending on which side is asking.
     fn base_object(&self, oid: &ObjectId) -> Result<(ObjectKind, Vec<u8>)> {
-        todo!()
+        // The cache is keyed by (pack, offset); a base reached by id names only its id, so
+        // key it by the id itself with a fixed offset of 0. The id is unique across the
+        // database, so this deduplicates correctly. Only delta bases are cached, never
+        // whole objects: we store the resolved (kind, body) and discard the object wrapper.
+        if let Some(cached) = self.delta_cache.borrow().get(oid, 0) {
+            return Ok(cached);
+        }
+        let object = self.read(oid)?;
+        let cached = (object.kind(), object.data().to_vec());
+        self.delta_cache.borrow_mut().insert(*oid, 0, object.kind(), object.data().to_vec());
+        Ok(cached)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::object::ObjectKind;
+
+    /// Write a single loose blob body via `LooseObjectStore::write_raw`, which hashes the
+    /// body exactly as git does. Returns the object's id. This avoids calling `Odb::write`
+    /// (still `todo!()`) and lets tests verify exact ids and paths.
+    fn write_loose_blob(store: &LooseObjectStore, data: &[u8]) -> ObjectId {
+        store
+            .write_raw(ObjectKind::Blob, data)
+            .expect("writing a loose blob failed")
+    }
+
+    #[test]
+    fn open_on_missing_dir_finds_nothing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Point at a directory that does not exist.
+        let missing = tmp.path().join("no-such-objects");
+        let odb = Odb::open_objects_dir(&missing, ObjectFormat::Sha1);
+        let odb = odb.expect("opening a non-existent objects dir must succeed");
+        assert_eq!(odb.format(), ObjectFormat::Sha1);
+        assert_eq!(odb.objects_dir(), &missing);
+        let oid = ObjectId::from_hex(
+            ObjectFormat::Sha1,
+            bstr::BStr::new(b"b4e2bc81abc981e1056a883f86cdfe9971ac7295"),
+        )
+        .expect("valid hex");
+        assert!(!odb.contains(&oid));
+        assert!(odb.oids().expect("oids").is_empty());
+        assert!(odb.packs().is_empty());
+    }
+
+    #[test]
+    fn open_points_at_git_objects_and_reports_format() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let git_dir = tmp.path();
+        // Mimic a `git init`-shaped tree: create objects/ so the dir exists.
+        fs::create_dir_all(git_dir.join("objects")).expect("create objects/");
+        let odb = Odb::open(git_dir, ObjectFormat::Sha1).expect("open");
+        assert_eq!(odb.objects_dir(), &git_dir.join("objects"));
+        assert_eq!(odb.format(), ObjectFormat::Sha1);
+        assert!(odb.loose().objects_dir() == git_dir.join("objects"));
+    }
+
+    #[test]
+    fn contains_and_oids_after_loose_write() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects_dir = tmp.path().join("objects");
+        fs::create_dir_all(&objects_dir).expect("create objects/");
+        let odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
+
+        let data = b"hello from rivet\n";
+        let oid = write_loose_blob(odb.loose(), data);
+        // Verify against the known-good git hash so a hash/path regression fails loudly.
+        assert_eq!(
+            oid,
+            ObjectId::from_hex(
+                ObjectFormat::Sha1,
+                bstr::BStr::new(b"b4e2bc81abc981e1056a883f86cdfe9971ac7295"),
+            )
+            .expect("known-good id")
+        );
+
+        assert!(odb.contains(&oid));
+        let ids = odb.oids().expect("oids");
+        assert_eq!(ids, vec![oid]);
+
+        // An empty pack/ directory and a stray non-hex file must be ignored.
+        fs::create_dir_all(objects_dir.join("pack")).expect("create pack/");
+        fs::write(objects_dir.join("stray-file"), b"not-an-object").expect("write stray");
+        assert!(odb.oids().expect("oids") == vec![oid]);
+        let zero = ObjectId::zero(ObjectFormat::Sha1);
+        assert!(!odb.contains(&zero));
+    }
+
+    #[test]
+    fn open_objects_dir_and_open_agree_on_objects_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let git_dir = tmp.path();
+        fs::create_dir_all(git_dir.join("objects")).expect("create objects/");
+        let via_open = Odb::open(git_dir, ObjectFormat::Sha1).expect("open");
+        let via_direct = Odb::open_objects_dir(&git_dir.join("objects"), ObjectFormat::Sha1)
+            .expect("open_objects_dir");
+        assert_eq!(via_open.objects_dir(), via_direct.objects_dir());
+    }
+
+    #[test]
+    fn oids_union_is_deduplicated_and_ordered() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects_dir = tmp.path().join("objects");
+        fs::create_dir_all(&objects_dir).expect("create objects/");
+        let odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
+
+        // Two distinct blobs; oids must list both, deduplicated, in deterministic order.
+        let a = write_loose_blob(odb.loose(), b"alpha");
+        let b = write_loose_blob(odb.loose(), b"beta body");
+        assert_ne!(a, b);
+        let ids = odb.oids().expect("oids");
+        assert_eq!(ids.len(), 2);
+        // The union is a set of exactly {a, b}; assert membership and dedup.
+        let mut set = ids.clone();
+        set.sort();
+        let mut expected = vec![a, b];
+        expected.sort();
+        assert_eq!(set, expected);
+    }
+
+    #[test]
+    fn base_object_serves_from_cache_on_hit() {
+        // base_object's read path needs `Odb::read` (T03d2, still `todo!()`), so we exercise
+        // only the cache-hit branch: pre-populate the delta cache, then `base_object`
+        // must serve it without touching `read`. A cache miss would call `read` and panic.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects_dir = tmp.path().join("objects");
+        fs::create_dir_all(&objects_dir).expect("create objects/");
+        let odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
+
+        let pack = ObjectId::zero(ObjectFormat::Sha1);
+        let data = b"base object";
+        let key = ObjectId::zero(ObjectFormat::Sha1);
+        odb.delta_cache.borrow_mut().insert(pack, 0, ObjectKind::Blob, data.to_vec());
+
+        // Both calls must be cache hits — neither may reach `read` (still `todo!()`).
+        let (kind, body) = odb.base_object(&key).expect("cache hit 1");
+        let (kind2, body2) = odb.base_object(&key).expect("cache hit 2");
+        assert_eq!((kind, body.clone()), (ObjectKind::Blob, data.to_vec()));
+        assert_eq!((kind2, body2), (kind, body));
+    }
+
+    #[test]
+    fn pack_path_for_keeps_a_single_pack_prefix() {
+        // Git's pack names, as `git gc` writes them: `pack-<hex>.idx` beside `pack-<hex>.pack`.
+        let dir = Path::new("/repo/objects/pack");
+        assert_eq!(
+            pack_path_for(dir, "pack-9ec0c0d0f0b3c3e1a4b5c6d7e8f90a1b2c3d4e5f.idx"),
+            Some(dir.join("pack-9ec0c0d0f0b3c3e1a4b5c6d7e8f90a1b2c3d4e5f.pack"))
+        );
+        // Anything that is not a pack index is skipped, not guessed at.
+        assert_eq!(
+            pack_path_for(dir, "pack-9ec0c0d0f0b3c3e1a4b5c6d7e8f90a1b2c3d4e5f.pack"),
+            None
+        );
+        assert_eq!(
+            pack_path_for(dir, "9ec0c0d0f0b3c3e1a4b5c6d7e8f90a1b2c3d4e5f.idx"),
+            None
+        );
+        assert_eq!(
+            pack_path_for(dir, "pack-9ec0c0d0f0b3c3e1a4b5c6d7e8f90a1b2c3d4e5f.rev"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_pack_directory_that_cannot_be_listed_is_an_error() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects_dir = tmp.path().join("objects");
+        fs::create_dir_all(&objects_dir).expect("create objects/");
+        // `pack` as a regular file: present, but not a directory that can be listed.
+        fs::write(objects_dir.join("pack"), b"not a directory").expect("write pack file");
+        assert!(matches!(
+            Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1),
+            Err(Error::IoAtPath { .. })
+        ));
+    }
+
+    #[test]
+    fn refresh_reports_an_unlistable_pack_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects_dir = tmp.path().join("objects");
+        fs::create_dir_all(&objects_dir).expect("create objects/");
+        let mut odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
+        fs::write(objects_dir.join("pack"), b"not a directory").expect("write pack file");
+        assert!(matches!(odb.refresh(), Err(Error::IoAtPath { .. })));
     }
 }
