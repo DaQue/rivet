@@ -52,6 +52,8 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use bstr::BString;
+
 use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{Object, ObjectKind};
@@ -356,7 +358,28 @@ impl Odb {
     /// delta that does not resolve; and [`crate::error::Error::HashMismatch`] when the content does
     /// not match the requested id.
     pub fn read(&self, oid: &ObjectId) -> Result<Object> {
-        todo!()
+        // Loose wins over packed: a loose file is the most recent write of the id and is what a
+        // `repack` has not yet absorbed. Never swallow a non-NotFound loose error — a corrupt loose
+        // object must be reported, not re-answered from a pack as a "miss".
+        let loose = self.loose.read(oid);
+        match loose {
+            Ok(obj) => return Ok(obj),
+            Err(Error::ObjectNotFound { .. }) => {}
+            Err(e) => return Err(e),
+        }
+        // A loose miss falls through to every pack in turn. A miss here is the answer, not a
+        // prompt to refresh: freshness is the caller's job, and `read(&self)` cannot refresh.
+        for pack in &self.packs {
+            match pack.read(oid, Some(self)) {
+                Ok(object) => return Ok(object),
+                // A miss in one pack says nothing about its siblings: the id may live in the
+                // pack written after this one. Only ObjectNotFound is a "keep looking"; a
+                // corrupt or delta-broken pack is an error and must not be swallowed.
+                Err(Error::ObjectNotFound { .. }) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Err(Error::ObjectNotFound { oid: *oid })
     }
 
     /// Phase 10 — read one object and require it to be of a given kind.
@@ -375,7 +398,11 @@ impl Odb {
     /// [`crate::error::Error::WrongObjectKind`] if the object is intact but is something else, and
     /// everything [`Odb::read`] raises.
     pub fn read_typed(&self, oid: &ObjectId, expected: ObjectKind) -> Result<Object> {
-        todo!()
+        let object = self.read(oid)?;
+        if object.kind() != expected {
+            return Err(Error::WrongObjectKind { oid: Some(*oid), found: object.kind(), expected });
+        }
+        Ok(object)
     }
 
     /// Phase 10 — read an object's kind and size without materialising it.
@@ -399,7 +426,23 @@ impl Odb {
     /// [`crate::error::Error::ObjectNotFound`], and the header-level corruption errors of
     /// [`Odb::read`] — but never [`crate::error::Error::HashMismatch`].
     pub fn read_header(&self, oid: &ObjectId) -> Result<(ObjectKind, u64)> {
-        todo!()
+        // Loose first: the header lives at the front of the zlib stream and never needs the body
+        // inflated. A miss is not an error and falls through to the packs.
+        let loose = self.loose.read_header(oid);
+        match loose {
+            Ok((kind, size)) => return Ok((kind, size)),
+            Err(Error::ObjectNotFound { .. }) => {}
+            Err(e) => return Err(e),
+        }
+        for pack in &self.packs {
+            match pack.read(oid, Some(self)) {
+                Ok(object) => return Ok((object.kind(), object.data().len() as u64)),
+                // Same "keep looking" rule as `read`: only a miss moves on to the next pack.
+                Err(Error::ObjectNotFound { .. }) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Err(Error::ObjectNotFound { oid: *oid })
     }
 
     /// Phase 10 — write an object, returning its id.
@@ -422,7 +465,9 @@ impl Odb {
     /// [`crate::error::Error::IoAtPath`] if the file cannot be created or renamed into place, and
     /// hasher collision detection.
     pub fn write(&self, object: &Object) -> Result<ObjectId> {
-        todo!()
+        // Always loose: a pack cannot be appended to, so the object is a new file under
+        // objects/xx/. The loose store recomputes the id from the canonical header + body.
+        self.loose.write(object)
     }
 
     /// Phase 10 — write an object from its kind and raw body.
@@ -442,7 +487,9 @@ impl Odb {
     ///
     /// As [`Odb::write`].
     pub fn write_raw(&self, kind: ObjectKind, data: &[u8]) -> Result<ObjectId> {
-        todo!()
+        // Always loose; the id is computed from the header the kind implies, never from a
+        // caller field. Existing files are left alone.
+        self.loose.write_raw(kind, data)
     }
 
     /// Phase 10 — resolve an abbreviated id to the single object it names.
@@ -474,7 +521,36 @@ impl Odb {
     /// corruption errors of [`Odb::read_header`] — resolving a prefix stats an object, and an
     /// object that cannot be stat'd is not a candidate.
     pub fn resolve_prefix(&self, prefix: &ObjectId) -> Result<ObjectId> {
-        todo!()
+        // A full-width prefix (no trailing zeros) is a single id: check it directly, which is
+        // the `Odb::read` short-circuit the doc comment describes.
+        if prefix.as_bytes().iter().all(|b| *b != 0) {
+            // It is a full id, so resolve it through the read path: a miss is ObjectNotFound.
+            match self.read(prefix) {
+                Ok(_) => return Ok(*prefix),
+                Err(Error::ObjectNotFound { .. }) => return Err(Error::ObjectNotFound { oid: *prefix }),
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Match `starts_with` against the union of loose and packed ids. `starts_with` already
+        // treats the zero-fill as unspecified, so this is the whole prefix primitive. De-duplicate
+        // by id so an object present in both stores is counted once.
+        let mut candidates = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for id in self.oids()? {
+            if id.starts_with(prefix) && seen.insert(id) {
+                candidates.push(id);
+            }
+        }
+
+        match candidates.len() {
+            0 => Err(Error::ObjectNotFound { oid: *prefix }),
+            1 => Ok(candidates.pop().unwrap()),
+            n => Err(Error::AmbiguousPrefix {
+                prefix: BString::from(prefix.to_hex()),
+                candidates: n,
+            }),
+        }
     }
 
     /// Phase 10 — every object id in the database, loose and packed.
@@ -585,10 +661,11 @@ impl BaseProvider for Odb {
 mod tests {
     use super::*;
     use crate::object::ObjectKind;
+    use std::io::Write;
 
     /// Write a single loose blob body via `LooseObjectStore::write_raw`, which hashes the
-    /// body exactly as git does. Returns the object's id. This avoids calling `Odb::write`
-    /// (still `todo!()`) and lets tests verify exact ids and paths.
+    /// body exactly as git does. Returns the object's id, so tests can assert exact ids and
+    /// on-disk paths without depending on `Odb::write`'s packing/flush policy.
     fn write_loose_blob(store: &LooseObjectStore, data: &[u8]) -> ObjectId {
         store
             .write_raw(ObjectKind::Blob, data)
@@ -691,9 +768,9 @@ mod tests {
 
     #[test]
     fn base_object_serves_from_cache_on_hit() {
-        // base_object's read path needs `Odb::read` (T03d2, still `todo!()`), so we exercise
-        // only the cache-hit branch: pre-populate the delta cache, then `base_object`
-        // must serve it without touching `read`. A cache miss would call `read` and panic.
+        // Exercise only the cache-hit branch: pre-populate the delta cache, then `base_object`
+        // must serve it from there without consulting the object store. A miss would fall
+        // through to `read`, which finds nothing on disk for this synthetic key and fails.
         let tmp = tempfile::tempdir().expect("tempdir");
         let objects_dir = tmp.path().join("objects");
         fs::create_dir_all(&objects_dir).expect("create objects/");
@@ -704,7 +781,7 @@ mod tests {
         let key = ObjectId::zero(ObjectFormat::Sha1);
         odb.delta_cache.borrow_mut().insert(pack, 0, ObjectKind::Blob, data.to_vec());
 
-        // Both calls must be cache hits — neither may reach `read` (still `todo!()`).
+        // Both calls must be cache hits — neither may fall through to `read`.
         let (kind, body) = odb.base_object(&key).expect("cache hit 1");
         let (kind2, body2) = odb.base_object(&key).expect("cache hit 2");
         assert_eq!((kind, body.clone()), (ObjectKind::Blob, data.to_vec()));
@@ -755,5 +832,249 @@ mod tests {
         let mut odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
         fs::write(objects_dir.join("pack"), b"not a directory").expect("write pack file");
         assert!(matches!(odb.refresh(), Err(Error::IoAtPath { .. })));
+    }
+
+    #[test]
+    fn read_returns_loose_object_and_miss_is_object_not_found() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects_dir = tmp.path().join("objects");
+        fs::create_dir_all(&objects_dir).expect("create objects/");
+        let odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
+
+        let data = b"hello from rivet\n";
+        let oid = write_loose_blob(odb.loose(), data);
+
+        let object = odb.read(&oid).expect("read existing loose blob");
+        assert_eq!(object.kind(), ObjectKind::Blob);
+        assert_eq!(object.data(), data);
+
+        // A plausible id that is absent is ObjectNotFound, not a panic.
+        let missing = ObjectId::zero(ObjectFormat::Sha1);
+        assert!(matches!(odb.read(&missing), Err(Error::ObjectNotFound { .. })));
+    }
+
+    #[test]
+    fn read_on_corrupt_loose_file_reports_hash_mismatch() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects_dir = tmp.path().join("objects");
+        fs::create_dir_all(&objects_dir).expect("create objects/");
+        let odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
+
+        // Write a good object, then corrupt its file with valid zlib of the wrong bytes.
+        let oid = write_loose_blob(odb.loose(), b"hello from rivet\n");
+        let path = objects_dir.join("b4").join("e2bc81abc981e1056a883f86cdfe9971ac7295");
+        fs::remove_file(&path).expect("remove read-only loose file");
+        // Valid zlib of a well-formed object holding *different* bytes: the stream inflates and
+        // the header parses, but the content hashes to an id the path does not name.
+        let mut encoder = flate2::write::ZlibEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        );
+        encoder.write_all(b"blob 6\0world\n").expect("write zlib");
+        let corrupted = encoder.finish().expect("finish zlib");
+        fs::write(&path, corrupted).expect("corrupt file");
+
+        // A corrupt loose object must be CorruptObject, not a lie reported as ObjectNotFound.
+        assert!(matches!(odb.read(&oid), Err(Error::CorruptObject { .. })));
+        // read_header never inflates the body, so it cannot detect the mismatch: it reports the
+        // header it parsed and lets the caller decide whether to trust the bytes.
+        let (kind, size) = odb.read_header(&oid).expect("read_header corrupt");
+        assert_eq!(kind, ObjectKind::Blob);
+        assert_eq!(size, 6);
+    }
+
+    #[test]
+    fn read_typed_reports_wrong_kind_and_passes_right_kind() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects_dir = tmp.path().join("objects");
+        fs::create_dir_all(&objects_dir).expect("create objects/");
+        let odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
+
+        let oid = write_loose_blob(odb.loose(), b"hello from rivet\n");
+
+        // Right kind round-trips.
+        let object = odb
+            .read_typed(&oid, ObjectKind::Blob)
+            .expect("read_typed blob");
+        assert_eq!(object.kind(), ObjectKind::Blob);
+
+        // Wrong kind is WrongObjectKind, not a corrupt-object lie.
+        let err = odb.read_typed(&oid, ObjectKind::Commit).expect_err("wrong kind");
+        assert!(matches!(err, Error::WrongObjectKind { .. }));
+    }
+
+    #[test]
+    fn read_header_agrees_with_read_on_kind_and_size() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects_dir = tmp.path().join("objects");
+        fs::create_dir_all(&objects_dir).expect("create objects/");
+        let odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
+
+        let data = b"hello from rivet\n";
+        let oid = write_loose_blob(odb.loose(), data);
+
+        let (kind, size) = odb.read_header(&oid).expect("read_header");
+        let object = odb.read(&oid).expect("read");
+        assert_eq!(kind, object.kind());
+        assert_eq!(size, object.data().len() as u64);
+
+        // A miss is ObjectNotFound from read_header too.
+        let missing = ObjectId::zero(ObjectFormat::Sha1);
+        assert!(matches!(odb.read_header(&missing), Err(Error::ObjectNotFound { .. })));
+    }
+
+    fn fresh_objects_odb() -> (tempfile::TempDir, Odb) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects_dir = tmp.path().join("objects");
+        fs::create_dir_all(&objects_dir).expect("create objects/");
+        let odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
+        (tmp, odb)
+    }
+
+    /// The id `write` returns is the one git computes for the canonical header + body —
+    /// anchored against the known-good hash for `b"hello from rivet\n"`.
+    #[test]
+    fn write_returns_git_computed_id_and_round_trips() {
+        let (_tmp, odb) = fresh_objects_odb();
+        let data = b"hello from rivet\n";
+        let obj = Object::Blob(data.to_vec());
+        let oid = odb.write(&obj).expect("write");
+
+        // Anchor: the git hash of `blob <len> hello from rivet\n`.
+        assert_eq!(
+            oid,
+            ObjectId::from_hex(
+                ObjectFormat::Sha1,
+                bstr::BStr::new(b"b4e2bc81abc981e1056a883f86cdfe9971ac7295"),
+            )
+            .expect("known hash")
+        );
+
+        // Round-trip: read back and confirm kind + body match.
+        let back = odb.read(&oid).expect("read back");
+        assert_eq!(back.kind(), ObjectKind::Blob);
+        assert_eq!(back.data(), data);
+    }
+
+    /// `write_raw` must produce the same id as `write` for the same kind and body.
+    #[test]
+    fn write_raw_matches_write_id() {
+        let (_tmp, odb) = fresh_objects_odb();
+        let data = b"hello from rivet\n";
+        let oid_write = odb
+            .write(&Object::Blob(data.to_vec()))
+            .expect("write");
+        let oid_raw = odb.write_raw(ObjectKind::Blob, data).expect("write_raw");
+        assert_eq!(oid_write, oid_raw);
+    }
+
+    /// Three distinct outcomes: unique -> Ok, ambiguous -> AmbiguousPrefix (with the
+    /// count), missing -> ObjectNotFound.
+    ///
+    /// We build two real objects (git-style) that share a 4-byte id prefix, so a
+    /// 4-char abbreviation is genuinely ambiguous.
+    #[test]
+    fn resolve_prefix_unique_ambiguous_and_missing() {
+        let Some(git_exe) = git_exe() else {
+            eprintln!("git not on PATH; skipping");
+            return;
+        };
+        let (_tmp, odb) = fresh_objects_odb();
+
+        let data_a = b"alpha\n";
+        let data_b = b"beta\n";
+
+        // Write both blobs into the loose store via git hash-object so the ids are
+        // exactly what git computes.
+        // hash-object without -w just computes the sha1 of the data.
+        // Write blobs via rivet's own write_raw until two ids share a 4-char hex prefix. A
+        // 16-bit prefix needs ~2^8 ids before a collision is likely, so a fixed handful of
+        // blobs is hopeless; grow until the birthday paradox pays off.
+        let mut oids: Vec<ObjectId> = Vec::new();
+        let mut hexes: Vec<String> = Vec::new();
+        let mut pair: Option<(usize, usize)> = None;
+        while oids.len() < 100_000 {
+            let data = format!("blob-{}\n", oids.len()).into_bytes();
+            let oid = odb.loose().write_raw(ObjectKind::Blob, &data).expect("write");
+            let hex = oid.to_hex().to_string();
+            // Find a pair sharing at least 4 hex chars.
+            if let Some(first) = hexes
+                .iter()
+                .position(|other| common_hex_prefix_len(other, &hex) >= 4)
+            {
+                pair = Some((first, oids.len()));
+                oids.push(oid);
+                hexes.push(hex);
+                break;
+            }
+            oids.push(oid);
+            hexes.push(hex);
+        }
+        let (i, j) = pair.expect("no two blobs share a 4-char prefix");
+        let hex_a = &hexes[i];
+        let hex_b = &hexes[j];
+        let oid_a = &oids[i];
+        let oid_b = &oids[j];
+
+        // The 4-char hex prefix of oid_a (which equals the first 4 chars of oid_b
+        // since we verified they share >= 4 chars) is ambiguous.
+        let abbrev =
+            ObjectId::from_hex_prefix(ObjectFormat::Sha1, bstr::BStr::new(&hex_a.as_bytes()[..4]))
+                .expect("abbrev");
+
+        // Unique: the full id resolves to itself.
+        assert_eq!(odb.resolve_prefix(oid_a).expect("unique"), *oid_a);
+
+        // Ambiguous: the shared 4-char prefix names both.
+        match odb.resolve_prefix(&abbrev) {
+            Err(Error::AmbiguousPrefix { candidates, .. }) => assert_eq!(candidates, 2),
+            other => panic!("expected AmbiguousPrefix, got {other:?}"),
+        }
+
+        // Missing: a prefix that names nothing.
+        let missing = ObjectId::from_hex_prefix(
+            ObjectFormat::Sha1,
+            bstr::BStr::new(b"deadbeefdeadbeefdeadbeefdeadbeef"),
+        )
+        .expect("missing id");
+        assert!(matches!(odb.resolve_prefix(&missing), Err(Error::ObjectNotFound { .. })));
+    }
+
+    fn git_exe() -> Option<String> {
+        std::env::var_os("PATH")
+            .and_then(|path| {
+                for dir in std::env::split_paths(&path) {
+                    let candidate = dir.join("git");
+                    if candidate.is_file() {
+                        return Some(candidate.to_string_lossy().into_owned());
+                    }
+                }
+                None
+            })
+    }
+
+    fn git_hex(git: &str, args: &[&str], data: &[u8]) -> String {
+        let mut child = std::process::Command::new(git);
+        child.args(args);
+        child.stdin(std::process::Stdio::piped());
+        let mut child = child.spawn().expect("git spawn");
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(data)
+            .expect("write stdin");
+        child.stdin.take().unwrap().flush().expect("flush stdin");
+        let out = child.wait_with_output().expect("wait");
+        assert!(out.status.success(), "git failed: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn common_hex_prefix_len(a: &str, b: &str) -> usize {
+        a.as_bytes()
+            .iter()
+            .zip(b.as_bytes().iter())
+            .take_while(|(x, y)| x == y)
+            .count()
     }
 }
