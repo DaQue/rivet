@@ -67,7 +67,8 @@ def main():
     ap.add_argument("--interval", type=int, default=60)
     a = ap.parse_args()
 
-    root = a.root or os.path.dirname(HERE)
+    repo = a.root or os.path.dirname(HERE)
+    root = repo if os.path.basename(repo) == "crates" else os.path.join(repo, "crates")
     os.makedirs(a.out, exist_ok=True)
     ledger = os.path.join(a.out, "RUN-%s.ledger" % a.stamp)
     progress = os.path.join(a.out, "RUN-%s.progress" % a.stamp)
