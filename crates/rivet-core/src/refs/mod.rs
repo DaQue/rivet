@@ -404,7 +404,7 @@ impl RefStore {
 
     /// Phase 2 — the repository's object format, used for every id read and written here.
     pub fn format(&self) -> ObjectFormat {
-        todo!()
+        self.format
     }
 
     /// Phase 2 — the paths the git directory owns, as the `repo::Repository` glue (Batch 4) needs
