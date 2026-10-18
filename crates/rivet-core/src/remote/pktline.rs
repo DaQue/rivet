@@ -244,7 +244,7 @@ impl PktLine {
     /// Callers building text lines add `\n` themselves, which is why [`PktLine::new_text`] exists
     /// next to this.
     pub fn new_data(data: &[u8]) -> Self {
-        todo!()
+        PktLine::Data(data.to_vec())
     }
 
     /// Phase 11 — build a data packet from a text line, appending the terminating newline.
