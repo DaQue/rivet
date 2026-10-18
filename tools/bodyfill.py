@@ -437,7 +437,20 @@ def build_prompt(text, lines, stub):
         "- Error variants are either tuple-like `Error::Io(e)` or struct-like\n"
         "  `Error::LockHeld { path: x }`. Match the shape shown in IMPORTED TYPE\n"
         "  DEFINITIONS exactly; never pass a struct variant a bare argument.\n"
-        "- Free functions in the API REFERENCE are called as functions, not methods.\n",
+        "- Free functions in the API REFERENCE are called as functions, not methods.\n"
+        "- MISSING STD METHOD? Add the trait `use` as the FIRST line of the body.\n"
+        "  `Metadata::dev/ino/mode/nlink/uid/gid/ctime/ctime_nsec/atime/mtime` need\n"
+        "  `use std::os::unix::fs::MetadataExt;`. `Permissions::mode()` needs\n"
+        "  `use std::os::unix::fs::PermissionsExt;`. `OsStr`/`OsString` bytes need\n"
+        "  `use std::os::unix::ffi::{OsStrExt, OsStringExt};`. A `use` line inside the\n"
+        "  body is legal Rust and is the correct fix — never invent a helper instead.\n"
+        "- `Metadata::modified()`/`created()`/`accessed()` return `io::Result<SystemTime>`,\n"
+        "  not `SystemTime`; finish them with `.expect(\"mtime\")` when the signature is\n"
+        "  not Result, then call `.duration_since(UNIX_EPOCH)`.\n"
+        "- `BString` is `bstr::BString`: build it with `BString::from(...)` (it accepts\n"
+        "  `&str`, `String`, `&[u8]`, `Vec<u8>`). It has NO `.as_bytes()`: take raw\n"
+        "  bytes with `&x[..]`. Never return a bare `String`/`Vec<u8>` where the\n"
+        "  signature says `BString`.\n",
         "API REFERENCE (the real field names and method signatures; use exactly\n"
         "these and invent nothing that is not listed):\n" + api_sheet(text),
         "IMPORTED API (helpers that already exist and how to call them; use these,"
