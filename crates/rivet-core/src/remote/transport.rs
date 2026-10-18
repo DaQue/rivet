@@ -417,7 +417,7 @@ impl RefAdvertisement {
     /// built a [`RefAdvertisement`] by hand with an unsorted vector gets a wrong answer rather than an
     /// error, which is worth knowing before doing so.
     pub fn get(&self, name: &BStr) -> Option<&AdvertisedRef> {
-        todo!()
+        self.refs.binary_search_by(|r| BStr::new(&r.name).cmp(name)).ok().map(|i| &self.refs[i])
     }
 
     /// Phase 11 — the target of the peer's `HEAD`, from its `symref` capability.
