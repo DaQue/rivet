@@ -131,7 +131,15 @@ impl PackWriter {
     /// * The buffer is pre-sized for a small pack, not for the objects that will be added; growth
     ///   is amortised and the header is the only thing guaranteed to be there.
     pub fn new(format: ObjectFormat) -> Self {
-        todo!()
+        let mut data = Vec::with_capacity(256);
+        data.extend_from_slice(b"PACK");
+        data.extend_from_slice(&2u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes());
+        Self {
+            data,
+            format,
+            entries: Vec::new(),
+        }
     }
 
     /// Phase 10 — append one object, undeltified.
