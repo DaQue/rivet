@@ -575,7 +575,7 @@ impl Repository {
 
     /// Phase 4 — the index.
     pub fn index(&self) -> &Index {
-        todo!()
+        &self.index
     }
 
     /// Phase 4 — the index, mutably, for staging and checkout.
