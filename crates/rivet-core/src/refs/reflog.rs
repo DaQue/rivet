@@ -195,7 +195,10 @@ pub struct ReflogMessage<'a> {
 impl<'a> ReflogMessage<'a> {
     /// Phase 2 — pair an identity with a reason.
     pub const fn new(who: &'a Signature, message: &'a BStr) -> Self {
-        todo!()
+        Self {
+            who,
+            message,
+        }
     }
 }
 
