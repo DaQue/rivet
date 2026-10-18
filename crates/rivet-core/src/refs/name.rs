@@ -273,7 +273,7 @@ impl RefName {
 
     /// Phase 2 — the name as a borrowed `&BStr`.
     pub fn as_bstr(&self) -> &BStr {
-        todo!()
+        self.0.as_ref()
     }
 
     /// Phase 2 — take the owned bytes back.
