@@ -390,7 +390,7 @@ pub fn media_type(header: &bstr::BStr) -> BString {
 /// server's credential would send the token to a proxy that is not the server, which is how a
 /// credential leaks to an intercepting proxy.
 pub const fn is_auth_challenge(status: u16) -> bool {
-    todo!()
+    status == 401 || status == 407
 }
 
 /// Phase 11 — whether the status is a success.
