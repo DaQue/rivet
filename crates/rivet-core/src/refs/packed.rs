@@ -125,7 +125,10 @@ pub struct PackedRefs {
 impl PackedRefs {
     /// Phase 2 — an empty set, as if from a repository that has never packed its refs.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            traits: Vec::new(),
+            entries: Vec::new(),
+        }
     }
 
     /// Phase 2 — read `git_dir/packed-refs`.
