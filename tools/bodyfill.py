@@ -306,6 +306,11 @@ def api_sheet(text):
             r"^\s{0,8}(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s", ln
         ):
             out.append(f"{cur}::{_sig(lines, i)}")
+    for i, ln in enumerate(lines):
+        if re.match(r"^pub(?:\([^)]*\))?\s+(?:const\s+|unsafe\s+)?fn\s", ln):
+            s = _sig(lines, i)
+            if s not in out:
+                out.append(s)
     return "\n".join(out)[:7000]
 
 
@@ -332,7 +337,11 @@ def build_prompt(text, lines, stub):
         "  fences, no explanation, no comments about what you did.\n"
         "- Use the exact field names, types and helper functions shown in the context.\n"
         "- The body must compile as Rust 2021. Do not add dependencies.\n"
-        "- Never write todo!() or unimplemented!().\n",
+        "- Never write todo!() or unimplemented!().\n"
+        "- Error variants are either tuple-like `Error::Io(e)` or struct-like\n"
+        "  `Error::LockHeld { path: x }`. Match the shape shown in IMPORTED TYPE\n"
+        "  DEFINITIONS exactly; never pass a struct variant a bare argument.\n"
+        "- Free functions in the API REFERENCE are called as functions, not methods.\n",
         "API REFERENCE (the real field names and method signatures; use exactly\n"
         "these and invent nothing that is not listed):\n" + api_sheet(text),
         "IMPORTED API (helpers that already exist and how to call them; use these,"
@@ -408,6 +417,19 @@ def clean_body(resp, indent):
     s = textwrap.dedent(s).strip("\n")
     if not s or "todo!()" in s:
         return ""
+    # Degenerate repetition guard: small quants sometimes lock onto one line and
+    # emit it until num_predict runs out, which yields an unterminated body.
+    # Reject the whole body so the caller retries at a higher temperature.
+    run, prev = 1, None
+    for raw in s.split("\n"):
+        t = raw.strip()
+        if t and t == prev:
+            run += 1
+            if run >= 3:
+                return ""
+        else:
+            run = 1
+        prev = t
     # Re-indent from brace depth so output is canonical regardless of how the
     # model spaced it.  Braces only: multi-line calls stay on one indent level.
     out, depth = [], 0
