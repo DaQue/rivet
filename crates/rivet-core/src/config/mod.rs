@@ -405,7 +405,18 @@ impl Config {
     /// [`crate::error::Error::ConfigInvalidValue`] for a present value that is not a boolean, and
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn get_bool(&self, key: &BStr) -> Result<Option<bool>> {
-        todo!()
+        let value = self.get(key)?;
+        match value {
+            None => Ok(None),
+            Some(v) => {
+                let b = parse_bool(&v).map_err(|_| Error::ConfigInvalidValue {
+                    key: key.to_owned(),
+                    value: v.to_owned(),
+                    expected: "boolean".into(),
+                })?;
+                Ok(Some(b))
+            }
+        }
     }
 
     /// Phase 2 — a value parsed as a Git integer.
