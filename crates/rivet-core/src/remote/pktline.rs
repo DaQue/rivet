@@ -203,7 +203,10 @@ impl PktLine {
     /// that goes into the header, so a caller computing buffer sizes uses it and a caller writing the
     /// length uses [`PktLine::encode`].
     pub fn wire_len(&self) -> usize {
-        todo!()
+        match self {
+            PktLine::Data(data) => 4 + data.len(),
+            _ => 4,
+        }
     }
 
     /// Phase 11 — whether this is a control packet rather than data.
