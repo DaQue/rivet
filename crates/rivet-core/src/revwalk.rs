@@ -585,7 +585,15 @@ impl<'a> CommitWalker<'a> {
     ///
     /// As [`CommitWalker::next_commit`].
     pub fn into_vec(self) -> Result<Vec<Commit<'a>>> {
-        todo!()
+        let mut out = Vec::new();
+        let mut walker = self;
+        loop {
+            match walker.next_commit()? {
+                Some(c) => out.push(c),
+                None => break,
+            }
+        }
+        Ok(out)
     }
 
     /// Phase 4 — every remaining commit's id, in order, without loading the objects.
