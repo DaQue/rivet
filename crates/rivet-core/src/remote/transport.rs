@@ -571,7 +571,10 @@ impl Service {
     /// gets a v0 advertisement back and misparses it. This predicate is the guard that keeps the two
     /// generations from being applied to the wrong service.
     pub const fn supports_v2(self) -> bool {
-        todo!()
+        match self {
+            Service::UploadPack => true,
+            Service::ReceivePack => false,
+        }
     }
 }
 
