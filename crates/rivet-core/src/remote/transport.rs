@@ -1150,7 +1150,7 @@ pub enum Ack {
 ///   server's advertisement — rather than what the client asked for. Passing the request is a
 ///   hang against a server that fell back to v0's plain `multi_ack`.
 pub fn can_use_multi_ack(negotiated: &CapabilitySet<'_>) -> bool {
-    todo!()
+    negotiated.contains(BStr::new("multi_ack_detailed"))
 }
 
 /// Phase 11 — whether a push may proceed without `--force`.
