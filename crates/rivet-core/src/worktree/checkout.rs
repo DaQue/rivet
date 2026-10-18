@@ -152,7 +152,13 @@ impl CheckoutOptions {
     /// Phase 4 — the options a plain `rivet checkout <rev>` uses: no force, stop on the first
     /// error, no dry run, the whole tree, directories created.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            force: false,
+            keep_going: false,
+            dry_run: false,
+            pathspec: BString::from(""),
+            create_dirs: true,
+        }
     }
 
     /// Phase 4 — set the force flag.
