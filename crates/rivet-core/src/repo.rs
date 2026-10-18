@@ -437,7 +437,8 @@ impl Repository {
     /// [`crate::error::Error::NotARepository`] if no git directory is found in the directory or
     /// any parent, and as [`Repository::open_with`] otherwise.
     pub fn discover(start: &Path) -> Result<Self> {
-        todo!()
+        let git_dir = find_git_dir(start)?;
+        Self::open_with(&git_dir, Some(start), None)
     }
 
     /// Phase 4 — discover and open, honouring the environment first.
