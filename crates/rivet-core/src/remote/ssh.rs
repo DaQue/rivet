@@ -280,7 +280,7 @@ impl SshTransport {
     ///   demultiplexer does. A caller that does both the demux and its own read will see one of them
     ///   get nothing.
     pub fn take_stdout(&mut self) -> Option<std::process::ChildStdout> {
-        todo!()
+        self.child.as_mut().and_then(|c| c.stdout.take())
     }
 
     /// Phase 11 — the child's stdin, for a caller writing its own request.
