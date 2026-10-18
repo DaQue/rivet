@@ -202,7 +202,7 @@ def ask(messages, timeout=420):
         "options": {
             "temperature": 0.15,
             "top_p": 0.9,
-            "num_predict": 900,
+            "num_predict": 1400,
             "num_ctx": 16384,
         },
     }
@@ -254,6 +254,24 @@ def clean_body(resp, indent):
         out.append(" " * (indent + 4 * d) + t)
         depth = max(0, depth + t.count("{") - t.count("}"))
     return "\n".join(out)
+
+
+def errs_text(out, src):
+    """Compiler errors plus the offending source lines, so a repair is possible."""
+    parts = []
+    for l in out.split("\n"):
+        if "error" not in l or ": " not in l:
+            continue
+        parts.append(l)
+        m = re.match(r".*?:(\d+):\d+: error", l)
+        if m:
+            n = int(m.group(1))
+            sl = src.split("\n")
+            for k in range(max(0, n - 2), min(len(sl), n + 1)):
+                parts.append(f"  {k + 1}| {sl[k]}")
+        if len(parts) > 40:
+            break
+    return "\n".join(parts)[:2500]
 
 
 def cargo(args, timeout=600):
@@ -319,6 +337,7 @@ def main():
     t0 = time.time()
     done = 0
     consecutive_fail = 0
+    skipped = set()
 
     while done < args.max_functions:
         elapsed = time.time() - t0
@@ -343,7 +362,11 @@ def main():
         if not stubs:
             log(f"DONE no todo!() left in {args.file}")
             break
-        stub = stubs[0]
+        todo_stubs = [s for s in stubs if s["name"] not in skipped]
+        if not todo_stubs:
+            log(f"DONE every remaining stub skipped: {sorted(skipped)}")
+            break
+        stub = todo_stubs[0]
         log(f"fn={stub['name']} line={stub['fn_line']+1} remaining={len(stubs)}")
 
         prompt = build_prompt(text, lines, stub)
@@ -392,13 +415,13 @@ def main():
                 ok = True
                 log(f"  attempt{attempt} CHECK OK prefill={pt} gen={et} t={time.time()-fstart:.0f}s")
                 break
-            errs = "\n".join(
-                l for l in out.split("\n") if l.startswith("error") or " --> " in l
-            )[:1800]
+            errs = errs_text(out, new)
             log(f"  attempt{attempt} CHECK FAIL {len(errs)} chars of errors")
+            with open(os.path.join(OUT, f"fail-{stub['name']}-{attempt}.txt"), "w") as f:
+                f.write(errs + "\n\n=== BODY SENT ===\n" + body + "\n\n=== SPLICED ===\n" + new)
             open(path, "w", encoding="utf-8").write(text)
             msgs = msgs + [
-                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": body},
                 {
                     "role": "user",
                     "content": "That body failed to compile:\n" + errs + "\n\nReturn the corrected body only.",
@@ -407,12 +430,13 @@ def main():
 
         if not ok:
             open(path, "w", encoding="utf-8").write(text)
+            skipped.add(stub["name"])
             consecutive_fail += 1
-            log(f"  fn={stub['name']} FAILED (consecutive={consecutive_fail})")
+            log(f"  fn={stub['name']} FAILED skipped (consecutive={consecutive_fail}, skipped={len(skipped)})")
             with open(prog, "a") as f:
                 f.write(f"{datetime.now():%H:%M:%S} fail fn={stub['name']} done={done}\n")
-            if consecutive_fail >= 3:
-                log("STOP 3 consecutive failures")
+            if consecutive_fail >= 4:
+                log("STOP 4 consecutive failures - systemic, not a slow model")
                 break
             continue
 
