@@ -1347,7 +1347,7 @@ impl Index {
     /// is a whole-index question and not a per-path one: a single conflicted path blocks the commit,
     /// exactly as Git's "you have unmerged paths" does.
     pub fn has_conflicts(&self) -> bool {
-        todo!()
+        self.entries.iter().any(|e| e.flags.stage().unwrap_or(Stage::Normal) != Stage::Normal)
     }
 
     /// Phase 3 — whether entries are in Git's canonical order.
