@@ -148,7 +148,7 @@ impl<'a> PackFile<'a> {
 
     /// Phase 10 — the repository's id width, as it was passed to [`PackFile::open`].
     pub fn format(&self) -> ObjectFormat {
-        todo!()
+        self.format
     }
 
     /// Phase 10 — the pack's checksum, read from its trailer.
