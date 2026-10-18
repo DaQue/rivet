@@ -151,7 +151,7 @@ impl PackedObjectStore {
     /// [`PackedObjectStore::read`], which goes through the same index and additionally resolves
     /// deltas and verifies hashes — reading an entry by offset via the index skips both.
     pub fn index(&self) -> &OwnedPackIndex {
-        todo!()
+        &self.index
     }
 
     /// Phase 10 — whether this pack holds the object, without reading it.
