@@ -146,7 +146,14 @@ impl ConfigEntry {
     /// first and last dots, which is what Git does, but a round trip through this string is not
     /// always lossless. It is for display and for error messages, not for a lookup.
     pub fn flat_key(&self) -> BString {
-        todo!()
+        let mut out = self.section.clone();
+        if let Some(sub) = &self.subsection {
+            out.push(b'.');
+            out.extend_from_slice(sub);
+        }
+        out.push(b'.');
+        out.extend_from_slice(&self.key);
+        out
     }
 
     /// Phase 2 — parse a flat key into its three parts.
