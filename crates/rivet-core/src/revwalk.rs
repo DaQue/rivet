@@ -191,7 +191,7 @@ impl WalkOptions {
     /// Phase 4 — the options a plain `rivet log` uses: date order, all parents, no limit, no
     /// skips, no date bounds, no terminators, not `--all`, no paths.
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
 
     /// Phase 4 — follow only first parents.
