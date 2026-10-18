@@ -130,7 +130,8 @@ impl DiffOptions {
 
     /// Phase 8 — set the context line count.
     pub fn context(&mut self, lines: usize) -> &mut Self {
-        todo!()
+        self.context = lines;
+        self
     }
 
     /// Phase 8 — select the algorithm.
