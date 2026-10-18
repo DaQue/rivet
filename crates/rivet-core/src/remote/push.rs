@@ -229,7 +229,7 @@ impl RefUpdate {
     /// True exactly when `old` is the zero id. Note that the zero id is also a legal value in a
     /// repository with no objects, so this cannot be checked by consulting the odb; the wire decides.
     pub fn is_create(&self) -> bool {
-        todo!()
+        self.old.is_zero()
     }
 
     /// Phase 11 — the command line this update contributes to the push request.
