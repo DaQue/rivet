@@ -229,7 +229,7 @@ impl PktLine {
     /// delim packet ends the capability section and the flush ends the response, so code that
     /// stopped at the first control packet would discard the section it was waiting for.
     pub const fn is_flush(&self) -> bool {
-        todo!()
+        matches!(self, PktLine::Flush)
     }
 
     /// Phase 11 — build a data packet from bytes, requiring the trailing newline to be the caller's
