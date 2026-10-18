@@ -380,7 +380,7 @@ pub fn decode_body(encoding: Option<&bstr::BStr>, body: Vec<u8>) -> Result<Vec<u
 /// type, and comparing the whole header against the constant would reject it. The comparison is
 /// case-insensitive because media types are, while the pkt-line *content* is not.
 pub fn media_type(header: &bstr::BStr) -> BString {
-    todo!()
+    BString::from(header.to_ascii_lowercase())
 }
 
 /// Phase 11 — whether a status is one that carries an authentication challenge.
