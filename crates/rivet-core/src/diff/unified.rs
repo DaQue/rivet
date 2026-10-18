@@ -262,7 +262,7 @@ impl Hunk {
     /// are present on the new side. Used for `--stat` and by tests, and the distinction is the
     /// whole reason the function exists rather than a caller using `new_lines`.
     pub fn added(&self) -> usize {
-        todo!()
+        self.lines.iter().filter(|l| l.kind == LineKind::Added).count()
     }
 
     /// Phase 8 — how many lines the hunk removes.
