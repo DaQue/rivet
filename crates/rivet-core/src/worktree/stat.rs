@@ -121,7 +121,18 @@ impl StatData {
     /// Used when re-checking an entry the index describes without touching the filesystem, and
     /// when a caller wants to compare a fresh `lstat` against what was recorded.
     pub fn from_entry(entry: &IndexEntry) -> Self {
-        todo!()
+        Self {
+            ctime_seconds: entry.ctime_seconds,
+            ctime_nanos: entry.ctime_nanos,
+            mtime_seconds: entry.mtime_seconds,
+            mtime_nanos: entry.mtime_nanos,
+            dev: entry.dev,
+            ino: entry.ino,
+            mode: entry.mode,
+            uid: entry.uid,
+            gid: entry.gid,
+            size: entry.size,
+        }
     }
 
     /// Phase 4 — whether this stat data agrees with an index entry's cached copy.
