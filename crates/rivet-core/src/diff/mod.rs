@@ -120,7 +120,12 @@ impl DiffOptions {
     /// Phase 8 — the options a plain `rivet diff` uses: Myers, three lines of context, binary
     /// detection on, no pathspec.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            algorithm: DiffAlgorithm::Myers,
+            context: 3,
+            detect_binary: true,
+            pathspec: BString::from(""),
+        }
     }
 
     /// Phase 8 — set the context line count.
