@@ -1217,7 +1217,7 @@ impl Index {
 
     /// Phase 3 — the extensions, in file order.
     pub fn extensions(&self) -> &[IndexExtension] {
-        todo!()
+        &self.extensions
     }
 
     /// Phase 3 — the extensions, mutably.
