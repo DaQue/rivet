@@ -529,7 +529,7 @@ impl Repository {
     ///
     /// [`crate::error::Error::BareRepository`] when there is no work tree.
     pub fn require_worktree(&self, op: &'static str) -> Result<&Worktree> {
-        todo!()
+        self.worktree()
     }
 
     /// Phase 4 — what kind of repository this is.
