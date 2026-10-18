@@ -204,7 +204,13 @@ impl<'a> PackIndex<'a> {
     /// [`crate::odb::Odb`]'s question, and it must also consult the loose objects, which this type
     /// cannot see.
     pub fn lookup_prefix(&self, prefix: &ObjectId) -> Vec<PackIndexEntry> {
-        todo!()
+        let mut result = Vec::new();
+        for entry in self.iter() {
+            if entry.oid.starts_with(prefix) {
+                result.push(entry.clone());
+            }
+        }
+        result
     }
 
     /// Phase 10 — every entry, in id order.
