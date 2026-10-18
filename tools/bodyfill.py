@@ -517,16 +517,21 @@ def stub_files(crate):
 
 def running_agents():
     """Other agent CLIs editing this tree would poison every cargo check."""
-    try:
-        p = subprocess.run(["pgrep", "-af", "claude|codex"], capture_output=True, text=True)
-    except OSError:
-        return []
+    names = {"claude", "claude-code", "codex"}
     me = os.getpid()
     hits = []
-    for line in p.stdout.splitlines():
-        pid = line.split(" ", 1)[0]
-        if pid.isdigit() and int(pid) != me:
-            hits.append(line)
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == me:
+            continue
+        try:
+            raw = open(f"/proc/{pid}/cmdline", "rb").read()
+        except OSError:
+            continue
+        argv = [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
+        if not argv:
+            continue
+        if any(os.path.basename(a) in names for a in argv):
+            hits.append(f"{pid} {' '.join(argv)[:160]}")
     return hits
 
 
