@@ -194,7 +194,8 @@ impl RmOptions {
 
     /// Phase 3 — allow removing a directory.
     pub fn recursive(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.recursive = on;
+        self
     }
 }
 
