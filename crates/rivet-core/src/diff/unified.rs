@@ -148,7 +148,13 @@ impl HunkLine {
 
     /// Phase 8 — a removed line.
     pub fn removed(content: impl Into<BString>) -> Self {
-        todo!()
+        let content = content.into();
+        let has_newline = content.ends_with(&[b'\n']);
+        Self {
+            kind: LineKind::Removed,
+            content,
+            has_newline,
+        }
     }
 
     /// Phase 8 — an added line.
