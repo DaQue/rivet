@@ -466,7 +466,31 @@ pub struct RevRange {
 ///
 /// As [`RevSpec::parse`] for either side.
 pub fn parse_rev_spec(format: ObjectFormat, spec: &BStr, refs: &RefStore) -> Result<RevRange> {
-    todo!()
+    let spec = &spec[..];
+    let (left, right, symmetric) = if spec.starts_with(b"...") {
+        let rest = &spec[3..];
+        let dot = rest.iter().position(|&b| b == b'.').unwrap_or(rest.len());
+        (Some(&rest[..dot]), Some(&rest[dot + 1..]), true)
+    } else if let Some(dot) = spec.iter().position(|&b| b == b'.') {
+        if dot + 1 < spec.len() && spec[dot + 1] == b'.' {
+            (Some(&spec[..dot]), Some(&spec[dot + 2..]), false)
+        } else {
+            (None, None, false)
+        }
+    } else {
+        (None, None, false)
+    };
+    let from = if left.is_some() {
+        Some(RevSpec::parse(format, BStr::new(left.unwrap()), refs)?)
+    } else {
+        None
+    };
+    let to = if right.is_some() {
+        Some(RevSpec::parse(format, BStr::new(right.unwrap()), refs)?)
+    } else {
+        None
+    };
+    Ok(RevRange { from, to, symmetric })
 }
 
 /// Phase 4 — a commit walker over the object database.
