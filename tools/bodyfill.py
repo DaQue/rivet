@@ -251,41 +251,102 @@ def _compact_enum(block):
 
 def imported_types(text):
     """Full definitions of types imported by name - enum variants carry fields."""
-    out = []
-    seen = set()
+    pairs = []
     for m in re.finditer(r"use\s+crate::([A-Za-z0-9_:]+)::\{([^}]*)\}", text):
-        mod = m.group(1)
         for n in m.group(2).split(","):
             n = n.strip().split(" as ")[0].strip()
-            if not n or not n[0].isupper() or n in seen:
+            if n and n[0].isupper():
+                pairs.append((m.group(1), n))
+    # `use crate::error::Error;` - single-name imports were invisible to the old regex,
+    # so prompts carried no variant shapes and the model guessed struct-vs-tuple wrong.
+    for m in re.finditer(r"^use\s+crate::([A-Za-z0-9_:]+)::([A-Z][A-Za-z0-9_]*)\s*;", text, re.M):
+        pairs.append((m.group(1), m.group(2)))
+    out = []
+    seen = set()
+    for mod, n in pairs:
+        if n in seen or n == "Error":  # Error has its own compact shape index
+            continue
+        seen.add(n)
+        base = os.path.join(REPO, "crates/rivet-core/src", mod.replace("::", "/"))
+        f = base + ".rs"
+        if not os.path.isfile(f):
+            f = os.path.join(base, "mod.rs")
+        if not os.path.isfile(f):
+            continue
+        src = open(f, encoding="utf-8").read()
+        lines = src.split("\n")
+        offs = line_offsets(lines)
+        for i, ln in enumerate(lines):
+            if not re.match(r"^\s*pub\s+(?:struct|enum)\s+" + re.escape(n) + r"\b", ln):
                 continue
-            seen.add(n)
-            base = os.path.join(REPO, "crates/rivet-core/src", mod.replace("::", "/"))
-            p = base + ".rs"
-            if not os.path.isfile(p):
-                p = os.path.join(base, "mod.rs")
-            if not os.path.isfile(p):
-                continue
-            src = open(p, encoding="utf-8").read()
-            lines = src.split("\n")
-            offs = line_offsets(lines)
-            for i, ln in enumerate(lines):
-                if not re.match(
-                    r"^\s*pub\s+(?:struct|enum)\s+" + re.escape(n) + r"\b", ln
-                ):
-                    continue
-                is_enum = re.match(r"^\s*pub\s+enum\s", ln) is not None
-                k = src.find("{", offs[i])
-                close = scan_body(src, k) if k >= 0 else -1
-                if close < 0:
-                    break
-                end = src.count("\n", 0, close)
-                block = _strip_comments("\n".join(lines[i : end + 1]))
-                out.append(_compact_enum(block) if is_enum else block)
+            is_enum = re.match(r"^\s*pub\s+enum\s", ln) is not None
+            k = src.find("{", offs[i])
+            close = scan_body(src, k) if k >= 0 else -1
+            if close < 0:
                 break
-        if len("\n".join(out)) > 2600:
+            end = src.count("\n", 0, close)
+            block = _strip_comments("\n".join(lines[i : end + 1]))
+            out.append(
+                "enum " + n + " {\n" + _compact_enum(block) + "\n}" if is_enum else block
+            )
             break
-    return "\n".join(out)[:2600]
+        if len("\n".join(out)) > 3000:
+            break
+    return "\n".join(out)[:3000]
+
+
+
+def error_index():
+    """Compact variant shapes for Error: `{a, b}` is a struct variant, `(_)` is tuple-like."""
+    cache = getattr(error_index, "_cache", None)
+    if cache is not None:
+        return cache
+    p = os.path.join(REPO, "crates/rivet-core/src/error.rs")
+    src = open(p, encoding="utf-8").read()
+    k = src.index("pub enum Error")
+    ob = src.index("{", k)
+    cb = scan_body(src, ob)
+    body = re.sub(r"#\[[^\]]*\]", "", src[ob + 1 : cb])
+    body = _strip_comments(body)
+    pieces, depth, cur = [], 0, []
+    for ch in body:
+        if ch in "([{<":
+            depth += 1
+        elif ch in ")]}>":
+            depth -= 1
+        if ch == "," and depth == 0:
+            pieces.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    pieces.append("".join(cur))
+    out = []
+    for piece in pieces:
+        piece = piece.strip()
+        m = re.match(r"([A-Z][A-Za-z0-9_]*)\s*(\(|\{)", piece)
+        if not m:
+            if re.match(r"^[A-Z][A-Za-z0-9_]*$", piece):
+                out.append(piece)
+            continue
+        name, opener = m.group(1), m.group(2)
+        inner = piece[m.end() :]
+        if opener == "{":
+            fields = re.findall(r"(?:^|[,{])\s*([a-z_][A-Za-z0-9_]*)\s*:", inner)
+            out.append(f"{name} {{ {', '.join(fields)} }}")
+        else:
+            depth, n = 0, 0
+            for ch in inner:
+                if ch in "([{<":
+                    depth += 1
+                elif ch in ")]}>":
+                    depth -= 1
+                elif ch == "," and depth == 0:
+                    n += 1
+            n = n + 1 if inner.strip(" )").strip() else 0
+            out.append(f"{name}({', '.join('_' for _ in range(n))})")
+    txt = "\n".join("  " + line for line in out)
+    error_index._cache = txt
+    return txt
 
 
 def api_sheet(text):
@@ -348,6 +409,8 @@ def build_prompt(text, lines, stub):
         " do not invent signatures): " + imported_api(text),
         "IMPORTED TYPE DEFINITIONS (exact variants and fields; construct them exactly):\n"
         + imported_types(text),
+        "ERROR VARIANT SHAPES (use exactly these; `{a, b}` = struct variant needs named"
+        " fields, `(_)` = tuple variant takes a positional value):\n" + error_index(),
         "WORKED EXAMPLE (exactly how this crate hashes raw bytes):\n"
         "    let mut hasher = format.hasher();\n"
         "    hasher.update(&buf);\n"
@@ -553,6 +616,82 @@ def deadline_ts(until, max_hours):
     return now + max_hours * 3600
 
 
+
+_CRATE_DEFS = {}
+
+
+def crate_defs(crate):
+    """Map every public item name defined in the crate to the module path that defines it."""
+    if crate in _CRATE_DEFS:
+        return _CRATE_DEFS[crate]
+    root = os.path.join(REPO, "crates", crate, "src")
+    defs = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for fn in files:
+            if not fn.endswith(".rs"):
+                continue
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, root)[:-3]
+            parts = rel.split(os.sep)
+            if parts[-1] == "mod":
+                parts = parts[:-1]
+            if not parts:
+                continue
+            mod = "crate::" + "::".join(parts)
+            try:
+                src = open(full, encoding="utf-8").read()
+            except OSError:
+                continue
+            for name in re.findall(
+                r"^pub(?:\([^)]*\))?\s+(?:struct|enum|type|trait|union|const|static|fn)\s+([A-Za-z_][A-Za-z0-9_]*)",
+                src,
+                re.M,
+            ):
+                defs.setdefault(name, []).append(mod)
+    _CRATE_DEFS[crate] = defs
+    return defs
+
+
+def _matches_import(src, name):
+    return re.search(rf"^\s*use\s+[^;]*\b{name}\b[^;]*;", src, re.M) is not None
+
+
+def add_imports(src, err, crate, own_module):
+    """Insert `use` lines for names the compiler says are missing from this scope."""
+    wanted = set(
+        re.findall(r"cannot find (?:type|value|function) `([A-Za-z_][A-Za-z0-9_]*)` in this scope", err)
+    )
+    if not wanted:
+        return src
+    defs = crate_defs(crate)
+    lines = src.split("\n")
+    added = []
+    last_use = None
+    for i, line in enumerate(lines):
+        if line.startswith("use ") or line.startswith("pub use "):
+            last_use = i
+    for name in sorted(wanted):
+        mods = [m for m in defs.get(name, []) if m != own_module]
+        if not mods or _matches_import(src, name):
+            continue
+        mods.sort(key=lambda m: (m.count("::"), m))
+        added.append(f"use {mods[0]}::{name};")
+    if not added:
+        return src
+    if last_use is None:
+        # after the leading //! doc block, before the first item
+        idx = 0
+        for i, line in enumerate(lines):
+            if line.startswith("//!") or line.strip() == "":
+                idx = i + 1
+            else:
+                break
+        lines[idx:idx] = added + [""]
+    else:
+        lines[last_use + 1 : last_use + 1] = added
+    return "\n".join(lines)
+
+
 def run_file(rel, args, log, prog, deadline, counter):
     """Fill stubs in one file. Return (status, done_count)."""
     path = os.path.join(REPO, rel)
@@ -631,6 +770,21 @@ def run_file(rel, args, log, prog, deadline, counter):
             new = text[: stub["open"] + 1] + "\n" + code + "\n" + stub["indent"] + text[stub["close"] :]
             open(path, "w", encoding="utf-8").write(new)
             rc, out = cargo(["check", "-p", args.crate, "--all-targets", "--message-format=short"])
+            if rc != 0:
+                # The model writes `Error::RefNotFound` without an import: splice in the `use`
+                # line it forgot, then re-check before burning the second model call.
+                own = "crate::" + "::".join(
+                    os.path.relpath(path, os.path.join(REPO, "crates", args.crate, "src"))[:-3].split(os.sep)
+                )
+                fixed = add_imports(new, out, args.crate, own)
+                if fixed != new:
+                    open(path, "w", encoding="utf-8").write(fixed)
+                    frc, fout = cargo(
+                        ["check", "-p", args.crate, "--all-targets", "--message-format=short"]
+                    )
+                    if frc == 0:
+                        log("  imported missing names, check clean")
+                    new, rc, out = fixed, frc, fout
             if rc == 0 and args.gate == "tests":
                 trc, tout = cargo(["test", "-p", args.crate, "--lib", "--quiet"])
                 if trc != 0:
