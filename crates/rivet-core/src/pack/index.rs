@@ -57,6 +57,8 @@ use std::fmt;
 
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
+use crate::error::Error;
+use crate::pack::crc32;
 
 /// Phase 10 — one row of a v2 index: an object, and where in the pack it lives.
 ///
@@ -128,7 +130,60 @@ impl<'a> PackIndex<'a> {
     /// [`crate::error::Error::InvalidHash`] if a stored id is not `format.len()` bytes — which can
     /// only happen if the caller passed the wrong format.
     pub fn parse(data: &'a [u8], format: ObjectFormat) -> Result<Self> {
-        todo!()
+        let len = data.len();
+        let min_len = 8 + 256 * 4 + 4 + 4;
+        if len < min_len {
+            return Err(Error::CorruptPackIndex { reason: "truncated index".into() });
+        }
+        let version = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        if version != 2 {
+            return Err(Error::UnsupportedPackIndexVersion { version });
+        }
+        let fanout_start = 8;
+        let fanout_end = fanout_start + 256 * 4;
+        let mut fanout = [0u32; 256];
+        for i in 0..256 {
+            fanout[i] = u32::from_be_bytes([
+            data[fanout_start + i * 4],
+            data[fanout_start + i * 4 + 1],
+            data[fanout_start + i * 4 + 2],
+            data[fanout_start + i * 4 + 3],
+        ]);
+        }
+        for i in 0..255 {
+            if fanout[i] > fanout[i + 1] {
+                return Err(Error::CorruptPackIndex { reason: "non-monotonic fanout".into() });
+            }
+        }
+        let n = fanout[255] as usize;
+        let large_offset_start = fanout_end;
+        let large_offset_end = large_offset_start + n * 8;
+        let trailer_start = large_offset_end;
+        let trailer_end = trailer_start + 8;
+        if trailer_end != len {
+            return Err(Error::CorruptPackIndex { reason: "length mismatch".into() });
+        }
+        let expected_checksum = u32::from_be_bytes([
+        data[trailer_start],
+        data[trailer_start + 1],
+        data[trailer_start + 2],
+        data[trailer_start + 3],
+        ]);
+        let actual_checksum = crc32(&data[..trailer_start]);
+        if expected_checksum != actual_checksum {
+            return Err(Error::CorruptPackIndex { reason: "checksum mismatch".into() });
+        }
+        let expected_pack_checksum = u32::from_be_bytes([
+        data[trailer_start + 4],
+        data[trailer_start + 5],
+        data[trailer_start + 6],
+        data[trailer_start + 7],
+        ]);
+        let pack_checksum = crc32(&data[trailer_start + 4..trailer_end]);
+        if expected_pack_checksum != pack_checksum {
+            return Err(Error::CorruptPackIndex { reason: "pack checksum mismatch".into() });
+        }
+        Ok(Self { data, format })
     }
 
     /// Phase 10 — the repository's id width, as it was passed in.
