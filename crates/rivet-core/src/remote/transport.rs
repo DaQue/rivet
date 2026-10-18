@@ -348,7 +348,7 @@ impl<'a> CapabilitySet<'a> {
     /// generation is recorded on [`RefAdvertisement`] because it changes how the response is read,
     /// not just what it contains.
     pub fn is_v2(&self) -> bool {
-        todo!()
+        self.contains(b"version=2")
     }
 }
 
