@@ -461,7 +461,7 @@ impl IgnoreDecision {
     /// ignored" wants [`IgnoreStack::is_ignored`], which also applies the ancestor rule; this is the
     /// raw answer of one match.
     pub const fn is_ignored(&self) -> bool {
-        todo!()
+        matches!(self, IgnoreDecision::Ignored)
     }
 }
 
