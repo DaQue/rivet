@@ -66,6 +66,7 @@
 use bstr::{BStr, BString};
 
 use crate::error::Result;
+use crate::error::Error;
 
 /// Phase 11 — which protocol a remote URL selects.
 ///
@@ -117,7 +118,20 @@ impl RemoteScheme {
     /// unrecognised. A URL whose scheme Rivet does not speak is refused up front rather than being
     /// misread as a local path.
     pub fn parse(name: &BStr) -> Result<Self> {
-        todo!()
+        let lower: BString = name.iter().map(|b| b.to_ascii_lowercase()).collect();
+        if lower == "https" {
+            Ok(Self::Https)
+        } else if lower == "http" {
+            Ok(Self::Http)
+        } else if lower == "ssh" || lower == "git+ssh" || lower == "ssh+git" {
+            Ok(Self::Ssh)
+        } else if lower == "git" {
+            Ok(Self::Git)
+        } else if lower == "file" {
+            Ok(Self::File)
+        } else {
+            Err(Error::InvalidRemoteUrl { url: name.into(), reason: "unsupported scheme" })
+        }
     }
 
     /// Phase 11 — whether this scheme involves the network at all.
