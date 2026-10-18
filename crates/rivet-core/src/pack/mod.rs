@@ -374,7 +374,12 @@ pub fn fix_thin_pack(
 /// `Object::Commit` around a blob's bytes. Round-tripping through
 /// [`crate::object::AnyObject::parse`] is the checked path.
 pub(crate) fn wrap_object(kind: ObjectKind, data: Vec<u8>) -> Object {
-    todo!()
+    match kind {
+        ObjectKind::Blob => Object::Blob(data),
+        ObjectKind::Tree => Object::Tree(data),
+        ObjectKind::Commit => Object::Commit(data),
+        ObjectKind::Tag => Object::Tag(data),
+    }
 }
 
 /// Phase 10 — read a big-endian `u32` from `data` at `at`.
