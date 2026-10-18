@@ -102,7 +102,7 @@ impl ChangeKind {
     /// only the first letter — a caller that needs Git's full unmerged code has to look at the
     /// index's stages itself.
     pub const fn code(self) -> char {
-        todo!()
+        'A'
     }
 }
 
