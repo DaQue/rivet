@@ -98,7 +98,12 @@ impl Default for SidebandOptions {
     /// far more likely to be running under the negotiated capability than outside it. A caller
     /// reading a raw stream sets it to false explicitly, and the field is public for that reason.
     fn default() -> Self {
-        todo!()
+        Self {
+            enabled: true,
+            max_payload: 65516,
+            want_progress: true,
+            version: ProtocolVersion::V2,
+        }
     }
 }
 
