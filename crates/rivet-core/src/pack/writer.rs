@@ -239,7 +239,21 @@ impl PackWriter {
     /// writer produced something it cannot read back, which is a bug in Rivet rather than in
     /// repository data, and is reported rather than asserted so that a fuzz target can reach it.
     pub fn finish(self) -> Result<(Vec<u8>, PackWriteSummary)> {
-        todo!()
+        let count = self.entries.len() as u32;
+        let mut data = self.data;
+        data[8..12].copy_from_slice(&count.to_le_bytes());
+        let mut hasher = self.format.hasher();
+        hasher.update(&data);
+        let checksum = hasher.finish()?;
+        let mut index = Vec::new();
+        for entry in &self.entries {
+            let mut rec = Vec::with_capacity(40);
+            rec.extend_from_slice(entry.offset.to_le_bytes().as_slice());
+            rec.extend_from_slice(&[0; 20]);
+            rec.extend_from_slice(entry.oid.as_bytes());
+            index.extend_from_slice(&rec);
+        }
+        Ok((data, PackWriteSummary { checksum, entry_count: count, index }))
     }
 
     /// Phase 10 — seal the pack and write `pack-<checksum>.pack` and its `.idx` under `dir`.
