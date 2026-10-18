@@ -105,7 +105,14 @@ impl RefCategory {
     /// This is Rivet's own vocabulary for reporting, not part of any on-disk format, so it may be
     /// changed for readability — unlike [`crate::object::ObjectKind::as_str`], which may not.
     pub const fn as_str(self) -> &'static str {
-        todo!()
+        match self {
+            RefCategory::Head => "head",
+            RefCategory::Branch => "branch",
+            RefCategory::Tag => "tag",
+            RefCategory::Remote => "remote",
+            RefCategory::Note => "note",
+            RefCategory::Other => "other",
+        }
     }
 }
 
