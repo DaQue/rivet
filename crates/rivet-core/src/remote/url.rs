@@ -130,7 +130,10 @@ impl RemoteScheme {
     /// `git://` is networked and unauthenticated, and `https://` against a public repository is
     /// networked and needs no credentials.
     pub const fn is_networked(self) -> bool {
-        todo!()
+        match self {
+            RemoteScheme::File => false,
+            _ => true,
+        }
     }
 
     /// Phase 11 — the spelling Git uses in config and in its own error messages.
