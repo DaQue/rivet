@@ -153,7 +153,7 @@ impl ReflogEntry {
     /// being created by `switch -c` both look like this; the reflog alone cannot tell them apart,
     /// and the message is what distinguishes them for a human.
     pub fn is_creation(&self) -> bool {
-        todo!()
+        self.old.is_zero()
     }
 
     /// Phase 2 — whether this entry records a ref being deleted.
