@@ -361,7 +361,18 @@ impl std::fmt::Display for RemoteUrl {
     /// therefore making a visible choice. This is the one place in the crate where `Display` is not
     /// the identity of the value, and it is worth knowing that before "fixing" it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        let s = self.to_string();
+        let b = BStr::new(s.as_bytes());
+        let span = credential_span(b);
+        let mut out = String::new();
+        if let Some(r) = span {
+            out.push_str(&s[..r.start]);
+            out.push_str("****");
+            out.push_str(&s[r.end..]);
+        } else {
+            out.push_str(&s);
+        }
+        write!(f, "{}", out)
     }
 }
 
