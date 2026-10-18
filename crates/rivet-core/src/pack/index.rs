@@ -448,6 +448,6 @@ impl<'a> Iterator for PackIndexIter<'a> {
 impl ExactSizeIterator for PackIndexIter<'_> {
     /// Phase 10 — the same count as [`PackIndexIter::size_hint`]'s lower bound.
     fn len(&self) -> usize {
-        todo!()
+        self.index.len() - self.next
     }
 }
