@@ -219,7 +219,7 @@ impl RefUpdate {
     /// True exactly when `new` is the zero id. A caller that used it as "the ref will not exist
     /// afterwards" would miss nothing, because there is no other way to spell a delete on the wire.
     pub fn is_delete(&self) -> bool {
-        todo!()
+        self.new.is_zero()
     }
 
     /// Phase 11 — whether this update creates the ref.
