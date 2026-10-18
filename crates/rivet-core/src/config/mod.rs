@@ -127,7 +127,13 @@ impl ConfigEntry {
         key: BString,
         value: BString,
     ) -> Self {
-        todo!()
+        Self {
+            section,
+            subsection,
+            key,
+            value,
+            origin: None,
+        }
     }
 
     /// Phase 2 — the flat key, e.g. `core.filemode` or `remote.origin.url`.
