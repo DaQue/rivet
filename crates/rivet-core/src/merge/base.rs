@@ -94,7 +94,7 @@ impl MergeBase {
     /// caller uses to decide whether to warn, so it must be cheap and it must not be `common.len()
     /// > 1` computed against a list that was deduplicated differently in two code paths.
     pub fn is_criss_cross(&self) -> bool {
-        todo!()
+        self.common.len() > 1
     }
 
     /// Phase 9 — whether `oid` is one of the commits being merged, i.e. whether a fast-forward is
