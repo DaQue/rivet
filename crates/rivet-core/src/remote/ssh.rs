@@ -420,7 +420,10 @@ impl Transport for SshTransport {
 
     /// Phase 11 — the capabilities from the last [`Transport::connect`].
     fn capabilities(&self) -> &CapabilitySet<'_> {
-        todo!()
+        match &self.advertisement {
+            Some(ad) => &ad.capabilities,
+            None => &self.advertisement.as_ref().unwrap().capabilities,
+        }
     }
 
     /// Phase 11 — negotiate a fetch down the child's pipes and write the pack to `into`.
