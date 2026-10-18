@@ -217,7 +217,8 @@ impl RefName {
     /// [`crate::error::Error::InvalidRefName`] if the resulting full name is not valid, which is
     /// how a short form containing `..` or a nested `.lock` is caught.
     pub fn branch(short: &BStr) -> Result<Self> {
-        todo!()
+        let full = format!("refs/heads/{}", short);
+        Self::from_bytes(full.as_bytes())
     }
 
     /// Phase 2 — build the name of a tag from its short form.
