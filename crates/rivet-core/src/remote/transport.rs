@@ -1023,7 +1023,7 @@ impl Transport for LocalTransport {
     /// None. The signature returns a [`crate::error::Result`] to match the trait, and this
     /// implementation never fails.
     fn disconnect(&mut self) -> Result<()> {
-        todo!()
+        Ok(())
     }
 }
 
