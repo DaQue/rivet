@@ -581,7 +581,27 @@ impl Config {
     /// Nothing. The signature is infallible because a section name is a plain byte string, not a
     /// dotted key that needs parsing.
     pub fn remove_section(&mut self, section: &BStr, subsection: Option<&BStr>) -> bool {
-        todo!()
+        let mut removed = false;
+        let mut i = 0;
+        while i < self.entries.len() {
+            let entry = &self.entries[i];
+            if entry.key.eq_ignore_ascii_case(section) {
+                if let Some(sub) = subsection {
+                    if entry.key == sub {
+                        self.entries.remove(i);
+                        removed = true;
+                    } else {
+                        i += 1;
+                    }
+                } else {
+                    self.entries.remove(i);
+                    removed = true;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        removed
     }
 
     /// Phase 2 — the names of every section, in file order, duplicates included.
