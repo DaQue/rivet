@@ -385,7 +385,7 @@ impl IgnoreFrame {
 
     /// Phase 5 — the frame's patterns, in file order.
     pub fn patterns(&self) -> &[Pattern] {
-        todo!()
+        &self.patterns
     }
 
     /// Phase 5 — the frame's source.
