@@ -258,5 +258,5 @@ pub fn line_count(data: &[u8]) -> usize {
 /// * **A buffer ending in `\r\n` ends in `\n`** and needs no marker, even though the last line's
 ///   content holds a `\r`. The marker is about the terminator, not about the CR.
 pub fn needs_newline_marker(data: &[u8]) -> bool {
-    todo!()
+    !data.is_empty() && !data.ends_with(b"\n")
 }
