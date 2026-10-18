@@ -278,7 +278,7 @@ impl RefName {
 
     /// Phase 2 — take the owned bytes back.
     pub fn into_bstring(self) -> BString {
-        todo!()
+        self.0
     }
 
     /// Phase 2 — which namespace this name lives in.
