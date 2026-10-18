@@ -1245,7 +1245,7 @@ impl Index {
     /// `false` while there is no stage-0 entry at all — so this is not "everything is staged
     /// cleanly", which is [`Index::has_conflicts`] asked the other way.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.entries.is_empty()
     }
 
     /// Phase 3 — find the stage-0 entry for a path.
