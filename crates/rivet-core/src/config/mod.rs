@@ -323,7 +323,50 @@ impl Config {
     ///   normalising writer that dropped or reordered them would produce a repository that
     ///   `repo::Repository` then refuses to open, or worse, opens as the wrong format.
     pub fn to_bytes(&self) -> Vec<u8> {
-        todo!()
+        let mut out = Vec::new();
+        for entry in &self.entries {
+            let key: &[u8] = entry.key.as_ref();
+            let section: &[u8] = entry.section.as_ref();
+            let value: &[u8] = entry.value.as_ref();
+            if !section.is_empty() {
+                out.extend_from_slice(b"[");
+                let needs_quote = section.iter().any(|b| *b == b' ' || *b == b'"' || *b == b'#');
+                if needs_quote {
+                    out.push(b'"');
+                    for b in section {
+                        if *b == b'\\' || *b == b'"' {
+                            out.push(b'\\');
+                        }
+                        out.push(*b);
+                    }
+                    out.push(b'"');
+                } else {
+                    out.extend_from_slice(section);
+                }
+                out.push(b']');
+                out.push(b'\n');
+            }
+            out.extend_from_slice(key);
+            out.push(b'=');
+            let needs_quote = value.iter().any(|b| *b == b'\\' || *b == b'"')
+            || (value.first().map(|b| b.is_ascii_whitespace()).unwrap_or(false))
+            || (value.last().map(|b| b.is_ascii_whitespace()).unwrap_or(false))
+            || value.windows(2).any(|w| w[0].is_ascii_whitespace() && (w[1] == b'#' || w[1] == b';'));
+            if needs_quote {
+                out.push(b'"');
+                for b in value {
+                    if *b == b'\\' || *b == b'"' {
+                        out.push(b'\\');
+                    }
+                    out.push(*b);
+                }
+                out.push(b'"');
+            } else {
+                out.extend_from_slice(value);
+            }
+            out.push(b'\n');
+        }
+        out
     }
 
     /// Phase 2 — write atomically, via `path.lock`.
