@@ -334,7 +334,7 @@ impl Config {
     /// [`crate::error::Error::ConfigSyntax`] if the flat key does not have the shape
     /// `section.key` or `section.subsection.key`; see [`ConfigEntry::parse_key`].
     pub fn get(&self, key: &BStr) -> Result<Option<&BStr>> {
-        todo!()
+        Ok(self.entries.iter().rev().find(|e| e.key == key).map(|e| e.value.as_ref()))
     }
 
     /// Phase 2 — every value of a key, in file order.
