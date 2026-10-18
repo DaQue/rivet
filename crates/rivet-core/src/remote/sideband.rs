@@ -363,6 +363,10 @@ impl From<PackWriteSummary> for StoredPack {
     /// signature that takes either ambiguous to a reader. The representation being identical is the
     /// happy accident that makes the conversion free, not the reason for the type.
     fn from(summary: PackWriteSummary) -> Self {
-        todo!()
+        Self {
+            checksum: summary.checksum,
+            entry_count: summary.entry_count,
+            index: summary.index,
+        }
     }
 }
