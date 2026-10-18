@@ -138,7 +138,7 @@ impl FileDiff {
     /// file — which is what `git diff` prints as `T` in `--name-status`. It is not a mode change
     /// between `100644` and `100755`, which is [`FileDiff::is_mode_only`].
     pub fn is_type_change(&self) -> bool {
-        todo!()
+        self.old_mode.is_some() && self.new_mode.is_some() && self.old_mode.unwrap() != self.new_mode.unwrap()
     }
 
     /// Phase 8 — the counts `--stat` and `--numstat` need.
