@@ -160,7 +160,7 @@ impl<'a> PackIndex<'a> {
     /// produces. It is **not** the same as "the pack is missing"; that is a caller-level
     /// distinction which cannot be made from this type.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.len() == 0
     }
 
     /// Phase 10 — the pack's own checksum, the 20 or 32 bytes before the index's.
