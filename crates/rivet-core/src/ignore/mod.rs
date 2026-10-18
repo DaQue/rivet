@@ -123,7 +123,10 @@ impl IgnoreSource {
     /// `::` for the two empty fields rather than omitting them, so a renderer must not treat this as
     /// "print nothing".
     pub fn path(&self) -> Option<&BStr> {
-        todo!()
+        match self {
+            IgnoreSource::Gitignore(p) => Some(p.as_ref()),
+            _ => None
+        }
     }
 
     /// Phase 5 — how a report names this source.
