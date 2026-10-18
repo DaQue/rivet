@@ -191,7 +191,8 @@ impl SshTransport {
     ///   invocation rather than the remote command; a caller assembling a diagnostic needs both, and
     ///   [`SshTransport::ssh_command`] returns the other half.
     pub fn build_remote_command(url: &RemoteUrl, service: Service) -> BString {
-        todo!()
+        let path = quote_remote_path(url.path.as_ref());
+        remote_command(service, path.as_ref())
     }
 
     /// Phase 11 — the `ssh` invocation, as a program and its arguments.
