@@ -1212,7 +1212,7 @@ impl Index {
     /// fail to find an entry that is visibly present. Call [`Index::sort`] before writing unless the
     /// change provably preserves order.
     pub fn entries_mut(&mut self) -> &mut Vec<IndexEntry> {
-        todo!()
+        &mut self.entries
     }
 
     /// Phase 3 — the extensions, in file order.
