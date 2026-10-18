@@ -145,7 +145,7 @@ pub struct AddOutcome {
 impl AddOutcome {
     /// Phase 3 — whether the operation changed nothing.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.added == 0 && self.updated == 0 && self.removed == 0
     }
 }
 
