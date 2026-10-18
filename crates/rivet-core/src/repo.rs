@@ -560,7 +560,7 @@ impl Repository {
     /// repository mutably at once in spirit, which is why the two are separate accessors rather
     /// than one returning a tuple.
     pub fn odb_mut(&mut self) -> &mut Odb {
-        todo!()
+        &mut self.odb
     }
 
     /// Phase 4 — the ref store.
