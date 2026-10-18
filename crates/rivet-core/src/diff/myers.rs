@@ -91,7 +91,12 @@ pub struct Edit {
 impl Edit {
     /// Phase 8 — an insertion: no old lines, `len` new ones.
     pub fn insert(new_index: usize, len: usize) -> Self {
-        todo!()
+        Self {
+            old_index: new_index,
+            old_len: 0,
+            new_index,
+            new_len: len,
+        }
     }
 
     /// Phase 8 — a deletion: `len` old lines, no new ones.
