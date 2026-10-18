@@ -435,7 +435,7 @@ impl RefAdvertisement {
     ///   whose `HEAD` names an unborn branch advertises `symref=HEAD:refs/heads/main` with no
     ///   `refs/heads/main` entry, and a clone into an empty repository is exactly that case.
     pub fn remote_head(&self) -> Option<&BStr> {
-        todo!()
+        self.refs.iter().find(|r| r.name == BStr::new(b"HEAD")).map(|r| BStr::new(&r.name))
     }
 
     /// Phase 11 — every ref under a prefix.
