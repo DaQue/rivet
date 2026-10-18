@@ -245,7 +245,18 @@ impl PackedObjectStore {
     /// None from the tables, which were validated at open; the signature is [`Result`] so that a
     /// later implementation that re-validates the pair does not change every call site.
     pub fn oids(&self) -> Result<Vec<ObjectId>> {
-        todo!()
+        let mut ids = Vec::with_capacity(self.len());
+        for i in 0..self.len() {
+            let (kind, data) = self.read_at(i as u64, None)?;
+            let obj = match kind {
+                ObjectKind::Blob => Object::Blob(data),
+                ObjectKind::Tree => Object::Tree(data),
+                ObjectKind::Commit => Object::Commit(data),
+                ObjectKind::Tag => Object::Tag(data),
+            };
+            ids.push(obj.id(self.format())?);
+        }
+        Ok(ids)
     }
 
     /// Phase 10 — confirm the pack's trailer by hashing its contents.
