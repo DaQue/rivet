@@ -206,7 +206,7 @@ pub struct StatCache {
 impl StatCache {
     /// Phase 4 — an empty cache.
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
 
     /// Phase 4 — an empty cache with room for `capacity` entries.
