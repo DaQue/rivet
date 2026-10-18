@@ -585,7 +585,9 @@ impl IgnoreStack {
     /// line — have the lowest depth and must survive every truncation, which is why they are pushed
     /// with a depth that no directory can have.
     pub fn truncate(&mut self, depth: usize) {
-        todo!()
+        while self.frames.last().map(|f| f.depth).is_some_and(|d| d >= depth) {
+            self.frames.pop();
+        }
     }
 
     /// Phase 5 — the decision for a path, naming the pattern that made it.
