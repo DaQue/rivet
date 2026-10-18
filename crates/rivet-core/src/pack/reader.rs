@@ -193,7 +193,7 @@ impl<'a> PackFile<'a> {
     /// wrong, but because there is nothing to agree with, and callers that require a trustworthy
     /// pack should check the index is present separately.
     pub fn is_index_consistent(&self) -> bool {
-        todo!()
+        self.index.as_ref().map(|index| index.len() == self.object_count() as usize).unwrap_or(false)
     }
 
     /// Phase 10 — read one object by id, resolving its delta chain.
