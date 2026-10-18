@@ -68,6 +68,7 @@ use crate::hash::ObjectFormat;
 use crate::remote::RefUpdate;
 use crate::remote::url::RemoteUrl;
 use crate::error::Error;
+use crate::hash::ObjectId;
 
 /// Phase 11 — one capability the peer advertised.
 ///
@@ -474,7 +475,24 @@ impl RefAdvertisement {
         &'a self,
         plan: &'a [crate::remote::PushSpec],
     ) -> Vec<crate::remote::RefUpdate> {
-        todo!()
+        self.refs
+        .iter()
+        .filter(|r| plan.iter().any(|p| p.name == r.name))
+        .map(|r| {
+            let old = plan
+            .iter()
+            .find(|p| p.name == r.name)
+            .map(|p| p.old)
+            .unwrap_or_else(|| ObjectId::zero(self.format));
+            RefUpdate {
+                old,
+                new: r.oid,
+                name: r.name.clone(),
+                expect: None,
+                force: false,
+            }
+        })
+        .collect()
     }
 }
 
