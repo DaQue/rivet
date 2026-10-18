@@ -999,7 +999,78 @@ impl Index {
     /// [`crate::error::Error::BadIndexChecksum`] if the trailer does not match;
     /// [`crate::error::Error::CorruptIndex`] for a truncated or malformed body.
     pub fn load(path: &Path, format: ObjectFormat) -> Result<Self> {
-        todo!()
+        let data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::new())
+            }
+            Err(e) => {
+                return Err(Error::IoAtPath {
+                    path: BString::from(path.to_string_lossy().as_bytes()),
+                    source: e,
+                })
+            }
+        };
+        if data.len() < 12 {
+            return Err(Error::CorruptIndex {
+                offset: 0,
+                reason: "truncated",
+            });
+        }
+        if &data[0..4] != b"DIRC" {
+            return Err(Error::BadIndexSignature {
+                found: [data[0], data[1], data[2], data[3]],
+            });
+        }
+        let version_u32 = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+        let version = IndexVersion::from_u32(version_u32)?;
+        if version == IndexVersion::V4 {
+            return Err(Error::UnsupportedIndexVersion {
+                version: version_u32,
+            });
+        }
+        let entry_count = u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        let mut offset = 12usize;
+        let mut entries = Vec::with_capacity(entry_count);
+        for _ in 0..entry_count {
+            let (entry, consumed) = IndexEntry::parse(format, version, &data[offset..])?;
+            offset += consumed;
+            entries.push(entry);
+        }
+        let mut extensions = Vec::new();
+        while offset < data.len() {
+            if data.len() - offset < 8 {
+                return Err(Error::CorruptIndex {
+                    offset,
+                    reason: "truncated extension",
+                });
+            }
+            let sig = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]];
+            let ext_len = u32::from_be_bytes([data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7]]) as usize;
+            offset += 8;
+            if data.len() - offset < ext_len {
+                return Err(Error::CorruptIndex {
+                    offset,
+                    reason: "truncated extension data",
+                });
+            }
+            let ext_data = data[offset..offset + ext_len].to_vec();
+            offset += ext_len;
+            extensions.push(IndexExtension::new(sig, ext_data));
+        }
+        let expected_checksum = ObjectId::read(format, &data[offset..])?;
+        let actual_checksum = ObjectId::read(format, &data[offset..])?;
+        if expected_checksum != actual_checksum {
+            return Err(Error::BadIndexChecksum {
+                expected: expected_checksum,
+                actual: actual_checksum,
+            });
+        }
+        Ok(Self {
+            version,
+            entries,
+            extensions,
+        })
     }
 
     /// Phase 3 — parse and verify index bytes.
