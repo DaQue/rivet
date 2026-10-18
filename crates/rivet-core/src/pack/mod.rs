@@ -87,6 +87,7 @@ pub use delta::{
 pub use index::{OwnedPackIndex, PackIndex, PackIndexEntry, PackIndexIter};
 pub use reader::{OwnedPackFile, PackFile, PackReader};
 pub use writer::{PackWriteSummary, PackWriter};
+use crate::error::Error;
 
 /// Phase 10 — somewhere a delta base can be fetched from when it is not in the pack.
 ///
@@ -194,7 +195,15 @@ impl EntryKind {
     /// [`Error::CorruptPack`] for the unassigned values `0` and `5`. These are not
     /// forward-compatibility land: a future pack format would bump the version field instead.
     pub fn from_nibble(nibble: u8) -> Result<Self> {
-        todo!()
+        match nibble {
+            1 => Ok(Self::Commit),
+            2 => Ok(Self::Tree),
+            3 => Ok(Self::Blob),
+            4 => Ok(Self::Tag),
+            6 => Ok(Self::OfsDelta),
+            7 => Ok(Self::RefDelta),
+            _ => Err(Error::CorruptPack { reason: "unassigned pack type nibble".into() }),
+        }
     }
 
     /// Phase 10 — the entry kind that stores an object of this kind whole.
