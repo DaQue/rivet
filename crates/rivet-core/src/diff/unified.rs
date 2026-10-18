@@ -102,7 +102,12 @@ impl LineKind {
     /// line kind. A caller parsing a patch must check for the marker before this, or `\ No newline`
     /// becomes an unparseable line rather than a flag on the previous one.
     pub const fn from_prefix(byte: u8) -> Option<Self> {
-        todo!()
+        match byte {
+            b' ' => Some(LineKind::Context),
+            b'-' => Some(LineKind::Removed),
+            b'+' => Some(LineKind::Added),
+            _ => None,
+        }
     }
 }
 
