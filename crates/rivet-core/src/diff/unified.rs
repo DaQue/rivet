@@ -55,6 +55,7 @@ use std::io::Write;
 use bstr::BString;
 
 use crate::error::Result;
+use crate::hash::ObjectId;
 
 /// Phase 8 — which side of a hunk a line belongs to.
 ///
@@ -511,5 +512,11 @@ pub fn index_line_abbrev(
     format: crate::hash::ObjectFormat,
     abbrev: usize,
 ) -> BString {
-    todo!()
+    let old = old.unwrap_or_else(|| ObjectId::zero(format));
+    let new = new.unwrap_or_else(|| ObjectId::zero(format));
+    let old_hex = old.to_hex();
+    let new_hex = new.to_hex();
+    let old_abbr = BString::from(&old_hex[..abbrev.min(old_hex.len())]);
+    let new_abbr = BString::from(&new_hex[..abbrev.min(new_hex.len())]);
+    BString::from(format!("index {}..{} {}\n", old_abbr, new_abbr, mode.to_string()))
 }
