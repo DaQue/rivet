@@ -520,5 +520,12 @@ pub fn remove_path(worktree: &Worktree, path: &bstr::BStr) -> Result<()> {
 ///   and `a/B`, but the second pair differs at a deeper level and the message a user needs
 ///   names the two components.
 pub fn paths_collide(a: &bstr::BStr, b: &bstr::BStr, ignore_case: bool) -> bool {
-    todo!()
+    a.len() != b.len()
+    || a.iter().zip(b.iter()).any(|(x, y)| {
+        if ignore_case {
+            x.to_ascii_lowercase() != y.to_ascii_lowercase()
+        } else {
+            x != y
+        }
+    })
 }
