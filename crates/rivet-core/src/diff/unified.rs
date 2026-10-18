@@ -430,7 +430,42 @@ pub fn write_unified(
 ///
 /// The writer's errors, as [`crate::error::Error::Io`].
 pub fn format_stat(diff: &crate::diff::TreeDiff, out: &mut impl Write) -> Result<()> {
-    todo!()
+    let total_added: usize = diff.stats.iter().map(|s| s.added).sum();
+    let total_deleted: usize = diff.stats.iter().map(|s| s.deleted).sum();
+    let max_count = diff.stats.iter().map(|s| s.added.max(s.deleted)).max().unwrap_or(0);
+    let bar_width = if max_count == 0 { 0 } else { 50 };
+    for stat in &diff.stats {
+        let display = if stat.is_binary {
+            "Binary".to_string()
+        } else {
+            let total = stat.added + stat.deleted;
+            let bar_len = if total == 0 { 0 } else { (total * bar_width) / max_count };
+            let mut bar = String::new();
+            for _ in 0..bar_len {
+                bar.push('#');
+            }
+            format!("{} ({})", bar, total)
+        };
+        let path = stat.path.to_string();
+        let pad = 50usize.saturating_sub(path.len());
+        let line = format!("{}{} {:>width$}\n", path, " ".repeat(pad), display, width = 50);
+        out.write_all(line.as_bytes())?;
+    }
+    let files = diff.stats.len();
+    let mut summary = format!("{} file{} changed", files, if files == 1 { "" } else { "s" });
+    if total_added > 0 {
+        summary.push_str(&format!(", {} insertion{}", total_added, if total_added == 1 { "" } else { "s" }));
+        summary.push_str("(+)");
+    }
+    if total_deleted > 0 {
+        if total_added > 0 {
+            summary.push_str(", ");
+        }
+        summary.push_str(&format!("{} deletion{}", total_deleted, if total_deleted == 1 { "" } else { "s" }));
+        summary.push_str("(-)");
+    }
+    out.write_all(summary.as_bytes())?;
+    Ok(())
 }
 
 /// Phase 8 — write the `--name-status` listing.
