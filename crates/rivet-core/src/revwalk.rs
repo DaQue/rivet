@@ -343,7 +343,8 @@ impl Revision {
     ///
     /// As [`Revision::parents`].
     pub fn is_merge(&self, odb: &Odb) -> Result<bool> {
-        todo!()
+        let parents = self.parents(odb)?;
+        Ok(parents.len() > 1)
     }
 }
 
