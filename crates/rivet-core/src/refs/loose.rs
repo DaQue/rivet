@@ -234,7 +234,14 @@ pub fn delete(git_dir: &Path, name: &RefName) -> Result<()> {
 /// [`crate::error::Error::RefNotFound`] if the source has no loose file and
 /// [`crate::error::Error::IoAtPath`] if the write or the removal fails.
 pub fn rename(git_dir: &Path, from: &RefName, to: &RefName) -> Result<()> {
-    todo!()
+    let mut src_lock = RefLock::acquire(git_dir, from)?;
+    let mut dst_lock = RefLock::acquire(git_dir, to)?;
+    let target = read(git_dir, from, ObjectFormat::Sha1)?;
+    delete(git_dir, from)?;
+    write_locked(&mut dst_lock, &target)?;
+    let _ = src_lock.release();
+    let _ = dst_lock.release();
+    Ok(())
 }
 
 /// Phase 2 — the path of a ref's lock file.
