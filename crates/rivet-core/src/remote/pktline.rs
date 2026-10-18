@@ -479,7 +479,12 @@ impl SidebandKind {
     /// [`crate::error::Error::Protocol`] for anything other than 1, 2 or 3, including 0 — see the
     /// type's caveat.
     pub const fn from_channel(byte: u8) -> Result<Self> {
-        todo!()
+        match byte {
+            1 => Ok(Self::Pack),
+            2 => Ok(Self::Progress),
+            3 => Ok(Self::Error),
+            _ => Err(Error::Protocol(String::new())),
+        }
     }
 }
 
