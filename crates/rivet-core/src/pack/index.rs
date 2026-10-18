@@ -380,7 +380,7 @@ impl<'a> Iterator for PackIndexIter<'a> {
     /// here, unlike on most iterators — but note that it does not make the iteration cheap, since
     /// each remaining item still decodes its id.
     fn size_hint(&self) -> (usize, Option<usize>) {
-        todo!()
+        (self.index.len() - self.next, Some(self.index.len() - self.next))
     }
 }
 
