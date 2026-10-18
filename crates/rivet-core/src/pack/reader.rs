@@ -551,6 +551,6 @@ impl<'a> Iterator for PackReader<'a> {
     /// a claim rather than a fact — a pack whose count overstates its contents yields fewer items
     /// than promised, terminating with a [`crate::error::Error::TrailingPackBytes`] item.
     fn size_hint(&self) -> (usize, Option<usize>) {
-        todo!()
+        (0, None)
     }
 }
