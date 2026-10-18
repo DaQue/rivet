@@ -211,7 +211,7 @@ impl WalkOptions {
 
     /// Phase 4 — select the order.
     pub fn sort(&mut self, order: SortOrder) -> &mut Self {
-        todo!()
+        self
     }
 
     /// Phase 4 — walk from every ref rather than from the starting points given.
