@@ -341,7 +341,12 @@ impl PackedRefs {
     /// has just written as loose, which is why it returns the removed entry rather than a `bool`:
     /// the caller wants to know what it just deleted.
     pub fn remove(&mut self, name: &RefName) -> Option<PackedRef> {
-        todo!()
+        let pos = self.entries.iter().position(|e| e.name == *name);
+        if let Some(i) = pos {
+            Some(self.entries.remove(i))
+        } else {
+            None
+        }
     }
 
     /// Phase 2 — drop every entry for which the predicate is false.
