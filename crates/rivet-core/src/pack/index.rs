@@ -338,7 +338,21 @@ impl<'a> PackIndex<'a> {
     /// The returned bytes are the whole file, checksums included, ready for an atomic
     /// temp-file-and-rename write. Nothing in this crate writes a `.idx` any other way (§5).
     pub fn write(&self) -> Vec<u8> {
-        todo!()
+        let mut out = Vec::new();
+        out.extend_from_slice(&[2, 0, 0, 0]);
+        let n = self.entries().len() as u32;
+        out.extend_from_slice(&n.to_le_bytes());
+        for e in self.iter() {
+            let off = e.offset as u32;
+            out.extend_from_slice(&off.to_le_bytes());
+        }
+        let crc = crc32(&out);
+        out.extend_from_slice(&crc.to_le_bytes());
+        let mut hasher = self.format.hasher();
+        hasher.update(&out);
+        let id = hasher.finish().expect("hash collision");
+        out.extend_from_slice(id.as_bytes());
+        out
     }
 
     /// Phase 10 — copy the borrowed index into one that owns its bytes.
