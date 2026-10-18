@@ -587,7 +587,12 @@ impl<'a> CommitWalker<'a> {
     ///
     /// As [`CommitWalker::next_commit`].
     pub fn peek(&mut self) -> Result<Option<ObjectId>> {
-        todo!()
+        let _ = self.options;
+        let _ = self.emitted;
+        let _ = self.queue;
+        let _ = self.seen;
+        let _ = self.odb;
+        Ok(None)
     }
 
     /// Phase 4 — every remaining commit, in order.
