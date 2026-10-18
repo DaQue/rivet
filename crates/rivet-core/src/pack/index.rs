@@ -226,7 +226,13 @@ impl<'a> PackIndex<'a> {
     /// caller renaming or writing the pair derives the name from here rather than from the path it
     /// happened to read.
     pub fn pack_checksum(&self) -> ObjectId {
-        todo!()
+        let format = self.format();
+        let len = format.len();
+        let start = self.data.len() - len;
+        let checksum = &self.data[start..];
+        let mut hasher = format.hasher();
+        hasher.update(checksum);
+        hasher.finish().expect("checksum hash failed")
     }
 
     /// Phase 10 — find an object by full id.
