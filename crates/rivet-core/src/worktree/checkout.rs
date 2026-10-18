@@ -69,6 +69,7 @@ use crate::index::Index;
 use crate::object::EntryMode;
 use crate::odb::Odb;
 use crate::worktree::{StatCache, Worktree};
+use crate::error::Error;
 
 /// Phase 4 — one filesystem action a checkout will perform.
 ///
@@ -375,7 +376,18 @@ impl CheckoutPlan {
         stat_cache: &mut StatCache,
         options: &CheckoutOptions,
     ) -> Result<()> {
-        todo!()
+        if options.force {
+            return Ok(());
+        }
+        let untracked = self.untracked_obstructions(worktree, index)?;
+        if !untracked.is_empty() {
+            return Err(Error::UntrackedOverwrite(untracked[0].clone()));
+        }
+        let dirty = self.dirty_paths(worktree, index, stat_cache)?;
+        if !dirty.is_empty() {
+            return Err(Error::DirtyWorktree { paths: dirty });
+        }
+        Ok(())
     }
 
     /// Phase 4 — write the plan to the work tree.
