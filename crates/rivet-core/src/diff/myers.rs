@@ -101,7 +101,12 @@ impl Edit {
 
     /// Phase 8 — a deletion: `len` old lines, no new ones.
     pub fn delete(old_index: usize, len: usize) -> Self {
-        todo!()
+        Self {
+            old_index,
+            old_len: len,
+            new_index: old_index,
+            new_len: 0,
+        }
     }
 
     /// Phase 8 — an unchanged run, present in both sequences.
