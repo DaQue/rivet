@@ -1190,7 +1190,25 @@ impl Index {
     /// [`crate::error::Error::LockHeld`] if `index.lock` exists, and
     /// [`crate::error::Error::IoAtPath`] if the write or rename fails.
     pub fn write(&self, path: &Path, format: ObjectFormat) -> Result<()> {
-        todo!()
+        let lock_path = path.with_file_name("index.lock");
+        if lock_path.exists() {
+            return Err(Error::LockHeld { path: BString::from(path.to_string_lossy().as_bytes()) });
+        }
+        let bytes = self.to_bytes(format);
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("index");
+        let tmp_path = path.with_file_name(format!("{}.tmp", file_name));
+        let result = std::fs::write(&tmp_path, &bytes);
+        if let Err(e) = result {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(Error::IoAtPath { path: BString::from(path.to_string_lossy().as_bytes()), source: e });
+        }
+        let result = std::fs::rename(&tmp_path, path);
+        if let Err(e) = result {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(Error::IoAtPath { path: BString::from(path.to_string_lossy().as_bytes()), source: e });
+        }
+        let _ = std::fs::remove_file(&lock_path);
+        Ok(())
     }
 
     /// Phase 3 — the index version this was read as.
@@ -1278,7 +1296,29 @@ impl Index {
     /// out-of-order entry list — where a binary search would silently miss a present entry — can
     /// report it instead of returning `None`.
     pub fn entry_at(&self, path: &BStr, stage: Stage) -> Result<Option<&IndexEntry>> {
-        todo!()
+        if !self.is_sorted() {
+            return Err(Error::CorruptIndex {
+                offset: 0,
+                reason: "index entries are not in Git sort order",
+            });
+        }
+        let bits = stage.as_bits();
+        let mut lo = 0usize;
+        let mut hi = self.entries.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let e = &self.entries[mid];
+            let ord = match e.path.as_slice().cmp(&path[..]) {
+                Ordering::Equal => e.stage().as_bits().cmp(&bits),
+                ord => ord,
+            };
+            match ord {
+                Ordering::Less => lo = mid + 1,
+                Ordering::Greater => hi = mid,
+                Ordering::Equal => return Ok(Some(e)),
+            }
+        }
+        Ok(None)
     }
 
     /// Phase 3 — insert or replace an entry.
