@@ -190,7 +190,7 @@ impl TreeDiff {
 
     /// Phase 8 — whether nothing changed.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.files.is_empty()
     }
 
     /// Phase 8 — how many files changed.
