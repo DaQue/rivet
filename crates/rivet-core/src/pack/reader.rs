@@ -400,7 +400,11 @@ impl<'a> PackFile<'a> {
     /// around the iterator, because a walk that fails at entry 40 000 must still be able to report
     /// the 39 999 it got through.
     pub fn iter_entries(&self) -> PackReader<'_> {
-        todo!()
+        PackReader {
+            pack: self.clone(),
+            next_offset: 0,
+            produced: 0,
+        }
     }
 
     /// Phase 10 — the byte range one entry occupies in the pack, compressed.
