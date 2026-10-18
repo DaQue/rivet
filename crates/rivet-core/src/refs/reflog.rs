@@ -299,5 +299,6 @@ pub fn last_entry(
     name: &RefName,
     format: ObjectFormat,
 ) -> Result<Option<ReflogEntry>> {
-    todo!()
+    let entries = read(git_dir, name, format)?;
+    Ok(entries.last().cloned())
 }
