@@ -493,7 +493,13 @@ impl RefLocation {
 /// representable: a ref that is nowhere has no location, and a caller in that position has a
 /// [`crate::error::Error::RefNotFound`] to raise instead.
 pub fn location(loose_present: bool, packed_present: bool) -> RefLocation {
-    todo!()
+    if loose_present && packed_present {
+        RefLocation::Both
+    } else if loose_present {
+        RefLocation::Loose
+    } else {
+        RefLocation::Packed
+    }
 }
 
 /// Phase 2 — the full names of every ref in a `PackedRefs` set, in file order.
