@@ -246,7 +246,22 @@ impl<'a> PackIndex<'a> {
     /// A full id is required. Nothing here resolves abbreviations; that needs a view over the
     /// whole object database and belongs to [`crate::odb::Odb`].
     pub fn lookup(&self, oid: &ObjectId) -> Option<PackIndexEntry> {
-        todo!()
+        let entries = self.entries();
+        let mut lo = 0usize;
+        let mut hi = entries.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if entries[mid].oid.as_bytes() < oid.as_bytes() {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo < entries.len() && entries[lo].oid == *oid {
+            Some(entries[lo])
+        } else {
+            None
+        }
     }
 
     /// Phase 10 — find every object whose id begins with `prefix`.
