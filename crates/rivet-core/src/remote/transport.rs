@@ -993,7 +993,10 @@ impl Transport for LocalTransport {
 
     /// Phase 11 — the capabilities from the last [`Transport::connect`].
     fn capabilities(&self) -> &CapabilitySet<'_> {
-        todo!()
+        self.advertisement.as_ref().map(|ad| &ad.capabilities).unwrap_or_else(|| {
+            static DEFAULT: std::sync::OnceLock<CapabilitySet<'static>> = std::sync::OnceLock::new();
+            DEFAULT.get_or_init(CapabilitySet::default)
+        })
     }
 
     /// Phase 11 — copy the wanted objects into `into` as an undeltified pack.
