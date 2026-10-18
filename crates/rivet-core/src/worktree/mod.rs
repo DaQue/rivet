@@ -447,7 +447,8 @@ impl WorktreeWalkOptions {
 
     /// Phase 4 — set whether ignored files are collected.
     pub fn include_ignored(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.include_ignored = on;
+        self
     }
 
     /// Phase 4 — restrict the walk to a subtree.
