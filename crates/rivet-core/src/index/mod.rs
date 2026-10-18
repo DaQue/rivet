@@ -1316,7 +1316,15 @@ impl Index {
     /// different entries. A caller that means "forget this path entirely" must remove all four, which
     /// is what [`IndexExt::remove_path`] is for.
     pub fn remove(&mut self, path: &BStr, stage: Stage) -> Option<IndexEntry> {
-        todo!()
+        let mut i = 0;
+        while i < self.entries.len() {
+            let e = &self.entries[i];
+            if e.path == path && e.stage() == stage {
+                return Some(self.entries.swap_remove(i));
+            }
+            i += 1;
+        }
+        None
     }
 
     /// Phase 3 — sort the entries into Git's canonical order.
