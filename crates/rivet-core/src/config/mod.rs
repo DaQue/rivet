@@ -656,7 +656,13 @@ impl Config {
     /// distinct regions of the file. A caller listing remotes deduplicates; a caller rewriting the
     /// file must not, because merging two `[remote]` headers would reorder entries.
     pub fn sections(&self) -> Vec<(BString, Option<BString>)> {
-        todo!()
+        let mut out = Vec::new();
+        for entry in &self.entries {
+            if entry.key.is_empty() {
+                out.push((entry.value.clone(), None));
+            }
+        }
+        out
     }
 
     /// Phase 2 — every key in a section, in file order, as flat keys.
