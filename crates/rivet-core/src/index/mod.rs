@@ -1358,7 +1358,7 @@ impl Index {
     /// not a tidiness one. It is `O(n)` and is therefore for `fsck`, a test assertion, and the debug
     /// path of [`Index::write`] — not something to run before every lookup.
     pub fn is_sorted(&self) -> bool {
-        todo!()
+        self.entries.windows(2).all(|w| w[0].path.cmp(&w[1].path).then_with(|| w[0].flags.stage().unwrap_or(Stage::Normal).as_bits().cmp(&w[1].flags.stage().unwrap_or(Stage::Normal).as_bits())) != Ordering::Greater)
     }
 
     /// Phase 3 — whether an entry's cached stat data is too fresh to trust.
