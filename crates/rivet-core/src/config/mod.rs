@@ -745,5 +745,5 @@ pub fn parse_int(value: &BStr) -> Result<i64> {
 /// but note that these are **environment** overrides, not config values, and a parser that looked
 /// for them in a file would never find them.
 pub fn config_env_override(scope: &str) -> Option<BString> {
-    todo!()
+    std::env::var(format!("GIT_CONFIG_{}", scope.to_uppercase())).ok().map(BString::from)
 }
