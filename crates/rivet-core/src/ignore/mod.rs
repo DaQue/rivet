@@ -390,7 +390,7 @@ impl IgnoreFrame {
 
     /// Phase 5 — the frame's source.
     pub fn source(&self) -> &IgnoreSource {
-        todo!()
+        &self.source
     }
 }
 
