@@ -394,7 +394,11 @@ impl SidebandKind {
     /// Not an array index. The values were chosen by the protocol, not by convenience, and a reader
     /// that used `kind as u8` on a reordered enum would silently write progress on the pack channel.
     pub const fn channel(self) -> u8 {
-        todo!()
+        match self {
+            SidebandKind::Pack => 1,
+            SidebandKind::Progress => 2,
+            SidebandKind::Error => 3,
+        }
     }
 
     /// Phase 11 — decode a channel byte.
