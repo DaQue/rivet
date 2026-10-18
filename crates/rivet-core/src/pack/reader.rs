@@ -545,7 +545,15 @@ impl<'a> Iterator for PackReader<'a> {
     type Item = Result<(PackEntry, Vec<u8>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        if self.produced >= self.pack.object_count() {
+            return None;
+        }
+        let offset = self.next_offset;
+        self.produced += 1;
+        let entry = self.pack.entry_at(offset).ok()?;
+        let data = self.pack.get_at_offset(offset, None).ok()?;
+        self.next_offset = entry.data_offset + entry.size;
+        Some(Ok((entry, data.1)))
     }
 
     /// Phase 10 — how many entries remain, from the pack header's count.
