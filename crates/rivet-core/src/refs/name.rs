@@ -251,7 +251,8 @@ impl RefName {
     ///
     /// [`crate::error::Error::InvalidRefName`] as [`RefName::branch`].
     pub fn remote_tracking(remote: &BStr, branch: &BStr) -> Result<Self> {
-        todo!()
+        let full = format!("refs/remotes/{}/{}", remote, branch);
+        Self::from_bytes(full.as_bytes())
     }
 
     /// Phase 2 — the name of the ref `HEAD` normally points at.
