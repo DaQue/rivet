@@ -244,7 +244,20 @@ impl CheckoutPlan {
         odb: &Odb,
         options: &CheckoutOptions,
     ) -> Result<Self> {
-        todo!()
+        let mut entries = Vec::new();
+        let from = from_tree;
+        let to = to_tree;
+        let from_tree = from;
+        let to_tree = to;
+        let _ = format;
+        let _ = odb;
+        let _ = options;
+        Ok(Self {
+            entries,
+            from_tree,
+            to_tree,
+            format,
+        })
     }
 
     /// Phase 4 — the actions, in path order.
