@@ -608,7 +608,15 @@ impl<'a> CommitWalker<'a> {
     ///
     /// As [`CommitWalker::next_commit`].
     pub fn into_oids(self) -> Result<Vec<ObjectId>> {
-        todo!()
+        let mut out = Vec::new();
+        let mut walker = self;
+        loop {
+            match walker.next_commit()? {
+                Some(c) => out.push(c.id(walker.odb.format())?),
+                None => break,
+            }
+        }
+        Ok(out)
     }
 
     /// Phase 4 — every remaining commit, in reverse chronological order by committer date.
