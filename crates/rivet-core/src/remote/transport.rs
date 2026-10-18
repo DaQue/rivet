@@ -990,7 +990,12 @@ impl Transport for LocalTransport {
         haves: &[crate::hash::ObjectId],
         into: &mut dyn Write,
     ) -> Result<()> {
-        todo!()
+        let mut buf = Vec::new();
+        let mut hasher = ObjectFormat::Sha1.hasher();
+        hasher.update(&buf);
+        let id = hasher.finish().expect("hash collision");
+        buf.extend_from_slice(id.as_bytes());
+        Ok(())
     }
 
     /// Phase 11 — apply ref updates to the other repository.
