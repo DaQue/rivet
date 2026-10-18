@@ -567,7 +567,17 @@ pub fn push(
 /// * **`agent` is included so that the server's logs name Rivet**, which is the same reason the
 ///   fetch requests it and the same reason it must never carry credentials.
 pub fn push_capabilities(advertisement: &RefAdvertisement) -> Vec<BString> {
-    todo!()
+    let mut caps = Vec::new();
+    if advertisement.capabilities.contains(b"side-band-64k") {
+        caps.push(BString::from("side-band-64k"));
+    } else if advertisement.capabilities.contains(b"side-band") {
+        caps.push(BString::from("side-band"));
+    }
+    if advertisement.capabilities.contains(b"report-status") {
+        caps.push(BString::from("report-status"));
+    }
+    caps.push(BString::from("agent"));
+    caps
 }
 
 /// Phase 11 — the update lines for a push, without the pack.
