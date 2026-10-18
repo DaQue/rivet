@@ -681,6 +681,20 @@ def temps():
 
 
 # ---------------------------------------------------------------------- driver
+DEFERRED = (
+    # Whole-design work qwen cannot do: an assistant/Claude hand-writes these.
+    "src/repo.rs",
+    "src/remote/transport.rs",
+    "src/remote/http.rs",
+    "src/remote/ssh.rs",
+    "src/remote/sideband.rs",
+    "src/worktree/mod.rs",
+    "src/worktree/checkout.rs",
+    "src/diff/myers.rs",
+    "src/merge/tree.rs",
+)
+
+
 def stub_files(crate):
     """Every .rs under crates/<crate>/src with todo!() stubs, fewest first."""
     base = os.path.join(REPO, "crates", crate, "src")
@@ -690,6 +704,9 @@ def stub_files(crate):
             if not f.endswith(".rs"):
                 continue
             p = os.path.join(root, f)
+            rel = os.path.relpath(p, REPO).replace("\\", "/")
+            if any(rel.endswith(d) for d in DEFERRED):
+                continue
             try:
                 t = open(p, encoding="utf-8").read()
             except OSError:
