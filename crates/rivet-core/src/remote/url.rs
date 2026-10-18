@@ -364,7 +364,30 @@ impl std::fmt::Display for RemoteUrl {
 /// * **This is not a substitute for [`RemoteUrl::redacted`]**; a caller that has a parsed URL uses
 ///   that, and this is only for the path where parsing already failed.
 pub fn redact_url(input: &BStr) -> BString {
-    todo!()
+    let Some(scheme_end) = input.windows(3).position(|w| w == b"://") else {
+        return input.to_owned();
+    };
+    let scheme_end = scheme_end + 3;
+    let rest = &input[scheme_end..];
+    let Some(at_pos) = rest.iter().rposition(|&b| b == b'@') else {
+        return input.to_owned();
+    };
+    let at_pos = scheme_end + at_pos;
+    let Some(slash_pos) = rest.iter().position(|&b| b == b'/') else {
+        return input.to_owned();
+    };
+    let slash_pos = scheme_end + slash_pos;
+    if at_pos >= slash_pos {
+        return input.to_owned();
+    }
+    let Some(colon_pos) = input[scheme_end..at_pos].iter().rposition(|&b| b == b':') else {
+        return input.to_owned();
+    };
+    let colon_pos = scheme_end + colon_pos;
+    let mut out = input[..=colon_pos].to_owned();
+    out.extend_from_slice(b":***");
+    out.extend_from_slice(&input[at_pos..]);
+    out
 }
 
 /// Phase 11 — find where a password starts in a URL-shaped string.
