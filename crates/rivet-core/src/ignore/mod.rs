@@ -683,7 +683,7 @@ impl IgnoreStack {
     /// them top-to-bottom for a user must reverse, or the effective rule appears last and the user
     /// reads the precedence backwards.
     pub fn frames(&self) -> &[IgnoreFrame] {
-        todo!()
+        &self.frames
     }
 
     /// Phase 5 — whether no source contributed a pattern.
