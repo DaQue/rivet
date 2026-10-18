@@ -403,7 +403,7 @@ pub const fn is_auth_challenge(status: u16) -> bool {
 /// predicate is here so that rule lives in one place instead of being spelled `== 200` at each
 /// call site, which is how the `304` case gets forgotten.
 pub const fn is_success(status: u16) -> bool {
-    todo!()
+    status == 200 || status == 304
 }
 
 impl Transport for HttpTransport {
