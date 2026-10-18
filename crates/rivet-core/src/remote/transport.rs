@@ -894,7 +894,7 @@ impl LocalTransport {
     /// the push-side check refuses when it is not certain the target is bare. Reversing that default
     /// would let a push to a non-bare repository through whenever the flag had not been learned yet.
     pub fn is_bare(&self) -> bool {
-        todo!()
+        self.is_bare
     }
 }
 
