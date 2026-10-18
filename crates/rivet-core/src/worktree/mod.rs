@@ -207,7 +207,7 @@ impl Worktree {
 
     /// Phase 4 — whether symlinks can be stored as symlinks here.
     pub fn symlinks(&self) -> bool {
-        todo!()
+        self.filemode()
     }
 
     /// Phase 4 — whether the filesystem folds case.
