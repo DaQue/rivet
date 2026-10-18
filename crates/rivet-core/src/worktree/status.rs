@@ -182,7 +182,9 @@ impl Status {
     /// which is the whole point of an ignore rule — `git status` prints "nothing to commit,
     /// working tree clean" while a build directory sits there.
     pub fn is_clean(&self) -> bool {
-        todo!()
+        self.staged.is_empty()
+        && self.unstaged.is_empty()
+        && self.untracked.is_empty()
     }
 
     /// Phase 4 — how many paths are reported anywhere, ignored entries excluded.
