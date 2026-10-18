@@ -363,7 +363,10 @@ impl<'a> PackIndex<'a> {
     /// This is needed whenever the index must outlive the `.idx` file's mapping — caching, and the
     /// gap in `index-pack` between reading a received pack and writing its index.
     pub fn into_owned(self) -> OwnedPackIndex {
-        todo!()
+        OwnedPackIndex {
+            data: self.data.to_vec(),
+            format: self.format,
+        }
     }
 }
 
