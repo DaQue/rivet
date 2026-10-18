@@ -254,7 +254,7 @@ impl Conflict {
     /// our side is deletable and one with the deletion on our side is not (we would be deleting
     /// their change, which is the merge's whole content).
     pub fn resolvable_by_deleting(&self) -> bool {
-        todo!()
+        self.kind == ConflictKind::ModifyDelete && self.ours.is_some()
     }
 
     /// Phase 9 — whether this conflict is one a `--ours` checkout resolves.
