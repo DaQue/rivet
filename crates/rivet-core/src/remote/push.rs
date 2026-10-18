@@ -435,7 +435,16 @@ pub fn push_request(
     format: crate::hash::ObjectFormat,
     out: &mut dyn std::io::Write,
 ) -> Result<()> {
-    todo!()
+    let commands = update_commands(updates, capabilities, format)?;
+    for cmd in &commands {
+        out.write_all(&cmd[..])?;
+        out.write_all(b"\n")?;
+    }
+    out.write_all(b"\0")?;
+    if !pack.is_empty() {
+        out.write_all(pack)?;
+    }
+    Ok(())
 }
 
 /// Phase 11 — parse a `report-status` or `report-status-v2` response.
