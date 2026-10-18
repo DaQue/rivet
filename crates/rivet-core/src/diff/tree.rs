@@ -182,7 +182,10 @@ pub struct TreeDiff {
 impl TreeDiff {
     /// Phase 8 — an empty diff.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            files: Vec::new(),
+            stats: Vec::new(),
+        }
     }
 
     /// Phase 8 — whether nothing changed.
