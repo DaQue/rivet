@@ -423,7 +423,10 @@ pub(crate) fn read_u32_be(data: &[u8], at: usize) -> Result<u32> {
 ///
 /// [`crate::error::Error::CorruptPackIndex`] if fewer than eight bytes remain.
 pub(crate) fn read_u64_be(data: &[u8], at: usize) -> Result<u64> {
-    todo!()
+    if data.len() < at + 8 {
+        return Err(Error::CorruptPackIndex { reason: "truncated u64".to_string() });
+    }
+    Ok(u64::from_be_bytes([data[at], data[at + 1], data[at + 2], data[at + 3], data[at + 4], data[at + 5], data[at + 6], data[at + 7]]))
 }
 
 /// Phase 10 — inflate one zlib stream starting at `at`, returning the bytes and how many input
