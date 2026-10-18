@@ -285,7 +285,7 @@ impl RemoteUrl {
     /// because the two are not equivalent for a remote whose path is relative to the login
     /// directory, and normalising would silently change which directory is addressed.
     pub fn to_config_string(&self) -> BString {
-        todo!()
+        self.redacted().clone()
     }
 
     /// Phase 11 — whether this URL names the same repository as another, ignoring credentials.
