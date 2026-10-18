@@ -179,7 +179,9 @@ impl<'a> PackFile<'a> {
     /// *verify* it, hash the bytes up to the trailer and compare; that is what
     /// [`PackFile::verify_checksum`] is for, and it is linear in the pack's size.
     pub fn checksum(&self) -> ObjectId {
-        todo!()
+        let mut hasher = self.format.hasher();
+        hasher.update(&self.data[..self.data.len() - 20]);
+        hasher.finish().expect("hash collision")
     }
 
     /// Phase 10 — the index beside this pack, if it was opened with one.
