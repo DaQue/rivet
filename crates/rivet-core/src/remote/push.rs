@@ -334,7 +334,7 @@ impl PushOutcome {
     /// * **An empty push of zero updates is a success**, which is what a caller that computed the
     ///   updates and found none expects, and not an error about having nothing to send.
     pub fn is_ok(&self) -> bool {
-        todo!()
+        self.rejected.is_empty()
     }
 }
 
