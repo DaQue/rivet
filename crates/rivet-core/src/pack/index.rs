@@ -224,7 +224,7 @@ impl<'a> PackIndex<'a> {
     /// The order is the id table's order, which is *not* pack order. Code that expects to stream
     /// the pack in file order must use [`crate::pack::PackReader`] instead.
     pub fn entries(&self) -> Vec<PackIndexEntry> {
-        todo!()
+        self.iter().collect()
     }
 
     /// Phase 10 — the `i`-th entry in id order.
