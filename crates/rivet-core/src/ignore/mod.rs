@@ -317,7 +317,7 @@ impl Pattern {
     /// negation of [`Pattern::matches`] — it is the narrower question "is this rule even applicable
     /// here", which `check-ignore -v` needs to explain why a rule a user expected to fire did not.
     pub fn is_inapplicable(&self, kind: PathKind) -> bool {
-        todo!()
+        self.directory_only && kind == PathKind::File
     }
 
     /// Phase 5 — the pattern's origin as `path:line`, for a report.
