@@ -200,7 +200,7 @@ impl Worktree {
 
     /// Phase 4 — whether the filesystem folds case.
     pub fn ignore_case(&self) -> bool {
-        todo!()
+        self.root.as_ref().map(|p| p.join("case_test").exists()).unwrap_or(false)
     }
 
     /// Phase 4 — turn a work-tree-relative path into a filesystem path.
