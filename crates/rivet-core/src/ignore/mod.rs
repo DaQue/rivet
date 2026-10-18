@@ -475,7 +475,11 @@ impl IgnoreStack {
     /// A bare repository has no work tree and therefore no ignore rules, which is why the constructor
     /// takes a path rather than a repository.
     pub fn new(root: &Path) -> Self {
-        todo!()
+        Self {
+            root: root.to_path_buf(),
+            current_dir: BString::from(""),
+            frames: Vec::new(),
+        }
     }
 
     /// Phase 5 — the work tree root the stack is anchored to.
