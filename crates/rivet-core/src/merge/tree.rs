@@ -134,7 +134,63 @@ pub fn merge_path(
     their_mode: crate::object::EntryMode,
     options: &MergeOptions,
 ) -> Result<PathMerge> {
-    todo!()
+    let base_bytes = if base.is_zero() {
+        Vec::new()
+    } else {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(base.as_bytes());
+        buf
+    };
+    let our_bytes = if ours.is_zero() {
+        Vec::new()
+    } else {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(ours.as_bytes());
+        buf
+    };
+    let their_bytes = if theirs.is_zero() {
+        Vec::new()
+    } else {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(theirs.as_bytes());
+        buf
+    };
+    let is_binary = base_bytes.iter().any(|b| *b == 0)
+    || our_bytes.iter().any(|b| *b == 0)
+    || their_bytes.iter().any(|b| *b == 0);
+    if is_binary {
+        return Ok(PathMerge {
+            path: path.to_owned(),
+            result: Some(ours),
+            kind: Some(crate::merge::ConflictKind::Binary),
+        });
+    }
+    if base == ours && base == theirs {
+        return Ok(PathMerge {
+            path: path.to_owned(),
+            result: Some(base),
+            kind: None,
+        });
+    }
+    if base == ours {
+        return Ok(PathMerge {
+            path: path.to_owned(),
+            result: Some(theirs),
+            kind: None,
+        });
+    }
+    if base == theirs {
+        return Ok(PathMerge {
+            path: path.to_owned(),
+            result: Some(ours),
+            kind: None,
+        });
+    }
+    Ok(PathMerge {
+        path: path.to_owned(),
+        result: None,
+        kind: Some(crate::merge::ConflictKind::Content),
+    })
 }
 
 /// Phase 9 — write the conflicted entries into the index.
