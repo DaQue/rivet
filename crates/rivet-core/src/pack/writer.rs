@@ -183,7 +183,13 @@ impl PackWriter {
     ///
     /// Only hasher collision detection, from computing the object's id.
     pub fn write_raw(&mut self, kind: crate::object::ObjectKind, data: &[u8]) -> Result<ObjectId> {
-        todo!()
+        let mut hasher = self.format.hasher();
+        hasher.update(kind.as_bytes());
+        hasher.update(data);
+        let id = hasher.finish()?;
+        self.data.extend_from_slice(kind.as_bytes());
+        self.data.extend_from_slice(data);
+        Ok(id)
     }
 
     /// Phase 10 — how many objects have been written so far.
