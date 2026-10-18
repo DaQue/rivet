@@ -178,7 +178,10 @@ pub fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
 /// [`crate::error::Error::CorruptDelta`] if fewer than two varints are present, or either
 /// overflows a `u64`.
 pub fn parse_delta_header(delta: &[u8]) -> Result<DeltaHeader> {
-    todo!()
+    let mut pos = 0usize;
+    let base_len = decode_ofs_distance(delta, pos, 0)?;
+    let target_len = decode_ofs_distance(delta, pos, 0)?;
+    Ok(DeltaHeader { base_len, target_len })
 }
 
 /// Phase 10 — decode an `OFS_DELTA`'s backward distance into an absolute offset.
