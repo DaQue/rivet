@@ -342,7 +342,8 @@ impl MergeOptions {
 
     /// Phase 9 — set the conflict marker style.
     pub fn conflict_style(&mut self, style: ConflictStyle) -> &mut Self {
-        todo!()
+        self.conflict_style = style;
+        self
     }
 
     /// Phase 9 — force a merge commit even when a fast-forward is possible.
