@@ -275,7 +275,11 @@ impl<'a> CapabilitySet<'a> {
     /// rather than defaulting — a format Rivet does not know is exactly the case where guessing
     /// produces a repository full of wrong ids.
     pub fn object_format(&self) -> Result<ObjectFormat> {
-        todo!()
+        let value = self.value(b"object-format");
+        match value {
+            Some(v) => ObjectFormat::from_config_value(v),
+            None => Ok(ObjectFormat::Sha1),
+        }
     }
 
     /// Phase 11 — the symbolic refs the peer advertised, from `symref=`.
