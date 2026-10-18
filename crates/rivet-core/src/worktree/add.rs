@@ -111,7 +111,8 @@ impl AddOptions {
 
     /// Phase 3 — record intent-to-add entries.
     pub fn intent_to_add(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.intent_to_add = on;
+        self
     }
 }
 
