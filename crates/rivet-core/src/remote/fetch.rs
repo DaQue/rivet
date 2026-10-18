@@ -159,7 +159,16 @@ impl Default for FetchCapabilities {
     /// what makes the flags useful only as a restriction. A default that disabled something would
     /// make the common path slow for a reason the caller never stated.
     fn default() -> Self {
-        todo!()
+        FetchCapabilities {
+            side_band_64k: true,
+            side_band: true,
+            thin_pack: true,
+            ofs_delta: true,
+            include_tag: true,
+            agent: true,
+            multi_ack: true,
+            multi_ack_detailed: true,
+        }
     }
 }
 
