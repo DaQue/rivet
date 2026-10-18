@@ -154,7 +154,50 @@ pub enum DeltaBase {
 /// off the end); a copy reaching outside the base; a result longer than `target_len`; a stream that
 /// ends before `target_len` bytes exist; or bytes left over once the target is complete.
 pub fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
-    todo!()
+    let header = parse_delta_header(delta)?;
+    if header.base_len != base.len() as u64 {
+        return Err(Error::CorruptDelta { reason: "base length mismatch".to_string() });
+    }
+    let mut out = Vec::with_capacity(header.target_len as usize);
+    let mut pos = 0usize;
+    while out.len() < header.target_len as usize {
+        if pos >= delta.len() {
+            return Err(Error::CorruptDelta { reason: "delta stream ended before target length".to_string() });
+        }
+        let op = delta[pos];
+        pos += 1;
+        match op {
+            0 => return Err(Error::CorruptDelta { reason: "reserved opcode".to_string() }),
+            1..=32 => {
+                let len = op as usize;
+                if out.len() + len > header.target_len as usize {
+                    return Err(Error::CorruptDelta { reason: "insert exceeds target length".to_string() });
+                }
+                if pos + len > delta.len() {
+                    return Err(Error::CorruptDelta { reason: "insert runs off end".to_string() });
+                }
+                out.extend_from_slice(&delta[pos..pos + len]);
+                pos += len;
+            }
+            33..=127 => {
+                let len = (op - 32) as usize;
+                let offset = decode_ofs_distance(delta, pos, header.base_len)?;
+                pos += (offset as usize) + 1;
+                if offset + len as u64 > base.len() as u64 {
+                    return Err(Error::CorruptDelta { reason: "copy reaches outside base".to_string() });
+                }
+                if out.len() + len > header.target_len as usize {
+                    return Err(Error::CorruptDelta { reason: "copy exceeds target length".to_string() });
+                }
+                out.extend_from_slice(&base[offset as usize..offset as usize + len]);
+            }
+            _ => return Err(Error::CorruptDelta { reason: "unknown opcode".to_string() }),
+        }
+    }
+    if pos != delta.len() {
+        return Err(Error::CorruptDelta { reason: "trailing bytes in delta".to_string() });
+    }
+    Ok(out)
 }
 
 /// Phase 10 — parse just the two lengths at the head of a delta.
