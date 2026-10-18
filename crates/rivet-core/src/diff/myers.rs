@@ -145,7 +145,7 @@ impl Edit {
 
     /// Phase 8 — one past the last new line the run covers.
     pub fn new_end(&self) -> usize {
-        todo!()
+        self.old_end() + self.new_len
     }
 }
 
