@@ -229,7 +229,8 @@ impl RefName {
     ///
     /// [`crate::error::Error::InvalidRefName`] as [`RefName::branch`].
     pub fn tag(short: &BStr) -> Result<Self> {
-        todo!()
+        let full = format!("refs/tags/{}", short);
+        Self::from_bytes(full.as_bytes())
     }
 
     /// Phase 2 — build a remote-tracking branch name from its two parts.
