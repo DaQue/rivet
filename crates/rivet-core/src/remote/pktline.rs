@@ -577,7 +577,24 @@ impl<R: Read> SidebandReader<R> {
     /// [`crate::error::Error::Transport`] if the underlying read fails. A stream that ends without a
     /// flush is reported the same way, because a peer that closed mid-response is not a clean end.
     pub fn next_packet(&mut self) -> Result<Option<SidebandPacket>> {
-        todo!()
+        let line = PktLine::read_from(&mut self.inner)?;
+        if line.is_flush() {
+            return Ok(None);
+        }
+        let data = line.data();
+        let (channel, payload) = if self.enabled {
+            let ch = SidebandKind::from_channel(data[0])?;
+            (ch, &data[1..])
+        } else {
+            (SidebandKind::Pack, data)
+        };
+        if channel == SidebandKind::Error {
+            self.error_seen = true;
+        }
+        Ok(Some(SidebandPacket {
+            channel,
+            data: payload.to_vec(),
+        }))
     }
 
     /// Phase 11 — whether a channel-3 error packet has been seen.
