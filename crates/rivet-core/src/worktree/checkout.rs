@@ -269,7 +269,7 @@ impl CheckoutPlan {
     /// with a mode difference is a real change and keeps the plan non-empty; an empty plan means
     /// the two trees agree on every path the pathspec covers.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.entries.is_empty()
     }
 
     /// Phase 4 — the paths whose content the plan would write.
