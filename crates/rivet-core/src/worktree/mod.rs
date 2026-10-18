@@ -177,7 +177,7 @@ impl Worktree {
     /// [`Worktree::require_root`], which is the same query with the bare-repository case turned
     /// into [`crate::error::Error::BareRepository`].
     pub fn root(&self) -> Option<&Path> {
-        todo!()
+        self.root.as_ref().map(PathBuf::as_path)
     }
 
     /// Phase 4 — the work tree root, failing on a bare repository.
