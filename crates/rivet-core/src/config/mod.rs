@@ -351,7 +351,7 @@ impl Config {
     ///
     /// As [`Config::get`].
     pub fn get_all(&self, key: &BStr) -> Result<Vec<&BStr>> {
-        todo!()
+        Ok(self.entries.iter().rev().filter(|e| e.key == key).map(|e| e.value.as_ref()).collect())
     }
 
     /// Phase 2 — whether a key is present at all.
