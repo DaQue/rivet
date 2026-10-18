@@ -164,7 +164,8 @@ pub fn write(git_dir: &Path, name: &RefName, target: &RefTarget) -> Result<()> {
 ///
 /// [`crate::error::Error::IoAtPath`] if the write fails.
 pub fn write_locked(lock: &mut RefLock, target: &RefTarget) -> Result<()> {
-    todo!()
+    let data = target.to_bytes(ObjectFormat::Sha1);
+    lock.write_and_commit(&data)
 }
 
 /// Phase 2 — delete a loose ref, pruning directories that become empty.
