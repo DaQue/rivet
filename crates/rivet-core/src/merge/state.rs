@@ -240,7 +240,15 @@ pub fn read_merge_state(
 ///
 /// [`crate::error::Error::IoAtPath`] for a file that exists and cannot be removed.
 pub fn clear_merge_state(git_dir: &Path) -> Result<()> {
-    todo!()
+    let merge_head = git_dir.join("MERGE_HEAD");
+    let merge_msg = git_dir.join("MERGE_MSG");
+    if merge_head.exists() {
+        std::fs::remove_file(&merge_head).map_err(|e| crate::error::Error::IoAtPath { path: merge_head.to_string_lossy().into_owned().into(), source: e })?;
+    }
+    if merge_msg.exists() {
+        std::fs::remove_file(&merge_msg).map_err(|e| crate::error::Error::IoAtPath { path: merge_msg.to_string_lossy().into_owned().into(), source: e })?;
+    }
+    Ok(())
 }
 
 /// Phase 9 — whether a merge is in progress.
