@@ -1234,7 +1234,7 @@ impl Index {
     /// entries and `git status` counts paths; the two disagree exactly during a merge, which is when
     /// someone is looking.
     pub fn len(&self) -> usize {
-        todo!()
+        self.entries.len()
     }
 
     /// Phase 3 — whether nothing is staged.
