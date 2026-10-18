@@ -644,7 +644,11 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn default_branch(&self) -> Result<BString> {
-        todo!()
+        let value = config_env_override("init.defaultBranch");
+        match value {
+            Some(v) => Ok(v),
+            None => Ok(BString::from("main")),
+        }
     }
 
     /// Phase 2 — whether the repository is bare (`core.bare`).
