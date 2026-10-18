@@ -40,7 +40,7 @@ use std::path::Path;
 
 use bstr::{BStr, BString};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::Signature;
 
@@ -113,7 +113,33 @@ impl ReflogEntry {
     /// caller that knows it must attach it — the variant's `path` field is filled by
     /// [`ReflogEntry::parse_at`].
     pub fn parse(format: ObjectFormat, line: &BStr) -> Result<Self> {
-        todo!()
+        let mut fields = line.splitn(3, |b| *b == b' ');
+        let old_raw = fields.next().unwrap_or(b"");
+        let new_raw = fields.next().unwrap_or(b"");
+        let rest = fields.next().unwrap_or(b"");
+        let corrupt = |reason: &'static str| Error::CorruptReflog {
+            path: BString::from(""),
+            line: 0,
+            reason,
+        };
+        let old = ObjectId::from_hex(format, BStr::new(old_raw)).map_err(|_| corrupt("bad old id"))?;
+        let new = ObjectId::from_hex(format, BStr::new(new_raw)).map_err(|_| corrupt("bad new id"))?;
+        let (signature, message) = match rest.iter().position(|b| *b == b'\t') {
+            Some(tab) => (&rest[..tab], &rest[tab + 1..]),
+            None => (rest, &b""[..]),
+        };
+        let who = Signature::parse(BStr::new(signature)).unwrap_or_else(|_| Signature {
+            name: BString::new(Vec::new()),
+            email: BString::new(Vec::new()),
+            when: 0,
+            tz_offset_minutes: 0,
+        });
+        Ok(Self {
+            old,
+            new,
+            who,
+            message: BString::from(message),
+        })
     }
 
     /// Phase 2 — parse one reflog line, reporting the file it came from.
@@ -126,7 +152,14 @@ impl ReflogEntry {
     /// [`crate::error::Error::CorruptReflog`] with `path` and `line` filled in, for the same
     /// failures as [`ReflogEntry::parse`].
     pub fn parse_at(format: ObjectFormat, path: &BStr, line: usize, data: &BStr) -> Result<Self> {
-        todo!()
+        Self::parse(format, data).map_err(|e| match e {
+            Error::CorruptReflog { reason, .. } => Error::CorruptReflog {
+                path: BString::from(path),
+                line,
+                reason,
+            },
+            other => other,
+        })
     }
 
     /// Phase 2 — serialise to one reflog line, **including** its trailing newline.
@@ -142,7 +175,22 @@ impl ReflogEntry {
     /// * The separator between the signature and the message is exactly one tab, even when the
     ///   message is empty. That is what Git writes and what a byte-for-byte comparison expects.
     pub fn to_bytes(&self) -> Vec<u8> {
-        todo!()
+        let mut out = Vec::new();
+        out.extend_from_slice(&self.old.to_hex());
+        out.push(b' ');
+        out.extend_from_slice(&self.new.to_hex());
+        out.push(b' ');
+        out.extend_from_slice(&self.who.to_bytes());
+        out.push(b'\t');
+        for byte in self.message.iter() {
+            if *byte == b'\n' || *byte == b'\r' {
+                out.push(b' ');
+            } else {
+                out.push(*byte);
+            }
+        }
+        out.push(b'\n');
+        out
     }
 
     /// Phase 2 — whether this entry records a ref being created.
@@ -223,7 +271,32 @@ impl<'a> ReflogMessage<'a> {
 /// [`crate::error::Error::CorruptReflog`] for a line that does not parse — including the
 /// truncated-line case a killed writer leaves behind.
 pub fn read(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<Vec<ReflogEntry>> {
-    todo!()
+    let path = name.reflog_path(git_dir);
+    let data = match std::fs::read(&path) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(Error::IoAtPath {
+                path: path.to_string_lossy().as_bytes().into(),
+                source: e,
+            })
+        }
+    };
+    let display = name.as_bytes().to_vec();
+    let mut out = Vec::new();
+    for (index, raw) in data.split(|b| *b == b'\n').enumerate() {
+        let line = raw.strip_suffix(b"\r").unwrap_or(raw);
+        if line.is_empty() {
+            continue;
+        }
+        out.push(ReflogEntry::parse_at(
+            format,
+            BStr::new(&display),
+            index + 1,
+            BStr::new(line),
+        )?);
+    }
+    Ok(out)
 }
 
 /// Phase 2 — append one entry to a ref's reflog, creating the file and its directory if needed.
@@ -247,7 +320,27 @@ pub fn read(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<Vec<
 ///
 /// [`crate::error::Error::IoAtPath`] if the directory cannot be created or the write fails.
 pub fn append(git_dir: &Path, name: &RefName, entry: &ReflogEntry) -> Result<()> {
-    todo!()
+    use std::io::Write;
+    let path = name.reflog_path(git_dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| Error::IoAtPath {
+            path: parent.to_string_lossy().as_bytes().into(),
+            source: e,
+        })?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| Error::IoAtPath {
+            path: path.to_string_lossy().as_bytes().into(),
+            source: e,
+        })?;
+    file.write_all(&entry.to_bytes())
+        .map_err(|e| Error::IoAtPath {
+            path: path.to_string_lossy().as_bytes().into(),
+            source: e,
+        })
 }
 
 /// Phase 2 — whether a ref has a reflog.
@@ -258,7 +351,7 @@ pub fn append(git_dir: &Path, name: &RefName, entry: &ReflogEntry) -> Result<()>
 /// deciding whether an operation will *create* a log — `git branch` reports "Created from" only
 /// for a new one — and for that, existence is the whole question.
 pub fn exists(git_dir: &Path, name: &RefName) -> bool {
-    git_dir.join(name.to_string()).exists()
+    name.reflog_path(git_dir).exists()
 }
 
 /// Phase 2 — delete a ref's reflog, along with any now-empty parent directories.
@@ -279,7 +372,7 @@ pub fn exists(git_dir: &Path, name: &RefName) -> bool {
 ///
 /// [`crate::error::Error::IoAtPath`] if the file exists but cannot be removed.
 pub fn delete(git_dir: &Path, name: &RefName) -> Result<()> {
-    let path = git_dir.join(name.to_string());
+    let path = name.reflog_path(git_dir);
     if !path.exists() {
         return Ok(());
     }

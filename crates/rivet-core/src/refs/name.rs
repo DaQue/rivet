@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// Phase 2 — the literal name of the ref that holds the current branch, or a direct commit id.
 ///
@@ -169,7 +169,7 @@ impl RefName {
     /// name is reported as given: it is bytes, it may not be valid UTF-8, and a lossy conversion
     /// for the sake of an error message would misreport it.
     pub fn parse(name: &BStr) -> Result<Self> {
-        todo!()
+        Self::from_bytes(&name[..])
     }
 
     /// Phase 2 — validate a ref name from raw bytes.
@@ -180,7 +180,64 @@ impl RefName {
     ///
     /// As [`RefName::parse`].
     pub fn from_bytes(name: &[u8]) -> Result<Self> {
-        todo!()
+        let invalid = |reason: &'static str| Error::InvalidRefName {
+            name: BString::from(name),
+            reason,
+        };
+
+        if name.is_empty() {
+            return Err(invalid("ref name is empty"));
+        }
+        if name == b"@" {
+            return Err(invalid("`@` alone is revision syntax, not a ref name"));
+        }
+        for &byte in name {
+            if byte < 0x20 || byte == 0x7f {
+                return Err(invalid("ref name contains an ASCII control character"));
+            }
+            match byte {
+                b' ' => return Err(invalid("ref name contains a space")),
+                b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\' => {
+                    return Err(invalid("ref name contains one of `~^:?*[\\`"))
+                }
+                _ => {}
+            }
+        }
+        if name.ends_with(b".") {
+            return Err(invalid("ref name ends with `.`"));
+        }
+        if name.windows(2).any(|pair| pair == b"..") {
+            return Err(invalid("ref name contains `..`"));
+        }
+        if name.windows(2).any(|pair| pair == b"@{") {
+            return Err(invalid("ref name contains `@{`"));
+        }
+        for component in name.split(|&byte| byte == b'/') {
+            if component.is_empty() {
+                return Err(invalid("ref name has an empty path component"));
+            }
+            if component[0] == b'.' {
+                return Err(invalid("ref name component begins with `.`"));
+            }
+            if component.ends_with(b".lock") {
+                return Err(invalid("ref name component ends with `.lock`"));
+            }
+        }
+        // Git requires at least two components so that a ref cannot be a stray file directly in
+        // the git directory; `HEAD` and the one-level pseudo-refs (`MERGE_HEAD`, `ORIG_HEAD`, …)
+        // are the documented exceptions.
+        if !name.contains(&b'/') {
+            let pseudo = name
+                .iter()
+                .all(|&b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+            if !pseudo {
+                return Err(invalid(
+                    "ref name has no `/`, and one-level names must be uppercase pseudo-refs",
+                ));
+            }
+        }
+
+        Ok(Self(BString::from(name)))
     }
 
     /// Phase 2 — validate an owned ref name without copying it.

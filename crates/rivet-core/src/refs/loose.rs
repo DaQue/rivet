@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
 
 use super::{RefLock, RefName, RefTarget};
@@ -67,7 +67,106 @@ use super::{RefLock, RefName, RefTarget};
 /// [`crate::error::Error::InvalidHex`] for a value that is not a full-length hex id;
 /// [`crate::error::Error::InvalidRefName`] for a `ref:` target that is not a valid ref name.
 pub fn read(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<RefTarget> {
-    todo!()
+    let path = name.file_path(git_dir);
+    let mut file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Error::RefNotFound {
+                name: BString::from(name.as_bytes()),
+            })
+        }
+        Err(e) => {
+            return Err(Error::IoAtPath {
+                path: path_bytes(&path),
+                source: e,
+            })
+        }
+    };
+    let mut data = Vec::new();
+    {
+        use std::io::Read;
+        let mut limited = (&mut file).take(MAX_REF_FILE + 1);
+        limited.read_to_end(&mut data).map_err(|e| Error::IoAtPath {
+            path: path_bytes(&path),
+            source: e,
+        })?;
+    }
+    if data.len() as u64 > MAX_REF_FILE {
+        return Err(Error::InvalidRefName {
+            name: BString::from(name.as_bytes()),
+            reason: "ref file is larger than any valid ref",
+        });
+    }
+    parse_ref_file(format, &data)
+}
+
+/// The largest ref file Rivet will read. A ref is tens of bytes; anything past this is corruption
+/// or a hostile file, and reading it unbounded is the one way a ref lookup can exhaust memory.
+const MAX_REF_FILE: u64 = 4096;
+
+/// A path as the raw bytes an error variant reports.
+fn path_bytes(path: &Path) -> BString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        BString::from(path.as_os_str().as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        BString::from(path.to_string_lossy().as_bytes())
+    }
+}
+
+/// A relative path's bytes, for turning a walked path into a ref name.
+fn rel_bytes(path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    }
+    #[cfg(not(unix))]
+    {
+        path.to_string_lossy().as_bytes().to_vec()
+    }
+}
+
+fn walk_refs(root: &Path, dir: &Path, out: &mut Vec<RefName>) -> Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(Error::IoAtPath {
+                path: path_bytes(dir),
+                source: e,
+            })
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| Error::IoAtPath {
+            path: path_bytes(dir),
+            source: e,
+        })?;
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            walk_refs(root, &entry.path(), out)?;
+        } else if file_type.is_file() {
+            let path = entry.path();
+            let rel = match path.strip_prefix(root) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if let Ok(name) = RefName::from_bytes(&rel_bytes(rel)) {
+                out.push(name);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Phase 2 — read a loose ref, treating absence as `None`.
@@ -112,7 +211,30 @@ pub fn try_read(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<
 /// [`crate::error::Error::RefNotFound`] if the file is absent, and
 /// [`crate::error::Error::InvalidHex`] for a line that is not a full-length id.
 pub fn read_ids(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<Vec<ObjectId>> {
-    todo!()
+    let path = name.file_path(git_dir);
+    let data = match std::fs::read(&path) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Error::RefNotFound {
+                name: BString::from(name.as_bytes()),
+            })
+        }
+        Err(e) => {
+            return Err(Error::IoAtPath {
+                path: path_bytes(&path),
+                source: e,
+            })
+        }
+    };
+    let mut out = Vec::new();
+    for line in data.split(|b| *b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() {
+            continue;
+        }
+        out.push(ObjectId::from_hex(format, BStr::new(line))?);
+    }
+    Ok(out)
 }
 
 /// Phase 2 — whether a loose ref file exists.
@@ -123,7 +245,7 @@ pub fn read_ids(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<
 /// is the right answer for the question it asks — Git distinguishes "no such ref" from "broken ref"
 /// and so must Rivet — but it is not an existence check for the ref, which may also be packed.
 pub fn exists(git_dir: &Path, name: &RefName) -> bool {
-    todo!()
+    name.file_path(git_dir).exists()
 }
 
 /// Phase 2 — write a loose ref, taking its lock and renaming into place.
@@ -148,7 +270,8 @@ pub fn exists(git_dir: &Path, name: &RefName) -> bool {
 /// [`crate::error::Error::LockHeld`] if `<ref>.lock` already exists, and
 /// [`crate::error::Error::IoAtPath`] if a directory cannot be created or the rename fails.
 pub fn write(git_dir: &Path, name: &RefName, target: &RefTarget) -> Result<()> {
-    todo!()
+    let mut lock = RefLock::acquire(git_dir, name)?;
+    lock.write_and_commit(&target.to_bytes(ObjectFormat::Sha1))
 }
 
 /// Phase 2 — write a ref's file through a lock the caller already holds.
@@ -194,8 +317,17 @@ pub fn write_locked(lock: &mut RefLock, target: &RefTarget) -> Result<()> {
 /// directory afterwards is **not** an error: the ref is gone either way, and an empty directory is
 /// inert.
 pub fn delete(git_dir: &Path, name: &RefName) -> Result<()> {
-    let path = lock_path(git_dir, name);
-    let _ = std::fs::remove_file(&path);
+    let path = name.file_path(git_dir);
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(Error::IoAtPath {
+                path: path_bytes(&path),
+                source: e,
+            })
+        }
+    }
     let mut dir = path.parent();
     while let Some(d) = dir {
         if d.is_dir() {
@@ -258,7 +390,9 @@ pub fn rename(git_dir: &Path, from: &RefName, to: &RefName) -> Result<()> {
 /// directory. A `RefName` cannot itself end in `.lock` (validation forbids it), which is what keeps
 /// `refs/heads/x.lock` and the lock of `refs/heads/x` from being the same path.
 pub fn lock_path(git_dir: &Path, name: &RefName) -> PathBuf {
-    todo!()
+    let mut path = name.file_path(git_dir).into_os_string();
+    path.push(".lock");
+    PathBuf::from(path)
 }
 
 /// Phase 2 — every loose ref whose name begins with `prefix`.
@@ -288,7 +422,12 @@ pub fn list(
     prefix: &BStr,
     format: ObjectFormat,
 ) -> Result<Vec<(RefName, RefTarget)>> {
-    todo!()
+    let mut out = Vec::new();
+    for name in list_names(git_dir, prefix)? {
+        let target = read(git_dir, &name, format)?;
+        out.push((name, target));
+    }
+    Ok(out)
 }
 
 /// Phase 2 — the names, without reading the values, of every loose ref under `prefix`.
@@ -304,7 +443,31 @@ pub fn list(
 ///
 /// [`crate::error::Error::IoAtPath`] if a directory cannot be listed.
 pub fn list_names(git_dir: &Path, prefix: &BStr) -> Result<Vec<RefName>> {
-    todo!()
+    let mut names = Vec::new();
+    walk_refs(git_dir, &git_dir.join("refs"), &mut names)?;
+    if let Ok(entries) = std::fs::read_dir(git_dir) {
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if !file_type.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let rel = match path.strip_prefix(git_dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if let Ok(name) = RefName::from_bytes(&rel_bytes(rel)) {
+                names.push(name);
+            }
+        }
+    }
+    names.retain(|n| n.as_bytes().starts_with(prefix.as_ref()));
+    names.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    names.dedup();
+    Ok(names)
 }
 
 /// Phase 2 — parse a ref file's contents into a target.
@@ -329,7 +492,26 @@ pub fn list_names(git_dir: &Path, prefix: &BStr) -> Result<Vec<RefName>> {
 /// [`crate::error::Error::InvalidRefName`] for a symbolic target or a file that holds nothing —
 /// an empty ref file is a ref that exists and points nowhere, which is an error and not absence.
 pub fn parse_ref_file(format: ObjectFormat, data: &[u8]) -> Result<RefTarget> {
-    todo!()
+    let mut value = data;
+    if let Some(rest) = value.strip_suffix(b"\n") {
+        value = rest;
+        if let Some(rest) = value.strip_suffix(b"\r") {
+            value = rest;
+        }
+    }
+    if value.is_empty() {
+        return Err(Error::InvalidRefName {
+            name: BString::new(Vec::new()),
+            reason: "ref file is empty",
+        });
+    }
+    if let Some(rest) = value.strip_prefix(b"ref: ") {
+        return Ok(RefTarget::Symbolic(RefName::parse(BStr::new(rest))?));
+    }
+    Ok(RefTarget::Direct(ObjectId::from_hex(
+        format,
+        BStr::new(value),
+    )?))
 }
 
 /// Phase 2 — the id a ref file holds, requiring it to be direct.
@@ -345,7 +527,12 @@ pub fn parse_ref_file(format: ObjectFormat, data: &[u8]) -> Result<RefTarget> {
 /// [`crate::error::Error::SymbolicRef`] if the value is a symbolic redirect, plus everything
 /// [`read`] raises.
 pub fn read_direct(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<ObjectId> {
-    todo!()
+    match read(git_dir, name, format)? {
+        RefTarget::Direct(oid) => Ok(oid),
+        RefTarget::Symbolic(_) => Err(Error::SymbolicRef {
+            name: BString::from(name.as_bytes()),
+        }),
+    }
 }
 
 /// Phase 2 — the symbolic target of a ref file, requiring it to be symbolic.
@@ -358,5 +545,8 @@ pub fn read_direct(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Resu
 /// [`crate::error::Error::SymbolicRef`] if the value is a direct id, plus everything [`read`]
 /// raises.
 pub fn read_symbolic(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<BString> {
-    todo!()
+    match read(git_dir, name, format)? {
+        RefTarget::Symbolic(target) => Ok(target.into_bstring()),
+        RefTarget::Direct(oid) => Err(Error::SymbolicRef { name: oid.to_hex() }),
+    }
 }

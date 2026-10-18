@@ -42,6 +42,7 @@
 //! * **Peeled lines follow their ref immediately** and are meaningless on their own. A `^` line
 //!   before any ref line is corruption, not an entry without a name.
 
+use bstr::BStr;
 use std::path::{Path, PathBuf};
 
 use bstr::BString;
@@ -146,7 +147,18 @@ impl PackedRefs {
     /// [`crate::error::Error::CorruptPackedRefs`] for a line that is not a comment, a blank, a
     /// peel, or a well-formed `<id> <name>` pair.
     pub fn load(git_dir: &Path, format: ObjectFormat) -> Result<Self> {
-        todo!()
+        let path = packed_refs_path(git_dir);
+        let data = match std::fs::read(&path) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::new()),
+            Err(e) => {
+                return Err(crate::error::Error::IoAtPath {
+                    path: path.to_string_lossy().as_bytes().into(),
+                    source: e,
+                })
+            }
+        };
+        Self::parse(format, &data)
     }
 
     /// Phase 2 — parse the file's bytes.
@@ -170,7 +182,68 @@ impl PackedRefs {
     /// which is reported rather than skipped because a skipped ref is a ref that goes missing on
     /// the next write.
     pub fn parse(format: ObjectFormat, data: &[u8]) -> Result<Self> {
-        todo!()
+        use crate::error::Error;
+        let mut traits = Vec::new();
+        let mut entries: Vec<PackedRef> = Vec::new();
+        for (index, raw) in data.split(|b| *b == b'\n').enumerate() {
+            let line = raw.strip_suffix(b"\r").unwrap_or(raw);
+            if line.is_empty() {
+                continue;
+            }
+            if line.starts_with(b"#") {
+                if let Some(rest) = line.strip_prefix(b"# pack-refs with:") {
+                    traits = rest
+                        .split(|b| *b == b' ' || *b == b'\t')
+                        .filter(|field| !field.is_empty())
+                        .map(BString::from)
+                        .collect();
+                }
+                continue;
+            }
+            if let Some(hex) = line.strip_prefix(b"^") {
+                let peeled = ObjectId::from_hex(format, BStr::new(hex)).map_err(|_| {
+                    Error::CorruptPackedRefs {
+                        line: index + 1,
+                        reason: "invalid peeled object id",
+                    }
+                })?;
+                match entries.last_mut() {
+                    Some(last) => last.peeled = Some(peeled),
+                    None => {
+                        return Err(Error::CorruptPackedRefs {
+                            line: index + 1,
+                            reason: "peel line before any ref",
+                        })
+                    }
+                }
+                continue;
+            }
+            let split = line
+                .iter()
+                .position(|b| *b == b' ')
+                .ok_or(Error::CorruptPackedRefs {
+                    line: index + 1,
+                    reason: "missing space between id and name",
+                })?;
+            let target = ObjectId::from_hex(format, BStr::new(&line[..split])).map_err(|_| {
+                Error::CorruptPackedRefs {
+                    line: index + 1,
+                    reason: "invalid object id",
+                }
+            })?;
+            let name = RefName::parse(BStr::new(&line[split + 1..]))?;
+            let entry = PackedRef {
+                name,
+                target,
+                peeled: None,
+            };
+            if let Some(pos) = entries.iter().position(|e| e.name == entry.name) {
+                entries[pos] = entry;
+            } else {
+                entries.push(entry);
+            }
+        }
+        Ok(Self { traits, entries })
     }
 
     /// Phase 2 — serialise back to the file's bytes.
@@ -189,7 +262,29 @@ impl PackedRefs {
     ///   in the file: a SHA-256 repository's `packed-refs` is distinguishable only by the line
     ///   length, which is exactly why the caller supplies the format.
     pub fn serialize(&self, format: ObjectFormat) -> Vec<u8> {
-        todo!()
+        let mut out = Vec::new();
+        if !self.traits.is_empty() {
+            out.extend_from_slice(b"# pack-refs with: ");
+            for (i, t) in self.traits.iter().enumerate() {
+                if i > 0 {
+                    out.push(b' ');
+                }
+                out.extend_from_slice(t);
+            }
+            out.extend_from_slice(b" \n");
+        }
+        for entry in &self.entries {
+            out.extend_from_slice(&entry.target.to_hex());
+            out.push(b' ');
+            out.extend_from_slice(entry.name.as_bytes());
+            out.push(b'\n');
+            if let Some(peeled) = entry.peeled {
+                out.push(b'^');
+                out.extend_from_slice(&peeled.to_hex());
+                out.push(b'\n');
+            }
+        }
+        out
     }
 
     /// Phase 2 — write `git_dir/packed-refs` atomically.
@@ -210,7 +305,9 @@ impl PackedRefs {
     /// [`crate::error::Error::LockHeld`] if `packed-refs.lock` exists, and
     /// [`crate::error::Error::IoAtPath`] if the file cannot be written or renamed into place.
     pub fn write(&self, git_dir: &Path, format: ObjectFormat) -> Result<()> {
-        todo!()
+        let path = packed_refs_path(git_dir);
+        let mut lock = crate::refs::RefLock::acquire_path(&path)?;
+        lock.write_and_commit(&self.serialize(format))
     }
 
     /// Phase 2 — the target of a ref, if it is packed.
@@ -222,7 +319,10 @@ impl PackedRefs {
     /// [`crate::refs::RefStore::read`] does and why this method is on [`PackedRefs`] rather than on
     /// the store as the whole answer.
     pub fn get(&self, name: &RefName) -> Option<ObjectId> {
-        todo!()
+        self.entries
+            .iter()
+            .find(|entry| entry.name == *name)
+            .map(|entry| entry.target)
     }
 
     /// Phase 2 — the peeled target recorded for a ref, if the file has one.
@@ -296,7 +396,10 @@ impl PackedRefs {
     /// Borrowing the names rather than allocating, which is what the free function
     /// [`packed_names`] is for when an owned list is wanted. The order is the file's.
     pub fn names(&self) -> PackedRefNames<'_> {
-        todo!()
+        PackedRefNames {
+            inner: self,
+            position: 0,
+        }
     }
 
     /// Phase 2 — how many refs are packed.
@@ -427,7 +530,8 @@ impl<'a> Iterator for PackedRefNames<'a> {
     ///
     /// Scaffold stage: this body is `todo!()`.
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (usize::MAX, None)
+        let remaining = self.inner.entries.len().saturating_sub(self.position);
+        (remaining, Some(remaining))
     }
 }
 

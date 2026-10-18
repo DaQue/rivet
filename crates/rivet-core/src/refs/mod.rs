@@ -68,7 +68,9 @@ pub mod reflog;
 
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
+use bstr::{BStr, BString};
+
+use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::ObjectKind;
 
@@ -126,7 +128,10 @@ impl RefTarget {
     ///
     /// [`crate::error::Error::SymbolicRef`] if the target is symbolic.
     pub fn oid(&self) -> Result<ObjectId> {
-        todo!()
+                match self {
+            RefTarget::Direct(oid) => Ok(*oid),
+            RefTarget::Symbolic(name) => Err(Error::SymbolicRef { name: name_bytes(name) }),
+        }
     }
 
     /// Phase 2 — the symbolic target's name, requiring the target to be symbolic.
@@ -137,7 +142,10 @@ impl RefTarget {
     ///
     /// [`crate::error::Error::SymbolicRef`] if the target is direct.
     pub fn symbolic_target(&self) -> Result<&RefName> {
-        todo!()
+                match self {
+            RefTarget::Symbolic(name) => Ok(name),
+            RefTarget::Direct(oid) => Err(Error::SymbolicRef { name: oid.to_hex() }),
+        }
     }
 
     /// Phase 2 — whether this target redirects to another ref.
@@ -243,7 +251,7 @@ impl RefLock {
     /// only way `O_EXCL` fails that this distinguishes, because that is the case the user can act
     /// on. [`crate::error::Error::IoAtPath`] for any other failure to create it.
     pub fn acquire(git_dir: &Path, name: &RefName) -> Result<Self> {
-        todo!()
+                Self::acquire_path(&name.file_path(git_dir))
     }
 
     /// Phase 2 — take the lock for an arbitrary path.
@@ -261,7 +269,27 @@ impl RefLock {
     ///
     /// As [`RefLock::acquire`].
     pub fn acquire_path(path: &Path) -> Result<Self> {
-        todo!()
+                let mut lock_os = path.as_os_str().to_os_string();
+        lock_os.push(".lock");
+        let lock_path = PathBuf::from(lock_os);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io_at(parent, e))?;
+        }
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_) => Ok(Self {
+                path: lock_path,
+                target: path.to_path_buf(),
+                armed: true,
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(Error::LockHeld {
+                path: BString::from(lock_path.to_string_lossy().as_bytes()),
+            }),
+            Err(e) => Err(io_at(&lock_path, e)),
+        }
     }
 
     /// Phase 2 — the lock file's path.
@@ -298,7 +326,8 @@ impl RefLock {
     /// cleans it up — which means a caller reporting the error must not keep the guard alive
     /// indefinitely, or the user is told to delete a lock file that a still-open process owns.
     pub fn write_and_commit(&mut self, data: &[u8]) -> Result<()> {
-        todo!()
+                std::fs::write(&self.path, data).map_err(|e| io_at(&self.path, e))?;
+        self.commit()
     }
 
     /// Phase 2 — rename the lock file into place without writing it.
@@ -317,7 +346,12 @@ impl RefLock {
     ///
     /// [`crate::error::Error::IoAtPath`] if the rename fails.
     pub fn commit(&mut self) -> Result<()> {
-        todo!()
+                if !self.armed {
+            return Ok(());
+        }
+        std::fs::rename(&self.path, &self.target).map_err(|e| io_at(&self.path, e))?;
+        self.armed = false;
+        Ok(())
     }
 
     /// Phase 2 — release the lock without touching the ref.
@@ -336,7 +370,15 @@ impl RefLock {
     ///
     /// [`crate::error::Error::IoAtPath`] if the lock file exists and cannot be removed.
     pub fn release(&mut self) -> Result<()> {
-        todo!()
+                if !self.armed {
+            return Ok(());
+        }
+        self.armed = false;
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(io_at(&self.path, e)),
+        }
     }
 }
 
@@ -394,7 +436,11 @@ impl RefStore {
     /// [`crate::error::Error::IoAtPath`] if it exists and cannot be read, and
     /// [`crate::error::Error::InvalidRefName`] for a line naming an invalid ref.
     pub fn open(git_dir: &Path, format: ObjectFormat) -> Result<Self> {
-        todo!()
+                Ok(Self {
+            git_dir: git_dir.to_path_buf(),
+            format,
+            packed: PackedRefs::load(git_dir, format)?,
+        })
     }
 
     /// Phase 2 — the git directory this store reads.
@@ -415,7 +461,7 @@ impl RefStore {
     /// Exposed because `Repository` builds every subsystem over the same paths and re-deriving them
     /// in each would be the place two of them disagreed about where `refs/` is.
     pub fn git_dir_paths(&self) -> GitDirPaths {
-        todo!()
+                GitDirPaths::new(&self.git_dir)
     }
 
     /// Phase 2 — re-read `packed-refs` and pick up refs that moved since the last read.
@@ -432,7 +478,8 @@ impl RefStore {
     ///
     /// As [`RefStore::open`].
     pub fn refresh(&mut self) -> Result<()> {
-        todo!()
+                self.packed = PackedRefs::load(&self.git_dir, self.format)?;
+        Ok(())
     }
 
     /// Phase 2 — read a ref: loose first, then packed.
@@ -453,7 +500,13 @@ impl RefStore {
     /// [`crate::error::Error::RefNotFound`] if neither storage has it, and the parse errors of
     /// [`loose::read`] and [`RefStore::open`].
     pub fn read(&self, name: &RefName) -> Result<RefTarget> {
-        todo!()
+                if let Some(target) = loose::try_read(&self.git_dir, name, self.format)? {
+            return Ok(target);
+        }
+        match self.packed.get(name) {
+            Some(oid) => Ok(RefTarget::Direct(oid)),
+            None => Err(Error::RefNotFound { name: name_bytes(name) }),
+        }
     }
 
     /// Phase 2 — read a ref, treating absence as `None`.
@@ -465,7 +518,11 @@ impl RefStore {
     ///
     /// Everything [`RefStore::read`] raises except [`crate::error::Error::RefNotFound`].
     pub fn try_read(&self, name: &RefName) -> Result<Option<RefTarget>> {
-        todo!()
+                match self.read(name) {
+            Ok(target) => Ok(Some(target)),
+            Err(Error::RefNotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Phase 2 — follow a symbolic chain to the ref at its end, without resolving to an id.
@@ -486,7 +543,23 @@ impl RefStore {
     /// [`crate::error::Error::SymbolicRefCycle`] for a cycle or an over-long chain, and the read
     /// errors of [`RefStore::read`].
     pub fn follow(&self, name: &RefName) -> Result<RefName> {
-        todo!()
+                let mut current = name.clone();
+        let mut hops = 0usize;
+        loop {
+            match self.read(&current)? {
+                RefTarget::Direct(_) => return Ok(current),
+                RefTarget::Symbolic(next) => {
+                    hops += 1;
+                    if hops > MAX_SYMBOLIC_DEPTH {
+                        return Err(Error::SymbolicRefCycle {
+                            name: name_bytes(name),
+                            limit: MAX_SYMBOLIC_DEPTH,
+                        });
+                    }
+                    current = next;
+                }
+            }
+        }
     }
 
     /// Phase 2 — resolve a ref to an object id, following symbolic refs.
@@ -512,7 +585,14 @@ impl RefStore {
     /// start does not exist; [`crate::error::Error::SymbolicRefCycle`] for a cycle; and the parse
     /// errors of [`RefStore::read`].
     pub fn resolve_oid(&self, name: &RefName) -> Result<ObjectId> {
-        todo!()
+                let target = self.follow(name)?;
+        match self.read(&target)? {
+            RefTarget::Direct(oid) => Ok(oid),
+            RefTarget::Symbolic(_) => Err(Error::SymbolicRefCycle {
+                name: name_bytes(name),
+                limit: MAX_SYMBOLIC_DEPTH,
+            }),
+        }
     }
 
     /// Phase 2 — resolve a ref to the commit it ultimately names, peeling tags.
@@ -537,7 +617,8 @@ impl RefStore {
     /// [`crate::error::Error::TagCycle`] and [`crate::error::Error::ObjectNotFound`] from the
     /// object database, and everything [`RefStore::resolve_oid`] raises.
     pub fn peel_to_commit(&self, name: &RefName, odb: &crate::odb::Odb) -> Result<ObjectId> {
-        todo!()
+                let oid = self.resolve_oid(name)?;
+        self.peel_oid(oid, odb)
     }
 
     /// Phase 2 — peel a resolved object id to a commit.
@@ -558,7 +639,23 @@ impl RefStore {
     /// [`crate::error::Error::ObjectNotFound`], and [`crate::error::Error::WrongObjectKind`] for a
     /// malformed tag whose `type` header disagrees with the object it names.
     pub fn peel_oid(&self, oid: ObjectId, odb: &crate::odb::Odb) -> Result<ObjectId> {
-        todo!()
+                let mut current = oid;
+        let mut hops = 0usize;
+        loop {
+            let object = odb.read(&current)?;
+            match object.kind() {
+                ObjectKind::Commit => return Ok(current),
+                ObjectKind::Tag => {
+                    hops += 1;
+                    if hops > 64 {
+                        return Err(Error::TagCycle { oid: current });
+                    }
+                    let (next, _kind) = self.peel_one(current, odb)?;
+                    current = next;
+                }
+                _ => return Err(Error::NotACommit { name: current.to_hex() }),
+            }
+        }
     }
 
     /// Phase 2 — read one level of a tag object.
@@ -578,7 +675,21 @@ impl RefStore {
     /// [`crate::error::Error::WrongObjectKind`] if `oid` is not a tag, and the object database's
     /// read errors.
     pub fn peel_one(&self, oid: ObjectId, odb: &crate::odb::Odb) -> Result<(ObjectId, ObjectKind)> {
-        todo!()
+                let object = odb.read(&oid)?;
+        if object.kind() != ObjectKind::Tag {
+            return Err(Error::WrongObjectKind {
+                oid: Some(oid),
+                expected: ObjectKind::Tag,
+                found: object.kind(),
+            });
+        }
+        match crate::object::AnyObject::parse(ObjectKind::Tag, object.data())? {
+            crate::object::AnyObject::Tag(tag) => {
+                let (kind, _size) = odb.read_header(&tag.object)?;
+                Ok((tag.object, kind))
+            }
+            _ => unreachable!("parsed a tag object as a non-tag"),
+        }
     }
 
     /// Phase 2 — what `HEAD` resolves to: a branch name, or a detached commit id.
@@ -600,7 +711,35 @@ impl RefStore {
     /// directory is not a repository; [`crate::error::Error::SymbolicRefCycle`]; and the parse
     /// errors of [`RefStore::read`].
     pub fn head(&self) -> Result<HeadState> {
-        todo!()
+                let head = RefName::head();
+        match self.read(&head)? {
+            RefTarget::Direct(oid) => Ok(HeadState::Detached { oid }),
+            RefTarget::Symbolic(branch) => {
+                let mut current = branch;
+                let mut hops = 1usize;
+                loop {
+                    match self.read(&current) {
+                        Ok(RefTarget::Direct(oid)) => {
+                            return Ok(HeadState::Attached { branch: current, oid })
+                        }
+                        Ok(RefTarget::Symbolic(next)) => {
+                            hops += 1;
+                            if hops > MAX_SYMBOLIC_DEPTH {
+                                return Err(Error::SymbolicRefCycle {
+                                    name: name_bytes(&current),
+                                    limit: MAX_SYMBOLIC_DEPTH,
+                                });
+                            }
+                            current = next;
+                        }
+                        Err(Error::RefNotFound { .. }) => {
+                            return Ok(HeadState::Unborn { branch: current })
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+        }
     }
 
     /// Phase 2 — the branch `HEAD` names, or `None` when it is detached or unborn.
@@ -620,7 +759,10 @@ impl RefStore {
     ///
     /// As [`RefStore::head`].
     pub fn head_branch(&self) -> Result<Option<RefName>> {
-        todo!()
+                match self.head()? {
+            HeadState::Attached { branch, .. } => Ok(Some(branch).filter(|name| name.is_branch())),
+            _ => Ok(None),
+        }
     }
 
     /// Phase 2 — the commit `HEAD` names, failing on an unborn branch.
@@ -640,7 +782,12 @@ impl RefStore {
     /// [`crate::error::Error::RefNotFound`] for an unborn branch and for a missing `HEAD`, and
     /// everything [`RefStore::peel_to_commit`] raises.
     pub fn head_commit(&self, odb: &crate::odb::Odb) -> Result<ObjectId> {
-        todo!()
+                match self.head()? {
+            HeadState::Attached { oid, .. } | HeadState::Detached { oid } => self.peel_oid(oid, odb),
+            HeadState::Unborn { branch } => Err(Error::RefNotFound {
+                name: name_bytes(&branch),
+            }),
+        }
     }
 
     /// Phase 2 — point `HEAD` at a branch.
@@ -665,7 +812,7 @@ impl RefStore {
     /// [`crate::error::Error::LockHeld`] if `HEAD`'s lock is held, and
     /// [`crate::error::Error::IoAtPath`] if the write fails.
     pub fn set_head(&self, name: &RefName, message: Option<ReflogMessage<'_>>) -> Result<()> {
-        todo!()
+                self.write_ref(&RefName::head(), &RefTarget::Symbolic(name.clone()), message)
     }
 
     /// Phase 2 — point `HEAD` directly at a commit.
@@ -685,7 +832,7 @@ impl RefStore {
     ///
     /// As [`RefStore::set_head`].
     pub fn detach_head(&self, commit: ObjectId, message: Option<ReflogMessage<'_>>) -> Result<()> {
-        todo!()
+                self.write_ref(&RefName::head(), &RefTarget::Direct(commit), message)
     }
 
     /// Phase 2 — set a ref to an object id, with no expectation about its old value.
@@ -711,7 +858,7 @@ impl RefStore {
         oid: ObjectId,
         message: Option<ReflogMessage<'_>>,
     ) -> Result<()> {
-        todo!()
+                self.write_ref(name, &RefTarget::Direct(oid), message)
     }
 
     /// Phase 2 — point a ref at another ref.
@@ -735,7 +882,7 @@ impl RefStore {
         target: &RefName,
         message: Option<ReflogMessage<'_>>,
     ) -> Result<()> {
-        todo!()
+                self.write_ref(name, &RefTarget::Symbolic(target.clone()), message)
     }
 
     /// Phase 2 — move a ref, refusing if it is not where the caller expected it.
@@ -778,7 +925,41 @@ impl RefStore {
         expected: Option<ObjectId>,
         message: Option<ReflogMessage<'_>>,
     ) -> Result<()> {
-        todo!()
+                let git_dir = self.git_dir();
+        let mut lock = RefLock::acquire(git_dir, name)?;
+        let current = self.try_read(name)?;
+        match (&expected, &current) {
+            (None, None) => {}
+            (None, Some(_)) => {
+                return Err(Error::RefNotFound { name: name_bytes(name) });
+            }
+            (Some(_), None) => {
+                return Err(Error::RefNotFound { name: name_bytes(name) });
+            }
+            (Some(want), Some(RefTarget::Direct(found))) => {
+                if found != want {
+                    return Err(Error::NonFastForward {
+                        name: name_bytes(name),
+                        old: *want,
+                        new: *found,
+                    });
+                }
+            }
+            (Some(_), Some(RefTarget::Symbolic(_))) => {
+                return Err(Error::SymbolicRef { name: name_bytes(name) });
+            }
+        }
+        let old = match &current {
+            Some(RefTarget::Direct(oid)) => *oid,
+            _ => ObjectId::zero(self.format),
+        };
+        std::fs::write(lock.path(), RefTarget::Direct(new).to_bytes(self.format))
+            .map_err(|e| io_at(lock.path(), e))?;
+        if let Some(m) = message {
+            let entry = ReflogEntry::new(old, new, m.who.clone(), BString::from(m.message));
+            reflog::append(git_dir, name, &entry)?;
+        }
+        lock.commit()
     }
 
     /// Phase 2 — delete a ref from both storages.
@@ -804,7 +985,26 @@ impl RefStore {
     /// [`crate::error::Error::LockHeld`] for either lock; and
     /// [`crate::error::Error::IoAtPath`] if a file cannot be removed.
     pub fn delete(&self, name: &RefName) -> Result<()> {
-        todo!()
+                if name.is_head() {
+            return Err(Error::SymbolicRef { name: name_bytes(name) });
+        }
+        let git_dir = self.git_dir();
+        let loose_present = loose::exists(git_dir, name);
+        let packed_present = self.packed.get(name).is_some();
+        if !loose_present && !packed_present {
+            return Err(Error::RefNotFound { name: name_bytes(name) });
+        }
+        let _lock = RefLock::acquire(git_dir, name)?;
+        if loose_present {
+            loose::delete(git_dir, name)?;
+        }
+        reflog::delete(git_dir, name)?;
+        if packed_present {
+            let mut packed = self.packed.clone();
+            packed.remove(name);
+            packed.write(git_dir, self.format)?;
+        }
+        Ok(())
     }
 
     /// Phase 2 — move a ref, taking both locks.
@@ -830,7 +1030,32 @@ impl RefStore {
     /// [`crate::error::Error::LockHeld`] for either lock; and
     /// [`crate::error::Error::IoAtPath`] if the move fails.
     pub fn rename(&self, from: &RefName, to: &RefName) -> Result<()> {
-        todo!()
+                let git_dir = self.git_dir();
+        if self.exists(to) {
+            return Err(Error::Message(format!("ref {} already exists", to)));
+        }
+        let mut from_lock = RefLock::acquire(git_dir, from)?;
+        let mut to_lock = RefLock::acquire(git_dir, to)?;
+        let target = self.read(from)?;
+        std::fs::write(to_lock.path(), target.to_bytes(self.format))
+            .map_err(|e| io_at(to_lock.path(), e))?;
+        to_lock.commit()?;
+        loose::delete(git_dir, from)?;
+        let from_log = from.reflog_path(git_dir);
+        if from_log.exists() {
+            let to_log = to.reflog_path(git_dir);
+            if let Some(parent) = to_log.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::rename(&from_log, &to_log);
+        }
+        if self.packed.get(from).is_some() {
+            let mut packed = self.packed.clone();
+            packed.remove(from);
+            packed.write(git_dir, self.format)?;
+        }
+        let _ = from_lock.release();
+        Ok(())
     }
 
     /// Phase 2 — every ref under a prefix, loose and packed, with loose values winning.
@@ -858,7 +1083,20 @@ impl RefStore {
     /// The walk errors of [`loose::list`] and the parse errors of [`RefStore::read`] for a ref that
     /// is present and broken.
     pub fn list(&self, prefix: &[u8]) -> Result<Vec<(RefName, RefTarget)>> {
-        todo!()
+                let git_dir = self.git_dir();
+        let mut out: Vec<(RefName, RefTarget)> =
+            loose::list(git_dir, BStr::new(prefix), self.format)?;
+        for entry in self.packed.iter() {
+            if !entry.name.as_bytes().starts_with(prefix) {
+                continue;
+            }
+            if out.iter().any(|(name, _)| name == &entry.name) {
+                continue;
+            }
+            out.push((entry.name.clone(), RefTarget::Direct(entry.target)));
+        }
+        out.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        Ok(out)
     }
 
     /// Phase 2 — every local branch, with its commit id.
@@ -874,7 +1112,12 @@ impl RefStore {
     ///
     /// As [`RefStore::list`], plus the resolution errors of [`RefStore::resolve_oid`].
     pub fn list_branches(&self) -> Result<Vec<(RefName, ObjectId)>> {
-        todo!()
+                let mut out = Vec::new();
+        for (name, _target) in self.list(b"refs/heads/")? {
+            let oid = self.resolve_oid(&name)?;
+            out.push((name, oid));
+        }
+        Ok(out)
     }
 
     /// Phase 2 — every tag, with the id of what the ref names — the tag object for an annotated tag.
@@ -890,7 +1133,12 @@ impl RefStore {
     ///
     /// As [`RefStore::list`] and [`RefStore::resolve_oid`].
     pub fn list_tags(&self) -> Result<Vec<(RefName, ObjectId)>> {
-        todo!()
+                let mut out = Vec::new();
+        for (name, _target) in self.list(b"refs/tags/")? {
+            let oid = self.resolve_oid(&name)?;
+            out.push((name, oid));
+        }
+        Ok(out)
     }
 
     /// Phase 2 — every remote-tracking ref, with its commit id.
@@ -905,7 +1153,12 @@ impl RefStore {
     ///
     /// As [`RefStore::list`] and [`RefStore::resolve_oid`].
     pub fn list_remote(&self) -> Result<Vec<(RefName, ObjectId)>> {
-        todo!()
+                let mut out = Vec::new();
+        for (name, _target) in self.list(b"refs/remotes/")? {
+            let oid = self.resolve_oid(&name)?;
+            out.push((name, oid));
+        }
+        Ok(out)
     }
 
     /// Phase 2 — every ref, whatever namespace, with its resolved commit id.
@@ -927,7 +1180,23 @@ impl RefStore {
     ///
     /// The walk and resolution errors of [`RefStore::list`]; a per-ref peeling failure is skipped.
     pub fn list_all(&self, odb: &crate::odb::Odb) -> Result<Vec<(RefName, ObjectId)>> {
-        todo!()
+                let mut out = Vec::new();
+        // Only `refs/` holds refs that can be peeled to a commit. Scanning the git directory
+        // root would pull in `COMMIT_EDITMSG`, `description` and friends, which are not refs.
+        for (name, _target) in self.list(b"refs/")? {
+            if name.is_pseudo_ref() {
+                continue;
+            }
+            let oid = match self.resolve_oid(&name) {
+                Ok(oid) => oid,
+                Err(_) => continue,
+            };
+            match self.peel_oid(oid, odb) {
+                Ok(commit) => out.push((name, commit)),
+                Err(_) => continue,
+            }
+        }
+        Ok(out)
     }
 
     /// Phase 2 — where a ref is stored, or `None` if it is nowhere.
@@ -947,7 +1216,13 @@ impl RefStore {
     /// packed snapshot is consulted and is broken; it is already parsed, so in practice this is
     /// infallible.
     pub fn location(&self, name: &RefName) -> Option<RefLocation> {
-        todo!()
+                let loose_present = loose::exists(&self.git_dir, name);
+        let packed_present = self.packed.get(name).is_some();
+        if !loose_present && !packed_present {
+            None
+        } else {
+            Some(packed::location(loose_present, packed_present))
+        }
     }
 
     /// Phase 2 — whether a ref exists in either storage.
@@ -957,7 +1232,7 @@ impl RefStore {
     /// `true` for a ref whose file is empty or corrupt, matching [`RefStore::location`]'s logic and
     /// Git's own distinction between "no such ref" and "broken ref".
     pub fn exists(&self, name: &RefName) -> bool {
-        todo!()
+                self.location(name).is_some()
     }
 
     /// Phase 2 — the refs currently locked by a stale lock file.
@@ -974,7 +1249,16 @@ impl RefStore {
     ///
     /// [`crate::error::Error::IoAtPath`] if `refs/` cannot be walked.
     pub fn stale_locks(&self) -> Result<Vec<PathBuf>> {
-        todo!()
+                let mut out = Vec::new();
+        collect_locks(&self.git_dir.join("refs"), &mut out)?;
+        for extra in ["HEAD.lock", "packed-refs.lock"] {
+            let path = self.git_dir.join(extra);
+            if path.exists() {
+                out.push(path);
+            }
+        }
+        out.sort();
+        Ok(out)
     }
 
     /// Phase 2 — the parsed `packed-refs` snapshot this store is holding.
@@ -985,7 +1269,7 @@ impl RefStore {
     /// read-modify-write the whole file and would otherwise re-parse it; a caller reading a value
     /// must go through [`RefStore::read`] so that loose shadowing applies.
     pub fn packed(&self) -> &PackedRefs {
-        todo!()
+                &self.packed
     }
 
     /// Phase 2 — write `packed-refs` from the given set, replacing the file and the snapshot.
@@ -1006,7 +1290,9 @@ impl RefStore {
     ///
     /// [`crate::error::Error::LockHeld`], and [`crate::error::Error::IoAtPath`] if the write fails.
     pub fn write_packed(&mut self, packed: PackedRefs) -> Result<()> {
-        todo!()
+                packed.write(&self.git_dir, self.format)?;
+        self.packed = packed;
+        Ok(())
     }
 
     /// Phase 2 — the reflog for a ref, oldest entry first.
@@ -1019,7 +1305,7 @@ impl RefStore {
     ///
     /// [`crate::error::Error::CorruptReflog`] and [`crate::error::Error::IoAtPath`].
     pub fn reflog(&self, name: &RefName) -> Result<Vec<ReflogEntry>> {
-        todo!()
+                reflog::read(&self.git_dir, name, self.format)
     }
 
     /// Phase 2 — append to a ref's reflog without moving the ref.
@@ -1038,7 +1324,7 @@ impl RefStore {
     ///
     /// [`crate::error::Error::IoAtPath`] if the log cannot be written.
     pub fn append_reflog(&self, name: &RefName, entry: &ReflogEntry) -> Result<()> {
-        todo!()
+                reflog::append(&self.git_dir, name, entry)
     }
 
     /// Phase 2 — decide which namespace an abbreviated name refers to.
@@ -1067,7 +1353,33 @@ impl RefStore {
     /// [`crate::error::Error::InvalidRefName`] if `short` cannot be spelled as a ref name in any of
     /// the candidate namespaces.
     pub fn resolve_short(&self, short: &bstr::BStr) -> Result<RefName> {
-        todo!()
+                let short: &[u8] = short.as_ref();
+        let mut candidates: Vec<Vec<u8>> = Vec::with_capacity(6);
+        candidates.push(short.to_vec());
+        candidates.push([b"refs/".as_slice(), short].concat());
+        candidates.push([b"refs/tags/".as_slice(), short].concat());
+        candidates.push([b"refs/heads/".as_slice(), short].concat());
+        candidates.push([b"refs/remotes/".as_slice(), short].concat());
+        candidates.push([b"refs/remotes/".as_slice(), short, b"/HEAD".as_slice()].concat());
+        let mut any_valid = false;
+        for candidate in &candidates {
+            let Ok(name) = RefName::from_bytes(candidate) else {
+                continue;
+            };
+            any_valid = true;
+            if self.exists(&name) {
+                return Ok(name);
+            }
+        }
+        if !any_valid {
+            return Err(Error::InvalidRefName {
+                name: BString::from(short),
+                reason: "not a valid ref name in any namespace",
+            });
+        }
+        Err(Error::RefNotFound {
+            name: BString::from(short),
+        })
     }
 }
 
@@ -1114,7 +1426,10 @@ impl HeadState {
     /// "which branch am I on" has an answer in both — a fresh repository is on `main` before `main`
     /// exists. A caller that needs the branch to *resolve* must check for `Attached` specifically.
     pub fn branch(&self) -> Option<&RefName> {
-        todo!()
+                match self {
+            HeadState::Attached { branch, .. } | HeadState::Unborn { branch } => Some(branch),
+            HeadState::Detached { .. } => None,
+        }
     }
 
     /// Phase 2 — the id `HEAD` names, if there is one.
@@ -1124,7 +1439,10 @@ impl HeadState {
     /// `None` for an unborn branch and for a symbolic `HEAD` that does not resolve — the two cases
     /// where the user has asked "where am I" and the honest answer is "nowhere yet".
     pub fn oid(&self) -> Option<ObjectId> {
-        todo!()
+                match self {
+            HeadState::Attached { oid, .. } | HeadState::Detached { oid } => Some(*oid),
+            HeadState::Unborn { .. } => None,
+        }
     }
 
     /// Phase 2 — whether `HEAD` is detached.
@@ -1134,12 +1452,12 @@ impl HeadState {
     /// `false` for an unborn branch. That is the right answer for the question this asks, but it is
     /// not "the branch exists", and code that commits or checks out must not read it as such.
     pub const fn is_detached(&self) -> bool {
-        todo!()
+                matches!(self, HeadState::Detached { .. })
     }
 
     /// Phase 2 — whether `HEAD` is on a branch that has no commits yet.
     pub const fn is_unborn(&self) -> bool {
-        todo!()
+                matches!(self, HeadState::Unborn { .. })
     }
 }
 
@@ -1175,7 +1493,13 @@ impl GitDirPaths {
     /// creating. That is the point: `init` needs the paths before it has files, and a constructor
     /// that validated would be unusable in the one place it is most needed.
     pub fn new(git_dir: &Path) -> Self {
-        todo!()
+                Self {
+            git_dir: git_dir.to_path_buf(),
+            refs_dir: git_dir.join("refs"),
+            logs_dir: git_dir.join("logs"),
+            packed_refs: git_dir.join("packed-refs"),
+            head: git_dir.join("HEAD"),
+        }
     }
 }
 
@@ -1191,5 +1515,79 @@ impl GitDirPaths {
 /// interpretations to try, and the specific rule that failed is only interesting once the answer is
 /// "this was meant to be a ref". Code that wants the reason uses [`RefName::parse`].
 pub fn is_valid_ref_name(name: &[u8]) -> bool {
-    todo!()
+        RefName::from_bytes(name).is_ok()
+}
+
+impl RefStore {
+    /// Lock a ref, write its new value, log the update, then commit.
+    ///
+    /// The ordering is the point: the reflog line is on disk before the rename makes the new value
+    /// visible, so a reader that sees the value also sees its log entry.
+    fn write_ref(
+        &self,
+        name: &RefName,
+        target: &RefTarget,
+        message: Option<ReflogMessage<'_>>,
+    ) -> Result<()> {
+        let git_dir = self.git_dir();
+        let old = self.resolve_oid(name).unwrap_or_else(|_| ObjectId::zero(self.format));
+        let new = match target {
+            RefTarget::Direct(oid) => *oid,
+            RefTarget::Symbolic(next) => self
+                .resolve_oid(next)
+                .unwrap_or_else(|_| ObjectId::zero(self.format)),
+        };
+        let mut lock = RefLock::acquire(git_dir, name)?;
+        std::fs::write(lock.path(), target.to_bytes(self.format))
+            .map_err(|e| io_at(lock.path(), e))?;
+        if let Some(m) = message {
+            let entry = ReflogEntry::new(old, new, m.who.clone(), BString::from(m.message));
+            reflog::append(git_dir, name, &entry)?;
+        }
+        lock.commit()
+    }
+}
+
+impl Drop for RefLock {
+    fn drop(&mut self) {
+        if self.armed {
+            self.armed = false;
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn name_bytes(name: &RefName) -> BString {
+    BString::from(name.as_bytes())
+}
+
+fn io_at(path: &Path, source: std::io::Error) -> Error {
+    Error::IoAtPath {
+        path: BString::from(path.to_string_lossy().as_bytes()),
+        source,
+    }
+}
+
+fn collect_locks(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(io_at(dir, e)),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| io_at(dir, e))?;
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if file_type.is_dir() {
+            collect_locks(&entry.path(), out)?;
+        } else if file_type.is_file() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "lock").unwrap_or(false) {
+                out.push(path);
+            }
+        }
+    }
+    Ok(())
 }
