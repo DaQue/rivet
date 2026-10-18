@@ -46,6 +46,7 @@
 use crate::error::Result;
 use crate::hash::ObjectId;
 use crate::odb::Odb;
+use crate::error::Error;
 
 /// Phase 9 — how many commits the base walk may visit before giving up.
 ///
@@ -136,7 +137,14 @@ impl MergeBase {
 /// [`MAX_MERGE_BASE_STEPS`]; [`crate::error::Error::ObjectNotFound`] for a commit id the database
 /// lacks; [`crate::error::Error::WrongObjectKind`] if an id names a tree, a blob or a tag.
 pub fn merge_base(odb: &Odb, ours: ObjectId, theirs: ObjectId) -> Result<MergeBase> {
-    todo!()
+    if ours == theirs {
+        return Ok(MergeBase { oid: ours, common: vec![ours] });
+    }
+    let bases = merge_bases(odb, ours, theirs)?;
+    if bases.is_empty() {
+        return Err(Error::NoMergeBase { ours, theirs });
+    }
+    Ok(MergeBase { oid: bases[0], common: bases })
 }
 
 /// Phase 9 — every maximal common ancestor of two commits.
