@@ -301,7 +301,7 @@ impl PackedRefs {
 
     /// Phase 2 — how many refs are packed.
     pub fn len(&self) -> usize {
-        todo!()
+        self.entries.len()
     }
 
     /// Phase 2 — whether nothing is packed.
