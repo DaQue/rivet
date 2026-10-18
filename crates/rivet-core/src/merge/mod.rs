@@ -332,7 +332,12 @@ impl MergeOptions {
     /// Phase 9 — the options a plain `rivet merge <commit>` uses: no rename detection, `merge`
     /// conflict style, Myers line diff, fast-forward allowed.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            find_renames: false,
+            conflict_style: ConflictStyle::Merge,
+            diff_algorithm: crate::diff::DiffAlgorithm::Myers,
+            no_ff: false,
+        }
     }
 
     /// Phase 9 — set the conflict marker style.
