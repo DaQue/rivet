@@ -386,7 +386,9 @@ pub fn write_unified(
     diff: &crate::diff::TreeDiff,
     format: crate::hash::ObjectFormat,
 ) -> Result<BString> {
-    todo!()
+    let mut buf = Vec::new();
+    format_unified(diff, format, &mut buf)?;
+    Ok(BString::from(buf))
 }
 
 /// Phase 8 — write the `--stat` summary.
