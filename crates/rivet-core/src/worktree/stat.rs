@@ -242,7 +242,7 @@ impl StatCache {
     /// returning the pre-write answer. Returning the displaced value lets a caller distinguish
     /// "there was a stale entry" from "there was nothing to invalidate".
     pub fn remove(&mut self, path: &BStr) -> Option<StatData> {
-        todo!()
+        self.entries.remove(path)
     }
 
     /// Phase 4 — drop everything.
