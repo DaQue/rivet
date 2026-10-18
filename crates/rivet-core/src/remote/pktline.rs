@@ -217,7 +217,7 @@ impl PktLine {
     /// on the enum; the common question — "did the list end" — is not quite this, because a delim
     /// packet ends a *section*.
     pub const fn is_control(&self) -> bool {
-        todo!()
+        matches!(self, PktLine::Flush | PktLine::Delim | PktLine::ResponseEnd)
     }
 
     /// Phase 11 — whether this packet ends the list.
