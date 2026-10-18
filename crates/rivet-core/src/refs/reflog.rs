@@ -279,7 +279,22 @@ pub fn exists(git_dir: &Path, name: &RefName) -> bool {
 ///
 /// [`crate::error::Error::IoAtPath`] if the file exists but cannot be removed.
 pub fn delete(git_dir: &Path, name: &RefName) -> Result<()> {
-    todo!()
+    let path = git_dir.join(name.to_string());
+    if !path.exists() {
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(&path);
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        if d == git_dir {
+            break;
+        }
+        if d.read_dir().map(|e| e.count()).unwrap_or(0) == 0 {
+            let _ = std::fs::remove_dir(d);
+        }
+        dir = d.parent();
+    }
+    Ok(())
 }
 
 /// Phase 2 — the last entry of a ref's reflog, if it has one.
