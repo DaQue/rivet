@@ -169,7 +169,20 @@ impl RefTarget {
     /// * The newline is included because every caller is writing a file; a caller that wants the
     ///   value without it strips one byte.
     pub fn to_bytes(&self, format: ObjectFormat) -> Vec<u8> {
-        todo!()
+        let mut out = Vec::new();
+        match self {
+            RefTarget::Symbolic(name) => {
+                out.extend_from_slice(b"ref: ");
+                out.extend_from_slice(name.as_bytes());
+            }
+            RefTarget::Direct(id) => {
+                let mut hex = [0u8; 64];
+                id.write_hex(&mut hex[..format.hex_len()]).expect("write hex");
+                out.extend_from_slice(&hex[..format.hex_len()]);
+            }
+        }
+        out.push(b'\n');
+        out
     }
 }
 
