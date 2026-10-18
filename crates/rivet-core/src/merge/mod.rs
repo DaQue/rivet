@@ -280,7 +280,17 @@ impl Conflict {
     ///   the object database by this function; the caller has already stored whatever blobs the
     ///   file merge produced.
     pub fn stages(&self) -> Vec<(crate::index::Stage, ObjectId)> {
-        todo!()
+        let mut out = Vec::new();
+        if let Some(id) = self.base {
+            out.push((crate::index::Stage::from_bits(1).expect("stage"), id));
+        }
+        if let Some(id) = self.ours {
+            out.push((crate::index::Stage::from_bits(2).expect("stage"), id));
+        }
+        if let Some(id) = self.theirs {
+            out.push((crate::index::Stage::from_bits(3).expect("stage"), id));
+        }
+        out
     }
 }
 
