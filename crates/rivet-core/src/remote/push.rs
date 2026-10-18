@@ -459,7 +459,51 @@ pub fn push_request(
 /// [`crate::error::Error::Protocol`] for a line that is not `ok`/`ng`, a missing `unpack` line, or
 /// framing that does not end in a flush.
 pub fn parse_report_status(input: &[u8], v2: bool) -> Result<PushOutcome> {
-    todo!()
+    let mut pos = 0usize;
+    let mut statuses = Vec::new();
+    let mut unpack_ok = false;
+    let mut status_reported = false;
+    let mut updated = Vec::new();
+    let mut rejected = Vec::new();
+    let mut first = true;
+    while pos < input.len() {
+        let line_end = input[pos..].iter().position(|&b| b == b'\n').map_or(input.len(), |i| pos + i);
+        let line = &input[pos..line_end];
+        pos = line_end + 1;
+        if line.is_empty() {
+            continue;
+        }
+        if first {
+            first = false;
+            let rest = line.strip_prefix(b"unpack ").ok_or_else(|| Error::Protocol("missing unpack line".into()))?;
+            unpack_ok = rest == b"ok";
+            continue;
+        }
+        let sp = line.iter().position(|&b| b == b' ').ok_or_else(|| Error::Protocol("bad status line".into()))?;
+        let status = &line[..sp];
+        let rest = &line[sp + 1..];
+        let (name, message) = if v2 {
+            let sp2 = rest.iter().position(|&b| b == b' ').unwrap_or(rest.len());
+            (rest[..sp2].as_ref(), rest[sp2..].as_ref())
+        } else {
+            (rest, &[][..])
+        };
+        let name = BString::from(name);
+        let message = BString::from(message);
+        let ok = status == b"ok";
+        let st = PushStatus { name: name.clone(), ok, message: message.clone() };
+        statuses.push(st.clone());
+        if ok {
+            status_reported = true;
+            updated.push(RefUpdate::create(name, ObjectId::zero(crate::hash::ObjectFormat::Sha1)));
+        } else {
+            rejected.push(st);
+        }
+    }
+    if pos != input.len() {
+        return Err(Error::Protocol("no flush".into()));
+    }
+    Ok(PushOutcome { statuses, unpack_ok, status_reported, updated, rejected })
 }
 
 /// Phase 11 — run a push against a transport.
