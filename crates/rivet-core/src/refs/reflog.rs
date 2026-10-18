@@ -258,7 +258,7 @@ pub fn append(git_dir: &Path, name: &RefName, entry: &ReflogEntry) -> Result<()>
 /// deciding whether an operation will *create* a log — `git branch` reports "Created from" only
 /// for a new one — and for that, existence is the whole question.
 pub fn exists(git_dir: &Path, name: &RefName) -> bool {
-    todo!()
+    git_dir.join(name.to_string()).exists()
 }
 
 /// Phase 2 — delete a ref's reflog, along with any now-empty parent directories.
