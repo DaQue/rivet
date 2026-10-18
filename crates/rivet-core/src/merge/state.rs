@@ -120,7 +120,13 @@ pub struct MergeState {
 impl MergeState {
     /// Phase 9 — an empty state, for a merge about to record itself.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            merge_head: Vec::new(),
+            merge_msg: BString::default(),
+            orig_head: None,
+            head_commit: None,
+            tree: None,
+        }
     }
 
     /// Phase 9 — whether more than one commit is being merged in.
