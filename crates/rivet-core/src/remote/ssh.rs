@@ -574,5 +574,5 @@ pub fn ssh_args(url: &RemoteUrl, port: Option<u16>, version: ProtocolVersion) ->
 /// tell the user which program it is about to run — which is the first thing to check when an SSH
 /// remote fails.
 pub fn has_ssh_override() -> bool {
-    todo!()
+    std::env::var_os("GIT_SSH_COMMAND").is_some() || std::env::var_os("GIT_SSH").is_some()
 }
