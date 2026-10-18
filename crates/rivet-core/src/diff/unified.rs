@@ -227,7 +227,13 @@ pub struct Hunk {
 impl Hunk {
     /// Phase 8 — an empty hunk with no lines.
     pub fn new(old_start: usize, old_lines: usize, new_start: usize, new_lines: usize) -> Self {
-        todo!()
+        Self {
+            old_start: old_start,
+            old_lines: old_lines,
+            new_start: new_start,
+            new_lines: new_lines,
+            lines: Vec::new(),
+        }
     }
 
     /// Phase 8 — the `@@ -a,b +c,d @@` header, as bytes without a trailing newline.
