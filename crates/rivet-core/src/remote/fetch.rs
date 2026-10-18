@@ -68,6 +68,7 @@ use crate::remote::transport::Transport;
 use crate::remote::url::RemoteUrl;
 use crate::remote::{AdvertisedRef, RefAdvertisement};
 use crate::object::ObjectKind;
+use crate::error::Error;
 
 /// Phase 11 — how many objects to put in one `have` line's round.
 ///
@@ -428,7 +429,60 @@ pub fn negotiate(
     refs: &RefStore,
     format: crate::hash::ObjectFormat,
 ) -> Result<Negotiation> {
-    todo!()
+    let advertised_ids: Vec<ObjectId> = advertisement
+    .refs
+    .iter()
+    .map(|r| r.oid)
+    .collect();
+    if !advertised_ids.iter().any(|id| id.format() == format) {
+        return Err(Error::ObjectFormatMismatch {
+            expected: format,
+            found: format,
+        });
+    }
+    let mut wants = Vec::new();
+    for id in &spec.wants {
+        if !advertised_ids.iter().any(|a| a == id) {
+            return Err(Error::Protocol(format!("want {id} not advertised")));
+        }
+        if !wants.iter().any(|w| w == id) {
+            wants.push(*id);
+        }
+    }
+    let haves = crate::fetch::local_haves(odb, refs)?;
+    let mut used = Vec::new();
+    if capabilities.multi_ack {
+        used.push(BString::from("multi_ack"));
+    }
+    if capabilities.multi_ack_detailed {
+        used.push(BString::from("multi_ack_detailed"));
+    }
+    if capabilities.side_band_64k {
+        used.push(BString::from("side-band-64k"));
+    }
+    if capabilities.side_band {
+        used.push(BString::from("side-band"));
+    }
+    if capabilities.thin_pack {
+        used.push(BString::from("thin-pack"));
+    }
+    if capabilities.ofs_delta {
+        used.push(BString::from("ofs-delta"));
+    }
+    if capabilities.include_tag {
+        used.push(BString::from("include-tag"));
+    }
+    if capabilities.agent {
+        used.push(BString::from("agent"));
+    }
+    Ok(Negotiation {
+        wants,
+        common: Vec::new(),
+        ready: true,
+        negotiation_rounds: 0,
+        full_pack: false,
+        used_capabilities: used,
+    })
 }
 
 /// Phase 11 — turn an advertisement into the wants a fetch of a remote-tracking ref needs.
