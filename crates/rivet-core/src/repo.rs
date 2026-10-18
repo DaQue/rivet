@@ -78,6 +78,7 @@ use crate::object::{Signature, Tree};
 use crate::odb::Odb;
 use crate::refs::{HeadState, RefStore};
 use crate::worktree::Worktree;
+use crate::error::Error;
 
 /// Phase 4 — the environment variable naming a git directory directly.
 ///
@@ -655,7 +656,13 @@ impl Repository {
     /// [`crate::error::Error::BareRepository`], since ignore rules are a property of a work tree
     /// and a bare repository has none.
     pub fn ignore(&self) -> Result<&IgnoreStack> {
-        todo!()
+        if self.is_bare() {
+            return Err(Error::BareRepository {
+                path: self.git_dir.to_string_lossy().into_owned().into(),
+                op: "ignore",
+            });
+        }
+        Ok(&self.ignore)
     }
 
     /// Phase 4 — the ignore stack, mutably, for a walk that descends into directories.
