@@ -197,7 +197,8 @@ impl InitOptions {
 
     /// Phase 4 — set the initial branch name.
     pub fn initial_branch(&mut self, name: &BStr) -> &mut Self {
-        todo!()
+        self.initial_branch = BString::from(name);
+        self
     }
 
     /// Phase 4 — select the object format.
