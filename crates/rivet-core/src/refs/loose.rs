@@ -188,7 +188,25 @@ pub fn write_locked(lock: &mut RefLock, target: &RefTarget) -> Result<()> {
 /// directory afterwards is **not** an error: the ref is gone either way, and an empty directory is
 /// inert.
 pub fn delete(git_dir: &Path, name: &RefName) -> Result<()> {
-    todo!()
+    let path = lock_path(git_dir, name);
+    let _ = std::fs::remove_file(&path);
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        if d.is_dir() {
+            match std::fs::read_dir(d) {
+                Ok(mut entries) => {
+                    if entries.next().is_none() {
+                        let _ = std::fs::remove_dir(d);
+                    } else {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        dir = d.parent();
+    }
+    Ok(())
 }
 
 /// Phase 2 — move a loose ref, taking both locks.
