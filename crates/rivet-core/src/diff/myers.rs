@@ -34,6 +34,7 @@
 //!   kept. Normalising here would make the diff disagree with the blob the id was computed over.
 
 use crate::error::Result;
+use crate::error::Error;
 
 /// Phase 8 — one line of a diff input.
 ///
@@ -229,7 +230,7 @@ pub fn myers_diff<T: PartialEq>(old: &[T], new: &[T]) -> Vec<Edit> {
 ///
 /// [`crate::error::Error::NotImplemented`] always, until the algorithm lands.
 pub fn histogram_diff<T: PartialEq>(old: &[T], new: &[T]) -> Result<Vec<Edit>> {
-    todo!()
+    Err(Error::NotImplemented { what: "histogram diff" })
 }
 
 /// Phase 8 — the number of lines a buffer contains, without allocating or copying.
