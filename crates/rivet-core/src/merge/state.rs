@@ -148,7 +148,7 @@ impl MergeState {
     /// least one. The "first" is the one Git's messages refer to when they name a single other
     /// commit, which is why the order of `merge_head` is preserved from the command line.
     pub fn first_parent(&self) -> Option<ObjectId> {
-        todo!()
+        self.merge_head.first().copied()
     }
 
     /// Phase 9 — the message, as bytes.
