@@ -253,7 +253,7 @@ impl CheckoutPlan {
 
     /// Phase 4 — the tree the work tree is coming from, `None` for an unborn `HEAD`.
     pub fn from_tree(&self) -> Option<ObjectId> {
-        todo!()
+        self.from_tree
     }
 
     /// Phase 4 — the tree the work tree is going to.
