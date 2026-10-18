@@ -398,7 +398,9 @@ impl OwnedPackIndex {
     /// Identical to [`PackIndex::parse`], which does the actual work; this only takes ownership of
     /// the buffer first.
     pub fn parse(data: Vec<u8>, format: ObjectFormat) -> Result<Self> {
-        todo!()
+        let data = data;
+        let index = PackIndex::parse(&data, format)?;
+        Ok(Self { data, format })
     }
 
     /// Phase 10 — borrow as a [`PackIndex`] for the duration of a call.
