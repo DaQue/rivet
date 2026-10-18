@@ -475,7 +475,7 @@ pub enum RefLocation {
 impl RefLocation {
     /// Phase 2 — whether a loose file is part of this ref's storage.
     pub const fn has_loose(self) -> bool {
-        todo!()
+        matches!(self, RefLocation::Loose | RefLocation::Both)
     }
 
     /// Phase 2 — whether a `packed-refs` entry is part of this ref's storage.
