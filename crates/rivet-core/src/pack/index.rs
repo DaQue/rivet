@@ -336,7 +336,7 @@ impl fmt::Display for PackIndexEntry {
     /// the differential tests compare against `git verify-pack -v` output built the same way. The
     /// offset is decimal; the id is lowercase hex at the format's width.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        f.write_str(&format!("{} {}", self.oid.to_hex(), self.offset))
     }
 }
 
