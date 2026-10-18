@@ -167,7 +167,17 @@ impl Edit {
 ///   in the diff where an allocation per line would be visible. It returns borrowed slices, not
 ///   owned ones, for exactly that reason.
 pub fn split_lines(data: &[u8]) -> Vec<DiffLine<'_>> {
-    todo!()
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let len = data.len();
+    while start < len {
+        let end = data[start..].iter().position(|&b| b == b'\n').map(|i| start + i + 1).unwrap_or(len);
+        let content = &data[start..end];
+        let has_newline = end < len;
+        lines.push(DiffLine { content, has_newline });
+        start = end;
+    }
+    lines
 }
 
 /// Phase 8 — the edit script between two sequences, by Myers' greedy algorithm.
