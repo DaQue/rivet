@@ -188,7 +188,8 @@ impl RmOptions {
 
     /// Phase 3 — keep the file in the work tree.
     pub fn cached(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.cached = on;
+        self
     }
 
     /// Phase 3 — allow removing a directory.
