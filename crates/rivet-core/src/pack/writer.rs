@@ -57,6 +57,7 @@ use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::Object;
 use crate::pack::PackIndexEntry;
+use crate::error::Error;
 
 /// Phase 10 — what one finished pack contains, for the caller that has to name and place it.
 ///
@@ -265,6 +266,16 @@ impl PackWriter {
     ///
     /// [`crate::error::Error::IoAtPath`] for either file, and as [`PackWriter::finish`].
     pub fn finish_to_path(self, dir: &Path) -> Result<(std::path::PathBuf, PackWriteSummary)> {
-        todo!()
+        let (pack_bytes, summary) = self.finish()?;
+        let stem = summary.checksum.to_hex();
+        let pack_path = dir.join(format!("pack-{}.pack", stem));
+        let idx_path = dir.join(format!("pack-{}.idx", stem));
+        let pack_tmp = dir.join(format!("pack-{}.pack.tmp", stem));
+        let idx_tmp = dir.join(format!("pack-{}.idx.tmp", stem));
+        std::fs::write(&pack_tmp, &pack_bytes).map_err(|e| Error::IoAtPath { path: pack_tmp.to_string_lossy().into_owned().into(), source: e })?;
+        std::fs::write(&idx_tmp, &summary.index).map_err(|e| Error::IoAtPath { path: idx_tmp.to_string_lossy().into_owned().into(), source: e })?;
+        std::fs::rename(&pack_tmp, &pack_path).map_err(|e| Error::IoAtPath { path: pack_path.to_string_lossy().into_owned().into(), source: e })?;
+        std::fs::rename(&idx_tmp, &idx_path).map_err(|e| Error::IoAtPath { path: idx_path.to_string_lossy().into_owned().into(), source: e })?;
+        Ok((pack_path, summary))
     }
 }
