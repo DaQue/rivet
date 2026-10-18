@@ -309,7 +309,26 @@ impl Revision {
     /// [`crate::error::Error::ObjectNotFound`] if the commit is missing, and
     /// [`crate::error::Error::WrongObjectKind`] if the id names something else.
     pub fn parents(&self, odb: &Odb) -> Result<Vec<ObjectId>> {
-        todo!()
+        let obj = odb.read(&self.commit)?;
+        let data = obj.data();
+        let mut parents = Vec::new();
+        let mut i = 0;
+        while i + 40 <= data.len() {
+            let line = &data[i..i + 40];
+            if line.starts_with(b"tree ") {
+                i += 40;
+                continue;
+            }
+            if line.starts_with(b"parent ") {
+                let hex = BStr::new(&line[7..40]);
+                let id = ObjectId::from_hex(odb.format(), hex)?;
+                parents.push(id);
+                i += 40;
+            } else {
+                break;
+            }
+        }
+        Ok(parents)
     }
 
     /// Phase 4 — whether the commit is a merge.
