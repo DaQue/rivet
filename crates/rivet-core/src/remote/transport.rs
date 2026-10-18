@@ -375,7 +375,7 @@ impl RefAdvertisement {
     /// A convenience over `refs.iter()`; there is no allocation and no separate listing path. A
     /// caller building a `RefStore` update walks the refs themselves, because the values matter too.
     pub fn names(&self) -> Vec<&BStr> {
-        todo!()
+        self.refs.iter().map(|r| BStr::new(&r.name)).collect()
     }
 
     /// Phase 11 — look up an advertised ref by its full name.
