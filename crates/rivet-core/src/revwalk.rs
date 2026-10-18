@@ -528,7 +528,21 @@ impl<'a> CommitWalker<'a> {
     /// and [`crate::error::Error::NotImplemented`] if `options.paths` is non-empty — see
     /// [`WalkOptions`].
     pub fn new(odb: &'a Odb, starts: &[ObjectId], options: WalkOptions) -> Result<Self> {
-        todo!()
+        let mut seen = std::collections::HashSet::new();
+        for start in starts {
+            let obj = odb.read_typed(start, crate::object::ObjectKind::Commit)?;
+            let any = obj.parse()?;
+            let _ = any;
+            seen.insert(*start);
+        }
+        let queue = starts.iter().copied().collect();
+        Ok(Self {
+            odb,
+            queue,
+            seen,
+            options,
+            emitted: 0,
+        })
     }
 
     /// Phase 4 — the next commit in the chosen order, or `None` at the end.
