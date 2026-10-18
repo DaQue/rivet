@@ -556,7 +556,21 @@ impl IgnoreStack {
     ///
     /// [`crate::error::Error::InvalidIgnorePattern`] and [`crate::error::Error::IoAtPath`].
     pub fn push_excludes_file(&mut self, path: Option<&Path>) -> Result<()> {
-        todo!()
+        let Some(path) = path else {
+            return Ok(());
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            return Ok(());
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            self.push_dir(line.as_bytes().into());
+        }
+        Ok(())
     }
 
     /// Phase 5 — drop every frame pushed for a directory at or below a depth.
