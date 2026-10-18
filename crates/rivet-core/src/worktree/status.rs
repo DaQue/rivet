@@ -259,7 +259,12 @@ impl StatusOptions {
     /// **`Normal` untracked reporting, no ignored list, no forced refresh**, which is Git's own
     /// default and the one the differential tests compare against.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            untracked_files: UntrackedMode::Normal,
+            ignored: false,
+            refresh: false,
+            pathspec: BString::from(""),
+        }
     }
 
     /// Phase 4 — set the untracked mode.
