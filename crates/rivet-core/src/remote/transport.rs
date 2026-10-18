@@ -67,6 +67,7 @@ use crate::hash::ObjectFormat;
 
 use crate::remote::RefUpdate;
 use crate::remote::url::RemoteUrl;
+use crate::error::Error;
 
 /// Phase 11 — one capability the peer advertised.
 ///
@@ -120,7 +121,20 @@ impl Capability {
     /// name is a protocol violation, and a `Capability` with an empty name would compare equal to
     /// every other malformed one.
     pub fn parse(text: &[u8]) -> Result<Self> {
-        todo!()
+        let trimmed = text.strip_suffix(b"\n").unwrap_or(text);
+        let trimmed = trimmed.strip_suffix(b" ").unwrap_or(trimmed);
+        let (name, value) = match trimmed.iter().position(|&b| b == b'=') {
+            Some(pos) => (&trimmed[..pos], Some(&trimmed[pos + 1..])),
+            None => (trimmed, None),
+        };
+        if name.is_empty() {
+            return Err(Error::Protocol("empty capability name".into()));
+        }
+        Ok(Self {
+            name: BString::from(name),
+            value: value.map(BString::from),
+            raw: trimmed.to_vec(),
+        })
     }
 
     /// Phase 11 — the value, or the empty slice when there is none.
