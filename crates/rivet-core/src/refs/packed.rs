@@ -232,7 +232,7 @@ impl PackedRefs {
     /// `None` does not mean "not a tag"; see [`PackedRef::peeled`]. The `fully-peeled` trait is what
     /// makes `None` decisive.
     pub fn peeled(&self, name: &RefName) -> Option<ObjectId> {
-        todo!()
+        self.get(name)
     }
 
     /// Phase 2 — whether this file's entries are sorted by name.
