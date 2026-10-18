@@ -411,7 +411,10 @@ pub(crate) fn wrap_object(kind: ObjectKind, data: Vec<u8>) -> Object {
 /// a `.idx` report the same failure as [`crate::error::Error::CorruptPackIndex`] instead, since
 /// the bytes came from the other file.
 pub(crate) fn read_u32_be(data: &[u8], at: usize) -> Result<u32> {
-    todo!()
+    if data.len() < at + 4 {
+        return Err(Error::CorruptPack { reason: "truncated u32".to_string() });
+    }
+    Ok(u32::from_be_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]))
 }
 
 /// Phase 10 — read a big-endian `u64` from `data` at `at`, for the `.idx` 64-bit offset table.
