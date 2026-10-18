@@ -534,7 +534,7 @@ impl Repository {
 
     /// Phase 4 — what kind of repository this is.
     pub fn kind(&self) -> RepositoryKind {
-        todo!()
+        self.kind
     }
 
     /// Phase 4 — whether the repository is bare.
