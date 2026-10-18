@@ -181,7 +181,7 @@ impl StatData {
     ///   without reading its content, so a filesystem that lies about mtime defeats it; Git
     ///   accepts that, because the alternative is reading every file on every `status`.
     pub fn is_racy(&self, index_mtime: (u32, u32)) -> bool {
-        todo!()
+        self.mtime_seconds > index_mtime.0 || (self.mtime_seconds == index_mtime.0 && self.mtime_nanos >= index_mtime.1)
     }
 
     /// Phase 4 — the full question: does this stat data let an entry be trusted without reading
