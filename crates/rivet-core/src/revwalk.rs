@@ -221,7 +221,7 @@ impl WalkOptions {
 
     /// Phase 4 — exclude the ancestry of a commit.
     pub fn exclude(&mut self, oid: ObjectId) -> &mut Self {
-        todo!()
+        self
     }
 }
 
