@@ -254,7 +254,7 @@ impl PackedRefs {
     /// entry with no `^` line may be either a lightweight tag or an annotated one whose peel the
     /// writer chose not to record — and the only way to tell is to read the tag object.
     pub fn is_fully_peeled(&self) -> bool {
-        todo!()
+        self.entries.iter().all(|e| e.peeled.is_some())
     }
 
     /// Phase 2 — the header trait strings, in file order.
