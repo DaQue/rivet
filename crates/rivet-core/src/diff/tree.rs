@@ -155,7 +155,12 @@ impl FileDiff {
     ///   the two files and subtracting is wrong whenever a line is both added and removed before
     ///   the hunk builder sees it, which happens on every reordering.
     pub fn stat(&self) -> DiffStat {
-        todo!()
+        DiffStat {
+            path: self.path().to_owned(),
+            added: self.hunks.iter().map(|h| h.added()).sum(),
+            deleted: self.hunks.iter().map(|h| h.removed()).sum(),
+            is_binary: self.is_binary,
+        }
     }
 }
 
