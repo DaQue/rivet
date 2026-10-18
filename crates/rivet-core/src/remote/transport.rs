@@ -286,7 +286,7 @@ impl<'a> CapabilitySet<'a> {
     /// there is. A caller that needs every entry — which is what a duplicated capability would
     /// require — iterates [`CapabilitySet::entries`].
     pub fn value(&self, name: &[u8]) -> Option<&BStr> {
-        todo!()
+        self.entries.iter().find(|c| &c.name[..] == name).and_then(|c| c.value.as_ref()).map(|v| v.as_ref())
     }
 
     /// Phase 11 — the peer's `object-format` capability, defaulted to SHA-1.
