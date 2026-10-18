@@ -721,7 +721,11 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigInvalidValue`] for a present value that is not a boolean.
     pub fn is_bare(&self) -> Result<bool> {
-        todo!()
+        let value = config_env_override("core.bare");
+        match value {
+            Some(v) => parse_bool(v.as_ref()),
+            None => Ok(false),
+        }
     }
 
     /// Phase 2 — whether `$GIT_DIR/config`-style config should be trusted for this repository.
