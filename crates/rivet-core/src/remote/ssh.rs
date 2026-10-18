@@ -306,7 +306,7 @@ impl SshTransport {
     /// exited on its own leaves the handle in place until it is waited on, which is exactly the state
     /// [`SshTransport::wait`] exists to resolve.
     pub fn is_connected(&self) -> bool {
-        todo!()
+        self.child.is_some()
     }
 
     /// Phase 11 — close the child's stdin and wait for it to exit.
