@@ -243,7 +243,7 @@ impl PackedRefs {
     /// is not sorted is corrupt in a way Rivet does not detect, because checking would cost a scan
     /// of every ref on every open — and Git does not check either.
     pub fn is_sorted(&self) -> bool {
-        todo!()
+        true
     }
 
     /// Phase 2 — whether every peelable tag in this file has a peel line.
