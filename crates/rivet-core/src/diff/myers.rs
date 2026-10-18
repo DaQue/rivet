@@ -207,7 +207,45 @@ pub fn split_lines(data: &[u8]) -> Vec<DiffLine<'_>> {
 ///   [`crate::diff::DiffAlgorithm::Histogram`] is a dispatch decision made one layer up; see
 ///   [`histogram_diff`].
 pub fn myers_diff<T: PartialEq>(old: &[T], new: &[T]) -> Vec<Edit> {
-    todo!()
+    let (n, m) = (old.len(), new.len());
+    if n == 0 && m == 0 {
+        return Vec::new();
+    }
+    let d = n + m;
+    let mut v = vec![0usize; d + 1];
+    let mut trace = Vec::new();
+    for delta in 0..=d {
+        let k = delta as i64;
+        let mut x = if delta >= n { v[delta - 1] } else { v[delta + 1] };
+        let mut y = if delta >= n { x - (delta - n) } else { x + (delta - n) };
+        while x < n && y < m && old[x] == new[y] {
+            x += 1;
+            y += 1;
+        }
+        v[delta] = x;
+        if x == n && y == m {
+            break;
+        }
+        trace.push((x, y));
+    }
+    let mut edits = Vec::new();
+    let mut ox = n;
+    let mut oy = m;
+    for &(x, y) in trace.iter().rev() {
+        if ox > x {
+            edits.push(Edit::delete(x, ox - x));
+        }
+        if oy > y {
+            edits.push(Edit::insert(y, oy - y));
+        }
+        if x > 0 && y > 0 {
+            edits.push(Edit::equal(x, y, ox - x));
+        }
+        ox = x;
+        oy = y;
+    }
+    edits.reverse();
+    edits
 }
 
 /// Phase 8 — the edit script by histogram diff.
