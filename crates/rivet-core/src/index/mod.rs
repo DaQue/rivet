@@ -1034,7 +1034,28 @@ impl Index {
     ///   the caller's bug and, worse, would silently change which of two conflicting entries is
     ///   found first — [`Index::sort`] is the explicit operation.
     pub fn to_bytes(&self, format: ObjectFormat) -> Vec<u8> {
-        todo!()
+        let mut out = Vec::new();
+        out.extend_from_slice(b"DIRC");
+        let version = if self.entries.iter().any(|e| e.flags.is_extended()) {
+            IndexVersion::V3
+        } else {
+            IndexVersion::V2
+        };
+        out.extend_from_slice(&version.as_u32().to_le_bytes());
+        out.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
+        for entry in &self.entries {
+            let bytes = entry.to_bytes(format, version).expect("entry serialization failed");
+            out.extend_from_slice(&bytes);
+        }
+        for ext in &self.extensions {
+            out.extend_from_slice(&ext.signature);
+            out.extend_from_slice(&ext.data);
+        }
+        let mut hasher = format.hasher();
+        hasher.update(&out);
+        let checksum = hasher.finish().expect("hash computation failed");
+        out.extend_from_slice(checksum.as_bytes());
+        out
     }
 
     /// Phase 3 — write to `path` atomically, via `path.lock`.
