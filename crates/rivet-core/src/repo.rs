@@ -486,7 +486,7 @@ impl Repository {
     /// the file, not the directory containing it, which is the distinction that makes a linked
     /// work tree's `MERGE_HEAD` end up in the right place. See [`gitfile_target`].
     pub fn git_dir(&self) -> &Path {
-        todo!()
+        &self.git_dir
     }
 
     /// Phase 4 — the work tree, or `None` for a bare repository.
