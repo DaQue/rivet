@@ -203,7 +203,8 @@ impl InitOptions {
 
     /// Phase 4 — select the object format.
     pub fn format(&mut self, format: ObjectFormat) -> &mut Self {
-        todo!()
+        self.format = format;
+        self
     }
 }
 
