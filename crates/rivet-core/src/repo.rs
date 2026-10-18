@@ -191,7 +191,8 @@ impl InitOptions {
 
     /// Phase 4 — create a bare repository.
     pub fn bare(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.bare = on;
+        self
     }
 
     /// Phase 4 — set the initial branch name.
