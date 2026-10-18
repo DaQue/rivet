@@ -556,7 +556,10 @@ impl Service {
     /// would try to parse that prose as pkt-lines and report a framing error instead of the server's
     /// actual message.
     pub const fn response_content_type(self) -> &'static str {
-        todo!()
+        match self {
+            Service::UploadPack => "application/x-git-upload-pack-result",
+            Service::ReceivePack => "application/x-git-receive-pack-result",
+        }
     }
 
     /// Phase 11 — whether this service has a protocol v2 implementation.
