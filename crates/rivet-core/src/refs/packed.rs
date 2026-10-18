@@ -439,7 +439,7 @@ impl Default for PackedRefs {
     /// Scaffold stage: this body is `todo!()`. The implementation must simply return
     /// [`PackedRefs::new`]'s value.
     fn default() -> Self {
-        todo!()
+        Self::new()
     }
 }
 
