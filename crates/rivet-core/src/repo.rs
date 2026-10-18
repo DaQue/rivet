@@ -631,7 +631,7 @@ impl Repository {
     /// change made here, which is deliberate: changing `extensions.objectFormat` mid-process would
     /// reinterpret every id already in memory.
     pub fn config_mut(&mut self) -> &mut Config {
-        todo!()
+        &mut self.config
     }
 
     /// Phase 4 — the ignore stack, rooted at the work tree.
