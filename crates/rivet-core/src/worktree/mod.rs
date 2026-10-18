@@ -180,7 +180,7 @@ impl Worktree {
 
     /// Phase 4 — whether the repository has no work tree.
     pub fn is_bare(&self) -> bool {
-        todo!()
+        self.root().is_none()
     }
 
     /// Phase 4 — the repository's object format.
