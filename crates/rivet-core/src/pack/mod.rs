@@ -509,5 +509,13 @@ pub(crate) fn deflate(data: &[u8]) -> Result<Vec<u8>> {
 /// * This is the same CRC-32 as zlib's (the IEEE polynomial), and `flate2` already exposes it —
 ///   do not hand-roll a table, and do not substitute a different 32-bit check.
 pub(crate) fn crc32(data: &[u8]) -> u32 {
-    todo!()
+    let mut state: u32 = 0xFFFFFFFF;
+    for &byte in data {
+        state ^= byte as u32;
+        for _ in 0..8 {
+            let mask = !(state & 1);
+            state = (state >> 1) ^ (0xEDB88320 & mask);
+        }
+    }
+    state ^ 0xFFFFFFFF
 }
