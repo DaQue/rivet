@@ -541,7 +541,10 @@ impl Service {
     /// fetch and answers with a static file list — which parses as a corrupt advertisement rather
     /// than as an error, so getting it right matters more than it looks.
     pub const fn request_content_type(self) -> &'static str {
-        todo!()
+        match self {
+            Service::UploadPack => "application/x-git-upload-pack-request",
+            Service::ReceivePack => "application/x-git-receive-pack-request",
+        }
     }
 
     /// Phase 11 — the smart-HTTP `Content-Type` a response from this service carries.
