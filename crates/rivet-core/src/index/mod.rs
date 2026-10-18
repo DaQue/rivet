@@ -1383,7 +1383,7 @@ impl Index {
     ///   file changed with its mtime and size restored — is missed. Git accepts this; the
     ///   alternative is reading the work tree on every `status`.
     pub fn is_racy(&self, entry: &IndexEntry, index_mtime: (u32, u32)) -> bool {
-        todo!()
+        entry.mtime_seconds > index_mtime.0 || (entry.mtime_seconds == index_mtime.0 && entry.mtime_nanos >= index_mtime.1)
     }
 }
 
