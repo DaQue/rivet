@@ -580,7 +580,7 @@ impl Repository {
 
     /// Phase 4 — the index, mutably, for staging and checkout.
     pub fn index_mut(&mut self) -> &mut Index {
-        todo!()
+        &mut self.index
     }
 
     /// Phase 4 — re-read the index from disk.
