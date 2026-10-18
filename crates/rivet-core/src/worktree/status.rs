@@ -264,7 +264,8 @@ impl StatusOptions {
 
     /// Phase 4 — set the untracked mode.
     pub fn untracked(&mut self, mode: UntrackedMode) -> &mut Self {
-        todo!()
+        self.untracked_files = mode;
+        self
     }
 
     /// Phase 4 — set whether ignored paths are collected.
