@@ -362,6 +362,67 @@ def _local_types(text):
     return names
 
 
+_SRC_CACHE = {}
+_TYPE_BLOCK_CACHE = {}
+SKIP_TYPES = {
+    "Self", "String", "Vec", "Option", "Result", "Box", "Some", "None", "Ok", "Err",
+    "HashMap", "HashSet", "BTreeMap", "BTreeSet", "Path", "PathBuf", "Cow", "Write",
+    "Read", "Iterator", "IntoIterator", "Display", "Debug", "Default", "Clone",
+    "SystemTime", "Duration", "Metadata", "File", "Instant", "Ordering", "Arc", "Rc",
+}
+
+
+def _crate_sources(crate="rivet-core"):
+    if crate in _SRC_CACHE:
+        return _SRC_CACHE[crate]
+    root = os.path.join(REPO, "crates", crate, "src")
+    out = []
+    for dirpath, _dirs, files in os.walk(root):
+        for fn in sorted(files):
+            if fn.endswith(".rs"):
+                try:
+                    out.append(open(os.path.join(dirpath, fn), encoding="utf-8").read())
+                except OSError:
+                    pass
+    _SRC_CACHE[crate] = out
+    return out
+
+
+def type_block(name, crate="rivet-core"):
+    """Compact `struct X { fields }` line for a type defined elsewhere in the crate."""
+    if name in _TYPE_BLOCK_CACHE:
+        return _TYPE_BLOCK_CACHE[name]
+    blk = ""
+    pat = re.compile(rf"^pub(?:\([^)]*\))?\s+(?:struct|enum|type)\s+{name}\b", re.M)
+    for src in _crate_sources(crate):
+        if pat.search(src):
+            got = _def_blocks(src, keep={name})
+            if got:
+                blk = got[0]
+                break
+    _TYPE_BLOCK_CACHE[name] = blk
+    return blk
+
+
+def referenced_type_blocks(text, limit=8):
+    """Field layouts of the non-local types this file's public signatures mention."""
+    local = _local_types(text)
+    seen, out = set(), []
+    for ln in text.split("\n"):
+        if "fn " not in ln:
+            continue
+        for name in re.findall(r"\b([A-Z][A-Za-z0-9_]*)\b", ln):
+            if name in local or name in SKIP_TYPES or name in seen:
+                continue
+            seen.add(name)
+            blk = type_block(name)
+            if blk:
+                out.append(blk)
+            if len(out) >= limit:
+                return out
+    return out
+
+
 def api_sheet(text, local_only=False):
     """Real field names and callable signatures, so bodies stop inventing APIs.
 
@@ -400,7 +461,7 @@ def api_sheet(text, local_only=False):
         for i, ln in enumerate(lines):
             if re.match(r"^pub(?:\([^)]*\))?\s+(?:const\s+|unsafe\s+)?fn\s", ln):
                 free.append(_sig(lines, i))
-    out = own_defs + own_methods + extra + kept_defs + free
+    out = own_defs + own_methods + referenced_type_blocks(text) + extra + kept_defs + free
     kept, used = [], 0
     for blk in out:
         if used + len(blk) + 1 > 7000:
@@ -450,7 +511,13 @@ def build_prompt(text, lines, stub):
         "- `BString` is `bstr::BString`: build it with `BString::from(...)` (it accepts\n"
         "  `&str`, `String`, `&[u8]`, `Vec<u8>`). It has NO `.as_bytes()`: take raw\n"
         "  bytes with `&x[..]`. Never return a bare `String`/`Vec<u8>` where the\n"
-        "  signature says `BString`.\n",
+        "  signature says `BString`.\n"
+        "- `write_all` returns `io::Result<()>`: NEVER chain it (`.write_all(a).write_all(b)`\n"
+        "  is a compile error). Write each piece on its own line, ending with `?` or\n"
+        "  `.unwrap()`.\n"
+        "- The API REFERENCE prints `struct X { a, b }` — those names are FIELDS:\n"
+        "  reach them as `x.a`, never `x.a()`. Only names printed as `X::name(...)`\n"
+        "  are methods.\n",
         "API REFERENCE (the real field names and method signatures; use exactly\n"
         "these and invent nothing that is not listed):\n" + api_sheet(text),
         "IMPORTED API (helpers that already exist and how to call them; use these,"
