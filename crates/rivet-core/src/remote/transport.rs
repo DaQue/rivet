@@ -275,7 +275,7 @@ impl<'a> CapabilitySet<'a> {
     /// advertisement offered sideband and whose response honoured a request that did not ask for it.
     /// The check that matters is on what was *requested*.
     pub fn contains(&self, name: &[u8]) -> bool {
-        todo!()
+        self.entries.iter().any(|c| &c.name[..] == name)
     }
 
     /// Phase 11 — the value of a capability, or `None` if it is absent or bare.
