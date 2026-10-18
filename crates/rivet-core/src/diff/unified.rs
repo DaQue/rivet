@@ -183,7 +183,12 @@ impl HunkLine {
     ///
     /// The writer's errors, as [`crate::error::Error::Io`].
     pub fn write(&self, out: &mut impl Write) -> Result<()> {
-        todo!()
+        out.write_all(b"+")?;
+        out.write_all(&self.content)?;
+        if !self.has_newline {
+            out.write_all(b"\\ No newline at end of file\n")?;
+        }
+        Ok(())
     }
 }
 
