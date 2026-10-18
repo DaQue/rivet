@@ -495,79 +495,98 @@ def temps():
 
 
 # ---------------------------------------------------------------------- driver
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--file", default="crates/rivet-core/src/index/mod.rs")
-    ap.add_argument("--max-functions", type=int, default=25)
-    ap.add_argument("--max-hours", type=float, default=4.0)
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--only", default="")
-    args = ap.parse_args()
+def stub_files(crate):
+    """Every .rs under crates/<crate>/src with todo!() stubs, fewest first."""
+    base = os.path.join(REPO, "crates", crate, "src")
+    out = []
+    for root, _dirs, fs in os.walk(base):
+        for f in fs:
+            if not f.endswith(".rs"):
+                continue
+            p = os.path.join(root, f)
+            try:
+                t = open(p, encoding="utf-8").read()
+            except OSError:
+                continue
+            n = len(find_stubs(t))
+            if n:
+                out.append((n, os.path.relpath(p, REPO)))
+    out.sort(key=lambda x: (x[0], x[1]))
+    return out
 
-    path = os.path.join(REPO, args.file)
-    os.makedirs(OUT, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    logp = os.path.join(OUT, f"BODYFILL-{stamp}.log")
-    prog = os.path.join(OUT, f"BODYFILL-{stamp}.progress")
 
-    def log(msg):
-        line = f"{datetime.now():%H:%M:%S} {msg}"
-        print(line, flush=True)
-        with open(logp, "a") as f:
-            f.write(line + "\n")
+def running_agents():
+    """Other agent CLIs editing this tree would poison every cargo check."""
+    try:
+        p = subprocess.run(["pgrep", "-af", "claude|codex"], capture_output=True, text=True)
+    except OSError:
+        return []
+    me = os.getpid()
+    hits = []
+    for line in p.stdout.splitlines():
+        pid = line.split(" ", 1)[0]
+        if pid.isdigit() and int(pid) != me:
+            hits.append(line)
+    return hits
 
-    rc, out = cargo(["check", "-p", "rivet-core", "--all-targets", "--message-format=short"])
-    if rc != 0:
-        log("ABORT: tree is not green before we start")
-        print(out[-3000:])
-        return 2
-    log(f"start file={args.file} model={MODEL} max={args.max_hours}h")
 
-    t0 = time.time()
-    done = 0
-    consecutive_fail = 0
-    skipped = set()
+def deadline_ts(until, max_hours):
+    now = time.time()
+    if until:
+        hh, mm = (int(x) for x in until.split(":"))
+        t = datetime.now().replace(hour=hh, minute=mm, second=0, microsecond=0)
+        ts = t.timestamp()
+        return ts if ts > now else ts + 86400
+    return now + max_hours * 3600
 
-    while done < args.max_functions:
-        elapsed = time.time() - t0
-        if elapsed > args.max_hours * 3600:
-            log(f"STOP deadline {args.max_hours}h done={done}")
-            break
-        if done == 0 and elapsed > 15 * 60:
-            log(f"STOP SLO: 0 functions in {elapsed/60:.0f} min (budget 15)")
-            break
-        if done < 3 and elapsed > 30 * 60:
-            log(f"STOP SLO: {done} functions in {elapsed/60:.0f} min (need 3)")
-            break
+
+def run_file(rel, args, log, prog, deadline, counter):
+    """Fill stubs in one file. Return (status, done_count)."""
+    path = os.path.join(REPO, rel)
+    stem = os.path.splitext(os.path.basename(rel))[0]
+    skipped, done, consecutive = set(), 0, 0
+    file_start = time.time()
+
+    while True:
+        now = time.time()
+        if now >= deadline:
+            log(f"  deadline reached inside {rel} (done={done})")
+            return "deadline", done
+        el = now - file_start
+        if done == 0 and el > args.slo_zero_min * 60:
+            log(f"  STOP SLO: 0 functions in {el/60:.0f} min in {rel} (budget {args.slo_zero_min})")
+            return "slo", done
+        if done < 3 and el > args.slo_three_min * 60:
+            log(f"  STOP SLO: {done} functions in {el/60:.0f} min in {rel} (need 3)")
+            return "slo", done
 
         t = temps()
         if (t.get("edge", 0) > 92) or (t.get("junction", 0) > 105) or (t.get("mem", 0) > 100):
-            log(f"STOP thermal edge={t.get('edge')} junction={t.get('junction')} mem={t.get('mem')}")
-            break
+            log(f"  STOP thermal edge={t.get('edge')} junction={t.get('junction')} mem={t.get('mem')}")
+            return "thermal", done
 
         text = open(path, encoding="utf-8").read()
         lines = text.split("\n")
         stubs = find_stubs(text)
         if not stubs:
-            log(f"DONE no todo!() left in {args.file}")
-            break
-        todo_stubs = [s for s in stubs if s["name"] not in skipped]
+            log(f"  {rel}: no todo!() left")
+            return "complete", done
+        cand = [s for s in stubs if s["name"] not in skipped]
         if args.only:
-            todo_stubs = [s for s in todo_stubs if s["name"] == args.only]
-        if not todo_stubs:
-            log(f"DONE every remaining stub skipped: {sorted(skipped)}")
-            break
-        stub = todo_stubs[0]
-        log(f"fn={stub['name']} line={stub['fn_line']+1} remaining={len(stubs)}")
+            cand = [s for s in cand if s["name"] == args.only]
+        if not cand:
+            log(f"  {rel}: every remaining stub skipped: {sorted(skipped)}")
+            return "skipped", done
+
+        stub = cand[0]
+        where = f"{rel}:{stub['fn_line']+1}"
+        log(f"fn={stub['name']} {where} remaining={len(stubs)} file_done={done}")
 
         prompt = build_prompt(text, lines, stub)
         with open(os.path.join(OUT, f"prompt-{stub['name']}.txt"), "w") as f:
             f.write(prompt)
         msgs = [
-            {
-                "role": "system",
-                "content": "You write Rust function bodies only. No prose, no fences.",
-            },
+            {"role": "system", "content": "You write Rust function bodies only. No prose, no fences."},
             {"role": "user", "content": prompt},
         ]
 
@@ -578,7 +597,7 @@ def main():
             print("=== RAW ===\n" + body)
             print("=== CLEAN ===\n" + clean_body(body, len(stub["indent"]) + 4))
             print(f"prefill={pt} gen={et} t={time.time()-fstart:.0f}s")
-            return 0
+            return "dryrun", done
 
         ok = False
         for attempt in (1, 2):
@@ -592,62 +611,147 @@ def main():
             if not code:
                 log(f"  attempt{attempt} unusable output ({et} tok)")
                 msgs = msgs[:2] + [
-                    {
-                        "role": "user",
-                        "content": "That was empty or still a todo!(). Return the body statements only.",
-                    }
+                    {"role": "user", "content": "That was empty or still a todo!(). Return the body statements only."}
                 ]
                 continue
 
             new = text[: stub["open"] + 1] + "\n" + code + "\n" + stub["indent"] + text[stub["close"] :]
             open(path, "w", encoding="utf-8").write(new)
-            rc, out = cargo(["check", "-p", "rivet-core", "--all-targets", "--message-format=short"])
+            rc, out = cargo(["check", "-p", args.crate, "--all-targets", "--message-format=short"])
+            if rc == 0 and args.gate == "tests":
+                trc, tout = cargo(["test", "-p", args.crate, "--lib", "--quiet"])
+                if trc != 0:
+                    rc = trc
+                    out = "cargo test failed after a clean check:\n" + tout[-3000:]
             if rc == 0:
                 ok = True
                 log(f"  attempt{attempt} CHECK OK prefill={pt} gen={et} t={time.time()-fstart:.0f}s")
                 break
-            errs = errs_text(out, new)
+            errs = errs_text(out, new) if not out.startswith("cargo test failed") else out
             log(f"  attempt{attempt} CHECK FAIL {len(errs)} chars of errors")
             with open(os.path.join(OUT, f"fail-{stub['name']}-{attempt}.txt"), "w") as f:
                 f.write(errs + "\n\n=== BODY SENT ===\n" + body + "\n\n=== SPLICED ===\n" + new)
             open(path, "w", encoding="utf-8").write(text)
+            if os.path.basename(rel) not in errs and rel not in errs:
+                log("  errors do not mention this file -> crate is broken elsewhere; stopping")
+                return "systemic", done
             msgs = msgs + [
                 {"role": "assistant", "content": body},
-                {
-                    "role": "user",
-                    "content": "That body failed to compile:\n" + errs + "\n\nReturn the corrected body only.",
-                },
+                {"role": "user", "content": "That body failed to compile:\n" + errs + "\n\nReturn the corrected body only."},
             ]
 
         if not ok:
             open(path, "w", encoding="utf-8").write(text)
             skipped.add(stub["name"])
-            consecutive_fail += 1
-            log(f"  fn={stub['name']} FAILED skipped (consecutive={consecutive_fail}, skipped={len(skipped)})")
+            consecutive += 1
+            log(f"  fn={stub['name']} FAILED skipped (consecutive={consecutive}, skipped={len(skipped)})")
             with open(prog, "a") as f:
-                f.write(f"{datetime.now():%H:%M:%S} fail fn={stub['name']} done={done}\n")
-            if consecutive_fail >= 4:
-                log("STOP 4 consecutive failures - systemic, not a slow model")
-                break
+                f.write(f"{datetime.now():%H:%M:%S} fail fn={stub['name']} file={rel} done={done}\n")
+            if consecutive >= 4:
+                log("  STOP 4 consecutive failures - systemic, not a slow model")
+                return "systemic", done
             continue
 
-        consecutive_fail = 0
+        consecutive = 0
         done += 1
+        counter[0] += 1
         subprocess.run(["git", "add", "-A", "--", "crates"], cwd=REPO, capture_output=True)
         subprocess.run(
-            ["git", "commit", "-q", "-m", f"bodyfill: {stub['name']} (Index surface)"],
+            ["git", "commit", "-q", "-m", f"bodyfill: {stub['name']} ({stem})"],
             cwd=REPO,
             capture_output=True,
         )
         left = len(find_stubs(open(path, encoding="utf-8").read()))
-        el = time.time() - t0
-        log(f"  RUN #{done} fn={stub['name']} ok stubs_left={left} elapsed={el/60:.1f}m")
+        log(f"  RUN #{counter[0]} fn={stub['name']} ok stubs_left={left} elapsed={(time.time()-file_start)/60:.1f}m")
         with open(prog, "a") as f:
-            f.write(
-                f"{datetime.now():%H:%M:%S} done={done} fn={stub['name']} left={left} {el/60:.1f}m\n"
-            )
+            f.write(f"{datetime.now():%H:%M:%S} run={counter[0]} fn={stub['name']} left={left} file={rel}\n")
 
-    log(f"end done={done} elapsed={(time.time()-t0)/60:.1f}m")
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--file", default="", help="single file (repo-relative); omit for --auto")
+    ap.add_argument("--auto", action="store_true", help="walk every file with stubs, fewest first")
+    ap.add_argument("--crate", default="rivet-core")
+    ap.add_argument("--only", default="")
+    ap.add_argument("--max-functions", type=int, default=0, help="0 = no cap")
+    ap.add_argument("--max-hours", type=float, default=4.0)
+    ap.add_argument("--until", default="", help="wall-clock stop, e.g. 00:00")
+    ap.add_argument("--gate", choices=("check", "tests"), default="tests")
+    ap.add_argument("--slo-zero-min", type=float, default=20.0)
+    ap.add_argument("--slo-three-min", type=float, default=40.0)
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    os.makedirs(OUT, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    logp = os.path.join(OUT, f"BODYFILL-{stamp}.log")
+    prog = os.path.join(OUT, f"BODYFILL-{stamp}.progress")
+    summary = os.path.join(OUT, f"SUMMARY-{stamp}.txt")
+
+    def log(msg):
+        line = f"{datetime.now():%H:%M:%S} {msg}"
+        print(line, flush=True)
+        with open(logp, "a") as f:
+            f.write(line + "\n")
+
+    others = running_agents()
+    if others:
+        log("ABORT: another agent is running in this tree -- " + " | ".join(others[:3]))
+        return 3
+
+    rc, out = cargo(["check", "-p", args.crate, "--all-targets", "--message-format=short"])
+    if rc != 0:
+        log("ABORT: tree is not green before we start")
+        print(out[-3000:])
+        return 2
+    if args.gate == "tests":
+        trc, tout = cargo(["test", "-p", args.crate, "--lib", "--quiet"])
+        if trc != 0:
+            log("ABORT: tests are not green before we start")
+            print(tout[-3000:])
+            return 2
+
+    deadline = deadline_ts(args.until, args.max_hours)
+    stop_at = datetime.fromtimestamp(deadline)
+    log(f"start crate={args.crate} model={MODEL} gate={args.gate} stop_at={stop_at:%Y-%m-%d %H:%M}")
+
+    queue = [args.file] if args.file else [rel for _n, rel in stub_files(args.crate)]
+    if args.only:
+        queue = [args.file] if args.file else [rel for _n, rel in stub_files(args.crate)]
+    if not queue:
+        log("nothing to do: no todo!() stubs found")
+        return 0
+    log("queue: " + ", ".join(os.path.basename(q) for q in queue[:12]) + ("..." if len(queue) > 12 else ""))
+
+    total, results = 0, []
+    counter = [0]
+    t0 = time.time()
+    for rel in queue:
+        if time.time() >= deadline:
+            log("deadline reached before " + rel)
+            break
+        if args.max_functions and total >= args.max_functions:
+            log(f"function cap {args.max_functions} reached")
+            break
+        log(f"file {rel} ({len(find_stubs(open(os.path.join(REPO, rel), encoding='utf-8').read()))} stubs)")
+        status, done = run_file(rel, args, log, prog, deadline, counter)
+        total += done
+        results.append(f"{rel}: {status} done={done}")
+        log(f"file {rel} -> {status} ({done} this file, {total} total)")
+        if status in ("deadline", "thermal", "systemic", "slo", "dryrun"):
+            if status != "deadline":
+                log(f"stopping whole run: {status}")
+            break
+
+    el = (time.time() - t0) / 60
+    log(f"end total_done={total} elapsed={el:.1f}m")
+    with open(summary, "w") as f:
+        f.write(f"started {stamp}  stopped {datetime.now():%Y-%m-%d %H:%M:%S}\n")
+        f.write(f"total functions written this run: {total}\n")
+        f.write(f"elapsed: {el:.1f} min\n\n")
+        for r in results:
+            f.write(r + "\n")
+    print(f"summary written to {summary}")
     return 0
 
 
