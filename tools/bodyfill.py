@@ -134,28 +134,103 @@ def find_stubs(text):
     return found
 
 
-def type_context(text, lines, fn_line):
-    """Struct/type definition for the enclosing impl, so field names are known."""
-    name = None
-    for i in range(fn_line, -1, -1):
-        m = IMPL_RE.match(lines[i])
-        if m:
-            name = m.group(1)
-            break
-    if not name:
-        return ""
-    pat = re.compile(r"^pub(?:\([^)]*\))?\s*(?:struct|enum)\s+" + re.escape(name) + r"\b")
+KEEP_TYPES = {
+    "Index",
+    "IndexEntry",
+    "IndexExtension",
+    "IndexVersion",
+    "Stage",
+    "IndexEntryFlags",
+    "IndexEntryExtendedFlags",
+    "EntryMode",
+}
+EXTRA_FILES = ["crates/rivet-core/src/object/mod.rs"]
+
+
+def _strip_comments(block):
+    return "\n".join(l for l in block.split("\n") if not l.strip().startswith("//"))
+
+
+def _def_blocks(text):
+    """Every `pub struct/enum NAME {...}` we keep, comments stripped."""
+    lines = text.split("\n")
+    offs = line_offsets(lines)
+    out = []
     for i, ln in enumerate(lines):
-        if pat.match(ln):
-            k = text.find("{", line_offsets(lines)[i])
-            if k < 0:
-                return ""
-            close = scan_body(text, k)
-            if close < 0:
-                return ""
-            end = text.count("\n", 0, close)
-            return "\n".join(lines[i : min(end + 1, i + 45)])
-    return ""
+        m = re.match(r"^pub\s+(?:struct|enum)\s+([A-Za-z_]\w*)", ln)
+        if not m or m.group(1) not in KEEP_TYPES:
+            continue
+        k = text.find("{", offs[i])
+        close = scan_body(text, k) if k >= 0 else -1
+        if close < 0:
+            continue
+        end = text.count("\n", 0, close)
+        out.append(_strip_comments("\n".join(lines[i : end + 1])))
+    return out
+
+
+def _sig(lines, i):
+    s, j = lines[i].strip(), i
+    while not re.search(r"[;{]", s) and j < i + 6:
+        j += 1
+        s += " " + lines[j].strip()
+    s = re.split(r"[;{]", s)[0]
+    return re.sub(r"\s+", " ", s).replace("pub ", "").replace("fn ", "", 1)
+
+
+def file_index(src):
+    """One-line index of public items, so the model can call helpers it can't see."""
+    keep = []
+    for ln in src.split("\n"):
+        if re.match(r"^(pub (const )?(fn|struct|enum|const|type|trait)\s|    (pub )?(const )?fn )", ln):
+            keep.append(ln.rstrip("{ ").rstrip())
+    return "\n".join(keep[:45])
+
+
+def imported_api(text):
+    """Signatures from the modules this file imports - the helpers it must call."""
+    mods = set(m.group(1) for m in re.finditer(r"use crate::([A-Za-z0-9_:]+)", text))
+    mods |= set(
+        m.group(1) + "::" + m.group(2)
+        for m in re.finditer(r"\bcrate::([A-Za-z0-9_]+)::([A-Za-z0-9_]+)", text)
+    )
+    out = []
+    for mod in sorted(mods)[:14]:
+        base = mod.split("::")[0]
+        for rel in (
+            f"crates/rivet-core/src/{mod.replace('::', '/')}.rs",
+            f"crates/rivet-core/src/{mod.replace('::', '/')}/mod.rs",
+            f"crates/rivet-core/src/{base}.rs",
+            f"crates/rivet-core/src/{base}/mod.rs",
+        ):
+            p = os.path.join(REPO, rel)
+            if os.path.isfile(p):
+                idx = file_index(open(p, encoding="utf-8").read())
+                if idx:
+                    out.append(f"-- {mod} --\n{idx}")
+                break
+    return "\n".join(out)[:5500]
+
+
+def api_sheet(text):
+    """Real field names and callable signatures, so bodies stop inventing APIs."""
+    out = _def_blocks(text)
+    for rel in EXTRA_FILES:
+        p = os.path.join(REPO, rel)
+        if os.path.isfile(p):
+            out.extend(_def_blocks(open(p, encoding="utf-8").read()))
+    lines = text.split("\n")
+    cur = None
+    for i, ln in enumerate(lines):
+        mi = IMPL_RE.match(ln)
+        if mi:
+            cur = mi.group(1)
+            continue
+        if cur in KEEP_TYPES and re.match(
+            r"^\s{0,8}(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s", ln
+        ):
+            out.append(f"{cur}::{_sig(lines, i)}")
+    return "\n".join(out)[:7000]
 
 
 def imports(text):
@@ -182,7 +257,20 @@ def build_prompt(text, lines, stub):
         "- Use the exact field names, types and helper functions shown in the context.\n"
         "- The body must compile as Rust 2021. Do not add dependencies.\n"
         "- Never write todo!() or unimplemented!().\n",
-        "TYPE DEFINITION:\n" + type_context(text, lines, i),
+        "API REFERENCE (the real field names and method signatures; use exactly\n"
+        "these and invent nothing that is not listed):\n" + api_sheet(text),
+        "IMPORTED API (helpers that already exist and how to call them; use these,"
+        " do not invent signatures): " + imported_api(text),
+        "WORKED EXAMPLE (exactly how this crate hashes raw bytes):\n"
+        "    let mut hasher = format.hasher();\n"
+        "    hasher.update(&buf);\n"
+        "    let id = hasher.finish().expect(\"hash collision\");\n"
+        "    out.extend_from_slice(id.as_bytes());\n"
+        "ObjectId::as_bytes() gives the raw digest; ObjectId::zero(format) is all-zero.",
+        "SIGNATURE IS FROZEN: you cannot add a Result return. If a helper returns"
+        " Result but the signature does not, use .expect(\"...\") on it.",
+        "RETURN TYPE RULE: if the signature above does not return Result, the body"
+        " must not use the ? operator.",
         "IMPORTS IN SCOPE:\n" + imports(text),
         "FUNCTION SIGNATURE (already written, do not repeat it):\n" + sig,
         "DOCUMENTED CONTRACT (this is the specification):\n" + doc,
@@ -313,6 +401,7 @@ def main():
     ap.add_argument("--max-functions", type=int, default=25)
     ap.add_argument("--max-hours", type=float, default=4.0)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--only", default="")
     args = ap.parse_args()
 
     path = os.path.join(REPO, args.file)
@@ -363,6 +452,8 @@ def main():
             log(f"DONE no todo!() left in {args.file}")
             break
         todo_stubs = [s for s in stubs if s["name"] not in skipped]
+        if args.only:
+            todo_stubs = [s for s in todo_stubs if s["name"] == args.only]
         if not todo_stubs:
             log(f"DONE every remaining stub skipped: {sorted(skipped)}")
             break
