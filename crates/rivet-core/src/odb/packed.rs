@@ -119,7 +119,7 @@ impl PackedObjectStore {
     /// a reason to refuse the pack, and a caller that treats it as one will fail on a legitimate
     /// exchange.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.len() == 0
     }
 
     /// Phase 10 — the repository's id width, as it was supplied at open.
