@@ -169,7 +169,13 @@ impl RefUpdate {
     ///   the current value reads it under the same lock it uses for the push, which is what
     ///   [`RefStore::update`]'s `expected` parameter exists to make possible.
     pub fn new(name: BString, old: ObjectId, new: ObjectId) -> Self {
-        todo!()
+        Self {
+            name,
+            old,
+            new,
+            force: false,
+            expect: None,
+        }
     }
 
     /// Phase 11 — a create: the ref must not exist.
