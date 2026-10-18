@@ -527,7 +527,19 @@ impl IgnoreStack {
     ///
     /// [`crate::error::Error::InvalidIgnorePattern`] and [`crate::error::Error::IoAtPath`].
     pub fn push_info_exclude(&mut self, git_dir: &Path) -> Result<()> {
-        todo!()
+        let path = git_dir.join("info").join("exclude");
+        let Ok(bytes) = std::fs::read(&path) else {
+            return Ok(());
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            self.push_dir(line.as_bytes().into());
+        }
+        Ok(())
     }
 
     /// Phase 5 — push the per-user excludes file.
