@@ -175,7 +175,26 @@ impl ConfigEntry {
     /// section — or if the section or key part is empty. A key with no subsection is the common
     /// case and is not an error.
     pub fn parse_key(flat: &BStr) -> Result<(BString, Option<BString>, BString)> {
-        todo!()
+        let Some(first_dot) = flat.iter().position(|b| *b == b'.') else {
+            return Err(Error::ConfigSyntax { line: flat.len(), reason: "no dot in flat key" });
+        };
+        let Some(last_dot) = flat.iter().rposition(|b| *b == b'.') else {
+            return Err(Error::ConfigSyntax { line: flat.len(), reason: "no dot in flat key" });
+        };
+        if first_dot == last_dot {
+            return Err(Error::ConfigSyntax { line: flat.len(), reason: "empty section or key" });
+        }
+        let section = BString::from(&flat[..first_dot]);
+        let key = BString::from(&flat[last_dot + 1..]);
+        if section.is_empty() || key.is_empty() {
+            return Err(Error::ConfigSyntax { line: flat.len(), reason: "empty section or key" });
+        }
+        let subsection = if first_dot + 1 < last_dot {
+            Some(BString::from(&flat[first_dot + 1..last_dot]))
+        } else {
+            None
+        };
+        Ok((section, subsection, key))
     }
 }
 
