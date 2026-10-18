@@ -289,7 +289,18 @@ impl RefName {
     /// [`RefCategory::Other`], not a branch, even though it holds a commit id — pseudo-refs are
     /// written by an operation in progress and are not refs anyone can name in a revision.
     pub fn category(&self) -> RefCategory {
-        todo!()
+        let name = self.as_bstr();
+        if name == b"HEAD" {
+            RefCategory::Head
+        } else if name.starts_with(b"refs/heads/") {
+            RefCategory::Branch
+        } else if name.starts_with(b"refs/tags/") {
+            RefCategory::Tag
+        } else if name.starts_with(b"refs/remotes/") {
+            RefCategory::Remote
+        } else {
+            RefCategory::Other
+        }
     }
 
     /// Phase 2 — the part of the name after its namespace prefix.
