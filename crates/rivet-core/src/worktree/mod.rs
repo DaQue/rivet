@@ -154,7 +154,19 @@ impl Worktree {
     /// [`crate::error::Error::ConfigInvalidValue`] for a `core.filemode`, `core.symlinks`,
     /// `core.ignorecase` or `core.protectNTFS` that is present and not a boolean.
     pub fn new(root: Option<&Path>, format: ObjectFormat, config: &Config) -> Result<Self> {
-        todo!()
+        let root = root.map(PathBuf::from);
+        let filemode = config.get_bool(BStr::new(b"core.filemode")).expect("config read").unwrap_or(true);
+        let symlinks = config.get_bool(BStr::new(b"core.symlinks")).expect("config read").unwrap_or(true);
+        let ignore_case = config.get_bool(BStr::new(b"core.ignorecase")).expect("config read").unwrap_or(false);
+        let protect_ntfs = config.get_bool(BStr::new(b"core.protectNTFS")).expect("config read").unwrap_or(cfg!(windows));
+        Ok(Self {
+            root,
+            format,
+            filemode,
+            symlinks,
+            ignore_case,
+            protect_ntfs,
+        })
     }
 
     /// Phase 4 — the work tree root, or `None` when the repository is bare.
