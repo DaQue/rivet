@@ -294,7 +294,7 @@ impl RemoteUrl {
     /// so that the credential-ignoring rule is documented in one place a reader will find. A caller
     /// that wants byte equality of the configured text compares [`RemoteUrl::to_config_string`].
     pub fn is_same_remote(&self, other: &Self) -> bool {
-        todo!()
+        self.to_config_string() == other.to_config_string()
     }
 
     /// Phase 11 — the `host:port` pair a transport dials, with the scheme's default port applied.
