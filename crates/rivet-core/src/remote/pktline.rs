@@ -70,6 +70,7 @@
 use std::io::Read;
 
 use crate::error::Result;
+use crate::error::Error;
 
 /// Phase 11 — how many bytes of payload a pkt-line can carry, at most.
 ///
@@ -177,7 +178,21 @@ impl PktLine {
     /// The three control packets cannot fail, but they share the return type so that a caller
     /// encoding a mixed list does not need two call sites.
     pub fn encode(&self) -> Result<Vec<u8>> {
-        todo!()
+        match self {
+            PktLine::Flush => Ok(b"0000".to_vec()),
+            PktLine::Delim => Ok(b"0001".to_vec()),
+            PktLine::ResponseEnd => Ok(b"0002".to_vec()),
+            PktLine::Data(payload) => {
+                if payload.len() > MAX_PKT_DATA {
+                    return Err(Error::Protocol("payload exceeds MAX_PKT_DATA".to_string()));
+                }
+                let len = payload.len() + 4;
+                let mut out = Vec::with_capacity(len);
+                out.extend_from_slice(format!("{:04x}", len).as_bytes());
+                out.extend_from_slice(payload);
+                Ok(out)
+            }
+        }
     }
 
     /// Phase 11 — the payload, or an empty slice for a control packet.
