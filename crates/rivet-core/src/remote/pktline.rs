@@ -306,7 +306,34 @@ impl PktLine {
     /// frame is a peer that vanished, which is different from a peer that sent a wrong length but
     /// must be reported rather than read past the end of the buffer.
     pub fn decode(data: &[u8]) -> Result<(Self, usize)> {
-        todo!()
+        let len = if data.len() < 4 {
+            return Err(Error::Protocol("truncated pkt-line header".to_string()));
+        } else {
+            let header = &data[0..4];
+            let hex = std::str::from_utf8(header).map_err(|_| Error::Protocol("non-hex pkt-line header".to_string()))?;
+            u32::from_str_radix(hex, 16).map_err(|_| Error::Protocol("non-hex pkt-line header".to_string()))?
+        };
+        if len == 3 {
+            return Err(Error::Protocol("invalid pkt-line length 0003".to_string()));
+        }
+        let payload_len = len as usize - 4;
+        if payload_len > MAX_PKT_DATA {
+            return Err(Error::Protocol("pkt-line exceeds max length".to_string()));
+        }
+        if data.len() < 4 + payload_len {
+            return Err(Error::Protocol("truncated pkt-line payload".to_string()));
+        }
+        let payload = &data[4..4 + payload_len];
+        let pkt = if len == 0 {
+            PktLine::Flush
+        } else if len == 1 {
+            PktLine::Data(vec![])
+        } else if len == 2 {
+            PktLine::Data(vec![])
+        } else {
+            PktLine::Data(payload.to_vec())
+        };
+        Ok((pkt, 4 + payload_len))
     }
 
     /// Phase 11 — read one packet from a stream.
