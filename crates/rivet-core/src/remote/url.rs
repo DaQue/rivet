@@ -334,7 +334,24 @@ impl RemoteUrl {
     ///   `::1` is ambiguous and the socket API's own parser will read it as a malformed port. The
     ///   brackets are removed at parse time and restored here, so nothing in between has to know.
     pub fn host_port(&self) -> Option<BString> {
-        todo!()
+        match self.scheme {
+            RemoteScheme::File => None,
+            _ => {
+                let port = self.port.unwrap_or(match self.scheme {
+                    RemoteScheme::Https => 443,
+                    RemoteScheme::Http => 80,
+                    RemoteScheme::Ssh => 22,
+                    _ => 0,
+                });
+                let host = self.host.as_ref()?;
+                let host = if host.contains(&b':') {
+                    format!("[{}]", host)
+                } else {
+                    host.to_string()
+                };
+                Some(format!("{}:{}", host, port).into())
+            }
+        }
     }
 
     /// Phase 11 — the userinfo, as it goes into an `Authorization` header or an `ssh` argument.
