@@ -348,7 +348,8 @@ impl MergeOptions {
 
     /// Phase 9 — force a merge commit even when a fast-forward is possible.
     pub fn no_ff(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.no_ff = on;
+        self
     }
 }
 
