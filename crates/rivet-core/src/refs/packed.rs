@@ -382,7 +382,7 @@ impl PackedRefs {
     /// locale's collation. Sorting any other way produces a file whose `sorted` claim is a lie and
     /// whose binary search returns the wrong entry.
     pub fn sort(&mut self) {
-        todo!()
+        self.entries.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()))
     }
 }
 
