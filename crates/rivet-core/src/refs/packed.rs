@@ -480,7 +480,7 @@ impl RefLocation {
 
     /// Phase 2 — whether a `packed-refs` entry is part of this ref's storage.
     pub const fn has_packed(self) -> bool {
-        todo!()
+        matches!(self, RefLocation::Packed | RefLocation::Both)
     }
 }
 
