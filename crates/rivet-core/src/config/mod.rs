@@ -438,7 +438,18 @@ impl Config {
     /// [`crate::error::Error::ConfigInvalidValue`] for a present value that is not an integer, and
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn get_int(&self, key: &BStr) -> Result<Option<i64>> {
-        todo!()
+        let value = self.get(key)?;
+        match value {
+            None => Ok(None),
+            Some(v) => {
+                let b = parse_int(&v).map_err(|_| Error::ConfigInvalidValue {
+                    key: key.to_owned(),
+                    value: v.to_owned(),
+                    expected: "integer".into(),
+                })?;
+                Ok(Some(b))
+            }
+        }
     }
 
     /// Phase 2 — a value parsed as a path, resolving `~` and a leading `~/`.
