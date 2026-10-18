@@ -548,7 +548,12 @@ pub fn update_commands(
 ///
 /// [`crate::error::Error::ObjectNotFound`] if a reachability walk fails.
 pub fn push_is_fast_forward(odb: &Odb, old: ObjectId, new: ObjectId) -> Result<bool> {
-    todo!()
+    if old.is_zero() || new.is_zero() {
+        return Ok(true);
+    }
+    let old_oids = odb.oids().expect("object database unavailable");
+    let reachable = old_oids.iter().any(|oid| oid == &new);
+    Ok(reachable)
 }
 
 /// Phase 11 — the `+` prefix that marks a forced update in a command line, if it applies.
