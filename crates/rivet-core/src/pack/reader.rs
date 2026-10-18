@@ -43,6 +43,7 @@ use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{Object, ObjectKind};
 use crate::pack::{BaseProvider, PackEntry, PackIndex};
 use crate::error::Error;
+use crate::pack::EntryKind;
 
 /// Phase 10 — one packfile, opened over a borrowed buffer.
 ///
@@ -303,7 +304,73 @@ impl<'a> PackFile<'a> {
     /// [`crate::error::Error::CorruptPack`] if `offset` is past the end, the header is truncated,
     /// the size varint overflows, or the type nibble is one of the two reserved values.
     pub fn entry_at(&self, offset: u64) -> Result<PackEntry> {
-        todo!()
+        let data = self.data;
+        let pos = offset as usize;
+        if pos >= data.len() {
+            return Err(Error::CorruptPack { reason: "offset past end of pack".into() });
+        }
+        let mut i = pos;
+        let header_byte = data[i];
+        i += 1;
+        let type_nibble = header_byte & 0x0f;
+        let kind = match type_nibble {
+            0 => EntryKind::Commit,
+            1 => EntryKind::Tree,
+            2 => EntryKind::Blob,
+            3 => EntryKind::Tag,
+            4 => EntryKind::Commit,
+            5 => EntryKind::Tree,
+            6 => EntryKind::Blob,
+            7 => EntryKind::Tag,
+            8 => EntryKind::Commit,
+            9 => EntryKind::Tree,
+            10 => EntryKind::Blob,
+            11 => EntryKind::Tag,
+            12 => EntryKind::Commit,
+            13 => EntryKind::Tree,
+            14 => EntryKind::Blob,
+            15 => EntryKind::Tag,
+            _ => return Err(Error::CorruptPack { reason: "reserved type nibble".into() }),
+        };
+        let mut size: u64 = 0;
+        let mut shift: u64 = 0;
+        loop {
+            if i >= data.len() {
+                return Err(Error::CorruptPack { reason: "truncated size varint".into() });
+            }
+            let b = data[i];
+            i += 1;
+            size |= ((b & 0x7f) as u64) << shift;
+            shift += 7;
+            if b & 0x80 == 0 {
+                break;
+            }
+            if shift > 63 {
+                return Err(Error::CorruptPack { reason: "size varint overflow".into() });
+            }
+        }
+        let mut base_offset = None;
+        let mut base_oid = None;
+        if type_nibble >= 8 {
+            if i + 20 > data.len() {
+                return Err(Error::CorruptPack { reason: "truncated base oid".into() });
+            }
+            base_oid = Some(ObjectId::from_bytes(ObjectFormat::Sha1, &data[i..i + 20]).expect("base oid"));
+            i += 20;
+            if i + 8 > data.len() {
+                return Err(Error::CorruptPack { reason: "truncated base offset".into() });
+            }
+            base_offset = Some(u64::from_le_bytes(data[i..i + 8].try_into().unwrap()));
+            i += 8;
+        }
+        Ok(PackEntry {
+            offset,
+            kind,
+            size,
+            base_offset,
+            base_oid,
+            data_offset: i as u64,
+        })
     }
 
     /// Phase 10 — walk entries sequentially from the start of the pack.
