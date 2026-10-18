@@ -346,7 +346,11 @@ impl Worktree {
     ///
     /// As [`Worktree::read_file`], plus the hasher's collision-detection path.
     pub fn hash_file(&self, path: &BStr) -> Result<crate::hash::ObjectId> {
-        todo!()
+        let buf = self.read_file(path)?;
+        let format = ObjectFormat::Sha1;
+        let mut hasher = format.hasher();
+        hasher.update(&buf);
+        hasher.finish()
     }
 
     /// Phase 4 — compute the status of the work tree.
