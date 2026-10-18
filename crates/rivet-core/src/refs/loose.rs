@@ -85,7 +85,13 @@ pub fn read(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<RefT
 ///
 /// Everything [`read`] raises except [`crate::error::Error::RefNotFound`].
 pub fn try_read(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<Option<RefTarget>> {
-    todo!()
+    read(git_dir, name, format).map(Some).or_else(|e| {
+        if matches!(e, crate::error::Error::RefNotFound { .. }) {
+            Ok(None)
+        } else {
+            Err(e)
+        }
+    })
 }
 
 /// Phase 2 — read a ref file that holds **one id per line**, such as `MERGE_HEAD`.
