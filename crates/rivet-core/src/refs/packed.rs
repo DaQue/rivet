@@ -354,7 +354,7 @@ impl PackedRefs {
     /// The operation behind `pack-refs --prune` and behind removing refs that now exist as loose
     /// files. Like [`PackedRefs::remove`], it does not touch loose storage.
     pub fn retain(&mut self, keep: impl FnMut(&PackedRef) -> bool) {
-        todo!()
+        self.entries.retain(keep)
     }
 
     /// Phase 2 — record what a ref's target peels to.
