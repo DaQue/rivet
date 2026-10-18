@@ -247,7 +247,7 @@ impl StatCache {
 
     /// Phase 4 — drop everything.
     pub fn clear(&mut self) {
-        todo!()
+        self.entries.clear()
     }
 
     /// Phase 4 — how many paths are cached.
