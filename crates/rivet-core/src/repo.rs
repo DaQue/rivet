@@ -211,7 +211,11 @@ impl InitOptions {
 impl Default for InitOptions {
     /// Phase 4 — the defaults of [`InitOptions::new`].
     fn default() -> Self {
-        todo!()
+        Self {
+            initial_branch: BString::from("main"),
+            format: ObjectFormat::Sha1,
+            ..Default::default()
+        }
     }
 }
 
