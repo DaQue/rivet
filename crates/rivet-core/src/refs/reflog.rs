@@ -82,7 +82,12 @@ impl ReflogEntry {
     /// splits into two on the next read — the second half of which is corrupt. The one place that
     /// matters is [`ReflogEntry::to_bytes`], which is where the invariant is defended.
     pub fn new(old: ObjectId, new: ObjectId, who: Signature, message: BString) -> Self {
-        todo!()
+        Self {
+            old,
+            new,
+            who,
+            message,
+        }
     }
 
     /// Phase 2 — parse one reflog line, without its trailing newline.
