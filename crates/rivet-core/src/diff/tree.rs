@@ -126,7 +126,10 @@ impl FileDiff {
     /// hunks, and conflating the two would make `--stat` print `0 insertions, 0 deletions` for a
     /// submodule bump instead of the one-line change it is.
     pub fn is_mode_only(&self) -> bool {
-        todo!()
+        self.old_mode.is_some()
+        && self.new_mode.is_some()
+        && self.old_oid.as_ref() == self.new_oid.as_ref()
+        && self.old_mode != self.new_mode
     }
 
     /// Phase 8 — whether the file was replaced by something that is not a regular file, or the
