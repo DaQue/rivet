@@ -1390,7 +1390,11 @@ impl Index {
 impl Default for Index {
     /// Phase 3 — an empty index; identical to [`Index::new`].
     fn default() -> Self {
-        todo!()
+        Self {
+            version: IndexVersion::V2,
+            entries: Vec::new(),
+            extensions: Vec::new(),
+        }
     }
 }
 
