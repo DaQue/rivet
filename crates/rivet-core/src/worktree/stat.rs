@@ -252,7 +252,7 @@ impl StatCache {
 
     /// Phase 4 — how many paths are cached.
     pub fn len(&self) -> usize {
-        todo!()
+        self.entries.len()
     }
 
     /// Phase 4 — whether nothing is cached.
