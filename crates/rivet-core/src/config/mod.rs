@@ -224,7 +224,9 @@ impl Config {
     /// to no entries. `git init` writes a config with `core.repositoryformatversion` and nothing
     /// else, so a repository's config is never genuinely empty in practice.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     /// Phase 2 — read and parse a config file.
