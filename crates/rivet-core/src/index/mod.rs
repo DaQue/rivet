@@ -1015,7 +1015,49 @@ impl Index {
     ///
     /// As [`Index::load`].
     pub fn parse(format: ObjectFormat, data: &[u8]) -> Result<Self> {
-        todo!()
+        let data_len = data.len();
+        if data_len < 12 {
+            return Err(Error::CorruptIndex { offset: 0, reason: "truncated index" });
+        }
+        if &data[0..4] != b"DIRC" {
+            return Err(Error::BadIndexSignature { found: [data[0], data[1], data[2], data[3]] });
+        }
+        let version_u32 = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+        let version = IndexVersion::from_u32(version_u32)?;
+        let entry_count = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
+        let mut offset: usize = 12;
+        let mut entries = Vec::with_capacity(entry_count as usize);
+        for _ in 0..entry_count {
+            let (entry, consumed) = IndexEntry::parse(format, version, &data[offset..])?;
+            offset += consumed;
+            entries.push(entry);
+        }
+        let mut extensions = Vec::new();
+        while offset < data_len {
+            if data_len - offset < 8 {
+                return Err(Error::CorruptIndex { offset, reason: "truncated extension" });
+            }
+            let sig = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]];
+            let ext_len = u32::from_be_bytes([data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7]]) as usize;
+            offset += 8;
+            if offset + ext_len > data_len {
+                return Err(Error::CorruptIndex { offset, reason: "extension extends past end" });
+            }
+            let ext_data = data[offset..offset + ext_len].to_vec();
+            extensions.push(IndexExtension::new(sig, ext_data));
+            offset += ext_len;
+        }
+        if offset + 20 > data_len {
+            return Err(Error::CorruptIndex { offset, reason: "missing checksum" });
+        }
+        let expected = ObjectId::read(format, &data[offset..offset + 20])?;
+        let mut hasher = format.hasher();
+        hasher.update(&data[..offset]);
+        let actual = hasher.finish()?;
+        if expected != actual {
+            return Err(Error::BadIndexChecksum { expected, actual });
+        }
+        Ok(Self { version, entries, extensions })
     }
 
     /// Phase 3 — serialise with a fresh trailing checksum.
