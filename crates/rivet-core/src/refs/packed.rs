@@ -427,7 +427,7 @@ impl<'a> Iterator for PackedRefNames<'a> {
     ///
     /// Scaffold stage: this body is `todo!()`.
     fn size_hint(&self) -> (usize, Option<usize>) {
-        todo!()
+        (usize::MAX, None)
     }
 }
 
