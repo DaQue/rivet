@@ -149,7 +149,16 @@ impl StatData {
     ///   itself — same content, same size, new inode — is reported as changed. Git treats that
     ///   as a change too, and it is the honest answer: the file was rewritten.
     pub fn matches_entry(&self, entry: &IndexEntry) -> bool {
-        todo!()
+        self.ctime_seconds == entry.ctime_seconds
+        && self.ctime_nanos == entry.ctime_nanos
+        && self.mtime_seconds == entry.mtime_seconds
+        && self.mtime_nanos == entry.mtime_nanos
+        && self.dev == entry.dev
+        && self.ino == entry.ino
+        && self.mode == entry.mode
+        && self.uid == entry.uid
+        && self.gid == entry.gid
+        && self.size == entry.size
     }
 
     /// Phase 4 — whether this entry is too fresh to be trusted.
