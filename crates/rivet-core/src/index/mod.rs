@@ -1336,7 +1336,7 @@ impl Index {
     /// silently swapped — `fsck` should report the duplicate, and a sort that reordered it would
     /// change which one a lookup finds.
     pub fn sort(&mut self) {
-        todo!()
+        self.entries.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.flags.stage().unwrap_or(Stage::Normal).as_bits().cmp(&b.flags.stage().unwrap_or(Stage::Normal).as_bits())))
     }
 
     /// Phase 3 — whether any path has conflict stages.
