@@ -324,7 +324,16 @@ pub fn compute(
     ignore: &IgnoreStack,
     options: &StatusOptions,
 ) -> Result<Status> {
-    todo!()
+    let staged = staged_changes(index, head_tree, odb)?;
+    let mut stat_cache = crate::worktree::StatCache::new();
+    let unstaged = unstaged_changes(worktree, index, odb, &mut stat_cache)?;
+    let (untracked, ignored) = untracked_paths(worktree, index, ignore, options)?;
+    Ok(Status {
+        staged,
+        unstaged,
+        untracked,
+        ignored,
+    })
 }
 
 /// Phase 4 — the difference between `HEAD`'s tree and the index.
