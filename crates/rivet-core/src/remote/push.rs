@@ -528,7 +528,30 @@ pub fn update_commands(
     capabilities: &[BString],
     format: crate::hash::ObjectFormat,
 ) -> Result<Vec<BString>> {
-    todo!()
+    let mut out = Vec::new();
+    let mut caps = Vec::new();
+    if capabilities.iter().any(|c| c == "side-band-64k") {
+        caps.push(BString::from("side-band-64k"));
+    } else if capabilities.iter().any(|c| c == "side-band") {
+        caps.push(BString::from("side-band"));
+    }
+    if capabilities.iter().any(|c| c == "report-status") {
+        caps.push(BString::from("report-status"));
+    }
+    caps.push(BString::from("agent=Rivet"));
+    let mut first = true;
+    for c in &caps {
+        if first {
+            out.push(c.clone());
+            first = false;
+        } else {
+            out.push(format!(" {}", c).into());
+        }
+    }
+    for u in updates {
+        out.push(u.command_line(format));
+    }
+    Ok(out)
 }
 
 /// Phase 11 — whether a push of `new` over `old` would be refused for losing commits.
