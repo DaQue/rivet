@@ -1260,7 +1260,7 @@ impl Index {
     ///   [`IndexExt::is_unmerged`], because treating a conflict as untracked makes `status` report a
     ///   file that is very much tracked as new.
     pub fn entry(&self, path: &BStr) -> Option<&IndexEntry> {
-        todo!()
+        self.entries.iter().find(|e| &e.path == path && e.stage() == Stage::Normal)
     }
 
     /// Phase 3 — find a specific stage of a path.
