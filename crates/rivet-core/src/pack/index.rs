@@ -139,7 +139,7 @@ impl<'a> PackIndex<'a> {
     /// the pack's, every id this index yields is a slice of the wrong bytes taken from the right
     /// place — plausible, wrong, and not detectable here.
     pub fn format(&self) -> ObjectFormat {
-        todo!()
+        self.format
     }
 
     /// Phase 10 — how many objects the index describes.
