@@ -426,7 +426,7 @@ impl RefAdvertisement {
     /// repository sees. It is not the same as "the response failed to parse", which is an error from
     /// [`Transport::connect`] rather than an empty advertisement.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.refs.is_empty()
     }
 
     /// Phase 11 — build the request-side view of the advertisement for a push.
