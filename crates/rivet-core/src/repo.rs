@@ -548,7 +548,7 @@ impl Repository {
 
     /// Phase 4 — the object database.
     pub fn odb(&self) -> &Odb {
-        todo!()
+        &self.odb
     }
 
     /// Phase 4 — the object database, mutably, for a caller that needs to refresh it.
