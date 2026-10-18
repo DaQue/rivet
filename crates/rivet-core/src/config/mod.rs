@@ -898,7 +898,23 @@ impl Default for Config {
 ///
 /// [`crate::error::Error::ConfigInvalidValue`] with `expected` set to `"a boolean"`.
 pub fn parse_bool(value: &BStr) -> Result<bool> {
-    todo!()
+    let v = &value[..];
+    if v.is_empty() {
+        return Ok(false);
+    }
+    let lower = v.iter().map(|b| b.to_ascii_lowercase()).collect::<Vec<u8>>();
+    let s = BString::from(lower.as_slice());
+    if s == "true" || s == "yes" || s == "on" || s == "1" {
+        Ok(true)
+    } else if s == "false" || s == "no" || s == "off" || s == "0" {
+        Ok(false)
+    } else {
+        Err(Error::ConfigInvalidValue {
+            key: BString::from(""),
+            value: BString::from(v),
+            expected: "a boolean",
+        })
+    }
 }
 
 /// Phase 2 — parse a Git integer, with its size suffixes.
