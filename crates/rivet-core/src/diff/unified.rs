@@ -87,7 +87,11 @@ impl LineKind {
     /// implementation that returned nothing for it, or that skipped writing the prefix, produces
     /// output that looks right in a terminal and that applies to the wrong lines.
     pub const fn prefix(self) -> char {
-        todo!()
+        match self {
+            LineKind::Context => ' ',
+            LineKind::Removed => '-',
+            LineKind::Added => '+',
+        }
     }
 
     /// Phase 8 — the inverse of [`LineKind::prefix`], for a reader.
