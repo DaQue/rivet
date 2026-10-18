@@ -352,7 +352,7 @@ impl PktLine {
     /// because a byte is invalid UTF-8 helps nobody. Anything that will be *stored* or compared —
     /// a ref name, a capability — must come from [`PktLine::data`] as bytes instead.
     pub fn text(&self) -> String {
-        todo!()
+        String::from_utf8_lossy(self.data()).into_owned()
     }
 }
 
