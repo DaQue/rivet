@@ -1200,7 +1200,7 @@ impl Index {
 
     /// Phase 3 — the entries, in file order.
     pub fn entries(&self) -> &[IndexEntry] {
-        todo!()
+        &self.entries
     }
 
     /// Phase 3 — the entries, mutably.
