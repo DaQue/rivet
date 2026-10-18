@@ -495,7 +495,8 @@ impl IgnoreStack {
     /// so a caller can hand it straight to [`IgnoreStack::is_ignored`] as a prefix without
     /// re-deriving it and risking a leading slash that would break every anchor comparison.
     pub fn current_dir(&self) -> &BStr {
-        todo!()
+        use std::convert::AsRef;
+        self.current_dir.as_ref()
     }
 
     /// Phase 5 — add the patterns given on the command line.
