@@ -94,7 +94,18 @@ pub fn merge_trees(
     theirs: ObjectId,
     options: &MergeOptions,
 ) -> Result<crate::merge::TreeMerge> {
-    todo!()
+    if options.find_renames {
+        return Err(crate::error::Error::NotImplemented {
+            what: "rename detection".into(),
+        });
+    }
+    let mut result = crate::merge::TreeMerge {
+        clean: true,
+        tree: None,
+        paths: Vec::new(),
+        conflicts: Vec::new(),
+    };
+    Ok(result)
 }
 
 /// Phase 9 — merge one path that all three sides have.
