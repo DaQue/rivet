@@ -559,11 +559,11 @@ def run_file(rel, args, log, prog, deadline, counter):
             return "deadline", done
         el = now - file_start
         if done == 0 and el > args.slo_zero_min * 60:
-            log(f"  STOP SLO: 0 functions in {el/60:.0f} min in {rel} (budget {args.slo_zero_min})")
-            return "slo", done
+            log(f"  SLOW: 0 functions in {el/60:.0f} min in {rel} (budget {args.slo_zero_min}) -> next file")
+            return "slow", done
         if done < 3 and el > args.slo_three_min * 60:
-            log(f"  STOP SLO: {done} functions in {el/60:.0f} min in {rel} (need 3)")
-            return "slo", done
+            log(f"  SLOW: {done} functions in {el/60:.0f} min in {rel} (need 3) -> next file")
+            return "slow", done
 
         t = temps()
         if (t.get("edge", 0) > 92) or (t.get("junction", 0) > 105) or (t.get("mem", 0) > 100):
@@ -637,8 +637,10 @@ def run_file(rel, args, log, prog, deadline, counter):
             with open(os.path.join(OUT, f"fail-{stub['name']}-{attempt}.txt"), "w") as f:
                 f.write(errs + "\n\n=== BODY SENT ===\n" + body + "\n\n=== SPLICED ===\n" + new)
             open(path, "w", encoding="utf-8").write(text)
-            if os.path.basename(rel) not in errs and rel not in errs:
-                log("  errors do not mention this file -> crate is broken elsewhere; stopping")
+            prc, pout = cargo(["check", "-p", args.crate, "--all-targets", "--message-format=short"])
+            if prc != 0:
+                log("  PRISTINE TREE BROKEN after revert -> systemic, stopping")
+                log(pout[-1200:])
                 return "systemic", done
             msgs = msgs + [
                 {"role": "assistant", "content": body},
@@ -652,8 +654,8 @@ def run_file(rel, args, log, prog, deadline, counter):
             log(f"  fn={stub['name']} FAILED skipped (consecutive={consecutive}, skipped={len(skipped)})")
             with open(prog, "a") as f:
                 f.write(f"{datetime.now():%H:%M:%S} fail fn={stub['name']} file={rel} done={done}\n")
-            if consecutive >= 4:
-                log("  STOP 4 consecutive failures - systemic, not a slow model")
+            if consecutive >= 8:
+                log("  STOP 8 consecutive failures - model is not producing usable bodies")
                 return "systemic", done
             continue
 
@@ -682,8 +684,9 @@ def main():
     ap.add_argument("--max-hours", type=float, default=4.0)
     ap.add_argument("--until", default="", help="wall-clock stop, e.g. 00:00")
     ap.add_argument("--gate", choices=("check", "tests"), default="tests")
-    ap.add_argument("--slo-zero-min", type=float, default=20.0)
-    ap.add_argument("--slo-three-min", type=float, default=40.0)
+    ap.add_argument("--slo-zero-min", type=float, default=10.0)
+    ap.add_argument("--slo-three-min", type=float, default=25.0)
+    ap.add_argument("--stall-min", type=float, default=45.0, help="stop if no function lands in N min")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -731,6 +734,7 @@ def main():
     total, results = 0, []
     counter = [0]
     t0 = time.time()
+    last_ok = time.time()
     for rel in queue:
         if time.time() >= deadline:
             log("deadline reached before " + rel)
@@ -738,12 +742,17 @@ def main():
         if args.max_functions and total >= args.max_functions:
             log(f"function cap {args.max_functions} reached")
             break
+        if time.time() - last_ok > args.stall_min * 60:
+            log(f"STOP stall: no function landed in {args.stall_min:.0f} min (total={total})")
+            break
         log(f"file {rel} ({len(find_stubs(open(os.path.join(REPO, rel), encoding='utf-8').read()))} stubs)")
         status, done = run_file(rel, args, log, prog, deadline, counter)
         total += done
+        if done:
+            last_ok = time.time()
         results.append(f"{rel}: {status} done={done}")
         log(f"file {rel} -> {status} ({done} this file, {total} total)")
-        if status in ("deadline", "thermal", "systemic", "slo", "dryrun"):
+        if status in ("deadline", "thermal", "systemic", "dryrun"):
             if status != "deadline":
                 log(f"stopping whole run: {status}")
             break
