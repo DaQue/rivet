@@ -228,7 +228,10 @@ impl WalkOptions {
 impl Default for WalkOptions {
     /// Phase 4 — the defaults of [`WalkOptions::new`].
     fn default() -> Self {
-        todo!()
+        Self {
+            all: false,
+            ..Self::default()
+        }
     }
 }
 
