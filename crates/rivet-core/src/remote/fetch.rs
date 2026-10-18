@@ -520,7 +520,8 @@ pub fn write_tracking_refs(
 ///   [`crate::remote::RemoteUrl::parse`] is where a hostile remote name would be caught. This
 ///   function assumes a name of the shape the config allows.
 pub fn tracking_ref_name(remote: &BStr, advertised: &BStr) -> Option<BString> {
-    todo!()
+    let prefix = advertised.strip_prefix(b"refs/heads/").or_else(|| advertised.strip_prefix(b"refs/tags/"))?;
+    Some(BString::from(format!("refs/remotes/{}/{:?}", remote, prefix)))
 }
 
 /// Phase 11 — the remote an advertisement's refs would be tracked under, if the URL names one.
