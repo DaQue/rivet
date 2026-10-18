@@ -560,7 +560,28 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn set(&mut self, key: &BStr, value: &[u8]) -> Result<()> {
-        todo!()
+        let (section, subsection, key) = ConfigEntry::parse_key(key)?;
+        let value = BString::from(value);
+        let mut entries = self.entries.clone();
+        let mut found = false;
+        for entry in &mut entries {
+            if entry.section == section && entry.subsection == subsection && entry.key == key {
+                entry.value = value.clone();
+                entry.origin = None;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            entries.push(ConfigEntry::new(
+            section,
+            subsection,
+            key,
+            value,
+        ));
+        }
+        self.entries = entries;
+        Ok(())
     }
 
     /// Phase 2 — append a value to a key, keeping the existing ones.
