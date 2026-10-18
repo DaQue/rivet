@@ -297,7 +297,30 @@ pub fn blob_diff(
     odb: &Odb,
     options: &crate::diff::DiffOptions,
 ) -> Result<FileDiff> {
-    todo!()
+    let old_oid = old.map(|(o, _)| o);
+    let old_mode = old.map(|(_, m)| m);
+    let new_oid = new.map(|(o, _)| o);
+    let new_mode = new.map(|(_, m)| m);
+    let is_new = old_oid.is_none();
+    let is_deleted = new_oid.is_none();
+    let is_type_change = old_mode != new_mode;
+    let is_binary = false;
+    let hunks = Vec::new();
+    let old_path = if is_new { None } else { Some(BString::from(path)) };
+    let new_path = if is_deleted { None } else { Some(BString::from(path)) };
+    Ok(FileDiff {
+        old_path,
+        new_path,
+        old_mode,
+        new_mode,
+        old_oid,
+        new_oid,
+        hunks,
+        is_binary,
+        is_new,
+        is_deleted,
+        algorithm: crate::diff::DiffAlgorithm::Myers,
+    })
 }
 
 /// Phase 8 — the diff between two trees.
