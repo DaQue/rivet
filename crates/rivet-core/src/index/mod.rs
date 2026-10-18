@@ -1222,7 +1222,7 @@ impl Index {
 
     /// Phase 3 — the extensions, mutably.
     pub fn extensions_mut(&mut self) -> &mut Vec<IndexExtension> {
-        todo!()
+        &mut self.extensions
     }
 
     /// Phase 3 — how many entries there are.
