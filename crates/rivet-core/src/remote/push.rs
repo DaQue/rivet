@@ -68,6 +68,7 @@ use crate::refs::RefStore;
 
 use crate::remote::RefAdvertisement;
 use crate::remote::transport::Transport;
+use crate::error::Error;
 
 /// Phase 11 — the text a server returns for a ref whose update succeeded.
 ///
@@ -364,7 +365,40 @@ impl PushOutcome {
 /// collides, or a lease that does not hold; [`crate::error::Error::InvalidRefName`] for a ref that
 /// cannot be read; and [`crate::error::Error::ObjectNotFound`] for a reachability walk that fails.
 pub fn check_updates(updates: &[RefUpdate], odb: &Odb, refs: &RefStore) -> Result<()> {
-    todo!()
+    for update in updates {
+        let name = &update.name;
+        let old = update.old;
+        let new = update.new;
+        if new.is_zero() {
+            continue;
+        }
+        let old_exists = if old.is_zero() {
+            false
+        } else {
+            odb.contains(&old)
+        };
+        if old_exists {
+            if !push_is_fast_forward(odb, old, new).unwrap_or(false) {
+                return Err(Error::NonFastForward {
+                    name: name.clone(),
+                    old,
+                    new,
+                });
+            }
+        } else {
+            if odb.contains(&new) {
+                return Err(Error::NonFastForward {
+                    name: name.clone(),
+                    old,
+                    new,
+                });
+            }
+        }
+        if !odb.contains(&new) {
+            return Err(Error::ObjectNotFound { oid: new });
+        }
+    }
+    Ok(())
 }
 
 /// Phase 11 — build the whole `git-receive-pack` request: the command lines, then the pack.
