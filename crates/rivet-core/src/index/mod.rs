@@ -1292,7 +1292,20 @@ impl Index {
     /// * **Does not maintain sort order.** The entry is appended when nothing matched; a caller
     ///   inserting several must call [`Index::sort`] before writing.
     pub fn insert(&mut self, entry: IndexEntry) -> Option<IndexEntry> {
-        todo!()
+        let mut displaced = None;
+        let mut i = 0;
+        while i < self.entries.len() {
+            let e = &self.entries[i];
+            if e.path == entry.path && e.stage() == entry.stage() {
+                displaced = Some(self.entries.swap_remove(i));
+                break;
+            }
+            i += 1;
+        }
+        if displaced.is_none() {
+            self.entries.push(entry);
+        }
+        displaced
     }
 
     /// Phase 3 — remove an entry by path and stage.
