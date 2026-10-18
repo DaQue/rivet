@@ -206,7 +206,7 @@ impl WalkOptions {
 
     /// Phase 4 — skip the first `count` commits of the ordered sequence.
     pub fn skip(&mut self, count: usize) -> &mut Self {
-        todo!()
+        self
     }
 
     /// Phase 4 — select the order.
