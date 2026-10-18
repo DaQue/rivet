@@ -513,7 +513,7 @@ impl Repository {
     /// would panic on every command run against a bare repository — which is every command run
     /// against a repository a user is only pushing to.
     pub fn worktree_path(&self) -> Option<&Path> {
-        todo!()
+        self.work_tree.as_deref()
     }
 
     /// Phase 4 — the work tree, or an error naming the operation that needed one.
