@@ -202,7 +202,7 @@ impl<'a> PackFile<'a> {
     /// index's [`PackIndex::len`] for the two files to describe each other, and it bounds only a
     /// sequential walk — a lookup by offset never consults it.
     pub fn object_count(&self) -> u32 {
-        todo!()
+        self.index.as_ref().map(|i| i.len() as u32).unwrap_or(0)
     }
 
     /// Phase 10 — whether the object count came from a header that agrees with the index.
