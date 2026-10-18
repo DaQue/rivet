@@ -542,7 +542,10 @@ pub fn is_up_to_date(
     remote: &BStr,
     refs: &RefStore,
 ) -> Result<bool> {
-    todo!()
+    let Ok(up_to_date) = is_up_to_date(advertisement, remote, refs) else {
+        return Ok(false)
+    };
+    Ok(up_to_date)
 }
 
 /// Phase 11 — the advertised refs that are not objects the local repository has.
