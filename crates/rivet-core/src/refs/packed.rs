@@ -259,7 +259,7 @@ impl PackedRefs {
 
     /// Phase 2 — the header trait strings, in file order.
     pub fn traits(&self) -> &[BString] {
-        todo!()
+        &self.traits
     }
 
     /// Phase 2 — add or replace the trait strings written in the header.
