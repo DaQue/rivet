@@ -203,7 +203,13 @@ impl RefUpdate {
     /// has moved since the caller looked is rejected. This is why `git push --delete` on a branch
     /// someone else just moved fails, and it is the correct behaviour rather than an annoyance.
     pub fn delete(name: BString, old: ObjectId) -> Self {
-        todo!()
+        Self {
+            name,
+            old,
+            new: ObjectId::zero(old.format()),
+            force: false,
+            expect: None,
+        }
     }
 
     /// Phase 11 — whether this update deletes the ref.
