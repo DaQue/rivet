@@ -271,7 +271,7 @@ impl RefLock {
     /// The `.lock` file, not the ref. Useful for the error message that tells a user which file to
     /// delete after a crash, and for tests that assert the lock was released.
     pub fn path(&self) -> &Path {
-        todo!()
+        &self.path
     }
 
     /// Phase 2 — write bytes into the lock file, then rename it over the ref.
