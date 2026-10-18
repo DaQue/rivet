@@ -114,7 +114,28 @@ impl StatData {
     /// platform where a field is absent has somewhere to report it, rather than inventing a
     /// zero.
     pub fn from_metadata(meta: &std::fs::Metadata, filemode: bool, symlinks: bool) -> Result<Self> {
-        todo!()
+        use std::os::unix::fs::MetadataExt;
+        let mode = if symlinks && meta.is_symlink() {
+            EntryMode::Link
+        } else if filemode && meta.is_file() && meta.mode() & 0o111 != 0 {
+            EntryMode::BlobExecutable
+        } else if meta.is_file() {
+            EntryMode::Blob
+        } else {
+            EntryMode::Tree
+        };
+        Ok(Self {
+            ctime_seconds: meta.ctime() as u32,
+            ctime_nanos: meta.ctime_nsec() as u32,
+            mtime_seconds: meta.mtime() as u32,
+            mtime_nanos: meta.mtime_nsec() as u32,
+            dev: meta.dev() as u32,
+            ino: meta.ino() as u32,
+            mode,
+            uid: meta.uid() as u32,
+            gid: meta.gid() as u32,
+            size: meta.len() as u32,
+        })
     }
 
     /// Phase 4 — the stat data an index entry already holds.
