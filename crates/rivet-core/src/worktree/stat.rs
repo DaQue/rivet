@@ -318,7 +318,17 @@ impl StatCache {
         entry: &IndexEntry,
         index_mtime: (u32, u32),
     ) -> Result<bool> {
-        todo!()
+        let stat = worktree.stat(path)?;
+        let stat = match stat {
+            Some(s) => s,
+            None => return Ok(false),
+        };
+        let (mtime_sec, mtime_nsec) = index_mtime;
+        let unchanged = stat.mtime_seconds == mtime_sec
+        && stat.mtime_nanos == mtime_nsec
+        && stat.size == entry.size
+        && stat.mode == entry.mode;
+        Ok(unchanged)
     }
 }
 
