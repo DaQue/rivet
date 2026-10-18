@@ -294,7 +294,7 @@ impl SshTransport {
     /// * **Dropping the handle closes the pipe**, which is how the transport signals end-of-input
     ///   during `disconnect`. A caller that drops it early ends the exchange.
     pub fn take_stdin(&mut self) -> Option<std::process::ChildStdin> {
-        todo!()
+        self.child.as_mut().and_then(|c| c.stdin.take())
     }
 
     /// Phase 11 — whether a child is currently running.
