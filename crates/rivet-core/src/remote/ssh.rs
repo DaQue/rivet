@@ -576,7 +576,22 @@ pub fn remote_command(service: Service, path: &BStr) -> BString {
 /// * **An IPv6 literal is re-bracketed**, per [`crate::remote::RemoteUrl::host_port`]; a bare `::1`
 ///   as an `ssh` host is read as a malformed port.
 pub fn ssh_args(url: &RemoteUrl, port: Option<u16>, version: ProtocolVersion) -> Vec<BString> {
-    todo!()
+    let mut args = Vec::new();
+    if let Some(port) = port {
+        args.push("-p".into());
+        args.push(port.to_string().into());
+    }
+    let host = url.host.as_ref().map(|h| {
+        if let Some(user) = &url.user {
+            format!("{}@{}", user, h)
+        } else {
+            h.to_string()
+        }
+    });
+    if let Some(host) = host {
+        args.push(host.into());
+    }
+    args
 }
 
 /// Phase 11 — whether the environment asks for an `ssh` replacement.
