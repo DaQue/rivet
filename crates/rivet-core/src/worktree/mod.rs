@@ -453,7 +453,8 @@ impl WorktreeWalkOptions {
 
     /// Phase 4 — restrict the walk to a subtree.
     pub fn prefix(&mut self, prefix: &BStr) -> &mut Self {
-        todo!()
+        self.prefix = prefix.to_owned();
+        self
     }
 }
 
