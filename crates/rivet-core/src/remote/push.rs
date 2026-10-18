@@ -186,7 +186,13 @@ impl RefUpdate {
     /// server whose ref *does* exist rejects this as a non-fast-forward rather than as a create
     /// conflict, so a caller using this for a ref that may already exist should read first.
     pub fn create(name: BString, new: ObjectId) -> Self {
-        todo!()
+        Self {
+            name,
+            old: ObjectId::zero(new.format()),
+            new,
+            force: false,
+            expect: None,
+        }
     }
 
     /// Phase 11 — a delete: the ref must currently hold `old`.
