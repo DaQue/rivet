@@ -152,7 +152,7 @@ impl RefTarget {
     /// The negation of [`RefTarget::is_symbolic`], and not the same as "resolvable": a direct
     /// target names an id that may or may not be in the object database at all.
     pub const fn is_direct(&self) -> bool {
-        todo!()
+        !self.is_symbolic()
     }
 
     /// Phase 2 — serialise to the exact bytes of a loose ref file, **including** the trailing
