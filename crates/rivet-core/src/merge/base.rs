@@ -47,6 +47,7 @@ use crate::error::Result;
 use crate::hash::ObjectId;
 use crate::odb::Odb;
 use crate::error::Error;
+use crate::object::ObjectKind;
 
 /// Phase 9 — how many commits the base walk may visit before giving up.
 ///
@@ -165,5 +166,52 @@ pub fn merge_base(odb: &Odb, ours: ObjectId, theirs: ObjectId) -> Result<MergeBa
 ///
 /// As [`merge_base`].
 pub fn merge_bases(odb: &Odb, ours: ObjectId, theirs: ObjectId) -> Result<Vec<ObjectId>> {
-    todo!()
+    let mut bases = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![(ours, theirs)];
+    let mut steps = 0usize;
+    while let Some((a, b)) = stack.pop() {
+        if a == b {
+            if seen.insert(a) {
+                bases.push(a);
+            }
+            continue;
+        }
+        steps += 1;
+        if steps > 1000 {
+            break;
+        }
+        let (kind_a, _) = odb.read_header(&a)?;
+        let (kind_b, _) = odb.read_header(&b)?;
+        let a_parents = if kind_a == ObjectKind::Commit {
+            match odb.read_typed(&a, ObjectKind::Commit) {
+                Ok(obj) => obj.data().to_vec(),
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        let b_parents = if kind_b == ObjectKind::Commit {
+            match odb.read_typed(&b, ObjectKind::Commit) {
+                Ok(obj) => obj.data().to_vec(),
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        let a_parent = a_parents.first().map(|_| a);
+        let b_parent = b_parents.first().map(|_| b);
+        if let Some(ap) = a_parent {
+            stack.push((ap, b));
+        }
+        if let Some(bp) = b_parent {
+            stack.push((a, bp));
+        }
+    }
+    bases.sort();
+    bases.dedup();
+    if bases.is_empty() {
+        return Err(Error::NoMergeBase { ours, theirs });
+    }
+    Ok(bases)
 }
