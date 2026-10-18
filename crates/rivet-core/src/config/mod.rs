@@ -746,7 +746,17 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn is_safe_directory(&self, path: &BStr) -> Result<bool> {
-        todo!()
+        let value = config_env_override("safe.directory");
+        match value {
+            Some(v) => {
+                if v == b"*" {
+                    Ok(true)
+                } else {
+                    Ok(v == path)
+                }
+            }
+            None => Ok(false),
+        }
     }
 }
 
