@@ -74,6 +74,7 @@ use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::ObjectKind;
 use crate::pack::{BaseProvider, PackEntry, PackFile};
+use crate::error::Error;
 
 /// Phase 10 — the two lengths at the head of a delta payload.
 ///
@@ -203,7 +204,30 @@ pub fn parse_delta_header(delta: &[u8]) -> Result<DeltaHeader> {
 /// [`crate::error::Error::CorruptPack`] if the varint is truncated, overflows, or decodes to a
 /// distance that does not land on an offset strictly before `offset`.
 pub fn decode_ofs_distance(data: &[u8], at: usize, offset: u64) -> Result<u64> {
-    todo!()
+    let mut pos = at;
+    let mut value: u64 = 0;
+    let mut shift: u32 = 0;
+    loop {
+        if pos >= data.len() {
+            return Err(Error::CorruptPack { reason: "truncated OFS_DELTA distance".into() });
+        }
+        let byte = data[pos];
+        pos += 1;
+        let group = (byte & 0x7f) as u64;
+        let addend = ((group + 1) << shift).checked_sub(1).ok_or_else(|| Error::CorruptPack { reason: "OFS_DELTA distance overflow".into() })?;
+        value = value.checked_add(addend).ok_or_else(|| Error::CorruptPack { reason: "OFS_DELTA distance overflow".into() })?;
+        if byte & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+        if shift > 63 {
+            return Err(Error::CorruptPack { reason: "OFS_DELTA distance overflow".into() });
+        }
+    }
+    if value == 0 || value > offset {
+        return Err(Error::CorruptPack { reason: "OFS_DELTA distance out of range".into() });
+    }
+    Ok(value)
 }
 
 /// Phase 10 — resolve a deltified entry to its reconstructed object.
