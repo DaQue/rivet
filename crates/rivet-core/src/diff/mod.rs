@@ -150,7 +150,12 @@ impl DiffOptions {
 impl Default for DiffOptions {
     /// Phase 8 — the defaults of [`DiffOptions::new`].
     fn default() -> Self {
-        todo!()
+        Self {
+            algorithm: DiffAlgorithm::Myers,
+            pathspec: BString::default(),
+            context: 3,
+            detect_binary: true,
+        }
     }
 }
 
