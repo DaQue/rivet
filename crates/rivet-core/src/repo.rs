@@ -570,7 +570,7 @@ impl Repository {
 
     /// Phase 4 — the ref store, mutably.
     pub fn refs_mut(&mut self) -> &mut RefStore {
-        todo!()
+        &mut self.refs
     }
 
     /// Phase 4 — the index.
