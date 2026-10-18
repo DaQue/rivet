@@ -327,7 +327,15 @@ pub struct DiffStat {
 /// * **A gitlink whose commit moved is `M`**, and a caller that wanted to distinguish it has to
 ///   look at the [`crate::diff::FileDiff`]'s mode, not at this letter.
 pub const fn change_letter(is_new: bool, is_deleted: bool, is_type_change: bool) -> char {
-    todo!()
+    if is_new {
+        'A'
+    } else if is_deleted {
+        'D'
+    } else if is_type_change {
+        'T'
+    } else {
+        'M'
+    }
 }
 
 /// Phase 8 — write the unified diff of a whole [`crate::diff::TreeDiff`].
