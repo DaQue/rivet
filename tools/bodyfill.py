@@ -212,6 +212,82 @@ def imported_api(text):
     return "\n".join(out)[:5500]
 
 
+def _compact_enum(block):
+    """Enum as one line per variant: `Name { field: Type, ... }` - fits any size."""
+    lines = block.split("\n")
+    out = []
+    i = 0
+    while i < len(lines):
+        m = re.match(r"^\s{4}([A-Z]\w*)\s*([{(]?)\s*$", lines[i])
+        if not m:
+            m = re.match(r"^\s{4}([A-Z]\w*)\s*([{(])(.*)$", lines[i])
+        if not m:
+            i += 1
+            continue
+        name, opener = m.group(1), m.group(2)
+        fields = []
+        if opener:
+            close = "}" if opener == "{" else ")"
+            j = i + 1
+            depth = 1
+            rest = m.group(3) if m.lastindex and m.lastindex >= 3 else ""
+            if rest:
+                fields.append(rest.strip())
+            while j < len(lines):
+                ln = lines[j].strip()
+                depth += ln.count("{") + ln.count("(") - ln.count("}") - ln.count(")")
+                if depth <= 0:
+                    break
+                if ln and not ln.startswith("#") and ln != close:
+                    fields.append(ln.rstrip(","))
+                j += 1
+            out.append(f"{name} {opener} " + ", ".join(fields) + f" {close}")
+            i = j + 1
+        else:
+            out.append(name)
+            i += 1
+    return "enum " + " | ".join(out)
+
+
+def imported_types(text):
+    """Full definitions of types imported by name - enum variants carry fields."""
+    out = []
+    seen = set()
+    for m in re.finditer(r"use\s+crate::([A-Za-z0-9_:]+)::\{([^}]*)\}", text):
+        mod = m.group(1)
+        for n in m.group(2).split(","):
+            n = n.strip().split(" as ")[0].strip()
+            if not n or not n[0].isupper() or n in seen:
+                continue
+            seen.add(n)
+            base = os.path.join(REPO, "crates/rivet-core/src", mod.replace("::", "/"))
+            p = base + ".rs"
+            if not os.path.isfile(p):
+                p = os.path.join(base, "mod.rs")
+            if not os.path.isfile(p):
+                continue
+            src = open(p, encoding="utf-8").read()
+            lines = src.split("\n")
+            offs = line_offsets(lines)
+            for i, ln in enumerate(lines):
+                if not re.match(
+                    r"^\s*pub\s+(?:struct|enum)\s+" + re.escape(n) + r"\b", ln
+                ):
+                    continue
+                is_enum = re.match(r"^\s*pub\s+enum\s", ln) is not None
+                k = src.find("{", offs[i])
+                close = scan_body(src, k) if k >= 0 else -1
+                if close < 0:
+                    break
+                end = src.count("\n", 0, close)
+                block = _strip_comments("\n".join(lines[i : end + 1]))
+                out.append(_compact_enum(block) if is_enum else block)
+                break
+        if len("\n".join(out)) > 2600:
+            break
+    return "\n".join(out)[:2600]
+
+
 def api_sheet(text):
     """Real field names and callable signatures, so bodies stop inventing APIs."""
     out = _def_blocks(text)
@@ -261,6 +337,8 @@ def build_prompt(text, lines, stub):
         "these and invent nothing that is not listed):\n" + api_sheet(text),
         "IMPORTED API (helpers that already exist and how to call them; use these,"
         " do not invent signatures): " + imported_api(text),
+        "IMPORTED TYPE DEFINITIONS (exact variants and fields; construct them exactly):\n"
+        + imported_types(text),
         "WORKED EXAMPLE (exactly how this crate hashes raw bytes):\n"
         "    let mut hasher = format.hasher();\n"
         "    hasher.update(&buf);\n"
@@ -281,14 +359,14 @@ def build_prompt(text, lines, stub):
 
 
 # ---------------------------------------------------------------- model + tools
-def ask(messages, timeout=420):
+def ask(messages, timeout=420, temp=0.15):
     payload = {
         "model": MODEL,
         "stream": False,
         "think": False,
         "messages": messages,
         "options": {
-            "temperature": 0.15,
+            "temperature": temp,
             "top_p": 0.9,
             "num_predict": 1400,
             "num_ctx": 16384,
@@ -483,7 +561,7 @@ def main():
         ok = False
         for attempt in (1, 2):
             try:
-                body, pt, et = ask(msgs)
+                body, pt, et = ask(msgs, temp=0.15 if attempt == 1 else 0.45)
             except Exception as e:
                 log(f"  attempt{attempt} model error: {e}")
                 time.sleep(5)
