@@ -286,7 +286,7 @@ impl PackedRefs {
     /// The order is the file's, so it is byte-sorted only when the `sorted` trait is present. Use
     /// [`PackedRefs::sort`] first, or [`PackedRefs::get`], if the order matters.
     pub fn iter(&self) -> std::slice::Iter<'_, PackedRef> {
-        todo!()
+        self.entries.iter()
     }
 
     /// Phase 2 — the ref names, in file order.
