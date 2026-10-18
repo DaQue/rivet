@@ -226,7 +226,24 @@ impl<'a> CapabilitySet<'a> {
     /// [`crate::error::Error::Protocol`] for an entry that is not a well-formed capability, per
     /// [`Capability::parse`].
     pub fn parse(raw: &'a [u8]) -> Result<Self> {
-        todo!()
+        let mut entries = Vec::new();
+        let mut i = 0usize;
+        while i < raw.len() {
+            let start = i;
+            while i < raw.len() && raw[i] != b' ' {
+                i += 1;
+            }
+            let token = &raw[start..i];
+            if token.is_empty() {
+                return Err(Error::Protocol(String::from("empty capability field")));
+            }
+            let cap = crate::remote::Capability::parse(token)?;
+            entries.push(cap);
+            if i < raw.len() {
+                i += 1;
+            }
+        }
+        Ok(Self { entries, raw })
     }
 
     /// Phase 11 — add a capability, as read from its own v2 packet.
