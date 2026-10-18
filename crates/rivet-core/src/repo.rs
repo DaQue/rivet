@@ -286,7 +286,8 @@ impl CommitOptions {
 
     /// Phase 4 — allow a commit that changes nothing.
     pub fn allow_empty(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.allow_empty = on;
+        self
     }
 
     /// Phase 4 — amend `HEAD` instead of adding a child.
