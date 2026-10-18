@@ -663,8 +663,8 @@ def run_file(rel, args, log, prog, deadline, counter):
             with open(prog, "a") as f:
                 f.write(f"{datetime.now():%H:%M:%S} fail fn={stub['name']} file={rel} done={done}\n")
             if consecutive >= 8:
-                log("  STOP 8 consecutive failures - model is not producing usable bodies")
-                return "systemic", done
+                log("  8 consecutive failures in this file - skipping the rest of it")
+                return "slow", done
             continue
 
         consecutive = 0
