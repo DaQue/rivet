@@ -142,7 +142,7 @@ impl RefTarget {
 
     /// Phase 2 — whether this target redirects to another ref.
     pub const fn is_symbolic(&self) -> bool {
-        todo!()
+        matches!(self, RefTarget::Symbolic(_))
     }
 
     /// Phase 2 — whether this target names an object id.
