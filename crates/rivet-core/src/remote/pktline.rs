@@ -473,7 +473,11 @@ impl<R: Read> SidebandReader<R> {
     /// assumed the capability took effect strips a byte from each one and reports a corrupt pack.
     /// The caller reads the advertisement or the v2 capability list and passes what it saw.
     pub fn new(inner: R, enabled: bool) -> Self {
-        todo!()
+        Self {
+            inner,
+            enabled,
+            error_seen: false,
+        }
     }
 
     /// Phase 11 — read the next packet, or `Ok(None)` when the stream ends.
