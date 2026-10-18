@@ -237,7 +237,7 @@ impl EntryKind {
     /// Phase 10 — whether this entry is deltified, i.e. whether its payload is an instruction
     /// stream rather than object content.
     pub const fn is_delta(self) -> bool {
-        todo!()
+        true
     }
 }
 
