@@ -124,7 +124,7 @@ impl PackedObjectStore {
 
     /// Phase 10 — the repository's id width, as it was supplied at open.
     pub fn format(&self) -> ObjectFormat {
-        todo!()
+        self.format
     }
 
     /// Phase 10 — the pack's checksum, which is also its name: `pack-<hex>.pack`.
