@@ -158,7 +158,13 @@ impl RemoteScheme {
     /// and reports `"ssh"`, which is the honest answer. This is human-facing text: nothing parses it
     /// back.
     pub const fn as_str(self) -> &'static str {
-        todo!()
+        match self {
+            RemoteScheme::Https => "https",
+            RemoteScheme::Http => "http",
+            RemoteScheme::Ssh => "ssh",
+            RemoteScheme::Git => "git",
+            RemoteScheme::File => "file",
+        }
     }
 }
 
