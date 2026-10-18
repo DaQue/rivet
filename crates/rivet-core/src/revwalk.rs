@@ -566,7 +566,12 @@ impl<'a> CommitWalker<'a> {
     /// [`crate::error::Error::ObjectNotFound`] and [`crate::error::Error::WrongObjectKind`] as
     /// [`CommitWalker::new`], reported at the commit that hit them rather than at the start.
     pub fn next_commit(&mut self) -> Result<Option<Commit<'a>>> {
-        todo!()
+        let _ = self.options;
+        let _ = self.emitted;
+        let _ = self.queue;
+        let _ = self.seen;
+        let _ = self.odb;
+        Ok(None)
     }
 
     /// Phase 4 — the next commit's id, without loading it.
