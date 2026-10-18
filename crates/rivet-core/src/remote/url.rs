@@ -377,5 +377,16 @@ pub fn redact_url(input: &BStr) -> BString {
 /// span. A bare `user@` — no colon — yields `None`, because there is nothing secret in it; deciding
 /// the user is a secret is not this function's judgement to make.
 pub fn credential_span(input: &BStr) -> Option<std::ops::Range<usize>> {
-    todo!()
+    let scheme = input.iter().position(|b| *b == b':').and_then(|i| input.get(i..i + 3).map(|s| s == b"://"));
+    let scheme = scheme?;
+    let at = input.iter().position(|b| *b == b'@');
+    let at = at?;
+    let slash = input.iter().position(|b| *b == b'/');
+    let slash = slash.unwrap_or(input.len());
+    if at >= slash {
+        return None;
+    }
+    let colon = input[..at].iter().rposition(|b| *b == b':');
+    let colon = colon?;
+    Some(colon + 1..at)
 }
