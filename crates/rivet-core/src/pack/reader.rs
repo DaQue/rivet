@@ -42,6 +42,7 @@ use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{Object, ObjectKind};
 use crate::pack::{BaseProvider, PackEntry, PackIndex};
+use crate::error::Error;
 
 /// Phase 10 — one packfile, opened over a borrowed buffer.
 ///
@@ -109,7 +110,25 @@ impl<'a> PackFile<'a> {
         index: Option<PackIndex<'a>>,
         format: ObjectFormat,
     ) -> Result<Self> {
-        todo!()
+        let min_len = 12 + format.len();
+        if data.len() < min_len {
+            return Err(Error::CorruptPack { reason: "buffer shorter than header and trailer".to_string() });
+        }
+        if &data[0..4] != b"PACK" {
+            return Err(Error::CorruptPack { reason: "bad PACK magic".to_string() });
+        }
+        let version = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+        if version != 2 && version != 3 {
+            return Err(Error::UnsupportedPackVersion { version });
+        }
+        let trailer = &data[data.len() - format.len()..];
+        if let Some(idx) = &index {
+            let idx_checksum = idx.pack_checksum();
+            if idx_checksum.as_bytes() != trailer {
+                return Err(Error::CorruptPack { reason: "trailer does not match index checksum".to_string() });
+            }
+        }
+        Ok(Self { data, index, format, version })
     }
 
     /// Phase 10 — open a pack from `.pack` and `.idx` files on disk.
