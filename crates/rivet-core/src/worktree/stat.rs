@@ -228,7 +228,7 @@ impl StatCache {
     /// `None` means "not looked up yet", which is **not** "the file is absent". A caller that
     /// wants the second answer calls [`StatCache::stat`], which fills the cache.
     pub fn get(&self, path: &BStr) -> Option<&StatData> {
-        todo!()
+        self.entries.get(path)
     }
 
     /// Phase 4 — record stat data for a path, replacing any earlier value.
