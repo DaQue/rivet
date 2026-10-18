@@ -197,7 +197,7 @@ impl Worktree {
 
     /// Phase 4 — the repository's object format.
     pub fn format(&self) -> ObjectFormat {
-        todo!()
+        self.format
     }
 
     /// Phase 4 — whether the executable bit is meaningful on this filesystem.
