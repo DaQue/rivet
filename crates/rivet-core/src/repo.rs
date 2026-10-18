@@ -274,7 +274,8 @@ impl CommitOptions {
 
     /// Phase 4 — record an author distinct from the committer.
     pub fn author(&mut self, author: Signature) -> &mut Self {
-        todo!()
+        self.author = Some(author);
+        self
     }
 
     /// Phase 4 — set the parent list explicitly.
