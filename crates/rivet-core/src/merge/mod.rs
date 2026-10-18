@@ -356,7 +356,11 @@ impl MergeOptions {
 impl Default for MergeOptions {
     /// Phase 9 — the defaults of [`MergeOptions::new`].
     fn default() -> Self {
-        todo!()
+        Self {
+            conflict_style: ConflictStyle::default(),
+            no_ff: false,
+            ..Default::default()
+        }
     }
 }
 
