@@ -262,7 +262,14 @@ impl CommitOptions {
     /// Phase 4 — the options a plain `rivet commit -m <msg>` uses: ambient identity, the message
     /// given, no explicit parents (the caller supplies them), no empty commits, no amend.
     pub fn new(message: &BStr) -> Self {
-        todo!()
+        Self {
+            message: message.to_owned(),
+            author: None,
+            committer: None,
+            parents: Vec::new(),
+            allow_empty: false,
+            amend: false,
+        }
     }
 
     /// Phase 4 — record an author distinct from the committer.
