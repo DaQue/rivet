@@ -437,7 +437,14 @@ impl<'a> PackFile<'a> {
     /// [`crate::error::Error::CorruptPack`] if the recomputed checksum differs from the trailer,
     /// and [`crate::error::Error::Io`] from the hasher.
     pub fn verify_checksum(&self) -> Result<()> {
-        todo!()
+        let mut hasher = self.format.hasher();
+        hasher.update(&self.data);
+        let computed = hasher.finish()?;
+        let expected = self.checksum();
+        if computed != expected {
+            return Err(Error::CorruptPack { reason: "checksum mismatch".to_string() });
+        }
+        Ok(())
     }
 }
 
