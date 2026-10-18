@@ -712,7 +712,8 @@ impl IgnoreStack {
     ///
     /// [`crate::error::Error::InvalidPath`] as [`IgnoreStack::check`].
     pub fn should_descend(&self, dir: &BStr) -> Result<bool> {
-        todo!()
+        let decision = self.check(dir, PathKind::Directory)?;
+        Ok(!decision.is_ignored())
     }
 
     /// Phase 5 — every frame in the stack, lowest priority first.
