@@ -99,7 +99,8 @@ impl AddOptions {
 
     /// Phase 3 — set the force flag, which overrides ignore rules.
     pub fn force(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.force = on;
+        self
     }
 
     /// Phase 3 — stage only paths already in the index.
