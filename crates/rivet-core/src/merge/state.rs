@@ -251,7 +251,7 @@ pub fn clear_merge_state(git_dir: &Path) -> Result<()> {
 /// invocation, and it must not be replaced by a parse for that reason. A caller that needs the
 /// state calls [`read_merge_state`] and pays for it once.
 pub fn merge_in_progress(git_dir: &Path) -> bool {
-    todo!()
+    git_dir.join("MERGE_HEAD").exists()
 }
 
 /// Phase 9 — record where `HEAD` was, for a later `reset` or `--abort`.
