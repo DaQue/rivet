@@ -204,7 +204,10 @@ pub fn store_pack<R: Read>(
     format: ObjectFormat,
     progress: Option<&mut dyn FnMut(&[u8])>,
 ) -> Result<IndexPackResult> {
-    todo!()
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf).map_err(crate::error::Error::Io)?;
+    let result = store_pack(&mut buf.as_slice(), options, odb, format, progress)?;
+    Ok(result)
 }
 
 /// Phase 11 — read a sideband-framed exchange that carries no pack, as a push's status does.
