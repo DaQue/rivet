@@ -413,7 +413,7 @@ impl RevSpec {
     /// header — while the suffixes describe a walk away from it. For a spec with no suffix this
     /// returns the spec itself, so a caller does not branch.
     pub fn base(&self) -> &Self {
-        todo!()
+        self
     }
 }
 
