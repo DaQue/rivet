@@ -402,7 +402,9 @@ impl Transport for SshTransport {
     /// pipe failure, [`crate::error::Error::ObjectFormatMismatch`], and
     /// [`crate::error::Error::Protocol`] for an advertisement that does not parse.
     fn connect(&mut self, url: &RemoteUrl, format: ObjectFormat) -> Result<RefAdvertisement> {
-        todo!()
+        self.spawn(Service::ReceivePack)?;
+        let advertisement = self.read_advertisement(format)?;
+        Ok(advertisement)
     }
 
     /// Phase 11 — the capabilities from the last [`Transport::connect`].
