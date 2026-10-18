@@ -275,7 +275,7 @@ impl CheckoutPlan {
 
     /// Phase 4 — the paths whose content the plan would write.
     pub fn written_paths(&self) -> Vec<&bstr::BStr> {
-        todo!()
+        self.entries.iter().filter(|e| matches!(e.mode, Some(EntryMode::Blob) | Some(EntryMode::BlobExecutable))).map(|e| e.path.as_ref()).collect()
     }
 
     /// Phase 4 — the paths the plan would delete.
