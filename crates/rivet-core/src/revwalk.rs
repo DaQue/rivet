@@ -642,6 +642,6 @@ impl<'a> CommitWalker<'a> {
     /// compares against, so a caller using it for anything else is reading an implementation
     /// detail.
     pub fn emitted(&self) -> usize {
-        todo!()
+        self.emitted
     }
 }
