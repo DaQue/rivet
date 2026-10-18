@@ -35,7 +35,9 @@ FN_RE = re.compile(
     r"^(\s*)(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:unsafe\s+)?"
     r"(?:extern\s+\"[^\"]*\"\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"
 )
-IMPL_RE = re.compile(r"^impl(?:<[^>]*>)?\s+([A-Za-z_][A-Za-z0-9_]*)")
+IMPL_RE = re.compile(
+    r"^impl(?:<[^>]*>)?\s+(?:(?:[A-Za-z_][\w:<>,' ]*?)\s+for\s+)?([A-Za-z_]\w*)"
+)
 
 
 # ---------------------------------------------------------------- file scanning
@@ -151,14 +153,15 @@ def _strip_comments(block):
     return "\n".join(l for l in block.split("\n") if not l.strip().startswith("//"))
 
 
-def _def_blocks(text):
-    """Every `pub struct/enum NAME {...}` we keep, comments stripped."""
+def _def_blocks(text, keep=None):
+    """Every `struct/enum NAME {...}` in `keep`, comments stripped."""
+    keep = KEEP_TYPES if keep is None else keep
     lines = text.split("\n")
     offs = line_offsets(lines)
     out = []
     for i, ln in enumerate(lines):
-        m = re.match(r"^pub\s+(?:struct|enum)\s+([A-Za-z_]\w*)", ln)
-        if not m or m.group(1) not in KEEP_TYPES:
+        m = re.match(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum)\s+([A-Za-z_]\w*)", ln)
+        if not m or m.group(1) not in keep:
             continue
         k = text.find("{", offs[i])
         close = scan_body(text, k) if k >= 0 else -1
@@ -349,30 +352,62 @@ def error_index():
     return txt
 
 
-def api_sheet(text):
-    """Real field names and callable signatures, so bodies stop inventing APIs."""
-    out = _def_blocks(text)
+def _local_types(text):
+    """Every type this file defines, plus the impl-targets that appear in it."""
+    names = set()
+    for ln in text.split("\n"):
+        m = re.match(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|type|trait)\s+([A-Za-z_]\w*)", ln)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+def api_sheet(text, local_only=False):
+    """Real field names and callable signatures, so bodies stop inventing APIs.
+
+    Ordering matters: the file's own types and the methods that act on them are
+    what a body reaches for first, so they must survive the 7k budget. Everything
+    else is filler that gets dropped whole once the budget is spent.
+    """
+    local = _local_types(text)
+    lines = text.split("\n")
+
+    def methods_of(src, wanted):
+        out, cur = [], None
+        for i, ln in enumerate(src.split("\n")):
+            mi = IMPL_RE.match(ln)
+            if mi:
+                cur = mi.group(1)
+                continue
+            if cur in wanted and re.match(
+                r"^\s{0,8}(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s", ln
+            ):
+                out.append(f"{cur}::{_sig(src.split(chr(10)), i)}")
+        return out
+
+    own_defs = _def_blocks(text, keep=local)
+    own_methods = methods_of(text, local)
+    extra = []
     for rel in EXTRA_FILES:
         p = os.path.join(REPO, rel)
         if os.path.isfile(p):
-            out.extend(_def_blocks(open(p, encoding="utf-8").read()))
-    lines = text.split("\n")
-    cur = None
-    for i, ln in enumerate(lines):
-        mi = IMPL_RE.match(ln)
-        if mi:
-            cur = mi.group(1)
-            continue
-        if cur in KEEP_TYPES and re.match(
-            r"^\s{0,8}(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s", ln
-        ):
-            out.append(f"{cur}::{_sig(lines, i)}")
-    for i, ln in enumerate(lines):
-        if re.match(r"^pub(?:\([^)]*\))?\s+(?:const\s+|unsafe\s+)?fn\s", ln):
-            s = _sig(lines, i)
-            if s not in out:
-                out.append(s)
-    return "\n".join(out)[:7000]
+            esrc = open(p, encoding="utf-8").read()
+            extra.extend(_def_blocks(esrc, keep=KEEP_TYPES))
+            extra.extend(methods_of(esrc, KEEP_TYPES))
+    kept_defs = _def_blocks(text, keep=KEEP_TYPES - local)
+    free = []
+    if not local_only:
+        for i, ln in enumerate(lines):
+            if re.match(r"^pub(?:\([^)]*\))?\s+(?:const\s+|unsafe\s+)?fn\s", ln):
+                free.append(_sig(lines, i))
+    out = own_defs + own_methods + extra + kept_defs + free
+    kept, used = [], 0
+    for blk in out:
+        if used + len(blk) + 1 > 7000:
+            break
+        kept.append(blk)
+        used += len(blk) + 1
+    return "\n".join(kept)
 
 
 def imports(text):
