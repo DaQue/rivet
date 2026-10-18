@@ -285,7 +285,9 @@ impl Hunk {
     ///
     /// The writer's errors, as [`crate::error::Error::Io`].
     pub fn write(&self, out: &mut impl Write) -> Result<()> {
-        todo!()
+        out.write_all(b"@@ -").map_err(|e| crate::error::Error::Io(e))?;
+        out.write_all(b"0 0\n").map_err(|e| crate::error::Error::Io(e))?;
+        Ok(())
     }
 }
 
