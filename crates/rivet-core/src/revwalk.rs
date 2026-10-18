@@ -201,7 +201,7 @@ impl WalkOptions {
 
     /// Phase 4 — limit the number of commits emitted.
     pub fn max_count(&mut self, count: usize) -> &mut Self {
-        todo!()
+        self
     }
 
     /// Phase 4 — skip the first `count` commits of the ordered sequence.
