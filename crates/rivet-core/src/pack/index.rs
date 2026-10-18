@@ -322,7 +322,7 @@ impl<'a> PackIndex<'a> {
     /// underlying buffer is dropped. Each item decodes its id on the fly; there is no cached copy
     /// of the table anywhere, so this is O(1) memory regardless of how many objects the pack has.
     pub fn iter(&self) -> PackIndexIter<'_> {
-        todo!()
+        PackIndexIter { index: self.clone(), next: 0 }
     }
 
     /// Phase 10 — serialise back to `.idx` v2 bytes.
