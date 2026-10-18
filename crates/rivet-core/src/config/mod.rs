@@ -271,7 +271,12 @@ impl Config {
     /// header, or a key/value pair; [`crate::error::Error::InvalidUtf8`] for a section or key name
     /// that is not ASCII.
     pub fn load(path: &Path) -> Result<Self> {
-        todo!()
+        let data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::new()),
+            Err(e) => return Err(Error::IoAtPath { path: BString::from(path.as_os_str().as_encoded_bytes()), source: e }),
+        };
+        Self::parse(&data)
     }
 
     /// Phase 2 — parse config text.
