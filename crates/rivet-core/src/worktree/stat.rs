@@ -257,7 +257,7 @@ impl StatCache {
 
     /// Phase 4 — whether nothing is cached.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.entries.is_empty()
     }
 
     /// Phase 4 — `lstat` a path, using the cache when it can.
