@@ -454,7 +454,27 @@ pub(crate) fn inflate_at(data: &[u8], at: usize) -> Result<(Vec<u8>, usize)> {
 /// [`crate::error::Error::CorruptPack`] only as a wrapper for a compressor failure; with a valid
 /// backend this is not reachable.
 pub(crate) fn deflate(data: &[u8]) -> Result<Vec<u8>> {
-    todo!()
+    let mut out = Vec::with_capacity(data.len() + 6);
+    out.extend_from_slice(&[0x78, 0x9c]);
+    let mut w = out.len();
+    let mut i = 0;
+    while i < data.len() {
+        let chunk = &data[i..];
+        let n = chunk.len().min(65535);
+        let block = &chunk[..n];
+        let btype = 0u8;
+        let len = n as u32;
+        let nlen = !len;
+        out.push(btype);
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&nlen.to_le_bytes());
+        out.extend_from_slice(block);
+        i += n;
+    }
+    out.push(0x00);
+    let crc = crc32(data);
+    out.extend_from_slice(&crc.to_be_bytes());
+    Ok(out)
 }
 
 /// Phase 10 — CRC-32 of a pack entry's on-disk bytes, as the `.idx` v2 records it.
