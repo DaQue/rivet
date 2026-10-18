@@ -110,7 +110,7 @@ impl MergeBase {
     ///   [`crate::merge::MergeOptions::no_ff`].) The predicate is "possible", the decision is the
     ///   caller's.
     pub fn allows_fast_forward(&self, ours: ObjectId) -> bool {
-        todo!()
+        self.common.len() == 1 && self.common[0] == ours
     }
 }
 
