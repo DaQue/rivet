@@ -132,7 +132,7 @@ impl Edit {
     /// `false`: it is an artefact a diff implementation may emit at the ends of an alignment, and
     /// a renderer that printed it would produce an empty hunk.
     pub fn is_change(&self) -> bool {
-        todo!()
+        self.old_len != 0 || self.new_len != 0
     }
 
     /// Phase 8 — the number of old lines the run covers, as an `usize`.
