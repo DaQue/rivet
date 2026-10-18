@@ -263,7 +263,7 @@ impl RefName {
     /// currently symbolic. A detached `HEAD` still has this name, which is why callers that want
     /// "the current branch" must use [`crate::refs::RefStore::head_branch`] instead.
     pub fn head() -> Self {
-        todo!()
+        Self::from_bytes(b"HEAD").expect("HEAD is a valid ref name")
     }
 
     /// Phase 2 — the name as a byte slice.
