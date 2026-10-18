@@ -200,7 +200,7 @@ impl RefName {
     ///
     /// As [`RefName::parse`].
     pub fn from_bstring(name: BString) -> Result<Self> {
-        todo!()
+        Self::from_bytes(&name)
     }
 
     /// Phase 2 — build the name of a local branch from its short form.
