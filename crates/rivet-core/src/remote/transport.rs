@@ -1095,7 +1095,30 @@ pub fn wants_request(
     capabilities: &CapabilitySet<'_>,
     format: ObjectFormat,
 ) -> Result<Vec<u8>> {
-    todo!()
+    if wants.is_empty() {
+        return Err(Error::Protocol("empty want list".to_string()));
+    }
+    let mut out = Vec::new();
+    for (i, want) in wants.iter().enumerate() {
+        if want.format() != format {
+            return Err(Error::Protocol("want format mismatch".to_string()));
+        }
+        out.extend_from_slice(b"want ");
+        out.extend_from_slice(want.as_bytes());
+        if i == 0 {
+            let mut caps = Vec::new();
+            caps.push(b' ');
+            if let Some(fmt) = capabilities.object_format().ok() {
+                caps.extend_from_slice(b"object-format=");
+                caps.extend_from_slice(fmt.as_str().as_bytes());
+            }
+            caps.extend_from_slice(b"agent=");
+            out.extend_from_slice(&caps);
+        }
+        out.push(b'\n');
+    }
+    out.push(0u8);
+    Ok(out)
 }
 
 /// Phase 11 — build one `have` round of a v0 negotiation.
