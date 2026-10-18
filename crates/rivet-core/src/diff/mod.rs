@@ -171,7 +171,7 @@ impl Default for DiffOptions {
 ///   not implement attributes, so this is the whole rule here — worth knowing before a user's
 ///   `.gitattributes` appears to be ignored.
 pub fn is_binary(data: &[u8]) -> bool {
-    todo!()
+    data.iter().take(8000).any(|&b| b == 0)
 }
 
 /// Phase 8 — the `-U<n>` context size Git uses when nothing is specified.

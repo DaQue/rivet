@@ -358,6 +358,9 @@ def build_prompt(text, lines, stub):
         " Result but the signature does not, use .expect(\"...\") on it.",
         "RETURN TYPE RULE: if the signature above does not return Result, the body"
         " must not use the ? operator.",
+        "KEEP IT SHORT: at most 35 lines. Prefer the helpers listed above; do not"
+        " invent struct fields or methods that are not shown. A short body that"
+        " compiles is far better than a long one that does not.",
         "IMPORTS IN SCOPE:\n" + imports(text),
         "FUNCTION SIGNATURE (already written, do not repeat it):\n" + sig,
         "DOCUMENTED CONTRACT (this is the specification):\n" + doc,
@@ -377,7 +380,7 @@ def ask(messages, timeout=420, temp=0.15):
         "options": {
             "temperature": temp,
             "top_p": 0.9,
-            "num_predict": 1400,
+            "num_predict": 2400,
             "num_ctx": 16384,
         },
     }
@@ -416,6 +419,11 @@ def clean_body(resp, indent):
             s = s.rstrip()[:-1].rstrip()
     s = textwrap.dedent(s).strip("\n")
     if not s or "todo!()" in s:
+        return ""
+    # Truncation guard: an unterminated body means num_predict ran out mid-way.
+    # Reject so the caller retries instead of splicing a broken function.
+    bal = s.count("{") + s.count("(") + s.count("[") - s.count("}") - s.count(")") - s.count("]")
+    if bal != 0:
         return ""
     # Degenerate repetition guard: small quants sometimes lock onto one line and
     # emit it until num_predict runs out, which yields an unterminated body.
