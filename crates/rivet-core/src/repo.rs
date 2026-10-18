@@ -619,7 +619,7 @@ impl Repository {
 
     /// Phase 4 — the configuration.
     pub fn config(&self) -> &Config {
-        todo!()
+        &self.config
     }
 
     /// Phase 4 — the configuration, mutably, for a caller that writes a setting.
