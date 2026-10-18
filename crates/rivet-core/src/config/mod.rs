@@ -599,7 +599,17 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn add(&mut self, key: &BStr, value: &[u8]) -> Result<()> {
-        todo!()
+        let (section, subsection, key) = ConfigEntry::parse_key(key)?;
+        let value = BString::from(value);
+        let mut entries = self.entries.clone();
+        let last_idx = entries.iter().rposition(|e| e.flat_key() == key);
+        let pos = match last_idx {
+            Some(i) => i + 1,
+            None => entries.len(),
+        };
+        entries.insert(pos, ConfigEntry::new(section, subsection, key, value));
+        self.entries = entries;
+        Ok(())
     }
 
     /// Phase 2 — remove every value of a key.
