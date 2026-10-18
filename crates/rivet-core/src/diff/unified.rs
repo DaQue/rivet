@@ -485,7 +485,14 @@ pub fn format_stat(diff: &crate::diff::TreeDiff, out: &mut impl Write) -> Result
 ///
 /// The writer's errors, as [`crate::error::Error::Io`].
 pub fn format_name_status(diff: &crate::diff::TreeDiff, out: &mut impl Write) -> Result<()> {
-    todo!()
+    for file in &diff.files {
+        let letter = change_letter(file.is_new, file.is_deleted, file.is_type_change());
+        out.write_all(letter.to_string().as_bytes())?;
+        out.write_all(b"\t")?;
+        out.write_all(&file.path()[..])?;
+        out.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 /// Phase 8 — the identity that distinguishes two blob ids in a patch's `index` line.
