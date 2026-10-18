@@ -189,7 +189,10 @@ impl PktLine {
     /// enum; a caller that is accumulating payloads and only wants to know "is there anything here"
     /// uses this.
     pub fn data(&self) -> &[u8] {
-        todo!()
+        match self {
+            PktLine::Data(data) => data.as_slice(),
+            _ => &[],
+        }
     }
 
     /// Phase 11 — how many bytes this packet occupies on the wire, header included.
