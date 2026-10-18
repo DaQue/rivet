@@ -140,7 +140,7 @@ impl Edit {
     /// Provided so callers do not have to spell `old_len` in the two places it is easy to
     /// transpose with `new_len`.
     pub fn old_end(&self) -> usize {
-        todo!()
+        self.old_len
     }
 
     /// Phase 8 — one past the last new line the run covers.
