@@ -416,7 +416,9 @@ impl<'a> Iterator for PackedRefNames<'a> {
     /// `self.inner.entries.get(self.position)` and advance `self.position`, and must not index
     /// directly — an index past the end would panic on a `packed-refs` that shrank mid-iteration.
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        let entry = self.inner.entries.get(self.position)?;
+        self.position += 1;
+        Some(&entry.name)
     }
 
     /// Phase 2 — how many names are left.
