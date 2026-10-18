@@ -499,7 +499,12 @@ pub fn negotiate(
 /// * **A ref the server advertises with an all-zero id is skipped**, which is how a deletion is
 ///   announced and is not something to want.
 pub fn wants_for_tracking(advertisement: &RefAdvertisement) -> Vec<ObjectId> {
-    todo!()
+    advertisement
+    .refs
+    .iter()
+    .filter(|r| !r.oid.is_zero())
+    .map(|r| r.peeled.unwrap_or(r.oid))
+    .collect()
 }
 
 /// Phase 11 — compute the local refs to offer as `have` lines, newest first.
