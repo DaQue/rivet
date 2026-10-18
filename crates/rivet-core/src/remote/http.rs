@@ -159,7 +159,8 @@ impl HttpTransport {
     ///
     /// As [`HttpTransport::new`].
     pub fn with_timeout(url: RemoteUrl, timeout: std::time::Duration) -> Result<Self> {
-        todo!()
+        let agent = ureq::agent();
+        Ok(Self { url, agent, credentials: None })
     }
 
     /// Phase 11 — supply credentials to send, bypassing the credential chain.
