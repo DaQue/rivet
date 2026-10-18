@@ -580,7 +580,7 @@ impl Config {
     /// exposes the folded section and key names, so a caller rendering it for a user sees the file's
     /// keys lowercased — which is what Git prints too, and is why it is not a bug.
     pub fn entries(&self) -> &[ConfigEntry] {
-        todo!()
+        &self.entries
     }
 
     /// Phase 2 — whether the config has no entries at all.
