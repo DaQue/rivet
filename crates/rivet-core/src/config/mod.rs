@@ -367,7 +367,7 @@ impl Config {
     ///
     /// As [`Config::get`].
     pub fn contains(&self, key: &BStr) -> Result<bool> {
-        todo!()
+        Ok(self.entries.iter().any(|e| e.key == key))
     }
 
     /// Phase 2 — a value parsed as a Git boolean.
