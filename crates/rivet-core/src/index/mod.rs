@@ -1195,7 +1195,7 @@ impl Index {
 
     /// Phase 3 — the index version this was read as.
     pub fn version(&self) -> IndexVersion {
-        todo!()
+        self.version
     }
 
     /// Phase 3 — the entries, in file order.

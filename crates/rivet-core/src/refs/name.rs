@@ -32,6 +32,7 @@
 //!   differs only in case from an existing one; Rivet must do the same rather than let the
 //!   filesystem silently alias them.
 
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -287,27 +288,33 @@ impl RefName {
     /// tag. Nothing here decides between them — this is a display and lookup helper, and code that
     /// turns a short name back into a [`RefName`] must already know which namespace it means.
     pub fn short_name(&self) -> &BStr {
-        todo!()
+        match self.category() {
+            RefCategory::Branch => BStr::new(&self.0[b"refs/heads/".len()..]),
+            RefCategory::Tag => BStr::new(&self.0[b"refs/tags/".len()..]),
+            RefCategory::Remote => BStr::new(&self.0[b"refs/remotes/".len()..]),
+            RefCategory::Note => BStr::new(&self.0[b"refs/notes/".len()..]),
+            RefCategory::Head | RefCategory::Other => BStr::new(&self.0[..]),
+        }
     }
 
     /// Phase 2 — whether this is the literal `HEAD`.
     pub fn is_head(&self) -> bool {
-        todo!()
+        self.0 == b"HEAD"
     }
 
     /// Phase 2 — whether this name is under `refs/heads/`.
     pub fn is_branch(&self) -> bool {
-        todo!()
+        self.category() == RefCategory::Branch
     }
 
     /// Phase 2 — whether this name is under `refs/tags/`.
     pub fn is_tag(&self) -> bool {
-        todo!()
+        self.category() == RefCategory::Tag
     }
 
     /// Phase 2 — whether this name is under `refs/remotes/`.
     pub fn is_remote(&self) -> bool {
-        todo!()
+        self.category() == RefCategory::Remote
     }
 
     /// Phase 2 — whether this is a one-component pseudo-ref like `HEAD` or `MERGE_HEAD`.
@@ -323,7 +330,7 @@ impl RefName {
     /// [`RefCategory::Head`] is a subset of this: every `Head` is a pseudo-ref, but `MERGE_HEAD`
     /// is a pseudo-ref and is not `Head`.
     pub fn is_pseudo_ref(&self) -> bool {
-        todo!()
+        !self.0.contains(&b'/')
     }
 
     /// Phase 2 — where this ref's file lives.
@@ -344,7 +351,11 @@ impl RefName {
     ///   non-UTF-8 bytes cannot be represented and the conversion is the one place the byte-exact
     ///   promise breaks. Git itself requires ref names to be ASCII on such filesystems.
     pub fn file_path(&self, git_dir: &Path) -> PathBuf {
-        todo!()
+        #[cfg(unix)]
+        let os_name = <OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&self.0[..]);
+        #[cfg(not(unix))]
+        let os_name = OsStr::new(&String::from_utf8_lossy(&self.0[..]));
+        git_dir.join(os_name)
     }
 
     /// Phase 2 — where this ref's reflog lives.
@@ -361,7 +372,11 @@ impl RefName {
     ///   Whether one exists is a policy question (`core.logAllRefUpdates`) decided by the writer,
     ///   so this returns a path whether or not anything is there.
     pub fn reflog_path(&self, git_dir: &Path) -> PathBuf {
-        todo!()
+        #[cfg(unix)]
+        let os_name = <OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&self.0[..]);
+        #[cfg(not(unix))]
+        let os_name = OsStr::new(&String::from_utf8_lossy(&self.0[..]));
+        git_dir.join("logs").join(os_name)
     }
 }
 
