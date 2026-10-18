@@ -454,7 +454,12 @@ impl Repository {
     ///
     /// As [`Repository::discover`].
     pub fn open_or_discover(start: &Path) -> Result<Self> {
-        todo!()
+        let env_dir = std::env::var_os("GIT_DIR");
+        let git_dir = match env_dir {
+            Some(dir) => PathBuf::from(dir),
+            None => find_git_dir(start)?,
+        };
+        Self::open_with(&git_dir, Some(start), None)
     }
 
     /// Phase 4 — create a repository.
