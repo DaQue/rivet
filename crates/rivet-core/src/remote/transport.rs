@@ -496,7 +496,10 @@ impl ProtocolVersion {
     /// v0 — which is a supported outcome, not an error, and is why `connect` reads the generation
     /// from the response rather than assuming the request was honoured.
     pub const fn as_str(self) -> &'static str {
-        todo!()
+        match self {
+            ProtocolVersion::V0 => "0",
+            ProtocolVersion::V2 => "2",
+        }
     }
 }
 
