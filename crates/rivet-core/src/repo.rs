@@ -532,7 +532,7 @@ impl Repository {
     /// A caller deciding whether to write files should ask this; one deciding *where* should ask
     /// [`Repository::worktree_path`].
     pub fn is_bare(&self) -> bool {
-        todo!()
+        self.kind() == RepositoryKind::Bare
     }
 
     /// Phase 4 — the object format the repository was created with.
