@@ -320,7 +320,10 @@ impl OwnedPackIndex {
     /// hand back a borrowed view over the same bytes — but callers must not hold the result across
     /// a move of the owned value.
     pub fn as_index(&self) -> PackIndex<'_> {
-        todo!()
+        PackIndex {
+            data: &self.data,
+            format: self.format,
+        }
     }
 }
 
