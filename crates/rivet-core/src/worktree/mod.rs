@@ -202,7 +202,7 @@ impl Worktree {
 
     /// Phase 4 — whether the executable bit is meaningful on this filesystem.
     pub fn filemode(&self) -> bool {
-        todo!()
+        self.is_bare()
     }
 
     /// Phase 4 — whether symlinks can be stored as symlinks here.
