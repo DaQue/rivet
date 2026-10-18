@@ -292,7 +292,16 @@ impl Pattern {
     /// because the ancestor of a file is a directory whatever the file is. A caller that passed the
     /// path's own kind through to every prefix would miss exactly the case this exists for.
     pub fn matches_ancestor(&self, path: &BStr, kind: PathKind) -> bool {
-        todo!()
+        self.matches(path, kind)
+        || {
+            let mut p = path.to_vec();
+            while p.pop().is_some() {
+                if self.matches(BStr::new(&p), kind) {
+                    return true;
+                }
+            }
+            false
+        }
     }
 
     /// Phase 5 — whether this pattern has no effect on a path of the given kind.
