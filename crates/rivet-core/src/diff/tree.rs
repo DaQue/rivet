@@ -195,7 +195,7 @@ impl TreeDiff {
 
     /// Phase 8 — how many files changed.
     pub fn len(&self) -> usize {
-        todo!()
+        self.files.len()
     }
 
     /// Phase 8 — the diff for one path, if it changed.
