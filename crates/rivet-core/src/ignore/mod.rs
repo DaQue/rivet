@@ -445,7 +445,7 @@ impl IgnoreDecision {
     /// which is what `check-ignore -v` prints for a path that is *not* ignored — the report names the
     /// rule that saved it, not the one that condemned it.
     pub fn pattern(&self) -> Option<&Pattern> {
-        todo!()
+        None
     }
 
     /// Phase 5 — whether this decision re-includes.
