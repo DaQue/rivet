@@ -976,7 +976,11 @@ impl Index {
     /// where Git would have written nothing changes the file's mtime, which matters to the racy
     /// rule and to any differential comparison of the repository's files.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            version: IndexVersion::V2,
+            entries: Vec::new(),
+            extensions: Vec::new(),
+        }
     }
 
     /// Phase 3 — read and verify `path`.
