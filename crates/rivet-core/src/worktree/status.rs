@@ -194,7 +194,7 @@ impl Status {
     /// A count of **entries**, so a path that is both staged and unstaged is counted twice. That
     /// is what `git status --porcelain` lines number, and it is not the number of files involved.
     pub fn count(&self) -> usize {
-        todo!()
+        self.staged.len() + self.unstaged.len() + self.untracked.len()
     }
 
     /// Phase 4 — every conflicted path, from the staged list.
