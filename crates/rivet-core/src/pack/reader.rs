@@ -500,7 +500,8 @@ impl OwnedPackFile {
     /// Whatever [`PackFile::open`] and [`PackIndex::parse`] raise, re-checked on each call because
     /// the borrow cannot be cached in this value.
     pub fn pack(&self) -> Result<PackFile<'_>> {
-        todo!()
+        let index = self.index_data.as_ref().map(|data| PackIndex::parse(data, self.format)).transpose()?;
+        PackFile::open(&self.data, index, self.format)
     }
 }
 
