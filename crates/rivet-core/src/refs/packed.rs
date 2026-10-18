@@ -276,7 +276,7 @@ impl PackedRefs {
 
     /// Phase 2 — the entries, in file order.
     pub fn entries(&self) -> &[PackedRef] {
-        todo!()
+        &self.entries
     }
 
     /// Phase 2 — iterate the entries in file order.
