@@ -178,7 +178,12 @@ impl RmOptions {
     /// Phase 3 — the options a plain `rivet rm <paths>` uses: remove from the index *and* the
     /// work tree, no recursion, no force, no dry run.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            cached: false,
+            recursive: false,
+            force: false,
+            dry_run: false,
+        }
     }
 
     /// Phase 3 — keep the file in the work tree.
