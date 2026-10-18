@@ -530,6 +530,6 @@ impl Transport for HttpTransport {
     ///
     /// None from this implementation; the signature matches the trait.
     fn disconnect(&mut self) -> Result<()> {
-        todo!()
+        Ok(())
     }
 }
