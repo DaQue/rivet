@@ -163,7 +163,7 @@ impl ReflogEntry {
     /// True when `new` is the all-zero id. A ref update that legitimately moves a ref *to* a zero id
     /// is not meaningful — no object has that id — so this is unambiguous.
     pub fn is_deletion(&self) -> bool {
-        todo!()
+        self.new.is_zero()
     }
 }
 
