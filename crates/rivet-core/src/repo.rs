@@ -292,7 +292,8 @@ impl CommitOptions {
 
     /// Phase 4 — amend `HEAD` instead of adding a child.
     pub fn amend(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.amend = on;
+        self
     }
 }
 
