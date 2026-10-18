@@ -116,7 +116,12 @@ impl Edit {
     /// The signature takes both indices rather than one because they can differ, per the
     /// caveat on [`Edit`]; the lengths are always equal for a match, so only one is needed.
     pub fn equal(old_index: usize, new_index: usize, len: usize) -> Self {
-        todo!()
+        Self {
+            old_index,
+            old_len: len,
+            new_index,
+            new_len: len,
+        }
     }
 
     /// Phase 8 — whether the run changes anything.
