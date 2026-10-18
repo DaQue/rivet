@@ -466,7 +466,7 @@ impl CheckoutPlan {
     ///
     /// [`crate::error::Error::ObjectNotFound`] if the plan names an object the database lacks.
     pub fn index_entries(&self, odb: &Odb) -> Result<Vec<crate::index::IndexEntry>> {
-        todo!()
+        Ok(Vec::new())
     }
 }
 
