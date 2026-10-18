@@ -540,7 +540,12 @@ pub fn quote_remote_path(path: &BStr) -> BString {
 ///   with the `~` exception. A caller that concatenated the path itself would produce a command
 ///   injection reachable from a malicious remote-tracking configuration.
 pub fn remote_command(service: Service, path: &BStr) -> BString {
-    todo!()
+    let quoted = quote_remote_path(path);
+    let service_name = match service {
+        Service::UploadPack => "git-upload-pack",
+        Service::ReceivePack => "git-receive-pack",
+    };
+    format!("{} {}", service_name, quoted).into()
 }
 
 /// Phase 11 — the arguments to append to the `ssh` program for a URL.
