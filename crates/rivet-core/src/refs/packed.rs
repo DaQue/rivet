@@ -306,7 +306,7 @@ impl PackedRefs {
 
     /// Phase 2 — whether nothing is packed.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.entries.is_empty()
     }
 
     /// Phase 2 — insert an entry, replacing any entry with the same name.
