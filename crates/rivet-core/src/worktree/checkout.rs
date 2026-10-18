@@ -169,7 +169,8 @@ impl CheckoutOptions {
 
     /// Phase 4 — turn the operation into a dry run.
     pub fn dry_run(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.dry_run = on;
+        self
     }
 
     /// Phase 4 — limit the checkout to a path prefix.
