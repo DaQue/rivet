@@ -310,7 +310,18 @@ pub fn write_framed<R: Read, W: Write>(
     out: &mut W,
     params: ChannelWrite,
 ) -> Result<u64> {
-    todo!()
+    let mut buf = vec![0u8; params.max_payload];
+    let mut total: u64 = 0;
+    loop {
+        let n = input.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        let packet = frame(params, &buf[..n])?;
+        out.write_all(&packet)?;
+        total += n as u64;
+    }
+    Ok(total)
 }
 
 /// Phase 11 — where the pack bytes of a fetch should go, for a caller that wants the choice.
