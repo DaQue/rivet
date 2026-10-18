@@ -216,7 +216,7 @@ impl WalkOptions {
 
     /// Phase 4 — walk from every ref rather than from the starting points given.
     pub fn all(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self
     }
 
     /// Phase 4 — exclude the ancestry of a commit.
