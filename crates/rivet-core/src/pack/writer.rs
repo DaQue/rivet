@@ -195,7 +195,7 @@ impl PackWriter {
     /// fixed up by [`PackWriter::finish`], because the count is not known until the end and a
     /// header cannot be appended to once entries follow it.
     pub fn len(&self) -> usize {
-        todo!()
+        self.entries.len()
     }
 
     /// Phase 10 — whether no objects have been written yet.
