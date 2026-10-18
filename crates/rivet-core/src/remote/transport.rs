@@ -181,7 +181,10 @@ impl Default for CapabilitySet<'static> {
     ///   the empty set as an error. [`CapabilitySet::contains`] returning false for everything is the
     ///   correct answer, and the negotiation falls back to the capabilities that need no permission.
     fn default() -> Self {
-        todo!()
+        Self {
+            entries: Vec::new(),
+            raw: &[],
+        }
     }
 }
 
