@@ -131,7 +131,10 @@ impl Capability {
     /// empty value, which the protocol does not distinguish either. Callers that need to test for
     /// support use [`CapabilitySet::contains`], not this.
     pub fn value_or_empty(&self) -> &[u8] {
-        todo!()
+        match self.value {
+            Some(ref v) => v.as_ref(),
+            None => &[],
+        }
     }
 }
 
