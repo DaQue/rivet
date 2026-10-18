@@ -345,7 +345,14 @@ impl<'a> PackFile<'a> {
     /// [`crate::error::Error::CorruptPack`] if the entry cannot be read, or if its zlib stream runs
     /// past the trailer.
     pub fn entry_range(&self, offset: u64) -> Result<Range<usize>> {
-        todo!()
+        let entry = self.entry_at(offset)?;
+        let inflated_len = entry.size as usize;
+        let start = entry.data_offset as usize;
+        let end = start + inflated_len;
+        if end > self.data.len() {
+            return Err(Error::CorruptPack { reason: "zlib stream runs past trailer".to_string() });
+        }
+        Ok(start..end)
     }
 
     /// Phase 10 — hash the pack and compare against its trailer.
