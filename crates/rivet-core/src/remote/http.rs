@@ -202,7 +202,9 @@ impl HttpTransport {
     /// * **The credentials are not in the returned URL**, even if the remote URL carried them. This
     ///   is the string that must appear in any error message, so it is the one that must be safe.
     pub fn refs_url(&self, service: Service) -> BString {
-        todo!()
+        let path = &self.url.path;
+        let service_str = service.as_str();
+        BString::from(format!("{}info/refs?service={}", path, service_str).as_bytes())
     }
 
     /// Phase 11 — the absolute service URL for a POST.
