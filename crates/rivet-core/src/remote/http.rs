@@ -70,6 +70,7 @@ use crate::hash::ObjectFormat;
 use crate::remote::transport::{CapabilitySet, HttpResponse, Service};
 use crate::remote::url::RemoteUrl;
 use crate::remote::{AdvertisedRef, PushStatus, RefAdvertisement, RefUpdate, Transport};
+use crate::remote::url::RemoteScheme;
 
 /// Phase 11 — the user agent Rivet sends.
 ///
@@ -187,7 +188,7 @@ impl HttpTransport {
     /// sending a credential in the clear; the transport itself does not refuse, because refusing
     /// would break the localhost case that every `git http-backend` test relies on.
     pub fn is_insecure(&self) -> bool {
-        todo!()
+        self.url.scheme == RemoteScheme::Http
     }
 
     /// Phase 11 — the absolute `info/refs` URL for a service.
