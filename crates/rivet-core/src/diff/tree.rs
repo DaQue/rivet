@@ -216,7 +216,17 @@ impl TreeDiff {
     /// Binary files contribute nothing and are not counted as zero-line changes; the caller that
     /// needs to know how many were skipped reads [`FileDiff::is_binary`] from `files`.
     pub fn totals(&self) -> (usize, usize) {
-        todo!()
+        let (mut added, mut deleted) = (0usize, 0usize);
+        for file in &self.files {
+            if file.is_binary {
+                continue;
+            }
+            for hunk in &file.hunks {
+                added += hunk.added();
+                deleted += hunk.removed();
+            }
+        }
+        (added, deleted)
     }
 
     /// Phase 8 — keep only the files under a path prefix.
