@@ -745,7 +745,7 @@ impl Repository {
     ///
     /// As [`Repository::tree_of`].
     pub fn head_tree(&self) -> Result<Option<Tree<'_>>> {
-        todo!()
+        self.tree_of(self.head_commit()?)
     }
 
     /// Phase 4 — write the index's contents as a tree.
