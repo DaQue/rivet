@@ -565,7 +565,7 @@ impl Repository {
 
     /// Phase 4 — the ref store.
     pub fn refs(&self) -> &RefStore {
-        todo!()
+        &self.refs
     }
 
     /// Phase 4 — the ref store, mutably.
