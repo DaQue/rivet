@@ -585,7 +585,7 @@ impl Config {
 
     /// Phase 2 — whether the config has no entries at all.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.entries.is_empty()
     }
 
     /// Phase 2 — `core.repositoryformatversion`.
