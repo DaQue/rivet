@@ -321,7 +321,15 @@ impl PackedRefs {
     ///   Leaving the stale `^` line would resolve the tag to a commit it no longer points at.
     /// * Returns the entry that was replaced, so a caller can report what it overwrote.
     pub fn insert(&mut self, entry: PackedRef) -> Option<PackedRef> {
-        todo!()
+        let pos = self.entries.iter().position(|e| e.name == entry.name);
+        if let Some(i) = pos {
+            let old = self.entries[i].clone();
+            self.entries[i] = entry;
+            Some(old)
+        } else {
+            self.entries.push(entry);
+            None
+        }
     }
 
     /// Phase 2 — remove an entry by name.
