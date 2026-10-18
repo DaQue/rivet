@@ -1113,7 +1113,16 @@ pub fn wants_request(
 /// empty `haves` produces a legal flush-only round, which is what a first round with nothing to
 /// offer is.
 pub fn haves_request(haves: &[crate::hash::ObjectId], format: ObjectFormat) -> Result<Vec<u8>> {
-    todo!()
+    let mut out = Vec::new();
+    for id in haves {
+        if id.format() != format {
+            return Err(Error::Protocol("have format mismatch".to_string()));
+        }
+        out.extend_from_slice(b"have ");
+        out.extend_from_slice(id.as_bytes());
+        out.push(b'\n');
+    }
+    Ok(out)
 }
 
 /// Phase 11 — parse one line of a v0 negotiation response.
