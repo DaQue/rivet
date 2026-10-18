@@ -268,7 +268,7 @@ impl RefName {
 
     /// Phase 2 — the name as a byte slice.
     pub fn as_bytes(&self) -> &[u8] {
-        todo!()
+        self.0.as_slice()
     }
 
     /// Phase 2 — the name as a borrowed `&BStr`.
