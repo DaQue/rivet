@@ -87,7 +87,14 @@ impl AddOptions {
     /// Phase 3 — the options a plain `rivet add <paths>` uses: no force, no update, no all, no
     /// intent-to-add, no dry run, no extra pathspec.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            force: false,
+            update: false,
+            all: false,
+            intent_to_add: false,
+            dry_run: false,
+            pathspec: BString::from(""),
+        }
     }
 
     /// Phase 3 — set the force flag, which overrides ignore rules.
