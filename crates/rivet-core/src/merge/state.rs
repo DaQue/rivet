@@ -159,7 +159,7 @@ impl MergeState {
     /// guaranteed to be UTF-8. A caller that displayed it by lossy conversion is fine; one that
     /// wrote it into a commit by lossy conversion would change the commit's id.
     pub fn message(&self) -> &BStr {
-        todo!()
+        self.merge_msg.as_ref()
     }
 }
 
