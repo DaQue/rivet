@@ -169,7 +169,7 @@ impl<'a> PackFile<'a> {
     /// `None` does not mean "empty pack". It means the index is unknown, and every lookup by id
     /// must treat this pack as unsearchable — see [`PackFile::get`].
     pub fn index(&self) -> Option<&PackIndex<'a>> {
-        todo!()
+        self.index.as_ref()
     }
 
     /// Phase 10 — how many objects the pack header claims.
