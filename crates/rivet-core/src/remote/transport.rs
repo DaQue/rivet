@@ -954,7 +954,23 @@ impl Transport for LocalTransport {
     /// [`crate::error::Error::ObjectFormatMismatch`], [`crate::error::Error::NotARepository`], and
     /// the ref store's read errors.
     fn connect(&mut self, url: &RemoteUrl, format: ObjectFormat) -> Result<RefAdvertisement> {
-        todo!()
+        let path = self.path.clone();
+        let mut caps = CapabilitySet::default();
+        caps.insert(b"side-band-64k").expect("cap");
+        caps.insert(b"ofs-delta").expect("cap");
+        caps.insert(b"multi_ack_detailed").expect("cap");
+        caps.insert(b"object-format").expect("cap");
+        caps.insert(b"symref").expect("cap");
+        let refs = self.ls_refs(&[], false)?;
+        let ad = RefAdvertisement {
+            capabilities: caps,
+            refs,
+            format,
+            agent: None,
+            version: ProtocolVersion::V0,
+        };
+        self.advertisement = Some(ad.clone());
+        Ok(ad)
     }
 
     /// Phase 11 — the capabilities from the last [`Transport::connect`].
