@@ -883,7 +883,7 @@ impl LocalTransport {
 
     /// Phase 11 — the repository directory this transport reads.
     pub fn path(&self) -> &std::path::Path {
-        todo!()
+        &self.path
     }
 
     /// Phase 11 — whether the other side is a bare repository.
