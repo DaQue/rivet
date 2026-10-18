@@ -657,7 +657,29 @@ impl IgnoreStack {
     ///
     /// [`crate::error::Error::InvalidPath`] as [`IgnoreStack::check`].
     pub fn is_ignored(&self, path: &BStr, kind: PathKind) -> Result<bool> {
-        todo!()
+        let decision = self.check(path, kind)?;
+        if decision.is_ignored() {
+            return Ok(true);
+        }
+        if decision.is_reincluded() {
+            let mut ancestor_ignored = false;
+            for frame in self.frames() {
+                for pattern in frame.patterns() {
+                    if pattern.negated {
+                        continue;
+                    }
+                    if pattern.matches_ancestor(path, kind) {
+                        ancestor_ignored = true;
+                        break;
+                    }
+                }
+                if ancestor_ignored {
+                    break;
+                }
+            }
+            return Ok(!ancestor_ignored);
+        }
+        Ok(false)
     }
 
     /// Phase 5 — every rule that matches a path, in the order they were considered.
