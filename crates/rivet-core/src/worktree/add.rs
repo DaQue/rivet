@@ -105,7 +105,8 @@ impl AddOptions {
 
     /// Phase 3 — stage only paths already in the index.
     pub fn update(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.update = on;
+        self
     }
 
     /// Phase 3 — record intent-to-add entries.
