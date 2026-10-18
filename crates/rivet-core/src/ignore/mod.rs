@@ -694,6 +694,6 @@ impl IgnoreStack {
     /// patterns — which is most repositories — and it means every query answers
     /// [`IgnoreDecision::Unmatched`] without touching the filesystem.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.frames.is_empty()
     }
 }
