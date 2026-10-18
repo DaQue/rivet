@@ -88,7 +88,13 @@ impl RefCategory {
     /// one of the namespaces. A caller that wants to build a name must handle both cases rather
     /// than concatenating an empty prefix and producing `/main`.
     pub const fn prefix(self) -> Option<&'static [u8]> {
-        todo!()
+        match self {
+            RefCategory::Branch => Some(b"refs/heads"),
+            RefCategory::Tag => Some(b"refs/tags"),
+            RefCategory::Remote => Some(b"refs/remotes"),
+            RefCategory::Note => Some(b"refs/notes"),
+            RefCategory::Head | RefCategory::Other => None,
+        }
     }
 
     /// Phase 2 — the short label, for CLI output and error messages.
