@@ -283,7 +283,7 @@ impl Pattern {
     ///   priority rules are [`IgnoreStack`]'s; a caller testing patterns one at a time will get a
     ///   negated pattern backwards.
     pub fn matches(&self, path: &BStr, kind: PathKind) -> bool {
-        todo!()
+        self.is_inapplicable(kind) || self.matches_ancestor(path, kind)
     }
 
     /// Phase 5 — whether this pattern matches a path or any of its ancestors.
