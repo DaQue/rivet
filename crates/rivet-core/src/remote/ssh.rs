@@ -215,7 +215,12 @@ impl SshTransport {
     ///   caller that needs non-interactive behaviour sets `GIT_SSH_COMMAND` with it, which is exactly
     ///   what CI does.
     pub fn ssh_command(&self, port: Option<u16>) -> (BString, Vec<BString>) {
-        todo!()
+        let (invocation, args) = ssh_command_for(&self.url, port);
+        let program = match invocation {
+            SshInvocation::Program(p) => p,
+            SshInvocation::ShellLine(_) => BString::from("ssh"),
+        };
+        (program, args)
     }
 
     /// Phase 11 — spawn the remote service.
