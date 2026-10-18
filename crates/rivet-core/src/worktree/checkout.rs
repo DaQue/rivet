@@ -289,7 +289,26 @@ impl CheckoutPlan {
     /// they mean different things to a user: a plan of 10 000 keeps and one create is a
     /// different operation from the reverse.
     pub fn summary(&self) -> (usize, usize, usize, usize) {
-        todo!()
+        let mut create = 0;
+        let mut update = 0;
+        let mut remove = 0;
+        let mut keep = 0;
+        for e in &self.entries {
+            match e.mode {
+                Some(EntryMode::Blob) | Some(EntryMode::BlobExecutable) => {
+                    if e.path.is_empty() {
+                        keep += 1;
+                    } else {
+                        create += 1;
+                    }
+                }
+                Some(EntryMode::Link) | Some(EntryMode::Tree) | Some(EntryMode::Commit) => {
+                    remove += 1;
+                }
+                _ => {}
+            }
+        }
+        (create, update, remove, keep)
     }
 
     /// Phase 4 — the paths the operation would lose, without raising an error about them.
