@@ -251,7 +251,25 @@ impl Hunk {
     ///   `diff.<driver>.xfuncname`; a caller comparing against `git diff` output on a C file will
     ///   see the difference, and matching it is a later phase.
     pub fn header(&self) -> BString {
-        todo!()
+        let mut buf = BString::from("@@ -");
+        if self.old_lines == 1 {
+            buf.extend_from_slice(self.old_start.to_string().as_bytes());
+        } else {
+            buf.extend_from_slice(self.old_start.to_string().as_bytes());
+            buf.push(b',');
+            buf.extend_from_slice(self.old_lines.to_string().as_bytes());
+        }
+        buf.push(b' ');
+        buf.push(b'+');
+        if self.new_lines == 1 {
+            buf.extend_from_slice(self.new_start.to_string().as_bytes());
+        } else {
+            buf.extend_from_slice(self.new_start.to_string().as_bytes());
+            buf.push(b',');
+            buf.extend_from_slice(self.new_lines.to_string().as_bytes());
+        }
+        buf.extend_from_slice(b" @@");
+        buf
     }
 
     /// Phase 8 — how many lines the hunk adds.
