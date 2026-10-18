@@ -446,7 +446,7 @@ impl RefAdvertisement {
     /// `refs/heads/feat` and `refs/heads/feature`, exactly as `RefStore::list` does. Callers that
     /// mean a namespace pass the trailing slash.
     pub fn under(&self, prefix: &[u8]) -> Vec<&AdvertisedRef> {
-        todo!()
+        self.refs.iter().filter(|r| r.name.starts_with(prefix)).collect()
     }
 
     /// Phase 11 — whether the peer advertised no refs at all.
