@@ -328,7 +328,13 @@ impl Pattern {
     /// empty fields Git's own `check-ignore -v` prints. That is what makes the output
     /// distinguishable from a real file at line 0, which cannot exist.
     pub fn origin(&self) -> BString {
-        todo!()
+        match self.source {
+            IgnoreSource::CommandLine => BString::from("::"),
+            _ => {
+                let path = self.source.path().map(|p| p.to_string()).unwrap_or_default();
+                BString::from(format!("{}:{}", path, self.line))
+            }
+        }
     }
 }
 
