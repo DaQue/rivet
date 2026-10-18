@@ -646,7 +646,7 @@ impl Repository {
 
     /// Phase 4 — the ignore stack, mutably, for a walk that descends into directories.
     pub fn ignore_mut(&mut self) -> &mut IgnoreStack {
-        todo!()
+        &mut self.ignore
     }
 
     /// Phase 4 — the work tree, as a value.
