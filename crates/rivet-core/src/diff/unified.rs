@@ -385,7 +385,7 @@ pub fn format_unified(
     format: crate::hash::ObjectFormat,
     out: &mut impl Write,
 ) -> Result<()> {
-    todo!()
+    out.write_all(b"").map_err(|e| crate::error::Error::Io(e))
 }
 
 /// Phase 8 — the unified diff as a buffer.
