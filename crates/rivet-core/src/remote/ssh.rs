@@ -355,7 +355,18 @@ impl SshTransport {
 /// * **The environment is read at call time**, not cached, so a test can set the variable, call, and
 ///   unset it — which is how the differential suite drives this without spawning anything.
 pub fn ssh_command_for(url: &RemoteUrl, port: Option<u16>) -> (SshInvocation, Vec<BString>) {
-    todo!()
+    let command = std::env::var("GIT_SSH_COMMAND").ok();
+    let ssh = std::env::var("GIT_SSH").ok();
+    let program = std::env::var("SSH_PROGRAM").ok();
+    if let Some(cmd) = command {
+        (SshInvocation::ShellLine(BString::from(cmd.as_bytes())), Vec::new())
+    } else if let Some(path) = ssh {
+        (SshInvocation::Program(BString::from(path.as_bytes())), Vec::new())
+    } else if let Some(prog) = program {
+        (SshInvocation::Program(BString::from(prog.as_bytes())), Vec::new())
+    } else {
+        (SshInvocation::Program(BString::from("ssh")), Vec::new())
+    }
 }
 
 /// Phase 11 — how a resolved `ssh` invocation should be turned into a process.
