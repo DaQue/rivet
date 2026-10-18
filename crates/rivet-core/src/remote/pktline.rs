@@ -364,7 +364,36 @@ impl PktLine {
     /// protocol needs, because "the peer sent nonsense" and "the connection broke" are different
     /// reports for the user.
     pub fn read_from<R: Read>(reader: &mut R) -> Result<Self> {
-        todo!()
+        let mut header = [0u8; 4];
+        let mut n = 0;
+        while n < 4 {
+            match reader.read(&mut header[n..]) {
+                Ok(0) => return Err(Error::Protocol("truncated frame".to_string())),
+                Ok(k) => n += k,
+                Err(e) => return Err(Error::Transport(e.to_string())),
+            }
+        }
+        let len = u16::from_be_bytes([header[0], header[1]]);
+        let payload_len = len as usize - 4;
+        let mut payload = vec![0u8; payload_len];
+        let mut n = 0;
+        while n < payload_len {
+            match reader.read(&mut payload[n..]) {
+                Ok(0) => return Err(Error::Protocol("truncated frame".to_string())),
+                Ok(k) => n += k,
+                Err(e) => return Err(Error::Transport(e.to_string())),
+            }
+        }
+        let pkt = if len == 0 {
+            PktLine::Flush
+        } else if len == 1 {
+            PktLine::Data(vec![])
+        } else if len == 2 {
+            PktLine::Data(vec![])
+        } else {
+            PktLine::Data(payload)
+        };
+        Ok(pkt)
     }
 
     /// Phase 11 — write this packet to a stream.
