@@ -287,7 +287,17 @@ impl std::fmt::Debug for FetchOptions {
     /// `FetchOptions` fail to derive it too. Printing the other fields keeps a diagnostic useful
     /// without pretending the sink is printable.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        f.write_str("FetchOptions { format: ")
+            .and_then(|_| self.format.fmt(f))
+            .and_then(|_| f.write_str(", capabilities: "))
+            .and_then(|_| self.capabilities.fmt(f))
+            .and_then(|_| f.write_str(", refs: "))
+            .and_then(|_| self.refs.fmt(f))
+            .and_then(|_| f.write_str(", dry_run: "))
+            .and_then(|_| self.dry_run.fmt(f))
+            .and_then(|_| f.write_str(", index: "))
+            .and_then(|_| self.index.fmt(f))
+            .and_then(|_| f.write_str(" }"))
     }
 }
 
