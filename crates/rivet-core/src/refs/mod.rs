@@ -399,7 +399,7 @@ impl RefStore {
 
     /// Phase 2 — the git directory this store reads.
     pub fn git_dir(&self) -> &Path {
-        todo!()
+        &self.git_dir
     }
 
     /// Phase 2 — the repository's object format, used for every id read and written here.
