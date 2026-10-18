@@ -48,6 +48,7 @@ use crate::index::{Index, IndexEntry, Stage};
 use crate::object::EntryMode;
 use crate::odb::Odb;
 use crate::worktree::{StatCache, Worktree};
+use crate::index::IndexEntryFlags;
 
 /// Phase 3 — how an `add` should behave.
 ///
@@ -294,5 +295,20 @@ pub fn build_index_entry(
     mode: EntryMode,
     stage: Stage,
 ) -> IndexEntry {
-    todo!()
+    IndexEntry {
+        ctime_seconds: stat.ctime_seconds,
+        ctime_nanos: stat.ctime_nanos,
+        mtime_seconds: stat.mtime_seconds,
+        mtime_nanos: stat.mtime_nanos,
+        dev: stat.dev,
+        ino: stat.ino,
+        mode,
+        uid: stat.uid,
+        gid: stat.gid,
+        size: stat.size,
+        oid,
+        flags: IndexEntryFlags::empty(),
+        extended_flags: 0,
+        path: path.to_owned(),
+    }
 }
