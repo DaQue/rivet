@@ -181,7 +181,12 @@ impl InitOptions {
     /// CI system, a script that hard-codes it — sets it explicitly; the default is a decision
     /// with a date on it and this one is made deliberately.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            bare: false,
+            initial_branch: BString::from("main"),
+            format: ObjectFormat::Sha1,
+            work_tree: None,
+        }
     }
 
     /// Phase 4 — create a bare repository.
