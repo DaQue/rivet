@@ -450,7 +450,7 @@ impl IgnoreDecision {
 
     /// Phase 5 — whether this decision re-includes.
     pub const fn is_reincluded(&self) -> bool {
-        todo!()
+        matches!(self, IgnoreDecision::ReIncluded)
     }
 
     /// Phase 5 — whether this decision ignores.
