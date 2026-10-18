@@ -631,6 +631,23 @@ impl<R: Read> SidebandReader<R> {
     /// [`crate::error::Error::Protocol`] for a malformed frame, an unknown channel, or a remote
     /// error message, and [`crate::error::Error::Transport`] if the read fails.
     pub fn drain(&mut self, progress: &mut dyn FnMut(&[u8])) -> Result<Vec<u8>> {
-        todo!()
+        let mut pack = Vec::new();
+        let mut error_text = Vec::new();
+        loop {
+            match self.next_packet()? {
+                Some(packet) => {
+                    match packet.channel {
+                        SidebandKind::Pack => pack.extend_from_slice(&packet.data),
+                        SidebandKind::Progress => progress(&packet.data),
+                        SidebandKind::Error => error_text.extend_from_slice(&packet.data),
+                    }
+                }
+                None => break,
+            }
+        }
+        if !error_text.is_empty() {
+            return Err(Error::Protocol(String::from_utf8_lossy(&error_text).into_owned()));
+        }
+        Ok(pack)
     }
 }
