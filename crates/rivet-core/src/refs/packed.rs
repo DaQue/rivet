@@ -511,5 +511,5 @@ pub fn location(loose_present: bool, packed_present: bool) -> RefLocation {
 /// with a tag per release is tens of thousands; a caller that only needs to iterate should use
 /// [`PackedRefs::iter`].
 pub fn packed_names(packed: &PackedRefs) -> Vec<RefName> {
-    todo!()
+    packed.names().into_iter().map(|n| n.clone()).collect()
 }
