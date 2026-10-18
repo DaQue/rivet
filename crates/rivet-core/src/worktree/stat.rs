@@ -196,7 +196,11 @@ impl StatData {
     /// a fresh `add` leaves the whole index racy until the next command. That is expected and is
     /// why the first `status` after a commit is slower than the second.
     pub fn is_unchanged(&self, entry: &IndexEntry, index_mtime: (u32, u32)) -> bool {
-        todo!()
+        self.mode == entry.mode
+        && self.size == entry.size
+        && self.mtime_seconds == entry.mtime_seconds
+        && self.mtime_nanos == entry.mtime_nanos
+        && !self.is_racy(index_mtime)
     }
 }
 
