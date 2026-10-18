@@ -450,7 +450,7 @@ impl Default for PackedRefs {
 /// Provided so that writers and `gc` agree on one spelling. It is *not* `refs/packed-refs` —
 /// the file sits at the top of the git directory, beside `HEAD` and `config`.
 pub fn packed_refs_path(git_dir: &Path) -> PathBuf {
-    todo!()
+    git_dir.join("packed-refs")
 }
 
 /// Phase 2 — whether a ref exists as a loose file, in `packed-refs`, or both.
