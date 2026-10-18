@@ -175,7 +175,8 @@ impl HttpTransport {
     /// * **The credentials are held for the transport's life**, so a caller that got them from a
     ///   helper and considers them short-lived must drop the transport to release them.
     pub fn set_credentials(&mut self, user: &bstr::BStr, password: &bstr::BStr) {
-        todo!()
+        self.url.user = Some(user.to_owned());
+        self.url.password = Some(password.to_owned());
     }
 
     /// Phase 11 — whether the URL is plain `http`.
