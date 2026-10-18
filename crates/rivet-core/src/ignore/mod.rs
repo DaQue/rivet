@@ -460,7 +460,7 @@ impl IgnoreStack {
 
     /// Phase 5 — the work tree root the stack is anchored to.
     pub fn root(&self) -> &Path {
-        todo!()
+        &self.root
     }
 
     /// Phase 5 — the directory the stack currently describes.
