@@ -267,7 +267,14 @@ impl Default for FetchOptions {
     ///   default — a caller must name a remote before Rivet will write a tracking ref — and it is the
     ///   opposite of what the CLI passes, which is deliberate.
     fn default() -> Self {
-        todo!()
+        Self {
+            format: crate::hash::ObjectFormat::Sha1,
+            capabilities: FetchCapabilities::default(),
+            refs: None,
+            progress: None,
+            dry_run: false,
+            index: true,
+        }
     }
 }
 
