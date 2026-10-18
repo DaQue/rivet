@@ -280,7 +280,8 @@ impl CommitOptions {
 
     /// Phase 4 — set the parent list explicitly.
     pub fn parents(&mut self, parents: Vec<ObjectId>) -> &mut Self {
-        todo!()
+        self.parents = parents;
+        self
     }
 
     /// Phase 4 — allow a commit that changes nothing.
