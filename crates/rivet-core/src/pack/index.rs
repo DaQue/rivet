@@ -235,7 +235,7 @@ impl<'a> PackIndex<'a> {
     /// first object in the file. Returns `None` for an out-of-range index rather than panicking:
     /// the index came off a socket or out of someone else's repository (§5).
     pub fn entry(&self, i: usize) -> Option<PackIndexEntry> {
-        todo!()
+        self.iter().nth(i)
     }
 
     /// Phase 10 — iterate the entries lazily, in id order.
