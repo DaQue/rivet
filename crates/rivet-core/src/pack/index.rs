@@ -364,7 +364,12 @@ impl<'a> Iterator for PackIndexIter<'a> {
     type Item = PackIndexEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        if self.next >= self.index.len() {
+            return None;
+        }
+        let entry = self.index.entry(self.next);
+        self.next += 1;
+        entry
     }
 
     /// Phase 10 — the number of entries not yet produced.
