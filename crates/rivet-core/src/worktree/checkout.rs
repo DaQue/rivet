@@ -258,7 +258,7 @@ impl CheckoutPlan {
 
     /// Phase 4 — the tree the work tree is going to.
     pub fn to_tree(&self) -> ObjectId {
-        todo!()
+        self.to_tree
     }
 
     /// Phase 4 — whether the plan would change anything.
