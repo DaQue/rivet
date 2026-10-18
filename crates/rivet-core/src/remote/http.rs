@@ -71,6 +71,7 @@ use crate::remote::transport::{CapabilitySet, HttpResponse, Service};
 use crate::remote::url::RemoteUrl;
 use crate::remote::{AdvertisedRef, PushStatus, RefAdvertisement, RefUpdate, Transport};
 use crate::remote::url::RemoteScheme;
+use crate::error::Error;
 
 /// Phase 11 — the user agent Rivet sends.
 ///
@@ -369,7 +370,26 @@ pub fn send_streaming<T>(
 /// [`crate::error::Error::CorruptPack`] is **not** raised here even for a garbled pack — the body's
 /// framing is checked by the layer that parses it, and this function only knows about compression.
 pub fn decode_body(encoding: Option<&bstr::BStr>, body: Vec<u8>) -> Result<Vec<u8>> {
-    todo!()
+    let Some(enc) = encoding else {
+        return Ok(body);
+    };
+    let enc = enc.trim_ascii();
+    if enc.is_empty() || enc == b"identity" {
+        return Ok(body);
+    }
+    if enc == b"gzip" {
+        let mut d = flate2::read::GzDecoder::new(&body[..]);
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut d, &mut out).map_err(|_| Error::Protocol(String::from("gzip decode failed")))?;
+        return Ok(out);
+    }
+    if enc == b"deflate" {
+        let mut d = flate2::read::ZlibDecoder::new(&body[..]);
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut d, &mut out).map_err(|_| Error::Protocol(String::from("deflate decode failed")))?;
+        return Ok(out);
+    }
+    Err(Error::Protocol(String::from("unsupported content-encoding")))
 }
 
 /// Phase 11 — parse the `Content-Type` of a response into its media type, lowercased.
