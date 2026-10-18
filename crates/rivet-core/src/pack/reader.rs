@@ -380,7 +380,11 @@ impl OwnedPackFile {
     /// construction. A caller that wants to fail early — `Odb::open`, which must not defer an
     /// error past the point it can report a path — calls `pack()` once immediately.
     pub fn new(data: Vec<u8>, index_data: Option<Vec<u8>>, format: ObjectFormat) -> Self {
-        todo!()
+        Self {
+            data,
+            index_data,
+            format,
+        }
     }
 
     /// Phase 10 — the pack's own bytes, and the index's, as one borrowed [`PackFile`].
