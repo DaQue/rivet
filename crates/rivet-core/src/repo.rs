@@ -543,7 +543,7 @@ impl Repository {
     /// caveat: it cannot be changed. Every id parsed anywhere in the crate goes through it, and a
     /// caller that hard-coded a length instead would read a SHA-256 repository's refs as garbage.
     pub fn format(&self) -> ObjectFormat {
-        todo!()
+        self.format
     }
 
     /// Phase 4 — the object database.
