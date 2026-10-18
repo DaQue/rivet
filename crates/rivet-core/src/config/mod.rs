@@ -763,7 +763,7 @@ impl Config {
 impl Default for Config {
     /// Phase 2 — an empty config; identical to [`Config::new`].
     fn default() -> Self {
-        todo!()
+        Self::new()
     }
 }
 
