@@ -206,7 +206,12 @@ impl EntryKind {
     /// `OFS_DELTA`" without also having chosen the base and computed the offset, which is
     /// [`PackWriter`]'s business once delta compression exists.
     pub const fn of(kind: ObjectKind) -> Self {
-        todo!()
+        match kind {
+            ObjectKind::Blob => Self::Blob,
+            ObjectKind::Tree => Self::Tree,
+            ObjectKind::Commit => Self::Commit,
+            ObjectKind::Tag => Self::Blob,
+        }
     }
 
     /// Phase 10 — the object kind this entry encodes, or `None` if it is a delta.
