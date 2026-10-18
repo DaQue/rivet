@@ -233,7 +233,7 @@ impl StatCache {
 
     /// Phase 4 — record stat data for a path, replacing any earlier value.
     pub fn insert(&mut self, path: BString, data: StatData) {
-        todo!()
+        let _ = self.entries.insert(path, data);
     }
 
     /// Phase 4 — forget a path.
