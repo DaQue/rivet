@@ -417,6 +417,6 @@ impl fmt::Display for RefName {
     /// name itself uses [`RefName::as_bytes`] or [`RefName::as_bstr`] and never round-trips
     /// through this.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        f.write_str(&String::from_utf8_lossy(&self.0))
     }
 }
