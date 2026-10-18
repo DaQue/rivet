@@ -784,7 +784,16 @@ impl Config {
     /// [`crate::error::Error::UnknownObjectFormat`] for an unrecognised value, and
     /// [`crate::error::Error::ConfigInvalidValue`] for a malformed key.
     pub fn object_format(&self) -> Result<ObjectFormat> {
-        todo!()
+        let version = self.repository_format_version()?;
+        if version == 0 {
+            return Ok(ObjectFormat::Sha1);
+        }
+        let key = BString::from("extensions.objectFormat");
+        let value = match self.get(key.as_ref())? {
+            Some(v) => v,
+            None => return Ok(ObjectFormat::Sha1),
+        };
+        ObjectFormat::from_config_value(value)
     }
 
     /// Phase 2 — `init.defaultBranch`, defaulted to `main`.
