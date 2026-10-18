@@ -231,7 +231,7 @@ impl EntryKind {
     /// real kind is inherited from the base at the bottom of the chain — a delta against a tree
     /// is a tree — which is another reason a delta cannot be treated as its own object kind.
     pub const fn object_kind(self) -> Option<ObjectKind> {
-        todo!()
+        None
     }
 
     /// Phase 10 — whether this entry is deltified, i.e. whether its payload is an instruction
