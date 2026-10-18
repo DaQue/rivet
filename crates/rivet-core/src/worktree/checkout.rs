@@ -280,7 +280,7 @@ impl CheckoutPlan {
 
     /// Phase 4 — the paths the plan would delete.
     pub fn removed_paths(&self) -> Vec<&bstr::BStr> {
-        todo!()
+        self.entries.iter().filter(|e| matches!(e.mode, Some(EntryMode::Link) | Some(EntryMode::Tree) | Some(EntryMode::Commit))).map(|e| e.path.as_ref()).collect()
     }
 
     /// Phase 4 — how many entries each action accounts for, as `(create, update, remove, keep)`.
