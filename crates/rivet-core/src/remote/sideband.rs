@@ -237,7 +237,19 @@ pub fn read_status_stream<R: Read>(
     options: &SidebandOptions,
     progress: Option<&mut dyn FnMut(&[u8])>,
 ) -> Result<Vec<u8>> {
-    todo!()
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf).map_err(crate::error::Error::Io)?;
+    let mut status = Vec::new();
+    let mut i = 0usize;
+    while i < buf.len() {
+        let line_end = buf[i..].iter().position(|&b| b == b'\n').map_or(buf.len(), |p| i + p + 1);
+        let line = &buf[i..line_end];
+        if line.len() >= 2 && line[0] == b'1' && line[1] == b' ' {
+            status.extend_from_slice(&line[2..]);
+        }
+        i = line_end;
+    }
+    Ok(status)
 }
 
 /// Phase 11 — frame `payload` for writing on a channel, for the client's own sideband writes.
