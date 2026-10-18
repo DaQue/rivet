@@ -513,7 +513,7 @@ impl<R: Read> SidebandReader<R> {
     /// here — the caller accumulated it from the packets it was returned — because this type would
     /// otherwise have to decide how much of a hostile peer's message to retain.
     pub const fn error_seen(&self) -> bool {
-        todo!()
+        self.error_seen
     }
 
     /// Phase 11 — drain the remaining packets, forwarding progress and collecting errors.
