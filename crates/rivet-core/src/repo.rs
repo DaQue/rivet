@@ -412,7 +412,15 @@ impl Repository {
     /// As [`Repository::open_with`], plus [`crate::error::Error::NotARepository`] when the
     /// current directory is not inside a repository and neither variable is set.
     pub fn open() -> Result<Self> {
-        todo!()
+        let git_dir = match std::env::var_os("GIT_DIR") {
+            Some(v) => PathBuf::from(v),
+            None => find_git_dir(&std::env::current_dir().expect("current dir"))?,
+        };
+        let work_tree = match std::env::var_os("GIT_WORK_TREE") {
+            Some(v) => Some(PathBuf::from(v)),
+            None => None,
+        };
+        Self::open_with(&git_dir, work_tree.as_deref(), None)
     }
 
     /// Phase 4 — discover and open the repository containing a directory.
