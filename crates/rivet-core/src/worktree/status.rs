@@ -275,7 +275,8 @@ impl StatusOptions {
 
     /// Phase 4 — limit the report to a path prefix.
     pub fn pathspec(&mut self, prefix: &bstr::BStr) -> &mut Self {
-        todo!()
+        self.pathspec = prefix.to_owned();
+        self
     }
 }
 
