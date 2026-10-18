@@ -248,7 +248,7 @@ impl CheckoutPlan {
 
     /// Phase 4 — the actions, in path order.
     pub fn entries(&self) -> &[CheckoutEntry] {
-        todo!()
+        &self.entries
     }
 
     /// Phase 4 — the tree the work tree is coming from, `None` for an unborn `HEAD`.
