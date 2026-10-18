@@ -257,7 +257,11 @@ impl PktLine {
     /// * **The text is bytes, not `&str`.** Ref names and remote paths are bytes on the wire; a
     ///   `&str` parameter would refuse a legal ref name that is not UTF-8.
     pub fn new_text(line: &[u8]) -> Self {
-        todo!()
+        let mut data = line.to_vec();
+        if !data.ends_with(b"\n") {
+            data.push(b'\n');
+        }
+        PktLine::Data(data)
     }
 
     /// Phase 11 — decode one packet from the front of a buffer, returning it and the bytes consumed.
