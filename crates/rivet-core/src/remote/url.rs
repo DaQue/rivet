@@ -346,7 +346,12 @@ impl RemoteUrl {
     /// credential helper, the second is the user having deliberately sent an empty one. The pair is
     /// returned together because separating them is how a password ends up used as a username.
     pub fn credentials(&self) -> Option<(&BStr, Option<&BStr>)> {
-        todo!()
+        match (&self.user, &self.password) {
+            (Some(user), Some(password)) => Some((user.as_ref(), Some(password.as_ref()))),
+            (Some(user), None) => Some((user.as_ref(), None)),
+            (None, Some(password)) => Some((password.as_ref(), None)),
+            (None, None) => None,
+        }
     }
 }
 
