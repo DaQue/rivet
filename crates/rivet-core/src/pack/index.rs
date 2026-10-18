@@ -204,7 +204,7 @@ impl<'a> PackIndex<'a> {
     /// Read from the fanout table's last entry. See [`PackIndex::parse`] for why that is the only
     /// trustworthy source.
     pub fn len(&self) -> usize {
-        todo!()
+        self.data.len()
     }
 
     /// Phase 10 — whether the index describes no objects at all.
