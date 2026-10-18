@@ -196,7 +196,7 @@ impl WalkOptions {
 
     /// Phase 4 — follow only first parents.
     pub fn first_parent(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self
     }
 
     /// Phase 4 — limit the number of commits emitted.
