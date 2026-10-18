@@ -137,7 +137,12 @@ impl IgnoreSource {
     /// spelling (`.git/info/exclude` and the excludes file's path). The string is for a user reading
     /// `check-ignore -v`, not for a parser.
     pub fn describe(&self) -> BString {
-        todo!()
+        match self {
+            IgnoreSource::CommandLine => BString::from("command line"),
+            IgnoreSource::Gitignore(p) => p.clone(),
+            IgnoreSource::InfoExclude => BString::from(".git/info/exclude"),
+            IgnoreSource::CoreExcludesFile => BString::from(".git/info/exclude"),
+        }
     }
 }
 
