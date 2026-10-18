@@ -245,7 +245,7 @@ pub fn histogram_diff<T: PartialEq>(old: &[T], new: &[T]) -> Result<Vec<Edit>> {
 /// Used by the unified renderer for the `@@ -a,b +c,d @@` counts, which are the number of lines
 /// **in the file**, not in the hunk — the distinction the header's arithmetic depends on.
 pub fn line_count(data: &[u8]) -> usize {
-    todo!()
+    data.iter().filter(|b| **b == b'\n').count()
 }
 
 /// Phase 8 — whether a buffer needs the `\ No newline at end of file` marker.
