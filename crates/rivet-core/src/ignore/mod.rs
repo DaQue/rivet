@@ -671,7 +671,27 @@ impl IgnoreStack {
     ///
     /// [`crate::error::Error::InvalidPath`] as [`IgnoreStack::check`].
     pub fn explain(&self, path: &BStr, kind: PathKind) -> Result<Vec<&Pattern>> {
-        todo!()
+        let mut out = Vec::new();
+        let mut depth = self.frames.len();
+        let mut i = self.frames.len();
+        while i > 0 {
+            i -= 1;
+            let frame = &self.frames[i];
+            let mut j = frame.patterns.len();
+            while j > 0 {
+                j -= 1;
+                let pat = &frame.patterns[j];
+                if pat.is_inapplicable(kind) {
+                    continue;
+                }
+                if pat.matches(path, kind) {
+                    out.push(pat);
+                }
+            }
+            depth = frame.depth;
+        }
+        let _ = depth;
+        Ok(out)
     }
 
     /// Phase 5 — whether a directory should be descended into during a walk.
