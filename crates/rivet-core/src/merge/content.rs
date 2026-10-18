@@ -115,5 +115,72 @@ pub fn merge_content(
     style: ConflictStyle,
     algorithm: crate::diff::DiffAlgorithm,
 ) -> Result<ContentMerge> {
-    todo!()
+    if algorithm == crate::diff::DiffAlgorithm::Histogram {
+        return Err(crate::error::Error::NotImplemented { what: "histogram merge" });
+    }
+    let base_bytes: &[u8] = base.unwrap_or(&[]);
+    let mut opts = crate::diff::DiffOptions::new();
+    opts.context(crate::diff::DEFAULT_CONTEXT);
+    opts.algorithm(algorithm);
+    let mut hunks: Vec<ConflictHunk> = Vec::new();
+    let mut out: Vec<u8> = Vec::new();
+    let ours_lines: Vec<&[u8]> = ours.split(|b| *b == b'\n').collect();
+    let theirs_lines: Vec<&[u8]> = theirs.split(|b| *b == b'\n').collect();
+    let base_lines: Vec<&[u8]> = base_bytes.split(|b| *b == b'\n').collect();
+    let mut oi = 0usize;
+    let mut ti = 0usize;
+    let mut bi = 0usize;
+    while oi < ours_lines.len() && ti < theirs_lines.len() {
+        if ours_lines[oi] == theirs_lines[ti] {
+            out.extend_from_slice(ours_lines[oi]);
+            if oi < ours_lines.len() - 1 { out.push(b'\n'); }
+            oi += 1; ti += 1; bi += 1;
+        } else {
+            let mut oe = oi;
+            let mut te = ti;
+            let mut be = bi;
+            while oe < ours_lines.len() && te < theirs_lines.len() && ours_lines[oe] != theirs_lines[te] {
+                oe += 1; te += 1; be += 1;
+            }
+            out.extend_from_slice(b"<<<<<<< ");
+            out.extend_from_slice(labels.0.as_bytes());
+            out.extend_from_slice(b"\n");
+            for l in &ours_lines[oi..oe] { out.extend_from_slice(l); out.push(b'\n'); }
+            out.extend_from_slice(b"||||||| base\n");
+            for l in &base_lines[bi..be] { out.extend_from_slice(l); out.push(b'\n'); }
+            out.extend_from_slice(b">>>>>>> ");
+            out.extend_from_slice(labels.1.as_bytes());
+            out.extend_from_slice(b"\n");
+            for l in &theirs_lines[ti..te] { out.extend_from_slice(l); out.push(b'\n'); }
+            out.extend_from_slice(b"=======\n");
+            for l in &theirs_lines[ti..te] { out.extend_from_slice(l); out.push(b'\n'); }
+            out.extend_from_slice(b">>>>>>> ");
+            out.extend_from_slice(labels.1.as_bytes());
+            out.extend_from_slice(b"\n");
+            hunks.push(ConflictHunk {
+                ours_start: oi,
+                ours_len: oe - oi,
+                theirs_start: ti,
+                theirs_len: te - ti,
+                base_start: bi,
+                base_len: be - bi,
+            });
+            oi = oe; ti = te; bi = be;
+        }
+    }
+    while oi < ours_lines.len() {
+        out.extend_from_slice(ours_lines[oi]);
+        if oi < ours_lines.len() - 1 { out.push(b'\n'); }
+        oi += 1;
+    }
+    while ti < theirs_lines.len() {
+        out.extend_from_slice(theirs_lines[ti]);
+        if ti < theirs_lines.len() - 1 { out.push(b'\n'); }
+        ti += 1;
+    }
+    Ok(ContentMerge {
+        data: BString::from(out),
+        conflict: !hunks.is_empty(),
+        hunks,
+    })
 }
