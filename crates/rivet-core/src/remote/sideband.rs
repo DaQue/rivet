@@ -257,7 +257,21 @@ pub fn read_status_stream<R: Read>(
 /// [`crate::error::Error::Protocol`] if `max_payload` exceeds the pkt-line maximum, which is a caller
 /// bug that would otherwise produce a frame no peer can parse.
 pub fn frame(params: ChannelWrite, payload: &[u8]) -> Result<Vec<u8>> {
-    todo!()
+    let max_payload = params.max_payload;
+    if max_payload == 0 {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    let mut remaining = payload;
+    while !remaining.is_empty() {
+        let chunk_len = remaining.len().min(max_payload as usize);
+        let chunk = &remaining[..chunk_len];
+        let len_bytes = (chunk_len as u32).to_be_bytes();
+        out.extend_from_slice(&len_bytes);
+        out.extend_from_slice(chunk);
+        remaining = &remaining[chunk_len..];
+    }
+    Ok(out)
 }
 
 /// Phase 11 — the parameters of a client-side sideband write.
