@@ -74,6 +74,7 @@ use bstr::{BStr, BString};
 
 use crate::error::Result;
 use crate::hash::ObjectFormat;
+use crate::error::Error;
 
 /// Phase 2 — one `key = value` entry, as it appears in a file.
 ///
@@ -312,7 +313,23 @@ impl Config {
     /// [`crate::error::Error::LockHeld`] if the lock exists, and
     /// [`crate::error::Error::IoAtPath`] if the write or rename fails.
     pub fn write(&self, path: &Path) -> Result<()> {
-        todo!()
+        let lock = path.with_extension("lock");
+        if lock.exists() {
+            return Err(Error::LockHeld { path: path.to_string_lossy().into_owned().into() });
+        }
+        let tmp = path.with_extension("tmp");
+        let data = self.to_bytes();
+        let res = std::fs::write(&tmp, &data);
+        if res.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(Error::IoAtPath { path: path.to_string_lossy().into_owned().into(), source: res.unwrap_err() });
+        }
+        let res = std::fs::rename(&tmp, path);
+        if res.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(Error::IoAtPath { path: path.to_string_lossy().into_owned().into(), source: res.unwrap_err() });
+        }
+        Ok(())
     }
 
     /// Phase 2 — the last value of a key, or `None` if it is absent.
