@@ -259,7 +259,9 @@ impl<'a> CapabilitySet<'a> {
     ///
     /// [`crate::error::Error::Protocol`] for a malformed entry.
     pub fn insert(&mut self, text: &[u8]) -> Result<()> {
-        todo!()
+        let cap = crate::remote::Capability::parse(text)?;
+        self.entries.push(cap);
+        Ok(())
     }
 
     /// Phase 11 — whether the peer announced a capability.
