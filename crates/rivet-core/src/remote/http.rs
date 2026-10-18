@@ -215,7 +215,9 @@ impl HttpTransport {
     /// Appending it here produces a server that answers with the advertisement again and a client
     /// that parses it as a negotiation response.
     pub fn service_url(&self, service: Service) -> BString {
-        todo!()
+        let path = &self.url.path;
+        let service_str = service.as_str();
+        BString::from(format!("{}info/refs?service={}", path, service_str).as_bytes())
     }
 }
 
