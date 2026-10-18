@@ -206,7 +206,7 @@ impl PackWriter {
     /// objects produces. Do not refuse it, and do not treat `is_empty` as a failure signal; a
     /// caller that wants to skip writing one should say so itself.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.entries.is_empty()
     }
 
     /// Phase 10 — seal the pack and return its bytes, ready to be written or sent.
