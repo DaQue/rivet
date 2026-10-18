@@ -50,6 +50,7 @@ use crate::error::Result;
 use crate::index::IndexEntry;
 use crate::object::EntryMode;
 use crate::worktree::Worktree;
+use crate::error::Error;
 
 /// Phase 4 — one `lstat` result, in the shape the index stores it.
 ///
@@ -350,5 +351,19 @@ impl StatCache {
 ///
 /// [`crate::error::Error::IoAtPath`] if the file exists and cannot be stat'd.
 pub fn index_mtime(path: &std::path::Path) -> Result<(u32, u32)> {
-    todo!()
+    let meta = std::fs::metadata(path);
+    match meta {
+        Ok(m) => {
+            let d = m
+            .modified()
+            .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default())
+            .unwrap_or_default();
+            Ok((d.as_secs() as u32, d.subsec_nanos()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((0, 0)),
+        Err(e) => Err(Error::IoAtPath {
+            path: BString::from(path.to_string_lossy().as_bytes()),
+            source: e,
+        }),
+    }
 }
