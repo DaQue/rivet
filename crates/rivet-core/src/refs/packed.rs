@@ -365,7 +365,12 @@ impl PackedRefs {
     /// corruption. Callers that need to know whether the peel landed must check
     /// [`PackedRefs::get`] first.
     pub fn set_peeled(&mut self, name: &RefName, peeled: ObjectId) {
-        todo!()
+        for (i, entry) in self.entries.iter_mut().enumerate() {
+            if entry.name == *name {
+                entry.peeled = Some(peeled);
+                return;
+            }
+        }
     }
 
     /// Phase 2 — sort the entries by ref name in byte order.
