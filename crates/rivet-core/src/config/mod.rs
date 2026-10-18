@@ -675,7 +675,24 @@ impl Config {
     /// The section is matched case-insensitively and the subsection case-sensitively; passing
     /// `None` matches a bare section and is **not** the same as matching any subsection.
     pub fn keys(&self, section: &BStr, subsection: Option<&BStr>) -> Vec<BString> {
-        todo!()
+        let mut out = Vec::new();
+        let mut in_section = false;
+        for entry in &self.entries {
+            if entry.key.is_empty() {
+                let section = entry.value.as_slice();
+                let section_match = section.eq_ignore_ascii_case(section);
+                let sub_match = match subsection {
+                    Some(sub) => section == sub,
+                    None => section.is_empty(),
+                };
+                in_section = section_match && sub_match;
+                continue;
+            }
+            if in_section {
+                out.push(entry.key.clone());
+            }
+        }
+        out
     }
 
     /// Phase 2 — every entry, in file order, duplicates included.
