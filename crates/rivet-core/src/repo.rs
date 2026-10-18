@@ -710,7 +710,12 @@ impl Repository {
     /// [`crate::error::Error::ObjectNotFound`] for a ref pointing at a missing object, and
     /// [`crate::error::Error::NotACommit`] for one that peels to a tree or blob.
     pub fn head_commit(&self) -> Result<Option<ObjectId>> {
-        todo!()
+        let head = self.head()?;
+        match head {
+            HeadState::Attached { oid, .. } => Ok(Some(oid)),
+            HeadState::Detached { oid } => Ok(Some(oid)),
+            HeadState::Unborn { .. } => Ok(None),
+        }
     }
 
     /// Phase 4 — the tree of a commit.
