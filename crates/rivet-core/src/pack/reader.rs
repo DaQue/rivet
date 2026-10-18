@@ -162,7 +162,7 @@ impl<'a> PackFile<'a> {
     /// reads — a pack v3 with an index v2 is the normal pairing, and confusing the two produces
     /// wrong error messages rather than wrong data.
     pub fn version(&self) -> u32 {
-        todo!()
+        self.version
     }
 
     /// Phase 10 — the repository's id width, as it was passed to [`PackFile::open`].
