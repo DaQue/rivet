@@ -207,7 +207,7 @@ impl Status {
     /// `unstaged`: its work tree content is the conflict-marked file `merge` wrote, and
     /// comparing that against the index would report a modification the user did not make.
     pub fn conflicts(&self) -> Vec<&BString> {
-        todo!()
+        self.staged.iter().filter(|e| e.kind == ChangeKind::Unmerged).map(|e| &e.path).collect()
     }
 }
 
