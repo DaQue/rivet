@@ -175,7 +175,8 @@ impl CheckoutOptions {
 
     /// Phase 4 — limit the checkout to a path prefix.
     pub fn pathspec(&mut self, prefix: &bstr::BStr) -> &mut Self {
-        todo!()
+        self.pathspec = prefix.to_owned();
+        self
     }
 }
 
