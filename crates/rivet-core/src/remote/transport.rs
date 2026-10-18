@@ -526,7 +526,10 @@ pub enum Service {
 impl Service {
     /// Phase 11 — the service's name as it appears on the wire.
     pub const fn as_str(self) -> &'static str {
-        todo!()
+        match self {
+            Service::UploadPack => "git-upload-pack",
+            Service::ReceivePack => "git-receive-pack",
+        }
     }
 
     /// Phase 11 — the smart-HTTP `Content-Type` for a request to this service.
