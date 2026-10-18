@@ -454,7 +454,11 @@ impl WorktreeWalkOptions {
     /// Phase 4 — the options `status` uses: recursive, untracked files included, ignored ones
     /// not.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            include_ignored: false,
+            recursive: true,
+            prefix: BString::from(""),
+        }
     }
 
     /// Phase 4 — set whether ignored files are collected.
