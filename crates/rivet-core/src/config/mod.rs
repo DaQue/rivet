@@ -550,7 +550,18 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn remove(&mut self, key: &BStr) -> Result<bool> {
-        todo!()
+        let mut removed = false;
+        let mut i = 0;
+        while i < self.entries.len() {
+            let entry = &self.entries[i];
+            if entry.key == key {
+                self.entries.remove(i);
+                removed = true;
+            } else {
+                i += 1;
+            }
+        }
+        Ok(removed)
     }
 
     /// Phase 2 — remove a whole section, subsection included.
