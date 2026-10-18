@@ -142,7 +142,8 @@ impl DiffOptions {
 
     /// Phase 8 — limit the diff to a path prefix.
     pub fn pathspec(&mut self, prefix: &BStr) -> &mut Self {
-        todo!()
+        self.pathspec = prefix.to_owned();
+        self
     }
 }
 
