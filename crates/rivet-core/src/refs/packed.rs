@@ -271,7 +271,7 @@ impl PackedRefs {
     /// reads report lightweight tags where there are annotated ones. The only honest way to set it
     /// is to have peeled every tag while building the file.
     pub fn set_traits(&mut self, traits: Vec<BString>) {
-        todo!()
+        self.traits = traits
     }
 
     /// Phase 2 — the entries, in file order.
