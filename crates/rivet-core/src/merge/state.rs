@@ -166,7 +166,7 @@ impl MergeState {
 impl Default for MergeState {
     /// Phase 9 — the defaults of [`MergeState::new`].
     fn default() -> Self {
-        todo!()
+        Self::new()
     }
 }
 
