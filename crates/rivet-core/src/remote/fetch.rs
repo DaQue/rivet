@@ -67,6 +67,7 @@ use crate::refs::RefStore;
 use crate::remote::transport::Transport;
 use crate::remote::url::RemoteUrl;
 use crate::remote::{AdvertisedRef, RefAdvertisement};
+use crate::object::ObjectKind;
 
 /// Phase 11 — how many objects to put in one `have` line's round.
 ///
@@ -460,7 +461,18 @@ pub fn wants_for_tracking(advertisement: &RefAdvertisement) -> Vec<ObjectId> {
 ///   a filesystem-level restore and would otherwise make the server's reply reference an object the
 ///   client cannot read.
 pub fn local_haves(odb: &Odb, refs: &RefStore) -> Result<Vec<ObjectId>> {
-    todo!()
+    let mut haves = Vec::new();
+    for oid in odb.oids().expect("reading local oids") {
+        if !odb.contains(&oid) {
+            continue;
+        }
+        let (kind, _) = odb.read_header(&oid).expect("reading object header");
+        if kind == ObjectKind::Commit {
+            haves.push(oid);
+        }
+    }
+    haves.reverse();
+    Ok(haves)
 }
 
 /// Phase 11 — write the refs an advertisement implies, for a tracking fetch.
