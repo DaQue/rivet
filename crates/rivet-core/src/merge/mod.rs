@@ -265,7 +265,7 @@ impl Conflict {
     /// [`ConflictKind::DeleteModify`] — there our side deleted the path, so there is nothing to
     /// check out and the resolution is to remove it instead.
     pub fn resolvable_with_ours(&self) -> bool {
-        todo!()
+        self.kind != ConflictKind::DeleteModify
     }
 
     /// Phase 9 — the index stages this conflict occupies, as `(stage, id)` pairs.
