@@ -267,7 +267,7 @@ impl Hunk {
 
     /// Phase 8 — how many lines the hunk removes.
     pub fn removed(&self) -> usize {
-        todo!()
+        self.lines.iter().filter(|l| l.kind == LineKind::Removed).count()
     }
 
     /// Phase 8 — write the hunk: header, lines, and the missing-newline markers.
