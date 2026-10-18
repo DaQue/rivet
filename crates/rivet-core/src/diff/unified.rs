@@ -159,7 +159,13 @@ impl HunkLine {
 
     /// Phase 8 — an added line.
     pub fn added(content: impl Into<BString>) -> Self {
-        todo!()
+        let content = content.into();
+        let has_newline = content.ends_with(&[b'\n']);
+        Self {
+            kind: LineKind::Added,
+            content,
+            has_newline,
+        }
     }
 
     /// Phase 8 — write this line, prefix and all, marking a missing newline.
