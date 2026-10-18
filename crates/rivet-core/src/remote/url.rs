@@ -390,7 +390,24 @@ impl RemoteUrl {
     ///   transports use, and re-parsing the redacted string would lose the credential silently. A
     ///   caller must not "clean" a URL by overwriting config with this.
     pub fn redacted(&self) -> BString {
-        todo!()
+        let mut out = BString::from(self.scheme.as_str());
+        out.extend_from_slice(b"://");
+        if let Some(user) = &self.user {
+            out.extend_from_slice(&user[..]);
+            if let Some(password) = &self.password {
+                out.extend_from_slice(&password[..]);
+            }
+            out.push(b'@');
+        }
+        if let Some(host) = &self.host {
+            out.extend_from_slice(&host[..]);
+            if let Some(port) = self.port {
+                out.push(b':');
+                out.extend_from_slice(port.to_string().as_bytes());
+            }
+        }
+        out.extend_from_slice(&self.path[..]);
+        out
     }
 
     /// Phase 11 — the URL as Git would spell it in `remote.origin.url`.
