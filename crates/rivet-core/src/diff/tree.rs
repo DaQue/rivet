@@ -231,7 +231,16 @@ impl TreeDiff {
     ///   how `--stat` ends up disagreeing with the patch it is printed above; if the two are ever
     ///   allowed to diverge, they should be one field, not two.
     pub fn filter_pathspec(&mut self, prefix: &BStr) {
-        todo!()
+        let mut files = Vec::new();
+        let mut stats = Vec::new();
+        for (f, s) in self.files.drain(..).zip(self.stats.drain(..)) {
+            if prefix.is_empty() || f.path().starts_with(prefix) {
+                files.push(f);
+                stats.push(s);
+            }
+        }
+        self.files = files;
+        self.stats = stats;
     }
 }
 
