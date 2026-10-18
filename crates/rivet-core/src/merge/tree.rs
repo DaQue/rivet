@@ -272,5 +272,15 @@ pub fn merge_worktree_paths(
     index: &Index,
     result: &crate::merge::TreeMerge,
 ) -> Result<Vec<BString>> {
-    todo!()
+    let mut paths = Vec::new();
+    for entry in index.entries() {
+        if entry.is_unmerged() {
+            continue;
+        }
+        let path = entry.path.clone();
+        if result.paths.iter().any(|p| p.path == path) {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
 }
