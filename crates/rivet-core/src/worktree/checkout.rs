@@ -163,7 +163,8 @@ impl CheckoutOptions {
 
     /// Phase 4 — set the force flag.
     pub fn force(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.force = on;
+        self
     }
 
     /// Phase 4 — turn the operation into a dry run.
