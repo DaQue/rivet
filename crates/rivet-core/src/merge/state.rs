@@ -137,7 +137,7 @@ impl MergeState {
     /// an error and it is not rare enough to ignore: `git merge topic1 topic2` is a normal thing
     /// to type, and the resulting commit's parent list is what makes the history reachable.
     pub fn is_octopus(&self) -> bool {
-        todo!()
+        self.merge_head.len() > 1
     }
 
     /// Phase 9 — the first commit being merged in.
