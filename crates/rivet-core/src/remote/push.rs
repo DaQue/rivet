@@ -561,5 +561,9 @@ pub fn push_is_fast_forward(odb: &Odb, old: ObjectId, new: ObjectId) -> Result<b
 /// update line is built from the flag — a distinction that only matters to someone constructing the
 /// lines by hand, and is stated so that they are not surprised.
 pub fn force_prefix(update: &RefUpdate) -> &'static BStr {
-    todo!()
+    if update.force {
+        BStr::new(b"+")
+    } else {
+        BStr::new(b"")
+    }
 }
