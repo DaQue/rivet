@@ -270,7 +270,44 @@ impl RemoteUrl {
     /// other than `localhost`, which is a URL naming a remote machine's filesystem and therefore not
     /// a local path at all.
     pub fn parse_local(input: &BStr) -> Result<Self> {
-        todo!()
+        let bytes = &input[..];
+        let scheme_end = bytes.iter().position(|&b| b == b':').unwrap_or(bytes.len());
+        let scheme = &bytes[..scheme_end];
+        let rest = &bytes[scheme_end..];
+        if scheme == b"file" {
+            let rest = rest.strip_prefix(b"//").unwrap_or(rest);
+            let slash = rest.iter().position(|&b| b == b'/');
+            let host = match slash {
+                Some(i) => &rest[..i],
+                None => rest,
+            };
+            if host != b"localhost" && !host.is_empty() {
+                return Err(Error::InvalidRemoteUrl {
+                    url: BString::from(input),
+                    reason: "file URL with non-localhost host",
+                });
+            }
+            let path = match slash {
+                Some(i) => &rest[i..],
+                None => b"",
+            };
+            return Ok(Self {
+                scheme: RemoteScheme::File,
+                user: None,
+                password: None,
+                host: None,
+                port: None,
+                path: BString::from(path),
+            });
+        }
+        Ok(Self {
+            scheme: RemoteScheme::File,
+            user: None,
+            password: None,
+            host: None,
+            port: None,
+            path: BString::from(input),
+        })
     }
 
     /// Phase 11 — the URL rendered with its credentials removed.
