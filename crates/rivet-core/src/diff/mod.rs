@@ -136,7 +136,8 @@ impl DiffOptions {
 
     /// Phase 8 — select the algorithm.
     pub fn algorithm(&mut self, algorithm: DiffAlgorithm) -> &mut Self {
-        todo!()
+        self.algorithm = algorithm;
+        self
     }
 
     /// Phase 8 — limit the diff to a path prefix.
