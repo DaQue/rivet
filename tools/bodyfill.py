@@ -743,27 +743,47 @@ def main():
     counter = [0]
     t0 = time.time()
     last_ok = time.time()
-    for rel in queue:
-        if time.time() >= deadline:
-            log("deadline reached before " + rel)
+    stop = False
+    for round_no in range(1, 9):
+        queue = [args.file] if args.file else [rel for _n, rel in stub_files(args.crate)]
+        if args.only:
+            queue = [args.file] if args.file else [rel for _n, rel in stub_files(args.crate)]
+        if not queue:
+            log("nothing to do: no remaining todo!() stubs")
             break
-        if args.max_functions and total >= args.max_functions:
-            log(f"function cap {args.max_functions} reached")
+        log(f"round {round_no} queue: " + ", ".join(os.path.basename(q) for q in queue[:12]) + ("..." if len(queue) > 12 else ""))
+        before = total
+        for rel in queue:
+            if time.time() >= deadline:
+                log("deadline reached before " + rel)
+                stop = True
+                break
+            if args.max_functions and total >= args.max_functions:
+                log(f"function cap {args.max_functions} reached")
+                stop = True
+                break
+            if time.time() - last_ok > args.stall_min * 60:
+                log(f"STOP stall: no function landed in {args.stall_min:.0f} min (total={total})")
+                stop = True
+                break
+            log(f"file {rel} ({len(find_stubs(open(os.path.join(REPO, rel), encoding='utf-8').read()))} stubs)")
+            status, done = run_file(rel, args, log, prog, deadline, counter)
+            total += done
+            if done:
+                last_ok = time.time()
+            results.append(f"{rel}: {status} done={done}")
+            log(f"file {rel} -> {status} ({done} this file, {total} total)")
+            if status in ("deadline", "thermal", "systemic", "dryrun"):
+                if status != "deadline":
+                    log(f"stopping whole run: {status}")
+                stop = True
+                break
+        if stop:
             break
-        if time.time() - last_ok > args.stall_min * 60:
-            log(f"STOP stall: no function landed in {args.stall_min:.0f} min (total={total})")
+        if total == before:
+            log(f"round {round_no} made no progress - stopping")
             break
-        log(f"file {rel} ({len(find_stubs(open(os.path.join(REPO, rel), encoding='utf-8').read()))} stubs)")
-        status, done = run_file(rel, args, log, prog, deadline, counter)
-        total += done
-        if done:
-            last_ok = time.time()
-        results.append(f"{rel}: {status} done={done}")
-        log(f"file {rel} -> {status} ({done} this file, {total} total)")
-        if status in ("deadline", "thermal", "systemic", "dryrun"):
-            if status != "deadline":
-                log(f"stopping whole run: {status}")
-            break
+        log(f"round {round_no} done: +{total - before} (total {total})")
 
     el = (time.time() - t0) / 60
     log(f"end total_done={total} elapsed={el:.1f}m")
