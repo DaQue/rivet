@@ -269,7 +269,8 @@ impl StatusOptions {
 
     /// Phase 4 — set whether ignored paths are collected.
     pub fn ignored(&mut self, on: bool) -> &mut Self {
-        todo!()
+        self.ignored = on;
+        self
     }
 
     /// Phase 4 — limit the report to a path prefix.
