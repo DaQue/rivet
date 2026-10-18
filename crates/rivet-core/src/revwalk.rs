@@ -657,7 +657,15 @@ impl<'a> CommitWalker<'a> {
     ///
     /// As [`CommitWalker::next_commit`].
     pub fn by_topo(self) -> Result<Vec<ObjectId>> {
-        todo!()
+        let mut walker = self;
+        let mut out = Vec::new();
+        loop {
+            match walker.next_commit()? {
+                Some(c) => out.push(c.id(walker.odb.format())?),
+                None => break,
+            }
+        }
+        Ok(out)
     }
 
     /// Phase 4 — how many commits have been emitted so far.
