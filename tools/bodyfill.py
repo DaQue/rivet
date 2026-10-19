@@ -465,6 +465,14 @@ def api_sheet(text, local_only=False):
         return out
 
     own_defs = _def_blocks(text, keep=local)
+    # Types this file *declares* but never names in a signature still get
+    # constructed by its bodies (`PackIndexEntry { .. }`); show their fields too.
+    declared = set(
+        re.findall(
+            r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum)\s+([A-Za-z_]\w*)", text, re.M
+        )
+    )
+    own_defs = own_defs + [b for b in _def_blocks(text, keep=declared - local)]
     own_methods = methods_of(text, local)
     calls = called_methods(text)
     call_sigs = _sig_by_name(text, calls)
@@ -546,6 +554,9 @@ def build_prompt(text, lines, stub):
         "- Call ONLY the methods listed in the API REFERENCE for a type. A method\n"
         "  that is private in another module (`as_bytes` on a foreign type) cannot\n"
         "  be called; use the accessor or field the sheet does show.\n"
+        "- `Error::IoAtPath { path }` stores a `BString`: never pass a `PathBuf` or\n"
+        "  `String` there. Convert first — `BString::from(p.to_string_lossy().into_owned())`\n"
+        "  or `BString::from(p.as_os_str().as_bytes())` with `OsStrExt`.\n"
         "- `write_all` returns `io::Result<()>`: NEVER chain it (`.write_all(a).write_all(b)`\n"
         "  is a compile error). Write each piece on its own line, ending with `?` or\n"
         "  `.unwrap()`.\n"
