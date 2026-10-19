@@ -306,7 +306,139 @@ impl Config {
     ///
     /// As [`Config::load`], with `line` set on the syntax error.
     pub fn parse(data: &[u8]) -> Result<Self> {
-        todo!()
+        let mut cfg = Self::new();
+        let mut section: Option<(BString, Option<BString>)> = None;
+        let mut line_no = 0usize;
+        let mut i = 0usize;
+        let mut logical: Vec<u8> = Vec::new();
+        let mut logical_start = 0usize;
+        let mut cont = false;
+        let mut n = data.len();
+        while i < n {
+            let start = i;
+            let mut j = i;
+            while j < n && data[j] != b'\n' {
+                j += 1;
+            }
+            let line = &data[start..j];
+            i = if j < n { j + 1 } else { j };
+            line_no += 1;
+            let trimmed = line.iter().position(|b| *b != b' ' && *b != b'\t').map(|p| &line[p..]).unwrap_or(&[]);
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed[0] == b'#' || trimmed[0] == b';' {
+                continue;
+            }
+            let mut k = 0usize;
+            while k < trimmed.len() && trimmed[k] == b'\\' {
+                k += 1;
+            }
+            if k % 2 == 1 {
+                cont = true;
+                logical.extend_from_slice(&trimmed[..k - 1]);
+                continue;
+            }
+            if cont {
+                cont = false;
+                logical.extend_from_slice(&trimmed[k..]);
+                continue;
+            }
+            logical_start = line_no;
+            logical = trimmed.to_vec();
+            let t = &logical[..];
+            if t[0] == b'[' {
+                let close = t.iter().position(|b| *b == b']').ok_or_else(|| Error::ConfigSyntax { line: line_no, reason: "unterminated section" })?;
+                let inner = &t[1..close];
+                let mut sp = 0usize;
+                while sp < inner.len() && inner[sp] == b' ' {
+                    sp += 1;
+                }
+                let mut ep = inner.len();
+                while ep > sp && inner[ep - 1] == b' ' {
+                    ep -= 1;
+                }
+                let name = &inner[sp..ep];
+                let name_str = String::from_utf8(name.to_vec()).map_err(|_| Error::InvalidUtf8 { what: "section name" })?;
+                let name_folded = BString::from(name_str.to_ascii_lowercase());
+                let sub: Option<BString> = if ep < inner.len() {
+                    let rest = &inner[ep..];
+                    let rs = rest.iter().position(|b| *b == b' ').map(|p| &rest[p..]).unwrap_or(&[]);
+                    let rs_trim = rs.iter().position(|b| *b != b' ' && *b != b'\t').map(|p| &rs[p..]).unwrap_or(&[]);
+                    let rs_str = String::from_utf8(rs_trim.to_vec()).map_err(|_| Error::InvalidUtf8 { what: "subsection name" })?;
+                    Some(BString::from(rs_str))
+                } else {
+                    None
+                };
+                section = Some((name_folded, sub));
+                continue;
+            }
+            let sec = section.as_ref().ok_or_else(|| Error::ConfigSyntax { line: line_no, reason: "key before section" })?;
+            let eq = t.iter().position(|b| *b == b'=');
+            let (key_bytes, value_bytes): (&[u8], &[u8]) = if let Some(eq) = eq {
+                let key = &t[..eq];
+                let key_trim = key.iter().position(|b| *b != b' ' && *b != b'\t').map(|p| &key[p..]).unwrap_or(&[]);
+                let key_trim = key_trim.iter().rev().position(|b| *b != b' ' && *b != b'\t').map(|p| &key_trim[..key_trim.len() - p]).unwrap_or(&[]);
+                let val = &t[eq + 1..];
+                let val_trim = val.iter().position(|b| *b != b' ' && *b != b'\t').map(|p| &val[p..]).unwrap_or(&[]);
+                let val_trim = val_trim.iter().rev().position(|b| *b != b' ' && *b != b'\t').map(|p| &val_trim[..val_trim.len() - p]).unwrap_or(&[]);
+                (key_trim, val_trim)
+            } else {
+                let key = t;
+                let key_trim = key.iter().position(|b| *b != b' ' && *b != b'\t').map(|p| &key[p..]).unwrap_or(&[]);
+                let key_trim = key_trim.iter().rev().position(|b| *b != b' ' && *b != b'\t').map(|p| &key_trim[..key_trim.len() - p]).unwrap_or(&[]);
+                (key_trim, &[] as &[u8])
+            };
+            let key_str = String::from_utf8(key_bytes.to_vec()).map_err(|_| Error::InvalidUtf8 { what: "key name" })?;
+            let key_folded = BString::from(key_str.to_ascii_lowercase());
+            let value: BString = if value_bytes.is_empty() {
+                BString::from("true")
+            } else {
+                let mut out: Vec<u8> = Vec::new();
+                let mut vi = 0usize;
+                let mut quoted = false;
+                if value_bytes[0] == b'"' {
+                    quoted = true;
+                    vi = 1;
+                }
+                while vi < value_bytes.len() {
+                    let b = value_bytes[vi];
+                    if quoted {
+                        if b == b'"' {
+                            break;
+                        }
+                        if b == b'\\' && vi + 1 < value_bytes.len() {
+                            let c = value_bytes[vi + 1];
+                            match c {
+                                b'n' => out.push(b'\n'),
+                                b't' => out.push(b'\t'),
+                                b'b' => out.push(0x08),
+                                b'\\' => out.push(b'\\'),
+                                b'"' => out.push(b'"'),
+                                _ => out.push(c),
+                            }
+                            vi += 2;
+                            continue;
+                        }
+                        out.push(b);
+                        vi += 1;
+                        continue;
+                    }
+                    if b == b' ' || b == b'\t' {
+                        let rest = &value_bytes[vi..];
+                        if rest.len() >= 2 && (rest[1] == b'#' || rest[1] == b';') {
+                            break;
+                        }
+                    }
+                    out.push(b);
+                    vi += 1;
+                }
+                BString::from(out)
+            };
+            let entry = ConfigEntry::new(sec.0.clone(), sec.1.clone(), key_folded, value);
+            cfg.entries.push(entry);
+        }
+        Ok(cfg)
     }
 
     /// Phase 2 — serialise in Git's canonical spelling.
