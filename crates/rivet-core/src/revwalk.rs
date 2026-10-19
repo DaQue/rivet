@@ -69,6 +69,7 @@ use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::Commit;
 use crate::odb::Odb;
 use crate::refs::{RefName, RefStore};
+use crate::error::Error;
 
 /// Phase 4 — what order a walk should emit commits in.
 ///
@@ -379,7 +380,25 @@ impl RevSpec {
     /// [`crate::error::Error::RefNotFound`] for a name that resolves to no ref and is not an id,
     /// and [`crate::error::Error::InvalidHex`] for a hex-looking string of the wrong length.
     pub fn parse(format: ObjectFormat, spec: &BStr, refs: &RefStore) -> Result<Self> {
-        todo!()
+        let spec = &spec[..];
+        if spec.is_empty() {
+            return Err(Error::InvalidRevision {
+                spec: BString::from(""),
+                reason: "empty revision spec",
+            });
+        }
+        let hex_len = format.hex_len();
+        if spec.len() == hex_len && spec.iter().all(|b| b.is_ascii_hexdigit()) {
+            let id = ObjectId::from_hex(format, BStr::new(spec))?;
+            return Ok(RevSpec::Oid(id));
+        }
+        if spec.len() < hex_len && spec.iter().all(|b| b.is_ascii_hexdigit()) {
+            let id = ObjectId::from_hex_prefix(format, BStr::new(spec))?;
+            return Ok(RevSpec::Abbrev(BString::from(spec)));
+        }
+        let name = BString::from(spec);
+        let name = RefName::from_bytes(&name)?;
+        Ok(RevSpec::Ref(name))
     }
 
     /// Phase 4 — resolve a parsed spec to a commit.
