@@ -445,7 +445,8 @@ impl IgnoreFrame {
     ///
     /// Any [`crate::error::Error::InvalidIgnorePattern`] from [`Pattern::parse_file`].
     pub fn parse(data: &[u8], source: IgnoreSource, base: &BStr, depth: usize) -> Result<Self> {
-        todo!()
+        let patterns = Pattern::parse_file(data, source.clone(), base)?;
+        Ok(Self { source, base: BString::from(base), depth, patterns })
     }
 
     /// Phase 5 — the frame's patterns, in file order.
