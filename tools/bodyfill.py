@@ -423,6 +423,24 @@ def referenced_type_blocks(text, limit=8):
     return out
 
 
+def called_methods(text):
+    """Method names this file actually calls; their signatures matter most."""
+    return set(re.findall(r"\.\s*([a-z_][A-Za-z0-9_]*)\s*\(", text))
+
+
+def _sig_by_name(src, wanted):
+    """Signatures of the named functions, wherever they are defined in src."""
+    out, lines = [], src.split("\n")
+    for i, ln in enumerate(lines):
+        m = re.match(
+            r"^\s{0,8}(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s+([A-Za-z0-9_]+)",
+            ln,
+        )
+        if m and m.group(1) in wanted:
+            out.append(_sig(lines, i))
+    return out
+
+
 def api_sheet(text, local_only=False):
     """Real field names and callable signatures, so bodies stop inventing APIs.
 
@@ -448,6 +466,8 @@ def api_sheet(text, local_only=False):
 
     own_defs = _def_blocks(text, keep=local)
     own_methods = methods_of(text, local)
+    calls = called_methods(text)
+    call_sigs = _sig_by_name(text, calls)
     extra = []
     for rel in EXTRA_FILES:
         p = os.path.join(REPO, rel)
@@ -455,13 +475,22 @@ def api_sheet(text, local_only=False):
             esrc = open(p, encoding="utf-8").read()
             extra.extend(_def_blocks(esrc, keep=KEEP_TYPES))
             extra.extend(methods_of(esrc, KEEP_TYPES))
+            call_sigs.extend(_sig_by_name(esrc, calls))
     kept_defs = _def_blocks(text, keep=KEEP_TYPES - local)
     free = []
     if not local_only:
         for i, ln in enumerate(lines):
             if re.match(r"^pub(?:\([^)]*\))?\s+(?:const\s+|unsafe\s+)?fn\s", ln):
                 free.append(_sig(lines, i))
-    out = own_defs + own_methods + referenced_type_blocks(text) + extra + kept_defs + free
+    out = (
+        own_defs
+        + own_methods
+        + call_sigs
+        + referenced_type_blocks(text)
+        + extra
+        + kept_defs
+        + free
+    )
     kept, used = [], 0
     for blk in out:
         if used + len(blk) + 1 > 7000:
@@ -512,6 +541,11 @@ def build_prompt(text, lines, stub):
         "  `&str`, `String`, `&[u8]`, `Vec<u8>`). It has NO `.as_bytes()`: take raw\n"
         "  bytes with `&x[..]`. Never return a bare `String`/`Vec<u8>` where the\n"
         "  signature says `BString`.\n"
+        "- Where a signature takes `&BStr`, wrap the bytes: `BStr::new(&raw)`.\n"
+        "  Never pass a bare `&[u8]` or a `u8` where the signature says `&BStr`.\n"
+        "- Call ONLY the methods listed in the API REFERENCE for a type. A method\n"
+        "  that is private in another module (`as_bytes` on a foreign type) cannot\n"
+        "  be called; use the accessor or field the sheet does show.\n"
         "- `write_all` returns `io::Result<()>`: NEVER chain it (`.write_all(a).write_all(b)`\n"
         "  is a compile error). Write each piece on its own line, ending with `?` or\n"
         "  `.unwrap()`.\n"
@@ -684,6 +718,7 @@ def temps():
 DEFERRED = (
     # Whole-design work qwen cannot do: an assistant/Claude hand-writes these.
     "src/repo.rs",
+    "src/odb/packed.rs",
     "src/remote/transport.rs",
     "src/remote/http.rs",
     "src/remote/ssh.rs",
