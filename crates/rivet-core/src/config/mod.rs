@@ -946,7 +946,80 @@ pub fn parse_bool(value: &BStr) -> Result<bool> {
 /// [`crate::error::Error::ConfigInvalidValue`] with `expected` set to `"an integer"` for anything
 /// that does not parse, overflows an [`i64`], or has a malformed suffix.
 pub fn parse_int(value: &BStr) -> Result<i64> {
-    todo!()
+    let bytes = &value[..];
+    let mut i = 0;
+    let mut neg = false;
+    if i < bytes.len() && bytes[i] == b'-' {
+        neg = true;
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return Err(Error::ConfigInvalidValue {
+            key: BString::from(""),
+            value: BString::from(value),
+            expected: "an integer",
+        });
+    }
+    let mut n: i64 = 0;
+    let mut has_digit = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c >= b'0' && c <= b'9' {
+            has_digit = true;
+            let d = (c - b'0') as i64;
+            if n > (i64::MAX - d) / 10 {
+                return Err(Error::ConfigInvalidValue {
+                    key: BString::from(""),
+                    value: BString::from(value),
+                    expected: "an integer",
+                });
+            }
+            n = n * 10 + d;
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if !has_digit {
+        return Err(Error::ConfigInvalidValue {
+            key: BString::from(""),
+            value: BString::from(value),
+            expected: "an integer",
+        });
+    }
+    let mut mult: i64 = 1;
+    if i < bytes.len() {
+        let c = bytes[i];
+        if c == b'k' || c == b'K' {
+            mult = 1024;
+        } else if c == b'm' || c == b'M' {
+            mult = 1024 * 1024;
+        } else if c == b'g' || c == b'G' {
+            mult = 1024 * 1024 * 1024;
+        } else {
+            return Err(Error::ConfigInvalidValue {
+                key: BString::from(""),
+                value: BString::from(value),
+                expected: "an integer",
+            });
+        }
+        if i + 1 != bytes.len() {
+            return Err(Error::ConfigInvalidValue {
+                key: BString::from(""),
+                value: BString::from(value),
+                expected: "an integer",
+            });
+        }
+    }
+    let result = if neg { -n * mult } else { n * mult };
+    if result < i64::MIN || result > i64::MAX {
+        return Err(Error::ConfigInvalidValue {
+            key: BString::from(""),
+            value: BString::from(value),
+            expected: "an integer",
+        });
+    }
+    Ok(result)
 }
 
 /// Phase 2 — the environment variable that relocates a config file, if set.
