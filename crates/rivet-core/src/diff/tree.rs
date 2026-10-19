@@ -214,7 +214,7 @@ impl TreeDiff {
     /// (a post-checkout hook, a test assertion), not for a caller iterating; the latter already
     /// has the slice.
     pub fn path(&self, path: &BStr) -> Option<&FileDiff> {
-        todo!()
+        self.files.iter().find(|f| f.path() == path)
     }
 
     /// Phase 8 — the total insertions and deletions across every file.
