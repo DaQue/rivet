@@ -411,7 +411,9 @@ impl PktLine {
     /// [`crate::error::Error::Protocol`] if a data payload is too long to encode, and
     /// [`crate::error::Error::Transport`] if the write fails.
     pub fn write_to<W: std::io::Write>(&self, writer: &mut W) -> Result<()> {
-        todo!()
+        let buf = self.encode()?;
+        writer.write_all(&buf)?;
+        Ok(())
     }
 
     /// Phase 11 — the payload decoded as text, for a human-facing message.
