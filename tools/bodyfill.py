@@ -719,6 +719,7 @@ DEFERRED = (
     # Whole-design work qwen cannot do: an assistant/Claude hand-writes these.
     "src/repo.rs",
     "src/odb/packed.rs",
+    "src/diff/tree.rs",
     "src/remote/transport.rs",
     "src/remote/http.rs",
     "src/remote/ssh.rs",
