@@ -274,7 +274,11 @@ pub fn merge_in_progress(git_dir: &Path) -> bool {
 ///
 /// [`crate::error::Error::IoAtPath`] if the file cannot be written.
 pub fn write_orig_head(git_dir: &Path, oid: ObjectId) -> Result<()> {
-    todo!()
+    let path = git_dir.join("ORIG_HEAD");
+    let mut buf = Vec::with_capacity(oid.format().hex_len() + 1);
+    oid.write_hex(&mut buf).expect("write hex");
+    buf.push(b'\n');
+    std::fs::write(&path, &buf).map_err(|e| crate::error::Error::IoAtPath { path: BString::from(path.to_string_lossy().as_ref()), source: e })
 }
 
 /// Phase 9 — undo a merge: restore the index and the work tree to before it started.
