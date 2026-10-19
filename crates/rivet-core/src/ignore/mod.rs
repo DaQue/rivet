@@ -539,7 +539,15 @@ impl IgnoreStack {
     /// [`crate::error::Error::InvalidIgnorePattern`] for a `.gitignore` line that parses to nothing
     /// usable, and [`crate::error::Error::IoAtPath`] for a file that exists and cannot be read.
     pub fn push_dir(&mut self, dir: &BStr) -> Result<()> {
-        todo!()
+        let path = self.root.join(dir.to_string());
+        let file = path.join(".gitignore");
+        let data = match std::fs::read(&file) {
+            Ok(d) => d,
+            Err(_) => return Ok(()),
+        };
+        let frame = IgnoreFrame::parse(&data, IgnoreSource::Gitignore(BString::from(dir)), dir, self.frames.len())?;
+        self.frames.push(frame);
+        Ok(())
     }
 
     /// Phase 5 — push the git directory's `info/exclude`.
