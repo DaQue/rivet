@@ -54,6 +54,7 @@ use crate::hash::ObjectId;
 use crate::index::Index;
 use crate::odb::Odb;
 use crate::worktree::Worktree;
+use crate::error::Error;
 
 /// Phase 9 — the file naming the commit(s) being merged in.
 ///
@@ -221,7 +222,38 @@ pub fn read_merge_state(
     git_dir: &Path,
     format: crate::hash::ObjectFormat,
 ) -> Result<Option<MergeState>> {
-    todo!()
+    let merge_head_path = git_dir.join("MERGE_HEAD");
+    if !merge_head_path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&merge_head_path).map_err(|e| Error::IoAtPath {
+        path: BString::from(merge_head_path.to_string_lossy().into_owned()),
+        source: e,
+    })?;
+    let line = content.lines().next().unwrap_or("");
+    let hex = BStr::new(line.trim().as_bytes());
+    let head = ObjectId::from_hex(format, hex).map_err(|e| e)?;
+    let mut state = MergeState::new();
+    state.merge_head.push(head);
+    let orig_head_path = git_dir.join("ORIG_HEAD");
+    if orig_head_path.exists() {
+        let orig_content = std::fs::read_to_string(&orig_head_path).map_err(|e| Error::IoAtPath {
+            path: BString::from(orig_head_path.to_string_lossy().into_owned()),
+            source: e,
+        })?;
+        let orig_line = orig_content.lines().next().unwrap_or("");
+        let orig_hex = BStr::new(orig_line.trim().as_bytes());
+        state.orig_head = Some(ObjectId::from_hex(format, orig_hex).map_err(|e| e)?);
+    }
+    let merge_msg_path = git_dir.join("MERGE_MSG");
+    if merge_msg_path.exists() {
+        let msg_content = std::fs::read_to_string(&merge_msg_path).map_err(|e| Error::IoAtPath {
+            path: BString::from(merge_msg_path.to_string_lossy().into_owned()),
+            source: e,
+        })?;
+        state.merge_msg = BString::from(msg_content);
+    }
+    Ok(Some(state))
 }
 
 /// Phase 9 — remove `MERGE_HEAD` and `MERGE_MSG`.
