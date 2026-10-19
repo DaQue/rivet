@@ -634,5 +634,11 @@ pub fn is_up_to_date(
 /// * **A missing object database entry is not an error**, so this returns `Result` only because
 ///   [`Odb::contains`] can fail on an unreadable pack index.
 pub fn missing_from(advertisement: &RefAdvertisement, odb: &Odb) -> Result<Vec<AdvertisedRef>> {
-    todo!()
+    let mut missing = Vec::new();
+    for advertised in &advertisement.refs {
+        if !odb.contains(&advertised.oid) {
+            missing.push(advertised.clone());
+        }
+    }
+    Ok(missing)
 }
