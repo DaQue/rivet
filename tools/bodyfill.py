@@ -584,11 +584,16 @@ def build_prompt(text, lines, stub):
 
 # ---------------------------------------------------------------- model + tools
 def ask(messages, timeout=420, temp=0.15):
+    # Prefill trick: a turn already opened with four spaces makes the model
+    # continue as indented code instead of writing prose about the function.
+    msgs = list(messages)
+    if msgs and msgs[-1].get("role") == "user":
+        msgs.append({"role": "assistant", "content": "    "})
     payload = {
         "model": MODEL,
         "stream": False,
         "think": False,
-        "messages": messages,
+        "messages": msgs,
         "options": {
             "temperature": temp,
             "top_p": 0.9,
@@ -643,13 +648,15 @@ def clean_body(resp, indent):
     run, prev = 1, None
     for raw in s.split("\n"):
         t = raw.strip()
-        if t and t == prev:
+        # Only statements count: nested blocks end with runs of `}` / `});` and
+        # those are perfectly legal Rust, not degenerate repetition.
+        if t and len(t) > 6 and not t.startswith("}") and t == prev:
             run += 1
             if run >= 3:
                 return ""
         else:
             run = 1
-        prev = t
+        prev = t if (len(t) > 6 and not t.startswith("}")) else None
     # Re-indent from brace depth so output is canonical regardless of how the
     # model spaced it.  Braces only: multi-line calls stay on one indent level.
     out, depth = [], 0
