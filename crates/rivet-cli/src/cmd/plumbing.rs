@@ -633,7 +633,63 @@ pub struct FsckArgs {
 /// * **`--literally` produces an object whose content is not valid for its type**, which `fsck`
 ///   will then report. It exists for testing corrupt repositories and must be off by default.
 pub fn run_hash_object(global: &GlobalArgs, args: &HashObjectArgs) -> Result<i32> {
-    todo!()
+    use std::io::Read;
+
+    let kind: rivet_core::ObjectKind = args.kind.into();
+
+    // Outside a repository there is still an answer — the id — but nowhere to write. Detecting the
+    // absence explicitly keeps `hash-object` usable before `init`, which the header documents.
+    let repository = match super::open(global) {
+        Ok(repository) => Some(repository),
+        Err(error) if is_not_a_repository(&error) => None,
+        Err(error) => return Err(error),
+    };
+    if args.write && repository.is_none() {
+        anyhow::bail!("hash-object --write: not a repository");
+    }
+    let format = repository
+        .as_ref()
+        .map(|repository| repository.format())
+        .unwrap_or(rivet_core::ObjectFormat::Sha1);
+
+    // Collect the byte streams first: a `--stdin` read has to be complete before the header that
+    // carries its length can be written.
+    let mut inputs: Vec<Vec<u8>> = Vec::new();
+    if args.stdin {
+        let mut buffer = Vec::new();
+        std::io::stdin().read_to_end(&mut buffer)?;
+        inputs.push(buffer);
+    } else if args.stdin_paths {
+        let mut text = String::new();
+        std::io::stdin().read_to_string(&mut text)?;
+        for line in text.lines().filter(|line| !line.is_empty()) {
+            inputs.push(std::fs::read(line)?);
+        }
+    } else {
+        for path in &args.paths {
+            inputs.push(std::fs::read(path)?);
+        }
+    }
+
+    for body in inputs {
+        let object = match kind {
+            rivet_core::ObjectKind::Blob => rivet_core::Object::Blob(body),
+            rivet_core::ObjectKind::Tree => rivet_core::Object::Tree(body),
+            rivet_core::ObjectKind::Commit => rivet_core::Object::Commit(body),
+            rivet_core::ObjectKind::Tag => rivet_core::Object::Tag(body),
+        };
+        let id = if args.write {
+            repository
+                .as_ref()
+                .expect("checked above")
+                .odb()
+                .write(&object)?
+        } else {
+            object.id(format)?
+        };
+        println!("{}", id.to_hex());
+    }
+    Ok(0)
 }
 
 /// Phase 1 — show an object's type, size or contents.
@@ -671,7 +727,76 @@ pub fn run_hash_object(global: &GlobalArgs, args: &HashObjectArgs) -> Result<i32
 ///   script reads them line by line and a pretty-printed object would be parsed as many
 ///   malformed lines rather than as one error.
 pub fn run_cat_file(global: &GlobalArgs, args: &CatFileArgs) -> Result<i32> {
-    todo!()
+    use std::io::Write;
+
+    if args.batch.is_some() || args.batch_check.is_some() || args.batch_all_objects {
+        anyhow::bail!("cat-file: batch mode is not implemented yet");
+    }
+
+    let repository = super::open(global)?;
+    let spec = args.object.as_deref().unwrap_or_default();
+    let format = repository.format();
+
+    let resolved = rivet_core::revparse::resolve_path(
+        format,
+        repository.refs(),
+        repository.odb(),
+        bstr::BStr::new(spec),
+    );
+    let object = match resolved {
+        Ok(oid) => match repository.odb().read(&oid) {
+            Ok(object) => object,
+            // `-e` turns "the database does not hold it" into a documented negative answer.
+            Err(_) if args.exists => return Ok(1),
+            Err(error) => return Err(error.into()),
+        },
+        Err(_) if args.exists => return Ok(1),
+        Err(error) => return Err(error.into()),
+    };
+
+    if args.exists {
+        return Ok(0);
+    }
+
+    // Git's own precedence when more than one is given: `-p`, then `-t`, then `-s`.
+    if args.pretty {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        match object.kind() {
+            rivet_core::ObjectKind::Blob => out.write_all(object.data())?,
+            rivet_core::ObjectKind::Tree => {
+                let tree = rivet_core::Tree::parse(format, object.data())?;
+                for entry in &tree.entries {
+                    let kind = match entry.mode {
+                        rivet_core::EntryMode::Tree => "tree",
+                        rivet_core::EntryMode::Commit => "commit",
+                        _ => "blob",
+                    };
+                    writeln!(
+                        out,
+                        "{:06o} {} {}\t{}",
+                        entry.mode.to_u32(),
+                        kind,
+                        entry.oid.to_hex(),
+                        entry.name
+                    )?;
+                }
+            }
+            // Commits and tags are already text in the form `-p` prints.
+            _ => out.write_all(object.data())?,
+        }
+        out.flush()?;
+    }
+    if args.kind {
+        println!("{}", object.kind().as_str());
+    }
+    if args.size {
+        println!("{}", object.data().len());
+    }
+    if !args.pretty && !args.kind && !args.size {
+        anyhow::bail!("cat-file: one of -p, -t, -s or -e is required");
+    }
+    Ok(0)
 }
 
 /// Phase 4 — list the contents of a tree.
@@ -705,7 +830,144 @@ pub fn run_cat_file(global: &GlobalArgs, args: &CatFileArgs) -> Result<i32> {
 /// * **A name containing a tab or a newline makes the default format ambiguous**, per
 ///   [`LsTreeArgs`], and `-z` is the answer. The name is never quoted in the default form.
 pub fn run_ls_tree(global: &GlobalArgs, args: &LsTreeArgs) -> Result<i32> {
-    todo!()
+    use std::io::Write;
+
+    let mut repository = super::open(global)?;
+    let format = repository.format();
+
+    // No tree-ish means "the index": Git materialises it as a tree rather than pretending an
+    // index has a tree's shape, which is the only way to print nested entries consistently.
+    let tree_oid = match args.tree.as_deref() {
+        Some(spec) => rivet_core::revparse::to_tree(
+            format,
+            repository.refs(),
+            repository.odb(),
+            bstr::BStr::new(spec),
+        )?,
+        None => repository.write_tree()?,
+    };
+
+    let separator = if args.null_terminated { '\0' } else { '\n' };
+    // Git prints full ids unless `--abbrev` asks otherwise: abbreviation is opt-in for ls-tree,
+    // unlike the pretty commands, and a script parsing the default form sees 40 hex characters.
+    let abbrev_len = match args.abbrev {
+        Some(Some(length)) => length,
+        _ => format.hex_len(),
+    };
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    list_tree(
+        &mut out,
+        &repository,
+        format,
+        &tree_oid,
+        b"",
+        args,
+        abbrev_len,
+        separator,
+    )?;
+    out.flush()?;
+    Ok(0)
+}
+
+/// Walks one tree, printing each entry and, when asked, descending into subtrees.
+fn list_tree(
+    out: &mut impl std::io::Write,
+    repository: &rivet_core::Repository,
+    format: rivet_core::ObjectFormat,
+    tree_oid: &rivet_core::ObjectId,
+    prefix: &[u8],
+    args: &LsTreeArgs,
+    abbrev_len: usize,
+    separator: char,
+) -> Result<()> {
+    let object = repository.odb().read(tree_oid)?;
+    let tree = rivet_core::Tree::parse(format, object.data())?;
+    for entry in &tree.entries {
+        let mut path = prefix.to_vec();
+        path.extend_from_slice(&entry.name);
+        if !matches_pathspec(&path, &args.paths) {
+            continue;
+        }
+        let kind = match entry.mode {
+            rivet_core::EntryMode::Tree => "tree",
+            rivet_core::EntryMode::Commit => "commit",
+            _ => "blob",
+        };
+        // `-r` lists files, not the directories it walks through: without `-t` Git omits tree
+        // entries entirely, which is what makes `ls-tree -r | wc -l` a file count.
+        let descend = args.recursive && entry.mode == rivet_core::EntryMode::Tree;
+        if descend {
+            let mut child_prefix = path.clone();
+            child_prefix.push(b'/');
+            list_tree(
+                out,
+                repository,
+                format,
+                &entry.oid,
+                &child_prefix,
+                args,
+                abbrev_len,
+                separator,
+            )?;
+            continue;
+        }
+        // A leading `/` in the recorded path is how Git's `-r` shows a path nested in a subtree.
+        if args.name_only {
+            out.write_all(&path)?;
+            write!(out, "{separator}")?;
+        } else if args.name_status {
+            write!(out, "A\t")?;
+            out.write_all(&path)?;
+            write!(out, "{separator}")?;
+        } else {
+            let id = entry.oid.to_hex();
+            let id: &[u8] = if args.full_tree || abbrev_len >= format.hex_len() {
+                &id
+            } else {
+                &id[..abbrev_len.min(id.len())]
+            };
+            if args.object_only {
+                out.write_all(id)?;
+            } else if args.long {
+                let size = match entry.mode {
+                    rivet_core::EntryMode::Blob => repository
+                        .odb()
+                        .read_header(&entry.oid)
+                        .map(|(_, size)| size)
+                        .unwrap_or(0),
+                    _ => 0,
+                };
+                write!(out, "{:06o} {} ", entry.mode.to_u32(), kind)?;
+                out.write_all(id)?;
+                write!(out, " {:>7}\t", size)?;
+                out.write_all(&path)?;
+            } else {
+                write!(out, "{:06o} {} ", entry.mode.to_u32(), kind)?;
+                out.write_all(id)?;
+                write!(out, "\t")?;
+                out.write_all(&path)?;
+            }
+            write!(out, "{separator}")?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether `path` should be listed, given the command's pathspecs.
+///
+/// No pathspecs means everything; otherwise a path matches when it *is* the pathspec or sits
+/// inside it, which is the behaviour scripts rely on for a directory argument.
+fn matches_pathspec(path: &[u8], pathspecs: &[PathBuf]) -> bool {
+    if pathspecs.is_empty() {
+        return true;
+    }
+    pathspecs.iter().any(|spec| {
+        let spec = spec.to_string_lossy();
+        let spec = spec.trim_end_matches('/').as_bytes();
+        path == spec || path.starts_with(spec) && path.get(spec.len()) == Some(&b'/')
+    })
 }
 
 /// Phase 3 — list the files in the index.
@@ -742,7 +1004,112 @@ pub fn run_ls_tree(global: &GlobalArgs, args: &LsTreeArgs) -> Result<i32> {
 ///   process is in a subdirectory**, per [`LsFilesArgs`]; the rule is Git's and getting it wrong
 ///   produces paths that a caller cannot feed back to `rivet`.
 pub fn run_ls_files(global: &GlobalArgs, args: &LsFilesArgs) -> Result<i32> {
-    todo!()
+    use std::io::Write;
+
+    let mut repository = super::open(global)?;
+    let format = repository.format();
+    let separator = if args.null_terminated { '\0' } else { '\n' };
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    let pathspecs: Vec<String> = args
+        .paths
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    let matches = |path: &[u8]| -> bool {
+        pathspecs.is_empty()
+            || pathspecs.iter().any(|spec| {
+                let spec = spec.trim_end_matches('/').as_bytes();
+                path == spec || path.starts_with(spec) && path.get(spec.len()) == Some(&b'/')
+            })
+    };
+
+    // Git's default is `--cached`, and `-o` on its own means "only the untracked ones".
+    let mut listed_cached = false;
+
+    if args.cached || !(args.others || args.ignored || args.deleted || args.modified) {
+        listed_cached = true;
+        for entry in repository.index().entries() {
+            if !matches(&entry.path) {
+                continue;
+            }
+            if args.unmerged && !entry.is_unmerged() {
+                continue;
+            }
+            write_index_entry(&mut out, format, entry, args, separator)?;
+        }
+    }
+
+    if args.others || args.ignored {
+        let mut options = rivet_core::worktree::StatusOptions::new();
+        options.untracked(rivet_core::worktree::UntrackedMode::All);
+        options.ignored(args.ignored);
+        let status = repository.status(&options)?;
+        let entries = if args.ignored {
+            &status.ignored
+        } else {
+            &status.untracked
+        };
+        for path in entries {
+            if matches(path) {
+                out.write_all(path)?;
+                write!(out, "{separator}")?;
+            }
+        }
+    }
+
+    if args.deleted || args.modified {
+        let status = repository.status(&rivet_core::worktree::StatusOptions::new())?;
+        for entry in &status.unstaged {
+            if !matches(&entry.path) {
+                continue;
+            }
+            let deleted = entry.kind == rivet_core::worktree::ChangeKind::Deleted;
+            if (args.deleted && deleted) || (args.modified && !deleted) {
+                out.write_all(&entry.path)?;
+                write!(out, "{separator}")?;
+            }
+        }
+    }
+
+    if args.error_unmatch && !listed_cached {
+        anyhow::bail!("ls-files: --error-unmatch needs --cached");
+    }
+    out.flush()?;
+    Ok(0)
+}
+
+/// Prints one index entry in the form `ls-files` uses: `<mode> <id> <stage>\t<path>`, or just the
+/// path under `-c`, with an optional status tag.
+fn write_index_entry(
+    out: &mut impl std::io::Write,
+    format: rivet_core::ObjectFormat,
+    entry: &rivet_core::IndexEntry,
+    args: &LsFilesArgs,
+    separator: char,
+) -> Result<()> {
+    if args.stage {
+        let stage = match entry.stage() {
+            rivet_core::index::Stage::Normal => 0,
+            rivet_core::index::Stage::Base => 1,
+            rivet_core::index::Stage::Ours => 2,
+            rivet_core::index::Stage::Theirs => 3,
+        };
+        write!(
+            out,
+            "{:06o} {} {}\t",
+            entry.mode.to_u32(),
+            entry.oid.to_hex(),
+            stage
+        )?;
+        let _ = format;
+    } else if args.tag {
+        write!(out, "H ")?;
+    }
+    out.write_all(&entry.path)?;
+    write!(out, "{separator}")?;
+    Ok(())
 }
 
 /// Phase 4 — resolve a revision or a repository property.
@@ -786,7 +1153,99 @@ pub fn run_ls_files(global: &GlobalArgs, args: &LsFilesArgs) -> Result<i32> {
 ///   the index or the object database, so that they work in a damaged repository. That is what
 ///   makes `rivet rev-parse --git-dir` the first thing to run when something is wrong.
 pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
-    todo!()
+    let repository = super::open(global)?;
+    let format = repository.format();
+
+    // Repository properties print first, as in Git, and do not consume the positional arguments.
+    if args.git_dir {
+        println!("{}", repository.git_dir().display());
+    }
+    if args.show_toplevel {
+        match repository.worktree_path() {
+            Some(path) => println!("{}", path.display()),
+            None => anyhow::bail!("this operation must be run in a work tree"),
+        }
+    }
+    if args.is_bare_repository {
+        println!("{}", repository.is_bare());
+    }
+    if args.is_inside_work_tree {
+        println!("{}", repository.worktree_path().is_some());
+    }
+    if args.is_inside_git_dir {
+        let cwd = std::env::current_dir()?;
+        println!("{}", cwd.starts_with(repository.git_dir()));
+    }
+
+    let mut status = 0;
+
+    for spec in &args.args {
+        let spec_bytes = bstr::BStr::new(spec);
+        let resolved = rivet_core::revparse::resolve_path(
+            format,
+            repository.refs(),
+            repository.odb(),
+            spec_bytes,
+        );
+        match resolved {
+            Ok(oid) => {
+                if args.symbolic_full_name {
+                    println!("{}", symbolic_name(&repository, spec, oid));
+                } else if let Some(short) = args.short {
+                    let length = short.unwrap_or(7);
+                    let hex = oid.to_hex();
+                    let text = String::from_utf8_lossy(&hex);
+                    println!("{}", &text[..length.min(text.len())]);
+                } else {
+                    println!("{}", oid.to_hex());
+                }
+            }
+            Err(error) => {
+                // `--quiet` suppresses the message but not the failure: scripts branch on the
+                // exit code, and a silent zero here would claim a revision resolved.
+                if !args.quiet {
+                    eprintln!("fatal: {}", error);
+                }
+                if !args.verify {
+                    // Git continues with the remaining arguments unless `--verify` was asked for,
+                    // which is what lets `rev-parse --git-dir HEAD` print both.
+                    status = 128;
+                } else {
+                    return Ok(128);
+                }
+            }
+        }
+    }
+    Ok(status)
+}
+
+/// The ref name a spec came from, for `--symbolic-full-name`.
+fn symbolic_name(
+    repository: &rivet_core::Repository,
+    spec: &str,
+    oid: rivet_core::ObjectId,
+) -> String {
+    // A spec that is already a ref name is printed back in full; anything else (an id, a `~`
+    // expression) has no symbolic name and Git prints the spec unchanged.
+    let mut candidate = bstr::BString::from(spec);
+    if !spec.starts_with("refs/") && !spec.starts_with("HEAD") {
+        if let Ok(name) = rivet_core::refs::RefName::from_bytes(&candidate) {
+            if repository.refs().read(&name).is_ok() {
+                return spec.to_string();
+            }
+        }
+        for prefix in ["refs/heads/", "refs/tags/", "refs/remotes/"] {
+            candidate = bstr::BString::from(prefix);
+            candidate.extend_from_slice(spec.as_bytes());
+            if let Ok(name) = rivet_core::refs::RefName::from_bytes(&candidate) {
+                if repository.refs().resolve_oid(&name).map(|id| id == oid).unwrap_or(false) {
+                    return candidate.to_string();
+                }
+            }
+        }
+        return spec.to_string();
+    }
+    spec.to_string()
 }
 
 /// Phase 3 — write the index out as a tree object.
@@ -823,7 +1282,43 @@ pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
 ///   and never takes `index.lock`; anything else makes a read-only plumbing command fail in a
 ///   repository another process is writing.
 pub fn run_write_tree(global: &GlobalArgs, args: &WriteTreeArgs) -> Result<i32> {
-    todo!()
+    let repository = super::open(global)?;
+    let format = repository.format();
+    let mut oid = repository.write_tree()?;
+
+    if let Some(prefix) = &args.prefix {
+        // `--prefix` writes the subtree rooted at a path, so walk down from the root tree with
+        // the same component-at-a-time lookup `ls-tree` uses.
+        let mut current = oid;
+        for part in prefix.split('/').filter(|part| !part.is_empty()) {
+            let object = repository.odb().read(&current)?;
+            let tree = rivet_core::Tree::parse(format, object.data())?;
+            let entry = tree
+                .entries
+                .iter()
+                .find(|entry| entry.name == part.as_bytes())
+                .ok_or_else(|| anyhow::anyhow!("write-tree: prefix not found: {}", prefix))?;
+            if entry.mode != rivet_core::EntryMode::Tree {
+                anyhow::bail!("write-tree: not a directory: {}", prefix);
+            }
+            current = entry.oid;
+        }
+        oid = current;
+    }
+
+    println!("{}", oid.to_hex());
+    Ok(0)
+}
+
+/// Whether an `anyhow` error is really "there is no repository here".
+///
+/// Commands like `hash-object` have an answer outside a repository, so they need to tell that
+/// specific failure apart from every other one rather than treating all `open` errors alike.
+fn is_not_a_repository(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<rivet_core::Error>(),
+        Some(rivet_core::Error::NotARepository(_))
+    )
 }
 
 /// Phase 10 — validate a packfile and its index.

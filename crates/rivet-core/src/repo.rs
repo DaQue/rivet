@@ -1278,6 +1278,7 @@ impl Repository {
         let resolve = |given: &Option<Signature>,
                        name_var: &str,
                        email_var: &str,
+                       date_var: &str,
                        what: &str|
          -> Result<Signature> {
             if let Some(signature) = given {
@@ -1298,21 +1299,47 @@ impl Repository {
                 })
                 .or_else(|| from_config(b"user.email"));
             match (name, email) {
-                (Some(name), Some(email)) => Ok(Signature::from_zoned(
-                    BStr::new(&name),
-                    BStr::new(&email),
-                    jiff::Zoned::now(),
-                )),
+                (Some(name), Some(email)) => {
+                    // `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` pin the timestamp, which is what
+                    // makes a rivet commit byte-identical to a git one in a differential test.
+                    // Without one, now — but the offset still comes from the local zone.
+                    let date = std::env::var_os(date_var)
+                        .map(|v| {
+                            use std::os::unix::ffi::OsStringExt;
+                            BString::from(v.into_vec())
+                        })
+                        .and_then(|v| crate::object::commit::parse_git_date(BStr::new(&v)));
+                    Ok(match date {
+                        Some((when, tz_offset_minutes)) => Signature {
+                            name,
+                            email,
+                            when,
+                            tz_offset_minutes,
+                        },
+                        None => Signature::from_zoned(
+                            BStr::new(&name),
+                            BStr::new(&email),
+                            jiff::Zoned::now(),
+                        ),
+                    })
+                }
                 _ => Err(Error::Message(format!(
                     "cannot resolve {what} identity: set user.name and user.email"
                 ))),
             }
         };
-        let author = resolve(&options.author, "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "author")?;
+        let author = resolve(
+            &options.author,
+            "GIT_AUTHOR_NAME",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_AUTHOR_DATE",
+            "author",
+        )?;
         let committer = resolve(
             &options.committer,
             "GIT_COMMITTER_NAME",
             "GIT_COMMITTER_EMAIL",
+            "GIT_COMMITTER_DATE",
             "committer",
         )?;
 

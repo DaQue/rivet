@@ -759,6 +759,89 @@ fn parse_two_digits(bytes: &[u8]) -> Option<u32> {
     Some((bytes[0] - b'0') as u32 * 10 + (bytes[1] - b'0') as u32)
 }
 
+/// Parses one of the date spellings Git accepts in `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`.
+///
+/// Returns `(seconds since the epoch, offset from UTC in minutes)` — the same pair a
+/// [`Signature`] stores, so a caller can build one without going through a `jiff::Zoned` (which
+/// would lose the exact offset when the value names a zone).
+///
+/// # Caveats
+///
+/// Supported spellings are the ones Git's own scripts and tests use: `now`, `<epoch> <±hhmm>`,
+/// `@<epoch> <±hhmm>`, and ISO 8601 with `T` or a space separator, with an optional `Z` or
+/// `±hhmm`/`±hh:mm` offset. Relative descriptions (`2.days.ago`, `yesterday`) are *not* parsed;
+/// a caller that needs them must resolve them before calling this. A date with no offset is
+/// taken in the local zone, which is also what Git does.
+pub fn parse_git_date(value: &BStr) -> Option<(i64, i32)> {
+    let text = std::str::from_utf8(&value[..]).ok()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if text.eq_ignore_ascii_case("now") {
+        let now = jiff::Zoned::now();
+        return Some((now.timestamp().as_second(), now.offset().seconds() / 60));
+    }
+    let text = text.strip_prefix('@').unwrap_or(text);
+
+    // Raw epoch: `<seconds>` optionally followed by an offset.
+    let mut fields = text.split_whitespace();
+    let first = fields.next()?;
+    if !first.is_empty() && first.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+        let when: i64 = first.parse().ok()?;
+        let offset = match fields.next() {
+            Some(offset) => parse_tz_offset(offset.as_bytes())?,
+            None => local_offset_minutes(),
+        };
+        return Some((when, offset));
+    }
+
+    // ISO 8601. `jiff` wants RFC 3339, so the separator and the offset are normalised first.
+    let mut body = text.replace(' ', "T");
+    if body.len() == 10 {
+        body.push_str("T00:00:00");
+    }
+    let (civil, offset) = match split_iso_offset(&body) {
+        Some((civil, offset)) => (civil, offset),
+        None => (body.as_str(), local_offset_minutes()),
+    };
+    let (hours, minutes) = format_offset(offset);
+    let normalised = format!("{civil}{hours:+03}:{minutes:02}");
+    let stamp: jiff::Timestamp = normalised.parse().ok()?;
+    Some((stamp.as_second(), offset))
+}
+
+/// Splits a trailing `Z`, `±hhmm` or `±hh:mm` off an ISO timestamp, returning the remainder and
+/// the offset in minutes.
+fn split_iso_offset(text: &str) -> Option<(&str, i32)> {
+    if let Some(rest) = text.strip_suffix('Z') {
+        return Some((rest, 0));
+    }
+    let is_offset = |tail: &str| match tail.as_bytes().first().copied() {
+        Some(sign) => {
+            (sign == b'+' || sign == b'-')
+                && tail[1..].bytes().all(|b| b.is_ascii_digit() || b == b':')
+        }
+        None => false,
+    };
+    if text.len() >= 6 && is_offset(&text[text.len() - 6..]) {
+        let tail = &text[text.len() - 6..];
+        let offset = parse_tz_offset(tail.replacen(':', "", 1).as_bytes())?;
+        return Some((&text[..text.len() - 6], offset));
+    }
+    if text.len() >= 5 && is_offset(&text[text.len() - 5..]) {
+        let tail = &text[text.len() - 5..];
+        let offset = parse_tz_offset(tail.as_bytes())?;
+        return Some((&text[..text.len() - 5], offset));
+    }
+    None
+}
+
+/// The current UTC offset in minutes, used when a date carries none.
+fn local_offset_minutes() -> i32 {
+    let now = jiff::Zoned::now();
+    now.offset().seconds() / 60
+}
+
 /// Inverse of `parse_tz_offset` for serialising: `(hours, non-negative minutes)`.
 fn format_offset(total_minutes: i32) -> (i32, i32) {
     let sign = if total_minutes < 0 { -1 } else { 1 };

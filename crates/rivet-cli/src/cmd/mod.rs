@@ -75,10 +75,9 @@ pub const EXIT_FATAL: i32 = 128;
 ///
 /// # Caveats
 ///
-/// * **The `todo!()` body is the whole scaffold point of this function**: the match arms are the
-///   command list, and the compiler refuses to build until every variant is handled. A new
-///   subcommand added to [`crate::cli::Commands`] therefore breaks the build here rather than
-///   silently doing nothing.
+/// * **The match is the command list**: every variant in [`crate::cli::Commands`] has an arm, so
+///   adding a subcommand breaks the build here instead of silently doing nothing. Each arm is one
+///   line; the work lives in the handler it names.
 /// * **Global flags are passed to every handler**, not applied here. A handler that needs
 ///   `--quiet` reads it from its own [`GlobalArgs`] argument, because whether `--quiet`
 ///   suppresses *this* command's output is a per-command question — `rivet push --quiet` and
@@ -91,35 +90,35 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
     let Cli { global, command } = cli;
     match command {
         Commands::Init(args) => setup::run_init(&global, &args),
-        Commands::Clone(_args) => todo!(),
-        Commands::Config(_args) => todo!(),
+        Commands::Clone(args) => setup::run_clone(&global, &args),
+        Commands::Config(args) => setup::run_config(&global, &args),
         Commands::Add(args) => snapshot::run_add(&global, &args),
         Commands::Rm(args) => snapshot::run_rm(&global, &args),
         Commands::Commit(args) => snapshot::run_commit(&global, &args),
         Commands::Status(args) => snapshot::run_status(&global, &args),
-        Commands::Restore(_args) => todo!(),
-        Commands::Reset(_args) => todo!(),
-        Commands::Log(_args) => todo!(),
-        Commands::Show(_args) => todo!(),
-        Commands::Diff(_args) => todo!(),
-        Commands::Branch(_args) => todo!(),
-        Commands::Switch(_args) => todo!(),
-        Commands::Checkout(_args) => todo!(),
-        Commands::Merge(_args) => todo!(),
-        Commands::Tag(_args) => todo!(),
-        Commands::CheckIgnore(_args) => todo!(),
-        Commands::Remote(_args) => todo!(),
-        Commands::Fetch(_args) => todo!(),
-        Commands::Pull(_args) => todo!(),
-        Commands::Push(_args) => todo!(),
-        Commands::HashObject(_args) => todo!(),
-        Commands::CatFile(_args) => todo!(),
-        Commands::LsTree(_args) => todo!(),
-        Commands::LsFiles(_args) => todo!(),
-        Commands::RevParse(_args) => todo!(),
-        Commands::WriteTree(_args) => todo!(),
-        Commands::VerifyPack(_args) => todo!(),
-        Commands::Fsck(_args) => todo!(),
+        Commands::Restore(args) => snapshot::run_restore(&global, &args),
+        Commands::Reset(args) => snapshot::run_reset(&global, &args),
+        Commands::Log(args) => history::run_log(&global, &args),
+        Commands::Show(args) => history::run_show(&global, &args),
+        Commands::Diff(args) => history::run_diff(&global, &args),
+        Commands::Branch(args) => branching::run_branch(&global, &args),
+        Commands::Switch(args) => branching::run_switch(&global, &args),
+        Commands::Checkout(args) => branching::run_checkout(&global, &args),
+        Commands::Merge(args) => branching::run_merge(&global, &args),
+        Commands::Tag(args) => tag::run_tag(&global, &args),
+        Commands::CheckIgnore(args) => ignore::run_check_ignore(&global, &args),
+        Commands::Remote(args) => remote::run_remote(&global, &args),
+        Commands::Fetch(args) => remote::run_fetch(&global, &args),
+        Commands::Pull(args) => remote::run_pull(&global, &args),
+        Commands::Push(args) => remote::run_push(&global, &args),
+        Commands::HashObject(args) => plumbing::run_hash_object(&global, &args),
+        Commands::CatFile(args) => plumbing::run_cat_file(&global, &args),
+        Commands::LsTree(args) => plumbing::run_ls_tree(&global, &args),
+        Commands::LsFiles(args) => plumbing::run_ls_files(&global, &args),
+        Commands::RevParse(args) => plumbing::run_rev_parse(&global, &args),
+        Commands::WriteTree(args) => plumbing::run_write_tree(&global, &args),
+        Commands::VerifyPack(args) => plumbing::run_verify_pack(&global, &args),
+        Commands::Fsck(args) => plumbing::run_fsck(&global, &args),
     }
 }
 
@@ -217,10 +216,10 @@ pub fn base_dir(global: &GlobalArgs) -> Result<std::path::PathBuf> {
 ///   lossless on Unix because it goes through `OsStrExt` rather than through `to_str()`. A
 ///   `to_str().unwrap()` here would make every non-UTF-8 filename unreachable from the command
 ///   line, which is precisely the class of file Git is careful to support.
-/// * **The result is relative to the work tree, not to the process.** A path given as
-///   `../other/file` must be normalised against the work tree root before it is used, and a
-///   path that escapes the work tree is [`rivet_core::Error::OutsideWorktree`] — not a path to
-///   be operated on. Keeping the conversion here means that rule has one implementation.
+/// * **This function only converts; it does not normalise.** Resolving `.`/`..` against the
+///   work tree and refusing paths that escape it lives in [`worktree_path`], which needs the
+///   repository to know where the work tree is. Callers that take a path from the command line
+///   should call that one.
 /// * **On Windows the separators are rewritten to `/`**, because a Git tree entry's name never
 ///   contains a backslash and would otherwise produce a tree that `git fsck` rejects.
 pub fn path_arg(path: &Path) -> Result<Vec<u8>> {
@@ -236,4 +235,46 @@ pub fn path_arg(path: &Path) -> Result<Vec<u8>> {
             .replace(std::path::MAIN_SEPARATOR, "/");
         Ok(text.into_owned().into_bytes())
     }
+}
+
+/// Resolve a command-line path to the work-tree-relative bytes `rivet-core` expects.
+///
+/// Relative paths are joined to the process's current directory, `.` and `..` are resolved
+/// lexically, and a path that lands outside the work tree is refused here rather than being
+/// handed to the library as a `..`-prefixed tree entry. `op` names the command so the error
+/// reads like Git's ("add: '...' is outside the work tree '...'").
+pub fn worktree_path(repository: &Repository, path: &Path, op: &str) -> Result<bstr::BString> {
+    let Some(root) = repository.worktree()?.root().map(Path::to_path_buf) else {
+        anyhow::bail!("{op}: this operation must be run in a work tree");
+    };
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+
+    let mut cleaned = std::path::PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                cleaned.pop();
+            }
+            other => cleaned.push(other.as_os_str()),
+        }
+    }
+
+    let relative = cleaned.strip_prefix(&root).map_err(|_| {
+        anyhow::anyhow!(
+            "{op}: '{}' is outside the work tree '{}'",
+            path.display(),
+            root.display()
+        )
+    })?;
+
+    if relative.as_os_str().is_empty() {
+        return Ok(bstr::BString::from("."));
+    }
+    Ok(path_arg(relative)?.into())
 }

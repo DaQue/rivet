@@ -9,8 +9,11 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use bstr::BString;
 
 use crate::cli::{GlobalArgs, UntrackedModeArg};
+use rivet_core::refs::HeadState;
+use rivet_core::worktree::{AddOptions, ChangeKind, RmOptions, StatusOptions, UntrackedMode};
 
 /// Arguments to `rivet add`.
 ///
@@ -123,8 +126,9 @@ pub struct RmArgs {
 #[derive(Debug, clap::Args)]
 pub struct CommitArgs {
     /// The commit message. Without one, and without `-C`, the editor would be opened.
+    /// Repeating `-m` joins the parts with a blank line, as Git does.
     #[arg(short = 'm', long = "message", value_name = "MESSAGE")]
-    pub message: Option<String>,
+    pub message: Vec<String>,
 
     /// Take the message, and the authorship, from an existing commit.
     #[arg(short = 'C', long = "reuse-message", value_name = "COMMIT")]
@@ -378,7 +382,45 @@ pub struct ResetArgs {
 ///   drops its stages 1/2/3 and installs the current file as stage 0, which is *how a merge is
 ///   resolved*. Writing all four stages instead leaves the merge permanently in progress.
 pub fn run_add(global: &GlobalArgs, args: &AddArgs) -> Result<i32> {
-    todo!()
+    if args.all && args.update {
+        anyhow::bail!("add: --all and --update are mutually exclusive");
+    }
+
+    let mut repository = super::open(global)?;
+
+    // Git exits 0 with this advice when a bare `git add` has nothing to work with; it is not an
+    // error, so the shell must not see a failure status.
+    if args.paths.is_empty() && !args.all && !args.update {
+        println!("Nothing specified, nothing added.");
+        return Ok(0);
+    }
+
+    let mut paths = Vec::with_capacity(args.paths.len());
+    for path in &args.paths {
+        paths.push(super::worktree_path(&repository, path, "add")?);
+    }
+
+    let options = AddOptions {
+        force: args.force,
+        update: args.update,
+        all: args.all,
+        intent_to_add: args.intent_to_add,
+        dry_run: args.dry_run,
+        pathspec: BString::default(),
+    };
+
+    let outcome = repository.add(&paths, &options)?;
+
+    // `AddOutcome` counts additions but does not name them, so the only honest per-path output
+    // is on a dry run, where Git lists every path it would have touched. A normal `add` that
+    // only modifies tracked files is silent in Git too.
+    if args.dry_run {
+        for path in &outcome.paths {
+            println!("add '{}'", path);
+        }
+    }
+
+    Ok(0)
 }
 
 /// Phase 3 — remove files from the work tree and the index.
@@ -407,7 +449,33 @@ pub fn run_add(global: &GlobalArgs, args: &AddArgs) -> Result<i32> {
 ///   the user which one.
 /// * **The index must be written back**, exactly as for `add`.
 pub fn run_rm(global: &GlobalArgs, args: &RmArgs) -> Result<i32> {
-    todo!()
+    if args.paths.is_empty() {
+        anyhow::bail!("rm: no paths specified");
+    }
+
+    let mut repository = super::open(global)?;
+
+    let mut paths = Vec::with_capacity(args.paths.len());
+    for path in &args.paths {
+        paths.push(super::worktree_path(&repository, path, "rm")?);
+    }
+
+    let options = RmOptions {
+        cached: args.cached,
+        recursive: args.recursive,
+        force: args.force,
+        dry_run: args.dry_run,
+    };
+
+    let outcome = repository.remove(&paths, &options)?;
+
+    // Git prints one `rm '<path>'` line per removal, dry run included (`--dry-run` still says
+    // `rm 'x'`), so the same loop serves both modes.
+    for path in &outcome.paths {
+        println!("rm '{}'", path);
+    }
+
+    Ok(0)
 }
 
 /// Phase 3 — record the index as a commit.
@@ -443,7 +511,112 @@ pub fn run_rm(global: &GlobalArgs, args: &RmArgs) -> Result<i32> {
 ///   is the one bug that can leave `HEAD` pointing at an object that does not exist, which is a
 ///   repository `git fsck` reports as broken.
 pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
-    todo!()
+    // Everything below either needs a piece rivet does not have or would change what lands in
+    // history if it were approximated. Refusing keeps a script from thinking it committed
+    // something it did not.
+    if args.gpg_sign.is_some() {
+        anyhow::bail!("commit: -S (signing) is not implemented");
+    }
+    if args.reuse_message.is_some() || args.reedit_message.is_some() {
+        anyhow::bail!("commit: -C/-c are not implemented");
+    }
+    if args.dry_run {
+        anyhow::bail!("commit: --dry-run is not implemented");
+    }
+    if args.with_status || args.porcelain {
+        anyhow::bail!("commit: --with-status/--porcelain are not implemented");
+    }
+    if args.author.is_some() {
+        anyhow::bail!("commit: --author is not implemented");
+    }
+    if !args.paths.is_empty() {
+        anyhow::bail!("commit: committing only the given paths is not implemented");
+    }
+
+    let mut repository = super::open(global)?;
+
+    // `-a` stages modifications and deletions of tracked files first; it never adds untracked
+    // ones, which is why the update mode is used rather than `all`.
+    if args.all {
+        let options = AddOptions {
+            force: false,
+            update: true,
+            all: false,
+            intent_to_add: false,
+            dry_run: false,
+            pathspec: BString::default(),
+        };
+        repository.add(&[], &options)?;
+    }
+
+    let raw = if !args.message.is_empty() {
+        args.message.join("\n\n")
+    } else if let Some(path) = &args.file {
+        let bytes = if path.as_os_str() == "-" {
+            use std::io::Read as _;
+            let mut buffer = Vec::new();
+            std::io::stdin().read_to_end(&mut buffer).map_err(|error| {
+                anyhow::anyhow!("commit: cannot read the message from stdin: {error}")
+            })?;
+            buffer
+        } else {
+            std::fs::read(path).map_err(|error| {
+                anyhow::anyhow!("commit: cannot read '{}': {error}", path.display())
+            })?
+        };
+        String::from_utf8_lossy(&bytes).into_owned()
+    } else {
+        anyhow::bail!("commit: no message given (use -m or -F; the editor is not implemented)");
+    };
+
+    let mut message = raw;
+    if args.signoff {
+        let config = repository.config();
+        let name = config
+            .get(bstr::BStr::new("user.name"))?
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let email = config
+            .get(bstr::BStr::new("user.email"))?
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        if name.is_empty() || email.is_empty() {
+            anyhow::bail!("commit: --signoff needs both user.name and user.email configured");
+        }
+        message = format!(
+            "{}\n\nSigned-off-by: {name} <{email}>",
+            message.trim_end()
+        );
+    }
+
+    let message = clean_commit_message(&message);
+    let mut options = rivet_core::repo::CommitOptions::new(bstr::BStr::new(message.as_bytes()));
+    options.allow_empty = args.allow_empty;
+    options.allow_empty_message = args.allow_empty_message;
+    options.amend = args.amend;
+
+    let oid = repository.commit(&options)?;
+
+    let branch = branch_name(&repository.head()?);
+    let subject = message.lines().next().unwrap_or_default();
+    println!("[{branch} {}] {subject}", short_oid(&oid));
+
+    Ok(0)
+}
+
+/// Git's default message cleanup: strip trailing whitespace on every line, drop leading and
+/// trailing blank lines, and end with exactly one newline.
+fn clean_commit_message(message: &str) -> String {
+    let mut lines: Vec<&str> = message.lines().map(str::trim_end).collect();
+    while lines.first().is_some_and(|line| line.is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    let mut cleaned = lines.join("\n");
+    cleaned.push('\n');
+    cleaned
 }
 
 /// Phase 3 — report the state of the work tree and the index.
@@ -474,7 +647,179 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
 ///   with C-style quoting when it contains a byte that is not printable, exactly as Git does,
 ///   or a script consuming the output splits on a byte that is part of a filename.
 pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
-    todo!()
+    // These flags change the layout or need history walking we do not have yet. Failing loudly
+    // beats printing a shape that looks like Git's while meaning something else.
+    if args.column.is_some() {
+        anyhow::bail!("status: --column is not implemented");
+    }
+    if args.ahead_behind {
+        anyhow::bail!("status: --ahead-behind is not implemented");
+    }
+    if args.no_lock_index {
+        anyhow::bail!("status: --no-lock-index is not implemented");
+    }
+    if args.paths.len() > 1 {
+        anyhow::bail!("status: only one path filter is supported");
+    }
+
+    let mut repository = super::open(global)?;
+
+    let mut options = StatusOptions::new();
+    options.untracked_files = match args.untracked {
+        Some(UntrackedModeArg::No) => UntrackedMode::No,
+        Some(UntrackedModeArg::All) => UntrackedMode::All,
+        Some(UntrackedModeArg::Normal) | None => UntrackedMode::Normal,
+    };
+    options.ignored = args.ignored;
+    // `refresh: true` re-hashes the work tree, which is what Git does on every status run unless
+    // asked not to; `--no-refresh` is therefore the only thing that turns it off.
+    options.refresh = !args.no_refresh;
+    if let Some(path) = args.paths.first() {
+        options.pathspec = super::worktree_path(&repository, path, "status")?;
+    }
+
+    let status = repository.status(&options)?;
+    let head = repository.head()?;
+
+    let head_line = || -> String {
+        match &head {
+            HeadState::Attached { branch, .. } => {
+                format!("On branch {}", branch.short_name())
+            }
+            HeadState::Unborn { branch } => {
+                format!("On branch {}", branch.short_name())
+            }
+            HeadState::Detached { oid } => {
+                format!("HEAD detached at {}", short_oid(oid))
+            }
+        }
+    };
+
+    if args.porcelain.is_some() || args.short {
+        // Git prints the `## branch` header in these formats only when asked for it.
+        if args.branch {
+            println!("{}", porcelain_header(&head));
+        }
+        for entry in &status.staged {
+            println!("{}{} {}", entry.kind.code(), ' ', entry.path);
+        }
+        for entry in &status.unstaged {
+            println!(" {} {}", entry.kind.code(), entry.path);
+        }
+        for path in &status.untracked {
+            println!("?? {}", path);
+        }
+        for path in &status.ignored {
+            println!("!! {}", path);
+        }
+        return Ok(0);
+    }
+
+    if args.branch {
+        println!("## {}", branch_name(&head));
+    }
+    println!("{}", head_line());
+    if matches!(head, HeadState::Unborn { .. }) {
+        // Git separates the "No commits yet" paragraph from the branch line, and keeps a trailing
+        // blank before the first section. When the branch has commits there is no blank at all:
+        // `On branch main` is immediately followed by the first section header.
+        println!();
+        println!("No commits yet");
+        println!();
+    }
+
+    let mut wrote_section = false;
+    if !status.staged.is_empty() {
+        println!("Changes to be committed:");
+        println!("  (use \"git restore --staged <file>...\" to unstage)");
+        for entry in &status.staged {
+            println!("\t{:<12}{}", section_label(entry.kind), entry.path);
+        }
+        wrote_section = true;
+    }
+    if !status.unstaged.is_empty() {
+        if wrote_section {
+            println!();
+        }
+        println!("Changes not staged for commit:");
+        println!("  (use \"git add <file>...\" to update what will be committed)");
+        println!("  (use \"git restore <file>...\" to discard changes in working directory)");
+        for entry in &status.unstaged {
+            println!("\t{:<12}{}", section_label(entry.kind), entry.path);
+        }
+        wrote_section = true;
+    }
+    if !status.untracked.is_empty() {
+        if wrote_section {
+            println!();
+        }
+        println!("Untracked files:");
+        println!("  (use \"git add <file>...\" to include in what will be committed)");
+        for path in &status.untracked {
+            println!("\t{}", path);
+        }
+        wrote_section = true;
+    }
+    if !status.ignored.is_empty() {
+        if wrote_section {
+            println!();
+        }
+        println!("Ignored files:");
+        println!("  (use \"git add -f <file>...\" to include in what will be committed)");
+        for path in &status.ignored {
+            println!("\t{}", path);
+        }
+        wrote_section = true;
+    }
+
+    if !wrote_section {
+        println!("nothing to commit, working tree clean");
+    } else if status.staged.is_empty() {
+        // Git separates the closing advice from the last section with a blank line, and picks the
+        // wording by what is actually pending: untracked-only names `git add`, anything unstaged
+        // points at `git commit -a` as well.
+        println!();
+        if status.unstaged.is_empty() && !status.untracked.is_empty() {
+            println!("nothing added to commit but untracked files present (use \"git add\" to track)");
+        } else {
+            println!("no changes added to commit (use \"git add\" and/or \"git commit -a\")");
+        }
+    }
+
+    Ok(0)
+}
+
+/// Git's one-line section label, padded so the paths line up.
+fn section_label(kind: ChangeKind) -> String {
+    let label = match kind {
+        ChangeKind::Added => "new file",
+        ChangeKind::Modified => "modified",
+        ChangeKind::Deleted => "deleted",
+        ChangeKind::TypeChanged => "typechange",
+        ChangeKind::Unmerged => "unmerged",
+    };
+    format!("{label}:")
+}
+
+/// The `## branch` line porcelain v1 and `--short --branch` print.
+fn porcelain_header(head: &HeadState) -> String {
+    format!("## {}", branch_name(head))
+}
+
+fn branch_name(head: &HeadState) -> String {
+    match head {
+        HeadState::Attached { branch, .. } => branch.short_name().to_string(),
+        HeadState::Unborn { branch } => branch.short_name().to_string(),
+        HeadState::Detached { oid } => format!("HEAD detached at {}", short_oid(oid)),
+    }
+}
+
+fn branch_or_head() -> &'static str {
+    "HEAD"
+}
+
+fn short_oid(oid: &rivet_core::hash::ObjectId) -> String {
+    oid.to_string().chars().take(7).collect()
 }
 
 /// Phase 4 — restore work tree files from the index, or the index from a commit.
