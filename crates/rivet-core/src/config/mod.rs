@@ -765,7 +765,23 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigInvalidValue`] for a value that is not an integer.
     pub fn repository_format_version(&self) -> Result<u32> {
-        todo!()
+        let key = BStr::new(b"core.repositoryformatversion");
+        let value = self.get(key)?;
+        match value {
+            Some(v) => {
+                let n = self.get_int(key)?;
+                match n {
+                    Some(n) => {
+                        if n < 0 || n > 1 {
+                            return Err(Error::UnsupportedRepositoryFormatVersion { version: n as u32 });
+                        }
+                        Ok(n as u32)
+                    }
+                    None => Ok(0),
+                }
+            }
+            None => Ok(0),
+        }
     }
 
     /// Phase 2 — `extensions.objectFormat`, defaulted to SHA-1.
