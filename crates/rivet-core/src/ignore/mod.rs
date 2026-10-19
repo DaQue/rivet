@@ -525,7 +525,21 @@ impl IgnoreStack {
     /// [`crate::error::Error::InvalidIgnorePattern`] for an unparseable pattern. A command line is
     /// the one place an error is worth raising rather than skipping, because a user is watching.
     pub fn add_command_line(&mut self, patterns: &[BString]) -> Result<()> {
-        todo!()
+        let mut frame = IgnoreFrame {
+            source: IgnoreSource::CommandLine,
+            base: BString::from(""),
+            depth: 0,
+            patterns: Vec::new(),
+        };
+        for p in patterns {
+            let line = BStr::new(&p[..]);
+            let parsed = Pattern::parse(line, IgnoreSource::CommandLine, frame.patterns.len() + 1, BStr::new(&frame.base[..]))?;
+            if let Some(pat) = parsed {
+                frame.patterns.push(pat);
+            }
+        }
+        self.frames.push(frame);
+        Ok(())
     }
 
     /// Phase 5 — push the `.gitignore` files for a directory being entered.
