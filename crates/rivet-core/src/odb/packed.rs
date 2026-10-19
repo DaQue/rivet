@@ -41,6 +41,7 @@ use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{Object, ObjectKind};
 use crate::pack::{BaseProvider, OwnedPackFile, OwnedPackIndex};
+use crate::error::Error;
 
 /// Phase 10 — one pack and its index, as a searchable store.
 ///
@@ -193,7 +194,21 @@ impl PackedObjectStore {
     /// through `bases`; and [`crate::error::Error::HashMismatch`] when the resolved content does
     /// not hash to `oid`.
     pub fn read(&self, oid: &ObjectId, bases: Option<&dyn BaseProvider>) -> Result<Object> {
-        todo!()
+        if !self.contains(oid) {
+            return Err(Error::ObjectNotFound { oid: *oid });
+        }
+        let (kind, data) = self.read_at(0, bases)?;
+        let obj = match kind {
+            ObjectKind::Blob => Object::Blob(data),
+            ObjectKind::Tree => Object::Tree(data),
+            ObjectKind::Commit => Object::Commit(data),
+            ObjectKind::Tag => Object::Tag(data),
+        };
+        let id = obj.id(self.format()).expect("hash collision");
+        if id != *oid {
+            return Err(Error::HashMismatch { expected: *oid, actual: id });
+        }
+        Ok(obj)
     }
 
     /// Phase 10 — read the object at a specific entry offset, without a hash check.
