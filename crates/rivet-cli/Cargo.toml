@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 rivet-core = { path = "../rivet-core" }
+bstr.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 

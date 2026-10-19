@@ -39,16 +39,17 @@
 //!   caller writes it through [`crate::index::Index::write`], which takes the `index.lock` and
 //!   is the only atomic step in the sequence. A caller that forgets to write has staged nothing.
 
+use std::collections::BTreeSet;
+
 use bstr::{BStr, BString};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::hash::ObjectFormat;
-use crate::ignore::IgnoreStack;
-use crate::index::{Index, IndexEntry, Stage};
-use crate::object::EntryMode;
+use crate::ignore::{IgnoreDecision, IgnoreStack, PathKind};
+use crate::index::{Index, IndexEntry, IndexEntryFlags, IndexExt, Stage};
+use crate::object::{hash_object, EntryMode, ObjectKind};
 use crate::odb::Odb;
-use crate::worktree::{StatCache, Worktree};
-use crate::index::IndexEntryFlags;
+use crate::worktree::{check_relative_path, StatCache, Worktree, WorktreeWalkOptions};
 
 /// Phase 3 — how an `add` should behave.
 ///
@@ -129,7 +130,7 @@ impl AddOptions {
 ///   length, and a caller counting written objects has to ask the database.
 /// * **An empty outcome is success.** `add` on a path that is already current changes nothing
 ///   and reports nothing, which is what makes `add .` idempotent and safe to run repeatedly.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AddOutcome {
     /// How many paths got a new or replaced stage-0 entry.
     pub added: usize,
@@ -234,7 +235,222 @@ pub fn add_paths(
     paths: &[BString],
     options: &AddOptions,
 ) -> Result<AddOutcome> {
-    todo!()
+    // ── the paths, normalised and classified ────────────────────────────────────────────────
+    // `specs` are the limits of the operation: they bound both what is staged and which
+    // deletions are in scope. An empty spec means "the whole work tree" and is what `-A`/`-u`
+    // with no paths produces.
+    let mut specs: Vec<BString> = Vec::new();
+    for p in paths {
+        specs.push(normalize_spec(BStr::new(p))?);
+    }
+    if !options.pathspec.is_empty() {
+        specs.push(normalize_spec(BStr::new(&options.pathspec))?);
+    }
+    if specs.is_empty() {
+        if options.all || options.update {
+            specs.push(BString::default());
+        } else {
+            // `add` with nothing to add is a no-op here; the CLI is where "Nothing specified"
+            // belongs, because a library caller may legitimately stage an empty set.
+            return Ok(AddOutcome::default());
+        }
+    }
+
+    let mut outcome = AddOutcome::default();
+    if !options.dry_run {
+        worktree.require_root("add")?;
+    }
+
+    let empty_blob = hash_object(worktree.format(), ObjectKind::Blob, b"")?.0;
+
+    // Files named directly, as opposed to found by walking a directory: the two differ in how an
+    // ignored path is treated, and in whether a missing path is an error.
+    let mut named: BTreeSet<BString> = BTreeSet::new();
+    let mut files: BTreeSet<BString> = BTreeSet::new();
+    let mut dirs: Vec<BString> = Vec::new();
+    let mut delete_scope: Vec<BString> = Vec::new();
+
+    for spec in &specs {
+        if spec.is_empty() {
+            dirs.push(spec.clone());
+            delete_scope.push(spec.clone());
+            continue;
+        }
+        let stat = stat_cache.stat(worktree, BStr::new(spec))?.cloned();
+        match stat {
+            Some(sd) if sd.mode == EntryMode::Tree => {
+                // A gitlink is a directory that belongs to another repository. Walking it would
+                // stage that repository's files under this one's paths, so the existing entry is
+                // left exactly as it is.
+                if index.entry(BStr::new(spec)).is_some_and(|e| e.is_gitlink())
+                    || is_repository_dir(worktree, BStr::new(spec))
+                {
+                    continue;
+                }
+                dirs.push(spec.clone());
+                delete_scope.push(spec.clone());
+            }
+            Some(_) => {
+                named.insert(spec.clone());
+                files.insert(spec.clone());
+            }
+            None => {
+                // Missing on disk: either a tracked path whose deletion is being staged, or a
+                // path Git never heard of. A directory that is gone entirely has no stat either,
+                // so the children are consulted before declaring it unknown.
+                let tracked_children = index
+                    .entries()
+                    .iter()
+                    .any(|e| e.stage() == Stage::Normal && is_under(&e.path, spec));
+                if !tracked_children && !options.update {
+                    return Err(Error::PathNotFound(spec.clone()));
+                }
+                delete_scope.push(spec.clone());
+            }
+        }
+    }
+
+    // ── directories: everything under them, filtered by the ignore stack ────────────────────
+    for dir in &dirs {
+        let mut walk_options = WorktreeWalkOptions::new();
+        walk_options.prefix = dir.clone();
+        walk_options.recursive = true;
+        // `-f` is the only way an ignored file is staged, and it applies to a walk exactly as it
+        // applies to a named path.
+        walk_options.include_ignored = options.force;
+        for entry in worktree.walk(ignore, &walk_options)? {
+            if entry.kind == PathKind::Directory {
+                continue;
+            }
+            files.insert(entry.path);
+        }
+    }
+
+    // ── `-u`: the paths the index already knows about, in scope ─────────────────────────────
+    if options.update {
+        let tracked: Vec<BString> = index
+            .entries()
+            .iter()
+            .filter(|e| e.stage() == Stage::Normal && in_scope(&e.path, &specs))
+            .map(|e| e.path.clone())
+            .collect();
+        files.extend(tracked);
+    }
+
+    // ── staging ─────────────────────────────────────────────────────────────────────────────
+    let index_mtime = worktree.index_mtime();
+    let mut staged = BTreeSet::new();
+    let mut sorted_files: Vec<BString> = files.into_iter().collect();
+    sorted_files.sort();
+
+    for path in sorted_files {
+        if options.update && index.entry(BStr::new(&path)).is_none() {
+            continue;
+        }
+        if !options.force && ignore.is_ignored(BStr::new(&path), PathKind::File)? {
+            if named.contains(&path) {
+                // Git's asymmetry: a named ignored path is an error, one found by a walk is
+                // skipped. The rule is carried out so `check-ignore -v` can name it.
+                let rule = match ignore.check(BStr::new(&path), PathKind::File)? {
+                    IgnoreDecision::Ignored(pattern) => pattern.origin(),
+                    _ => BString::default(),
+                };
+                return Err(Error::PathIgnored { path, rule });
+            }
+            continue;
+        }
+        let Some(stat) = stat_cache.stat(worktree, BStr::new(&path))?.cloned() else {
+            continue;
+        };
+        if stat.mode == EntryMode::Tree {
+            continue;
+        }
+        let existing = index.entry(BStr::new(&path)).cloned();
+        if let Some(entry) = &existing {
+            if entry.is_gitlink() {
+                continue;
+            }
+            // Already current: Git writes nothing, and rewriting the stat data alone would make
+            // the index look different from Git's for an operation that changed nothing.
+            if !options.intent_to_add && stat.is_unchanged(entry, index_mtime) {
+                continue;
+            }
+        }
+
+        let oid = if options.intent_to_add {
+            empty_blob
+        } else if options.dry_run {
+            worktree.hash_file(BStr::new(&path))?
+        } else {
+            let data = worktree.read_file(BStr::new(&path))?;
+            odb.write_raw(ObjectKind::Blob, &data)?
+        };
+
+        if !options.dry_run {
+            let entry = build_index_entry(
+                worktree.format(),
+                BStr::new(&path),
+                oid,
+                &stat,
+                stat.mode,
+                Stage::Normal,
+            );
+            if index.stages(BStr::new(&path)).len() > 1 {
+                // `add` during a merge is the resolution operation: every stage is dropped and a
+                // single stage-0 entry replaces them.
+                index.resolve(BStr::new(&path), entry)?;
+            } else {
+                index.insert(entry);
+            }
+        }
+
+        if existing.is_some() {
+            outcome.updated += 1;
+        } else {
+            outcome.added += 1;
+        }
+        staged.insert(path);
+    }
+
+    // ── deletions ───────────────────────────────────────────────────────────────────────────
+    // Deliberately after staging: a path that was just written is present on disk, so it can
+    // never be mistaken for a deletion even when the stat cache was stale.
+    let mut tracked_paths: Vec<BString> = index
+        .entries()
+        .iter()
+        .map(|e| e.path.clone())
+        .collect();
+    tracked_paths.sort();
+    tracked_paths.dedup();
+
+    for path in tracked_paths {
+        if staged.contains(&path) {
+            continue;
+        }
+        if !delete_scope.iter().any(|scope| is_under(&path, scope)) {
+            continue;
+        }
+        if stat_cache.stat(worktree, BStr::new(&path))?.is_some() {
+            continue;
+        }
+        let removed = if options.dry_run {
+            index.stages(BStr::new(&path)).len()
+        } else {
+            let removed = index.remove_path(BStr::new(&path)).len();
+            stat_cache.remove(BStr::new(&path));
+            removed
+        };
+        if removed > 0 {
+            outcome.removed += removed;
+            staged.insert(path);
+        }
+    }
+
+    if !options.dry_run {
+        index.sort();
+    }
+    outcome.paths = staged.into_iter().collect();
+    Ok(outcome)
 }
 
 /// Phase 3 — unstage the given paths, and by default delete them.
@@ -260,10 +476,190 @@ pub fn add_paths(
 pub fn rm_paths(
     index: &mut Index,
     worktree: &Worktree,
+    stat_cache: &mut StatCache,
     paths: &[BString],
     options: &RmOptions,
 ) -> Result<AddOutcome> {
-    todo!()
+    let mut outcome = AddOutcome::default();
+    if paths.is_empty() {
+        return Ok(outcome);
+    }
+    if !options.dry_run && !options.cached {
+        worktree.require_root("rm")?;
+    }
+
+    let mut specs: Vec<BString> = Vec::new();
+    for p in paths {
+        let spec = normalize_spec(BStr::new(p))?;
+        if spec.is_empty() {
+            // Removing "." would unstage and delete the entire work tree; Git has no spelling
+            // for that and neither does this.
+            return Err(Error::Message(
+                "rm: refusing to remove the whole work tree".to_string(),
+            ));
+        }
+        specs.push(spec);
+    }
+
+    let mut tracked: Vec<BString> = index.entries().iter().map(|e| e.path.clone()).collect();
+    tracked.sort();
+    tracked.dedup();
+
+    let mut unlink: Vec<BString> = Vec::new();
+    let mut removed_dirs: Vec<BString> = Vec::new();
+    let mut touched: BTreeSet<BString> = BTreeSet::new();
+
+    for spec in &specs {
+        let mut targets: Vec<BString> = Vec::new();
+        if !index.stages(BStr::new(spec)).is_empty() {
+            targets.push(spec.clone());
+        } else {
+            // Not a tracked path itself: it may be a directory that contains tracked files, and
+            // that is the only case in which `-r` is required.
+            let children: Vec<BString> = tracked
+                .iter()
+                .filter(|path| is_under(path, spec) && *path != spec)
+                .cloned()
+                .collect();
+            if children.is_empty() {
+                return Err(Error::PathNotFound(spec.clone()));
+            }
+            if !options.recursive {
+                return Err(Error::Message(format!(
+                    "not removing '{}' recursively without -r",
+                    spec
+                )));
+            }
+            targets.extend(children);
+            removed_dirs.push(spec.clone());
+        }
+
+        for path in targets {
+            let stages = index.stages(BStr::new(&path));
+            if stages.is_empty() {
+                continue;
+            }
+            let mode = stages[0].mode;
+
+            if !options.force && !options.cached {
+                if mode == EntryMode::Commit {
+                    if is_repository_dir(worktree, BStr::new(&path)) {
+                        return Err(Error::Message(format!(
+                            "submodule '{}' has local modifications (use --force to remove it)",
+                            path
+                        )));
+                    }
+                } else if stat_cache.stat(worktree, BStr::new(&path))?.is_some() {
+                    // Present on disk: only the index's content may be thrown away. Deleting a
+                    // file whose work tree content differs from stage 0 would lose work that
+                    // neither the index nor any commit holds.
+                    let staged_oid = stages
+                        .iter()
+                        .find(|e| e.stage() == Stage::Normal)
+                        .map(|e| e.oid);
+                    let worktree_oid = worktree.hash_file(BStr::new(&path))?;
+                    if Some(worktree_oid) != staged_oid {
+                        return Err(Error::Message(format!(
+                            "'{}' has local modifications (use --force to remove it)",
+                            path
+                        )));
+                    }
+                }
+            }
+
+            let count = if options.dry_run {
+                stages.len()
+            } else {
+                let count = index.remove_path(BStr::new(&path)).len();
+                stat_cache.remove(BStr::new(&path));
+                count
+            };
+            outcome.removed += count;
+            if !options.dry_run && !options.cached {
+                unlink.push(path.clone());
+            }
+            touched.insert(path);
+        }
+    }
+
+    // The index is authoritative and has already been updated; the work tree follows. A failure
+    // here leaves tracked deletions staged with the files still present, which `status` reports
+    // and a second `rm` finishes.
+    if !options.dry_run {
+        for path in &unlink {
+            let full = worktree.join(BStr::new(path))?;
+            match std::fs::remove_file(&full) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(Error::IoAtPath {
+                        path: path.clone(),
+                        source,
+                    })
+                }
+            }
+        }
+        for dir in &removed_dirs {
+            let full = worktree.join(BStr::new(dir))?;
+            // Only empty directories go: an untracked file left behind keeps the directory, and
+            // a failure (ENOTEMPTY) is not an error from `rm`'s point of view.
+            let _ = std::fs::remove_dir(&full);
+            stat_cache.remove(BStr::new(dir));
+        }
+        index.sort();
+    }
+
+    outcome.paths = touched.into_iter().collect();
+    Ok(outcome)
+}
+
+// ── path helpers ─────────────────────────────────────────────────────────────────────────────
+
+/// Strip the forms Git accepts for "this path" down to a repository-relative path.
+///
+/// A leading `./` and a trailing `/` are spelling, not location: `add ./src/` and `add src` name
+/// the same tree. `.` alone becomes the empty spec, which callers treat as the whole work tree.
+fn normalize_spec(spec: &BStr) -> Result<BString> {
+    let mut bytes: &[u8] = spec.as_ref();
+    while let Some(rest) = bytes.strip_prefix(b"./") {
+        bytes = rest;
+    }
+    while bytes.len() > 1 && bytes.last() == Some(&b'/') {
+        bytes = &bytes[..bytes.len() - 1];
+    }
+    if bytes == b"." {
+        bytes = b"";
+    }
+    let normalized = BString::from(bytes);
+    check_relative_path(BStr::new(&normalized), false)?;
+    Ok(normalized)
+}
+
+/// Whether `path` is `prefix` or sits below it. An empty prefix is the whole work tree.
+///
+/// Generic over the argument types on purpose: callers hold `&BString` (paths from an index) or
+/// `&BStr` (specs) interchangeably, and both coerce through `AsRef<[u8]>` without allocating.
+fn is_under(path: impl AsRef<[u8]>, prefix: impl AsRef<[u8]>) -> bool {
+    let path = path.as_ref();
+    let prefix = prefix.as_ref();
+    if prefix.is_empty() || path == prefix {
+        return true;
+    }
+    path.len() > prefix.len() && path.starts_with(prefix) && path[prefix.len()] == b'/'
+}
+
+/// Whether an index path falls inside any of the operation's specs.
+fn in_scope(path: impl AsRef<[u8]>, specs: &[BString]) -> bool {
+    let path = path.as_ref();
+    specs.iter().any(|spec| is_under(path, spec))
+}
+
+/// Whether a directory is the root of another repository (a submodule or an embedded clone).
+fn is_repository_dir(worktree: &Worktree, path: &BStr) -> bool {
+    worktree
+        .join(path)
+        .map(|full| full.join(".git").exists())
+        .unwrap_or(false)
 }
 
 /// Phase 3 — build the index entry for one work tree path.

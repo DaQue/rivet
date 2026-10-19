@@ -259,6 +259,12 @@ pub struct CommitOptions {
     pub parents: Vec<ObjectId>,
     /// Whether to use the tree as staged even if it equals the parent's.
     pub allow_empty: bool,
+    /// Whether to accept a message that is empty or whitespace-only.
+    ///
+    /// Git's `--allow-empty-message` is a separate switch from `--allow-empty`: one concerns the
+    /// tree, the other the message. Folding them into one flag would let `--allow-empty` silently
+    /// publish a commit with no description, so they stay apart.
+    pub allow_empty_message: bool,
     /// Replace `HEAD`'s commit rather than adding a child.
     pub amend: bool,
 }
@@ -273,6 +279,7 @@ impl CommitOptions {
             committer: None,
             parents: Vec::new(),
             allow_empty: false,
+            allow_empty_message: false,
             amend: false,
         }
     }
@@ -292,6 +299,12 @@ impl CommitOptions {
     /// Phase 4 — allow a commit that changes nothing.
     pub fn allow_empty(&mut self, on: bool) -> &mut Self {
         self.allow_empty = on;
+        self
+    }
+
+    /// Phase 4 — allow a commit whose message is empty or whitespace-only.
+    pub fn allow_empty_message(&mut self, on: bool) -> &mut Self {
+        self.allow_empty_message = on;
         self
     }
 
@@ -702,10 +715,15 @@ impl Repository {
                 config.set(BStr::new(b"core.worktree"), wt.as_os_str().as_bytes())?;
             }
         }
-        config.set(
-            BStr::new(b"extensions.objectFormat"),
-            options.format.as_str().as_bytes(),
-        )?;
+        // Git only writes `extensions.objectFormat` for SHA-256. Emitting it for SHA-1 makes
+        // stock git reject the repository outright: an extension is a v1-only feature, and a
+        // `repositoryformatversion=0` repository containing one is "not a git repository".
+        if options.format != ObjectFormat::Sha1 {
+            config.set(
+                BStr::new(b"extensions.objectFormat"),
+                options.format.as_str().as_bytes(),
+            )?;
+        }
         config.write(&config_path)?;
 
         // An unborn HEAD: a symbolic ref to a branch that does not exist yet.
@@ -1052,34 +1070,114 @@ impl Repository {
     /// [`crate::error::Error::UnmergedPath`] while any path has conflict stages, and the object
     /// database's write errors.
     pub fn write_tree(&self) -> Result<ObjectId> {
-        let mut items: Vec<(Vec<BString>, crate::object::EntryMode, ObjectId)> = Vec::new();
-        for entry in self.index.entries() {
-            if entry.is_unmerged() {
-                return Err(Error::UnmergedPath {
-                    path: entry.path.clone(),
-                });
-            }
-            let components: Vec<BString> = entry
-                .path
-                .split(|b| *b == b'/')
-                .map(BString::from)
-                .collect();
-            // `split` always yields at least one component, so emptiness is not the failure to
-            // look for: a leading, trailing or doubled slash yields an empty *component*, which
-            // would be written as a tree entry with a zero-length name — a tree Git parses into
-            // something no checkout can reproduce.
-            if components.iter().any(|c| c.is_empty()) {
-                return Err(Error::InvalidPath(entry.path.clone()));
-            }
-            items.push((components, entry.mode, entry.oid));
-        }
-        items.sort_by(|a, b| a.0.cmp(&b.0));
+        write_tree_of(&self.odb, &self.index)
+    }
 
-        let level: Vec<(&[BString], crate::object::EntryMode, ObjectId)> = items
-            .iter()
-            .map(|(components, mode, oid)| (components.as_slice(), *mode, *oid))
-            .collect();
-        build_tree_level(&self.odb, &level)
+    /// Phase 3 — stage paths into the index, writing it back.
+    ///
+    /// # Caveats
+    ///
+    /// **The index file is written before this returns.** The mutation
+    /// [`crate::worktree::add_paths`] performs is in memory and is invisible to every other
+    /// process — and to the next run of this one — until [`Repository::write_index`] runs, which
+    /// is why the write lives here rather than at each call site. A dry run writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Every error of [`crate::worktree::add_paths`], plus the index's own write errors.
+    pub fn add(
+        &mut self,
+        paths: &[BString],
+        options: &crate::worktree::AddOptions,
+    ) -> Result<crate::worktree::AddOutcome> {
+        let mut stat_cache = crate::worktree::StatCache::new();
+        let outcome = crate::worktree::add_paths(
+            &mut self.index,
+            &self.worktree,
+            &self.odb,
+            &self.ignore,
+            &mut stat_cache,
+            paths,
+            options,
+        )?;
+        if !options.dry_run {
+            self.write_index()?;
+        }
+        Ok(outcome)
+    }
+
+    /// Phase 3 — remove paths from the index, writing it back.
+    ///
+    /// # Caveats
+    ///
+    /// **The index is written here even under `--cached`**, which is the whole difference between
+    /// `rm --cached` and doing nothing: the work tree survives and the entry does not. A dry run
+    /// writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Every error of [`crate::worktree::rm_paths`], plus the index's own write errors.
+    pub fn remove(
+        &mut self,
+        paths: &[BString],
+        options: &crate::worktree::RmOptions,
+    ) -> Result<crate::worktree::AddOutcome> {
+        let mut stat_cache = crate::worktree::StatCache::new();
+        let outcome = crate::worktree::rm_paths(
+            &mut self.index,
+            &self.worktree,
+            &mut stat_cache,
+            paths,
+            options,
+        )?;
+        if !options.dry_run {
+            self.write_index()?;
+        }
+        Ok(outcome)
+    }
+
+    /// Phase 4 — compare the work tree, the index and `HEAD`.
+    ///
+    /// # Caveats
+    ///
+    /// **This reads `HEAD`'s tree once and passes the id down**, rather than handing the status
+    /// code a repository: the comparison needs three of the components and none of the ref
+    /// machinery, which is what keeps [`crate::worktree::compute`] testable without a repository
+    /// on disk. An unborn `HEAD` is `None`, which makes every index entry an addition.
+    pub fn status(
+        &mut self,
+        options: &crate::worktree::StatusOptions,
+    ) -> Result<crate::worktree::Status> {
+        let head_tree = self.head_tree_id()?;
+        crate::worktree::compute(
+            &self.worktree,
+            &self.index,
+            head_tree,
+            &self.odb,
+            &self.ignore,
+            options,
+        )
+    }
+
+    /// The tree id `HEAD` names, without materialising the tree.
+    ///
+    /// # Caveats
+    ///
+    /// A commit object whose parse yields something other than a commit cannot happen through
+    /// [`Repository::commit`], and is reported as `None` here rather than as an error: `status`
+    /// on a corrupt `HEAD` should show every staged path as an addition, exactly as an unborn
+    /// branch does, instead of failing to open the repository at all.
+    fn head_tree_id(&self) -> Result<Option<ObjectId>> {
+        use crate::object::{AnyObject, ObjectKind};
+        match self.head()? {
+            HeadState::Attached { oid, .. } | HeadState::Detached { oid } => {
+                match self.odb.read_typed(&oid, ObjectKind::Commit)?.parse()? {
+                    AnyObject::Commit(commit) => Ok(Some(commit.tree)),
+                    _ => Ok(None),
+                }
+            }
+            HeadState::Unborn { .. } => Ok(None),
+        }
     }
 
     /// Phase 4 — record a commit.
@@ -1118,10 +1216,10 @@ impl Repository {
                 .unwrap_or_else(|| BString::from(""));
             return Err(Error::UnmergedPath { path });
         }
-        // Git aborts a commit with an empty message unless `--allow-empty-message` is given, and
-        // this API has no such switch. Refusing before the tree is written keeps a doomed commit
-        // from leaving a new tree object behind.
-        if options.message.iter().all(|b| b.is_ascii_whitespace()) {
+        // Git aborts a commit with an empty message unless `--allow-empty-message` is given.
+        // Refusing before the tree is written keeps a doomed commit from leaving a new tree object
+        // behind.
+        if !options.allow_empty_message && options.message.iter().all(|b| b.is_ascii_whitespace()) {
             return Err(Error::Message(
                 "aborting commit due to empty commit message".to_string(),
             ));
@@ -1451,9 +1549,39 @@ pub fn gitfile_target(gitfile: &Path) -> Result<PathBuf> {
 
 /// Build one level of a tree from index paths, writing the result to the object database.
 ///
-/// `level` holds each remaining path as its components and must be sorted, so that every path
-/// sharing a first component is contiguous. A lone component becomes a leaf entry with the
-/// entry's own mode; anything longer recurses and becomes a subtree.
+/// The single definition of "what tree does this index describe", shared by
+/// [`Repository::write_tree`] and [`crate::index::IndexExt::write_tree`].
+pub(crate) fn write_tree_of(odb: &Odb, index: &crate::index::Index) -> Result<ObjectId> {
+    let mut items: Vec<(Vec<BString>, crate::object::EntryMode, ObjectId)> = Vec::new();
+    for entry in index.entries() {
+        if entry.is_unmerged() {
+            return Err(Error::UnmergedPath {
+                path: entry.path.clone(),
+            });
+        }
+        let components: Vec<BString> = entry
+            .path
+            .split(|b| *b == b'/')
+            .map(BString::from)
+            .collect();
+        // `split` always yields at least one component, so emptiness is not the failure to
+        // look for: a leading, trailing or doubled slash yields an empty *component*, which
+        // would be written as a tree entry with a zero-length name — a tree Git parses into
+        // something no checkout can reproduce.
+        if components.iter().any(|c| c.is_empty()) {
+            return Err(Error::InvalidPath(entry.path.clone()));
+        }
+        items.push((components, entry.mode, entry.oid));
+    }
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let level: Vec<(&[BString], crate::object::EntryMode, ObjectId)> = items
+        .iter()
+        .map(|(components, mode, oid)| (components.as_slice(), *mode, *oid))
+        .collect();
+    build_tree_level(odb, &level)
+}
+
 fn build_tree_level(
     odb: &Odb,
     level: &[(&[BString], crate::object::EntryMode, ObjectId)],

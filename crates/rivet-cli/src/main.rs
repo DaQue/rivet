@@ -46,5 +46,14 @@ use clap::Parser;
 use crate::cli::Cli;
 
 fn main() -> ExitCode {
-    todo!()
+    let cli = Cli::parse();
+    match cmd::dispatch(cli) {
+        Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
+        Err(error) => {
+            // Git's fatal diagnostics are one line on stderr, prefixed and unbounded; `{:#}`
+            // keeps the whole anyhow chain on that line rather than printing a backtrace shape.
+            eprintln!("fatal: {error:#}");
+            ExitCode::from(128)
+        }
+    }
 }

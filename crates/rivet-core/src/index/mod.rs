@@ -1578,6 +1578,91 @@ pub trait IndexExt {
     fn under(&self, prefix: &BStr) -> Vec<&IndexEntry>;
 }
 
+impl IndexExt for Index {
+    fn stages(&self, path: &BStr) -> Vec<&IndexEntry> {
+        self.entries
+            .iter()
+            .filter(|e| &*e.path == path)
+            .collect()
+    }
+
+    fn is_unmerged(&self, path: &BStr) -> bool {
+        self.entries
+            .iter()
+            .any(|e| &*e.path == path && e.stage() != Stage::Normal)
+    }
+
+    fn conflicts(&self) -> Vec<BString> {
+        // One path even when it has two or three stages, because a user resolves a path, not a
+        // stage. Sorted and deduplicated here rather than assumed: an index read from disk is
+        // sorted, but one built by `insert` during a merge need not be.
+        let mut paths: Vec<BString> = self
+            .entries
+            .iter()
+            .filter(|e| e.stage() != Stage::Normal)
+            .map(|e| e.path.clone())
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
+    fn remove_path(&mut self, path: &BStr) -> Vec<IndexEntry> {
+        let mut removed = Vec::new();
+        let mut kept = Vec::with_capacity(self.entries.len());
+        for entry in std::mem::take(&mut self.entries) {
+            if &*entry.path == path {
+                removed.push(entry);
+            } else {
+                kept.push(entry);
+            }
+        }
+        self.entries = kept;
+        removed
+    }
+
+    fn resolve(&mut self, path: &BStr, entry: IndexEntry) -> Result<()> {
+        if &*entry.path != path {
+            return Err(Error::Message(format!(
+                "cannot resolve '{path}': entry is for '{}'",
+                entry.path
+            )));
+        }
+        if entry.stage() != Stage::Normal {
+            return Err(Error::Message(format!(
+                "cannot resolve '{path}': entry is not stage 0"
+            )));
+        }
+        // Every stage goes, then the stage-0 entry arrives: a resolution is one entry, and
+        // leaving the other stages behind would make the path look conflicted to `commit`
+        // while `add` reported success.
+        self.remove_path(path);
+        self.insert(entry);
+        self.sort();
+        Ok(())
+    }
+
+    fn write_tree(&self, odb: &crate::odb::Odb) -> Result<ObjectId> {
+        crate::repo::write_tree_of(odb, self)
+    }
+
+    fn paths(&self) -> Vec<&BStr> {
+        self.entries.iter().map(|e| e.path.as_ref()).collect()
+    }
+
+    fn under(&self, prefix: &BStr) -> Vec<&IndexEntry> {
+        if prefix.is_empty() {
+            return self.entries.iter().collect();
+        }
+        let mut with_slash: Vec<u8> = prefix.to_vec();
+        with_slash.push(b'/');
+        self.entries
+            .iter()
+            .filter(|e| &*e.path == prefix || e.path.starts_with(&with_slash))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

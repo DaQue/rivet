@@ -90,13 +90,13 @@ pub const EXIT_FATAL: i32 = 128;
 pub fn dispatch(cli: Cli) -> Result<i32> {
     let Cli { global, command } = cli;
     match command {
-        Commands::Init(_args) => todo!(),
+        Commands::Init(args) => setup::run_init(&global, &args),
         Commands::Clone(_args) => todo!(),
         Commands::Config(_args) => todo!(),
-        Commands::Add(_args) => todo!(),
-        Commands::Rm(_args) => todo!(),
-        Commands::Commit(_args) => todo!(),
-        Commands::Status(_args) => todo!(),
+        Commands::Add(args) => snapshot::run_add(&global, &args),
+        Commands::Rm(args) => snapshot::run_rm(&global, &args),
+        Commands::Commit(args) => snapshot::run_commit(&global, &args),
+        Commands::Status(args) => snapshot::run_status(&global, &args),
         Commands::Restore(_args) => todo!(),
         Commands::Reset(_args) => todo!(),
         Commands::Log(_args) => todo!(),
@@ -144,7 +144,19 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
 /// [`rivet_core::Error::NotARepository`], wrapped with the text Git prints, when neither
 /// `--repo` nor the current directory is inside a repository.
 pub fn open(global: &GlobalArgs) -> Result<Repository> {
-    todo!()
+    let start = match &global.repo {
+        Some(path) => path.clone(),
+        None => std::env::current_dir()?,
+    };
+    match Repository::open_or_discover(&start) {
+        Ok(repository) => Ok(repository),
+        // Git's message names `.git` and says "parent" rather than "ancestor"; the differential
+        // tests compare the text, so the wording is quoted from `git status` outside a repository.
+        Err(rivet_core::Error::NotARepository(_)) => Err(anyhow::anyhow!(
+            "not a git repository (or any of the parent directories): .git"
+        )),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Open the repository the global flags point at, or create one if there is none.
@@ -165,7 +177,20 @@ pub fn open(global: &GlobalArgs) -> Result<Repository> {
 /// As [`rivet_core::Repository::init`], plus any error other than `NotARepository` that
 /// [`open`] raised.
 pub fn open_or_init(global: &GlobalArgs) -> Result<Repository> {
-    todo!()
+    let directory = base_dir(global)?;
+    match Repository::open_or_discover(&directory) {
+        Ok(repository) => Ok(repository),
+        Err(rivet_core::Error::NotARepository(_)) => {
+            let options = rivet_core::InitOptions {
+                bare: false,
+                initial_branch: bstr::BString::from("main"),
+                format: rivet_core::ObjectFormat::Sha1,
+                work_tree: None,
+            };
+            Repository::init(&directory, &options).map_err(Into::into)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// The directory a path-valued global flag names, or the current directory.
@@ -178,7 +203,10 @@ pub fn open_or_init(global: &GlobalArgs) -> Result<Repository> {
 /// `&Path` because `--repo` is owned by the argument struct and the current directory has to be
 /// materialised anyway.
 pub fn base_dir(global: &GlobalArgs) -> Result<std::path::PathBuf> {
-    todo!()
+    match &global.repo {
+        Some(path) => Ok(path.clone()),
+        None => Ok(std::env::current_dir()?),
+    }
 }
 
 /// Turn a command-line path into the byte string `rivet-core` expects.
@@ -196,5 +224,16 @@ pub fn base_dir(global: &GlobalArgs) -> Result<std::path::PathBuf> {
 /// * **On Windows the separators are rewritten to `/`**, because a Git tree entry's name never
 ///   contains a backslash and would otherwise produce a tree that `git fsck` rejects.
 pub fn path_arg(path: &Path) -> Result<Vec<u8>> {
-    todo!()
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(path.as_os_str().as_bytes().to_vec())
+    }
+    #[cfg(not(unix))]
+    {
+        let text = path
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        Ok(text.into_owned().into_bytes())
+    }
 }

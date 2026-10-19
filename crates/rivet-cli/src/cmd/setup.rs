@@ -11,6 +11,9 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use bstr::BString;
+
+use rivet_core::{InitOptions, ObjectFormat, Repository};
 
 use crate::cli::{ColorArg, ConfigTypeArg, FormatArg, GlobalArgs};
 
@@ -246,7 +249,60 @@ pub struct ConfigArgs {
 ///   not be silently ignored in the output — a user who asked for a shared repository needs to
 ///   know they did not get one.
 pub fn run_init(global: &GlobalArgs, args: &InitArgs) -> Result<i32> {
-    todo!()
+    let base = crate::cmd::base_dir(global)?;
+    let directory = match &args.directory {
+        Some(dir) if dir.is_absolute() => dir.clone(),
+        Some(dir) => base.join(dir),
+        None => base,
+    };
+
+    if let Some(perm) = &args.shared {
+        // Not silently accepted: a user who asked for a shared repository has to know the
+        // permissions were not applied. Git's own `--shared` affects umask and group bits only.
+        anyhow::bail!("--shared={perm} is not implemented: rivet does not manage repository permissions");
+    }
+
+    let git_dir = if args.bare {
+        directory.clone()
+    } else {
+        directory.join(".git")
+    };
+    let existed = git_dir.join("config").exists();
+
+    if args.bare && !args.force && !existed && directory.join(".git").exists() {
+        anyhow::bail!(
+            "attempt to reinitialize a work tree repository as bare: {}",
+            directory.display()
+        );
+    }
+
+    let format = args
+        .object_format
+        .map(ObjectFormat::from)
+        .unwrap_or(ObjectFormat::Sha1);
+    let initial_branch = match &args.initial_branch {
+        Some(name) => BString::from(name.as_str()),
+        None => BString::from("main"),
+    };
+
+    let options = InitOptions {
+        bare: args.bare,
+        initial_branch,
+        format,
+        work_tree: None,
+    };
+    let repository = Repository::init(&directory, &options)?;
+
+    // Git prints the resolved git directory with a trailing separator, and the differential
+    // tests compare this line byte-for-byte.
+    let shown = repository.git_dir().join("");
+    let shown = shown.display();
+    if existed {
+        println!("Reinitialized existing Git repository in {shown}");
+    } else {
+        println!("Initialized empty Git repository in {shown}");
+    }
+    Ok(0)
 }
 
 /// Phase 11 — clone a repository into a new directory.

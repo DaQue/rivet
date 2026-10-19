@@ -376,34 +376,53 @@ impl From<FormatArg> for rivet_core::ObjectFormat {
     /// which keeps "the user did not choose" distinguishable from "the user chose SHA-1" at the
     /// call site where the difference matters for the error message.
     fn from(value: FormatArg) -> Self {
-        todo!()
+        match value {
+            FormatArg::Sha1 => rivet_core::ObjectFormat::Sha1,
+            FormatArg::Sha256 => rivet_core::ObjectFormat::Sha256,
+        }
     }
 }
 
 impl From<UntrackedModeArg> for rivet_core::UntrackedMode {
     /// Phase 4 — the walk mode a `--untracked-files` value names.
     fn from(value: UntrackedModeArg) -> Self {
-        todo!()
+        match value {
+            UntrackedModeArg::No => rivet_core::UntrackedMode::No,
+            UntrackedModeArg::Normal => rivet_core::UntrackedMode::Normal,
+            UntrackedModeArg::All => rivet_core::UntrackedMode::All,
+        }
     }
 }
 
 impl From<DiffAlgorithmArg> for rivet_core::DiffAlgorithm {
     /// Phase 8 — the diff algorithm a `--diff-algorithm` value names.
     fn from(value: DiffAlgorithmArg) -> Self {
-        todo!()
+        match value {
+            DiffAlgorithmArg::Myers => rivet_core::DiffAlgorithm::Myers,
+            DiffAlgorithmArg::Histogram => rivet_core::DiffAlgorithm::Histogram,
+        }
     }
 }
 
 impl From<ObjectKindArg> for rivet_core::ObjectKind {
     /// Phase 1 — the object kind a `--type` value names.
     fn from(value: ObjectKindArg) -> Self {
-        todo!()
+        match value {
+            ObjectKindArg::Blob => rivet_core::ObjectKind::Blob,
+            ObjectKindArg::Tree => rivet_core::ObjectKind::Tree,
+            ObjectKindArg::Commit => rivet_core::ObjectKind::Commit,
+            ObjectKindArg::Tag => rivet_core::ObjectKind::Tag,
+        }
     }
 }
 
 impl From<ConflictStyleArg> for rivet_core::ConflictStyle {
     /// Phase 9 — the conflict style a `--conflict` value names.
     fn from(value: ConflictStyleArg) -> Self {
-        todo!()
+        match value {
+            ConflictStyleArg::Merge => rivet_core::ConflictStyle::Merge,
+            ConflictStyleArg::Diff3 => rivet_core::ConflictStyle::Diff3,
+            ConflictStyleArg::Zd3 => rivet_core::ConflictStyle::Zd3,
+        }
     }
 }

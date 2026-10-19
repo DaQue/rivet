@@ -457,28 +457,45 @@ impl Config {
     ///   normalising writer that dropped or reordered them would produce a repository that
     ///   `repo::Repository` then refuses to open, or worse, opens as the wrong format.
     pub fn to_bytes(&self) -> Vec<u8> {
+        fn push_quoted(out: &mut Vec<u8>, value: &[u8]) {
+            out.push(b'"');
+            for b in value {
+                if *b == b'\\' || *b == b'"' {
+                    out.push(b'\\');
+                }
+                out.push(*b);
+            }
+            out.push(b'"');
+        }
+
         let mut out = Vec::new();
+        // A header is emitted once per section, the way git writes it. Repeating `[core]` before
+        // every key is valid ini but is not what git produces, and any tool that regexes the file
+        // (or a human reading it) expects the grouped form.
+        let mut header: Option<(&BStr, Option<&BStr>)> = None;
         for entry in &self.entries {
             let key: &[u8] = entry.key.as_ref();
-            let section: &[u8] = entry.section.as_ref();
+            let section: &BStr = entry.section.as_ref();
+            let subsection: Option<&BStr> = entry.subsection.as_ref().map(|s| s.as_ref());
             let value: &[u8] = entry.value.as_ref();
-            if !section.is_empty() {
-                out.extend_from_slice(b"[");
-                let needs_quote = section.iter().any(|b| *b == b' ' || *b == b'"' || *b == b'#');
+            if !section.is_empty() && header != Some((section, subsection)) {
+                out.push(b'[');
+                let needs_quote =
+                    section.iter().any(|b| *b == b' ' || *b == b'"' || *b == b'#');
                 if needs_quote {
-                    out.push(b'"');
-                    for b in section {
-                        if *b == b'\\' || *b == b'"' {
-                            out.push(b'\\');
-                        }
-                        out.push(*b);
-                    }
-                    out.push(b'"');
+                    push_quoted(&mut out, section);
                 } else {
                     out.extend_from_slice(section);
                 }
+                if let Some(subsection) = subsection {
+                    // Subsection names are always quoted by git, even when they would parse
+                    // unquoted: `[remote "origin"]`, never `[remote origin]`.
+                    out.push(b' ');
+                    push_quoted(&mut out, subsection);
+                }
                 out.push(b']');
                 out.push(b'\n');
+                header = Some((section, subsection));
             }
             out.extend_from_slice(key);
             out.push(b'=');
@@ -487,14 +504,7 @@ impl Config {
             || (value.last().map(|b| b.is_ascii_whitespace()).unwrap_or(false))
             || value.windows(2).any(|w| w[0].is_ascii_whitespace() && (w[1] == b'#' || w[1] == b';'));
             if needs_quote {
-                out.push(b'"');
-                for b in value {
-                    if *b == b'\\' || *b == b'"' {
-                        out.push(b'\\');
-                    }
-                    out.push(*b);
-                }
-                out.push(b'"');
+                push_quoted(&mut out, value);
             } else {
                 out.extend_from_slice(value);
             }

@@ -87,6 +87,7 @@ fn init_stage_tree_and_commit() {
         message: "initial commit\n".into(),
         parents: Vec::new(),
         allow_empty: false,
+        allow_empty_message: false,
         amend: false,
     };
     let commit_id = repo.commit(&options).unwrap();
@@ -128,6 +129,7 @@ fn second_commit_parents_the_first_and_amend_replaces_it() {
             message: "one\n".into(),
             parents: Vec::new(),
             allow_empty: false,
+            allow_empty_message: false,
             amend: false,
         })
         .unwrap();
@@ -141,6 +143,7 @@ fn second_commit_parents_the_first_and_amend_replaces_it() {
             message: "two\n".into(),
             parents: Vec::new(),
             allow_empty: false,
+            allow_empty_message: false,
             amend: false,
         })
         .unwrap();
@@ -160,6 +163,7 @@ fn second_commit_parents_the_first_and_amend_replaces_it() {
             message: "two amended\n".into(),
             parents: Vec::new(),
             allow_empty: false,
+            allow_empty_message: false,
             amend: true,
         })
         .unwrap();
@@ -187,6 +191,7 @@ fn unchanged_tree_is_refused_without_allow_empty() {
         message: "one\n".into(),
         parents: Vec::new(),
         allow_empty: false,
+        allow_empty_message: false,
         amend: false,
     };
     repo.commit(&options).unwrap();
@@ -196,6 +201,7 @@ fn unchanged_tree_is_refused_without_allow_empty() {
 
     let allowed = CommitOptions {
         allow_empty: true,
+        allow_empty_message: false,
         ..options
     };
     repo.commit(&allowed).unwrap();
@@ -306,6 +312,7 @@ fn an_empty_commit_message_is_refused() {
                 message: message.into(),
                 parents: Vec::new(),
                 allow_empty: false,
+                allow_empty_message: false,
                 amend: false,
             })
             .unwrap_err();
@@ -328,6 +335,7 @@ fn amend_with_explicit_parents_is_refused() {
             message: "root\n".into(),
             parents: Vec::new(),
             allow_empty: false,
+            allow_empty_message: false,
             amend: false,
         })
         .unwrap();
@@ -339,6 +347,7 @@ fn amend_with_explicit_parents_is_refused() {
             message: "amended\n".into(),
             parents: vec![root],
             allow_empty: true,
+            allow_empty_message: false,
             amend: true,
         })
         .unwrap_err();
