@@ -261,7 +261,20 @@ impl Pattern {
     /// Any [`crate::error::Error::InvalidIgnorePattern`] from [`Pattern::parse`] for a line that is
     /// not a comment.
     pub fn parse_file(data: &[u8], source: IgnoreSource, base: &BStr) -> Result<Vec<Self>> {
-        todo!()
+        let mut out = Vec::new();
+        let mut line_number = 1usize;
+        for line in data.split(|b| *b == b'\n') {
+            let trimmed = line.strip_suffix(b"\r").unwrap_or(line);
+            let trimmed = trimmed.trim_ascii();
+            if !trimmed.is_empty() && !trimmed.starts_with(b"#") {
+                let pattern = Pattern::parse(BStr::new(trimmed), source.clone(), line_number, base)?;
+                if let Some(p) = pattern {
+                    out.push(p);
+                }
+            }
+            line_number += 1;
+        }
+        Ok(out)
     }
 
     /// Phase 5 — whether this pattern matches a path.
