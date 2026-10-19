@@ -87,6 +87,7 @@ use std::path::{Path, PathBuf};
 use bstr::{BStr, BString};
 
 use crate::error::Result;
+use crate::error::Error;
 
 /// Phase 5 — where a set of patterns came from.
 ///
@@ -239,7 +240,38 @@ impl Pattern {
         line_number: usize,
         base: &BStr,
     ) -> Result<Option<Self>> {
-        todo!()
+        let mut s = line.to_string();
+        let negated = s.starts_with('!');
+        if negated {
+            s = s[1..].to_string();
+        }
+        let directory_only = s.ends_with('/');
+        if directory_only {
+            s = s[..s.len() - 1].to_string();
+        }
+        let anchored = s.starts_with('/');
+        if anchored {
+            s = s[1..].to_string();
+        }
+        let s = s.trim_start();
+        if s.is_empty() {
+            return Ok(None);
+        }
+        if s.chars().all(|c| c == '/') {
+            return Err(Error::InvalidIgnorePattern {
+                pattern: BString::from(line),
+                reason: "pattern matches nothing",
+            });
+        }
+        Ok(Some(Self {
+            text: BString::from(s),
+            negated,
+            directory_only,
+            anchored,
+            source,
+            line: line_number,
+            base: BString::from(base),
+        }))
     }
 
     /// Phase 5 — parse a whole file's contents into patterns.
