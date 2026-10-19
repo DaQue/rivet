@@ -58,7 +58,6 @@ use std::fmt;
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::error::Error;
-use crate::pack::crc32;
 
 /// Phase 10 — one row of a v2 index: an object, and where in the pack it lives.
 ///
@@ -130,59 +129,79 @@ impl<'a> PackIndex<'a> {
     /// [`crate::error::Error::InvalidHash`] if a stored id is not `format.len()` bytes — which can
     /// only happen if the caller passed the wrong format.
     pub fn parse(data: &'a [u8], format: ObjectFormat) -> Result<Self> {
-        let len = data.len();
-        let min_len = 8 + 256 * 4 + 4 + 4;
-        if len < min_len {
-            return Err(Error::CorruptPackIndex { reason: "truncated index".into() });
+        let id_len = format.len();
+        let fanout_start = 8usize;
+        let fanout_end = fanout_start + 256 * 4;
+        let minimum = fanout_end + 2 * id_len;
+        if data.len() < minimum {
+            return Err(Error::CorruptPackIndex {
+                reason: "truncated index".into(),
+            });
         }
-        let version = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        if &data[0..4] != b"\xfftOc" {
+            return Err(Error::CorruptPackIndex {
+                reason: "bad index magic".into(),
+            });
+        }
+        let version = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
         if version != 2 {
             return Err(Error::UnsupportedPackIndexVersion { version });
         }
-        let fanout_start = 8;
-        let fanout_end = fanout_start + 256 * 4;
+
         let mut fanout = [0u32; 256];
-        for i in 0..256 {
-            fanout[i] = u32::from_be_bytes([
-            data[fanout_start + i * 4],
-            data[fanout_start + i * 4 + 1],
-            data[fanout_start + i * 4 + 2],
-            data[fanout_start + i * 4 + 3],
-        ]);
+        for (i, slot) in fanout.iter_mut().enumerate() {
+            let at = fanout_start + i * 4;
+            *slot = u32::from_be_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
         }
         for i in 0..255 {
             if fanout[i] > fanout[i + 1] {
-                return Err(Error::CorruptPackIndex { reason: "non-monotonic fanout".into() });
+                return Err(Error::CorruptPackIndex {
+                    reason: "non-monotonic fanout".into(),
+                });
             }
         }
         let n = fanout[255] as usize;
-        let large_offset_start = fanout_end;
-        let large_offset_end = large_offset_start + n * 8;
-        let trailer_start = large_offset_end;
-        let trailer_end = trailer_start + 8;
-        if trailer_end != len {
-            return Err(Error::CorruptPackIndex { reason: "length mismatch".into() });
+
+        let ids_start = fanout_end;
+        let crc_start = ids_start + n * id_len;
+        let offsets_start = crc_start + n * 4;
+        let large_start = offsets_start + n * 4;
+        if data.len() < large_start + 2 * id_len {
+            return Err(Error::CorruptPackIndex {
+                reason: "truncated index tables".into(),
+            });
         }
-        let expected_checksum = u32::from_be_bytes([
-        data[trailer_start],
-        data[trailer_start + 1],
-        data[trailer_start + 2],
-        data[trailer_start + 3],
-        ]);
-        let actual_checksum = crc32(&data[..trailer_start]);
-        if expected_checksum != actual_checksum {
-            return Err(Error::CorruptPackIndex { reason: "checksum mismatch".into() });
+
+        // The 64-bit offset table is absent when no offset needs it; its size is implied by how
+        // many 32-bit slots carry the high-bit flag.
+        let mut large_count = 0usize;
+        for i in 0..n {
+            let at = offsets_start + i * 4;
+            let raw = u32::from_be_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+            if raw & 0x8000_0000 != 0 {
+                large_count += 1;
+            }
         }
-        let expected_pack_checksum = u32::from_be_bytes([
-        data[trailer_start + 4],
-        data[trailer_start + 5],
-        data[trailer_start + 6],
-        data[trailer_start + 7],
-        ]);
-        let pack_checksum = crc32(&data[trailer_start + 4..trailer_end]);
-        if expected_pack_checksum != pack_checksum {
-            return Err(Error::CorruptPackIndex { reason: "pack checksum mismatch".into() });
+        let trailer_start = large_start + large_count * 8;
+        let expected_len = trailer_start + 2 * id_len;
+        if data.len() != expected_len {
+            return Err(Error::CorruptPackIndex {
+                reason: "length does not match the fanout table".into(),
+            });
         }
+
+        // The index's own checksum covers everything before it. This is the only integrity check
+        // the format offers, and it must pass before any table is trusted.
+        let expected_checksum = &data[expected_len - id_len..];
+        let mut hasher = format.hasher();
+        hasher.update(&data[..expected_len - id_len]);
+        let actual = hasher.finish()?;
+        if actual.as_bytes() != expected_checksum {
+            return Err(Error::CorruptPackIndex {
+                reason: "index checksum mismatch".into(),
+            });
+        }
+
         Ok(Self { data, format })
     }
 
@@ -204,7 +223,9 @@ impl<'a> PackIndex<'a> {
     /// Read from the fanout table's last entry. See [`PackIndex::parse`] for why that is the only
     /// trustworthy source.
     pub fn len(&self) -> usize {
-        self.data.len()
+        let at = 8 + 255 * 4;
+        u32::from_be_bytes([self.data[at], self.data[at + 1], self.data[at + 2], self.data[at + 3]])
+            as usize
     }
 
     /// Phase 10 — whether the index describes no objects at all.
@@ -226,13 +247,10 @@ impl<'a> PackIndex<'a> {
     /// caller renaming or writing the pair derives the name from here rather than from the path it
     /// happened to read.
     pub fn pack_checksum(&self) -> ObjectId {
-        let format = self.format();
-        let len = format.len();
-        let start = self.data.len() - len;
-        let checksum = &self.data[start..];
-        let mut hasher = format.hasher();
-        hasher.update(checksum);
-        hasher.finish().expect("checksum hash failed")
+        let id_len = self.format.len();
+        let start = self.data.len() - 2 * id_len;
+        ObjectId::from_bytes(self.format, &self.data[start..start + id_len])
+            .expect("index was validated at parse time")
     }
 
     /// Phase 10 — find an object by full id.
@@ -246,19 +264,20 @@ impl<'a> PackIndex<'a> {
     /// A full id is required. Nothing here resolves abbreviations; that needs a view over the
     /// whole object database and belongs to [`crate::odb::Odb`].
     pub fn lookup(&self, oid: &ObjectId) -> Option<PackIndexEntry> {
-        let entries = self.entries();
         let mut lo = 0usize;
-        let mut hi = entries.len();
+        let mut hi = self.len();
         while lo < hi {
             let mid = (lo + hi) / 2;
-            if entries[mid].oid.as_bytes() < oid.as_bytes() {
+            let entry = self.entry(mid)?;
+            if entry.oid.as_bytes() < oid.as_bytes() {
                 lo = mid + 1;
             } else {
                 hi = mid;
             }
         }
-        if lo < entries.len() && entries[lo].oid == *oid {
-            Some(entries[lo])
+        let entry = self.entry(lo)?;
+        if entry.oid == *oid {
+            Some(entry)
         } else {
             None
         }
@@ -311,7 +330,59 @@ impl<'a> PackIndex<'a> {
     /// first object in the file. Returns `None` for an out-of-range index rather than panicking:
     /// the index came off a socket or out of someone else's repository (§5).
     pub fn entry(&self, i: usize) -> Option<PackIndexEntry> {
-        self.iter().nth(i)
+        let n = self.len();
+        if i >= n {
+            return None;
+        }
+        let id_len = self.format.len();
+        let ids_start = 8 + 256 * 4;
+        let crc_start = ids_start + n * id_len;
+        let offsets_start = crc_start + n * 4;
+        let large_start = offsets_start + n * 4;
+
+        let id_at = ids_start + i * id_len;
+        let oid = ObjectId::from_bytes(self.format, &self.data[id_at..id_at + id_len]).ok()?;
+
+        let crc_at = crc_start + i * 4;
+        let crc = u32::from_be_bytes([
+            self.data[crc_at],
+            self.data[crc_at + 1],
+            self.data[crc_at + 2],
+            self.data[crc_at + 3],
+        ]);
+
+        let off_at = offsets_start + i * 4;
+        let raw = u32::from_be_bytes([
+            self.data[off_at],
+            self.data[off_at + 1],
+            self.data[off_at + 2],
+            self.data[off_at + 3],
+        ]);
+        let offset = if raw & 0x8000_0000 != 0 {
+            let slot = (raw & 0x7fff_ffff) as usize;
+            let at = large_start + slot * 8;
+            if at + 8 > self.data.len() {
+                return None;
+            }
+            u64::from_be_bytes([
+                self.data[at],
+                self.data[at + 1],
+                self.data[at + 2],
+                self.data[at + 3],
+                self.data[at + 4],
+                self.data[at + 5],
+                self.data[at + 6],
+                self.data[at + 7],
+            ])
+        } else {
+            raw as u64
+        };
+
+        Some(PackIndexEntry {
+            oid,
+            offset,
+            crc32: crc,
+        })
     }
 
     /// Phase 10 — iterate the entries lazily, in id order.
@@ -338,21 +409,8 @@ impl<'a> PackIndex<'a> {
     /// The returned bytes are the whole file, checksums included, ready for an atomic
     /// temp-file-and-rename write. Nothing in this crate writes a `.idx` any other way (§5).
     pub fn write(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(&[2, 0, 0, 0]);
-        let n = self.entries().len() as u32;
-        out.extend_from_slice(&n.to_le_bytes());
-        for e in self.iter() {
-            let off = e.offset as u32;
-            out.extend_from_slice(&off.to_le_bytes());
-        }
-        let crc = crc32(&out);
-        out.extend_from_slice(&crc.to_le_bytes());
-        let mut hasher = self.format.hasher();
-        hasher.update(&out);
-        let id = hasher.finish().expect("hash collision");
-        out.extend_from_slice(id.as_bytes());
-        out
+        let entries = self.entries();
+        serialize_index(&entries, self.pack_checksum(), self.format)
     }
 
     /// Phase 10 — copy the borrowed index into one that owns its bytes.
@@ -420,6 +478,80 @@ impl OwnedPackIndex {
             format: self.format,
         }
     }
+
+    /// Phase 10 — build an index from entries discovered by walking a pack.
+    ///
+    /// # Caveats
+    ///
+    /// The entries are sorted by id here; nothing else in this module will sort them, because an
+    /// unsorted table passes every checksum and fails every lookup. The bytes are serialised and
+    /// immediately re-parsed, so a caller receives a value that has passed the same validation a
+    /// file read would.
+    pub(crate) fn from_entries(
+        mut entries: Vec<PackIndexEntry>,
+        pack_checksum: ObjectId,
+        format: ObjectFormat,
+    ) -> Result<Self> {
+        entries.sort_by(|a, b| a.oid.as_bytes().cmp(b.oid.as_bytes()));
+        let data = serialize_index(&entries, pack_checksum, format);
+        Self::parse(data, format)
+    }
+}
+
+/// Phase 10 — serialise entries as a v2 `.idx`.
+///
+/// `entries` must already be sorted by id; the fanout table is computed from that order and a
+/// caller that hands over an unsorted list gets an index that looks valid and cannot be searched.
+fn serialize_index(
+    entries: &[PackIndexEntry],
+    pack_checksum: ObjectId,
+    format: ObjectFormat,
+) -> Vec<u8> {
+    let id_len = format.len();
+    let mut out = Vec::with_capacity(8 + 1024 + entries.len() * (id_len + 8) + 2 * id_len);
+    out.extend_from_slice(b"\xfftOc");
+    out.extend_from_slice(&2u32.to_be_bytes());
+
+    let mut fanout = [0u32; 256];
+    for entry in entries {
+        fanout[entry.oid.as_bytes()[0] as usize] += 1;
+    }
+    let mut running = 0u32;
+    for slot in fanout.iter_mut() {
+        running += *slot;
+        *slot = running;
+    }
+    for value in fanout {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+
+    for entry in entries {
+        out.extend_from_slice(entry.oid.as_bytes());
+    }
+    for entry in entries {
+        out.extend_from_slice(&entry.crc32.to_be_bytes());
+    }
+
+    let mut large_offsets: Vec<u64> = Vec::new();
+    for entry in entries {
+        if entry.offset < 0x8000_0000 {
+            out.extend_from_slice(&(entry.offset as u32).to_be_bytes());
+        } else {
+            let slot = 0x8000_0000u32 | (large_offsets.len() as u32);
+            out.extend_from_slice(&slot.to_be_bytes());
+            large_offsets.push(entry.offset);
+        }
+    }
+    for offset in large_offsets {
+        out.extend_from_slice(&offset.to_be_bytes());
+    }
+
+    out.extend_from_slice(pack_checksum.as_bytes());
+    let mut hasher = format.hasher();
+    hasher.update(&out);
+    let checksum = hasher.finish().expect("index hash");
+    out.extend_from_slice(checksum.as_bytes());
+    out
 }
 
 impl fmt::Display for PackIndexEntry {

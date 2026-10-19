@@ -316,6 +316,15 @@ impl PktLine {
         if len == 3 {
             return Err(Error::Protocol("invalid pkt-line length 0003".to_string()));
         }
+        // Control packets carry no payload. Their length is 0, 1 or 2, so the payload length must
+        // not be computed by subtraction before they are recognised: `0 - 4` underflows.
+        if len < 4 {
+            let pkt = match len {
+                0 => PktLine::Flush,
+                _ => PktLine::Data(vec![]),
+            };
+            return Ok((pkt, 4));
+        }
         let payload_len = len as usize - 4;
         if payload_len > MAX_PKT_DATA {
             return Err(Error::Protocol("pkt-line exceeds max length".to_string()));
@@ -324,16 +333,7 @@ impl PktLine {
             return Err(Error::Protocol("truncated pkt-line payload".to_string()));
         }
         let payload = &data[4..4 + payload_len];
-        let pkt = if len == 0 {
-            PktLine::Flush
-        } else if len == 1 {
-            PktLine::Data(vec![])
-        } else if len == 2 {
-            PktLine::Data(vec![])
-        } else {
-            PktLine::Data(payload.to_vec())
-        };
-        Ok((pkt, 4 + payload_len))
+        Ok((PktLine::Data(payload.to_vec()), 4 + payload_len))
     }
 
     /// Phase 11 — read one packet from a stream.
@@ -373,7 +373,27 @@ impl PktLine {
                 Err(e) => return Err(Error::Transport(e.to_string())),
             }
         }
-        let len = u16::from_be_bytes([header[0], header[1]]);
+        // The header is four *hex digits*, not two binary bytes: reading it as a big-endian u16
+        // turns "0032" into 0x3030 and makes every frame length wrong.
+        let len = u32::from_str_radix(
+            std::str::from_utf8(&header)
+                .map_err(|_| Error::Protocol("non-hex pkt-line header".to_string()))?,
+            16,
+        )
+        .map_err(|_| Error::Protocol("non-hex pkt-line header".to_string()))?;
+        if len == 3 {
+            return Err(Error::Protocol("invalid pkt-line length 0003".to_string()));
+        }
+        // Control packets carry no payload, so the subtraction must not happen before they are
+        // recognised — `0 - 4` underflows a usize.
+        if len < 4 {
+            let pkt = match len {
+                0 => PktLine::Flush,
+                1 => PktLine::Delim,
+                _ => PktLine::ResponseEnd,
+            };
+            return Ok(pkt);
+        }
         let payload_len = len as usize - 4;
         let mut payload = vec![0u8; payload_len];
         let mut n = 0;

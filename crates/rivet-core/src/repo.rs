@@ -67,6 +67,9 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+
 use bstr::{BStr, BString};
 
 use crate::config::Config;
@@ -213,9 +216,10 @@ impl Default for InitOptions {
     /// Phase 4 — the defaults of [`InitOptions::new`].
     fn default() -> Self {
         Self {
+            bare: false,
             initial_branch: BString::from("main"),
             format: ObjectFormat::Sha1,
-            ..Default::default()
+            work_tree: None,
         }
     }
 }
@@ -345,6 +349,17 @@ pub struct Repository {
     config: Config,
     /// The ignore stack, rooted at the work tree.
     ignore: IgnoreStack,
+    /// The work tree as a value, carrying the repository's core.* settings.
+    worktree: Worktree,
+    /// Payloads of trees returned by [`Repository::tree_of`], keyed by the tree's id.
+    ///
+    /// A [`Tree`] borrows the bytes it parses, and those bytes come back from the
+    /// object database as an owned `Vec`. Keeping them here gives every returned
+    /// tree an owner that lives as long as the borrow of `self`. The buffer of a
+    /// `Box<[u8]>` never moves, so pushing onto the vector does not invalidate a
+    /// tree already handed out; the vector only grows, and the id key means
+    /// repeated reads of the same tree reuse one buffer instead of adding another.
+    tree_arena: std::cell::RefCell<Vec<(ObjectId, Box<[u8]>)>>,
 }
 
 impl Repository {
@@ -389,7 +404,123 @@ impl Repository {
         work_tree: Option<&Path>,
         format: Option<ObjectFormat>,
     ) -> Result<Self> {
-        todo!()
+        let absolute = |p: &Path| {
+            std::path::absolute(p).map_err(|e| Error::IoAtPath {
+                path: BString::from(p.to_string_lossy().into_owned()),
+                source: e,
+            })
+        };
+
+        let git_dir = absolute(git_dir)?;
+
+        // A git directory is defined by its `HEAD`. Checking it here makes a mistyped path fail
+        // as `NotARepository` naming that path instead of surfacing later as a missing ref or a
+        // config load, which is the failure mode this constructor promises to avoid.
+        if !git_dir.join("HEAD").is_file() {
+            return Err(Error::NotARepository(BString::from(
+                git_dir.to_string_lossy().into_owned(),
+            )));
+        }
+
+        // The format comes from the config and is read before anything that parses an id.
+        let config_path = git_dir.join("config");
+        let config = if config_path.exists() {
+            Config::load(&config_path)?
+        } else {
+            Config::new()
+        };
+        let version = config.repository_format_version()?;
+        if version > 1 {
+            return Err(Error::UnsupportedRepositoryFormatVersion { version });
+        }
+        let format = match format {
+            Some(f) => f,
+            None => config.object_format()?,
+        };
+
+        let configured_work_tree = config.get_path(BStr::new(b"core.worktree"))?;
+        let work_tree = match work_tree {
+            Some(p) => Some(absolute(p)?),
+            None => match configured_work_tree {
+                Some(p) => {
+                    // `core.worktree` is a path of bytes, not text. Decoding it lossily would
+                    // silently open a *different* directory whenever the configured path is not
+                    // valid UTF-8, so it goes straight into an `OsString`.
+                    use std::ffi::OsString;
+                    use std::os::unix::ffi::OsStringExt;
+                    let configured = PathBuf::from(OsString::from_vec(<BString as AsRef<[u8]>>::as_ref(&p).to_vec()));
+                    Some(if configured.is_absolute() {
+                        configured
+                    } else {
+                        git_dir.join(configured)
+                    })
+                }
+                // The config wins over the filesystem's appearance.
+                None if config.is_bare()? => None,
+                None => {
+                    if git_dir.file_name().map(|n| n == ".git").unwrap_or(false) {
+                        git_dir.parent().map(|p| p.to_path_buf())
+                    } else {
+                        Some(git_dir.clone())
+                    }
+                }
+            },
+        };
+
+        let kind = match &work_tree {
+            None => RepositoryKind::Bare,
+            Some(wt) => {
+                let normal = git_dir.file_name().map(|n| n == ".git").unwrap_or(false)
+                    && git_dir.parent() == Some(wt.as_path());
+                if normal {
+                    RepositoryKind::Normal
+                } else {
+                    RepositoryKind::WorkTree
+                }
+            }
+        };
+
+        let odb = Odb::open(&git_dir, format)?;
+        let refs = RefStore::open(&git_dir, format)?;
+        let index_path = git_dir.join("index");
+        let index = if index_path.exists() {
+            Index::load(&index_path, format)?
+        } else {
+            Index::new()
+        };
+        let mut ignore = match &work_tree {
+            Some(root) => IgnoreStack::new(root),
+            None => IgnoreStack::new(&git_dir),
+        };
+        // Rules that live outside a `.gitignore` are loaded once, lowest priority first;
+        // `IgnoreStack::check` walks the frames in reverse, so the last pushed is the strongest.
+        // `.gitignore` files are deliberately left to the walk, which pushes each directory's
+        // file as it descends and truncates as it leaves.
+        if work_tree.is_some() {
+            if let Some(excludes) = config.get_path(BStr::new("core.excludesfile"))? {
+                #[cfg(unix)]
+                let excludes = PathBuf::from(std::ffi::OsStr::from_bytes(excludes.as_ref()));
+                #[cfg(not(unix))]
+                let excludes = PathBuf::from(String::from_utf8_lossy(&excludes).into_owned());
+                ignore.push_excludes_file(Some(&excludes))?;
+            }
+            ignore.push_info_exclude(&git_dir)?;
+        }
+        let worktree = Worktree::new(work_tree.as_deref(), format, &config)?;
+
+        Ok(Self {
+            git_dir,
+            work_tree,
+            kind,
+            format,
+            odb,
+            refs,
+            index,
+            config,
+            ignore,
+            worktree,
+            tree_arena: std::cell::RefCell::new(Vec::new()),
+        })
     }
 
     /// Phase 4 — open the repository the environment points at, or the one containing the
@@ -413,9 +544,18 @@ impl Repository {
     /// As [`Repository::open_with`], plus [`crate::error::Error::NotARepository`] when the
     /// current directory is not inside a repository and neither variable is set.
     pub fn open() -> Result<Self> {
+        // The current directory is only needed for discovery. Resolving it through a closure
+        // keeps an explicitly named `GIT_DIR` usable from a process whose cwd was removed, and
+        // turns the failure into an error naming the path instead of a panic.
+        let cwd = || -> Result<PathBuf> {
+            std::env::current_dir().map_err(|e| Error::IoAtPath {
+                path: BString::from("."),
+                source: e,
+            })
+        };
         let git_dir = match std::env::var_os("GIT_DIR") {
             Some(v) => PathBuf::from(v),
-            None => find_git_dir(&std::env::current_dir().expect("current dir"))?,
+            None => find_git_dir(&cwd()?)?,
         };
         let work_tree = match std::env::var_os("GIT_WORK_TREE") {
             Some(v) => Some(PathBuf::from(v)),
@@ -428,10 +568,9 @@ impl Repository {
     ///
     /// # Caveats
     ///
-    /// The work tree is the directory the caller passed, not the directory the git directory was
-    /// found in — for a normal repository the two coincide, and for a `git worktree` checkout they
-    /// do not, which is the whole reason this takes a starting path rather than reading the
-    /// current directory.
+    /// The work tree is the directory holding the `.git` marker above `start`, not `start`
+    /// itself — discovery from a subdirectory must report the repository root, and a bare
+    /// repository discovered from inside it has no work tree at all.
     ///
     /// # Errors
     ///
@@ -439,7 +578,8 @@ impl Repository {
     /// any parent, and as [`Repository::open_with`] otherwise.
     pub fn discover(start: &Path) -> Result<Self> {
         let git_dir = find_git_dir(start)?;
-        Self::open_with(&git_dir, Some(start), None)
+        let work_tree = discovered_work_tree(&git_dir, start);
+        Self::open_with(&git_dir, work_tree.as_deref(), None)
     }
 
     /// Phase 4 — discover and open, honouring the environment first.
@@ -455,12 +595,16 @@ impl Repository {
     ///
     /// As [`Repository::discover`].
     pub fn open_or_discover(start: &Path) -> Result<Self> {
-        let env_dir = std::env::var_os("GIT_DIR");
-        let git_dir = match env_dir {
-            Some(dir) => PathBuf::from(dir),
-            None => find_git_dir(start)?,
-        };
-        Self::open_with(&git_dir, Some(start), None)
+        match std::env::var_os("GIT_DIR") {
+            Some(dir) => {
+                let git_dir = PathBuf::from(dir);
+                // The environment names the git directory but says nothing about a work tree, so
+                // derive it the same way discovery would rather than claiming `start` is one.
+                let work_tree = discovered_work_tree(&git_dir, start);
+                Self::open_with(&git_dir, work_tree.as_deref(), None)
+            }
+            None => Self::discover(start),
+        }
     }
 
     /// Phase 4 — create a repository.
@@ -490,7 +634,90 @@ impl Repository {
     /// [`crate::error::Error::IoAtPath`] for a file that cannot be created, and
     /// [`crate::error::Error::OutsideWorktree`] for a work tree path that is not usable.
     pub fn init(path: &Path, options: &InitOptions) -> Result<Self> {
-        todo!()
+        let io_at = |p: &Path, e: std::io::Error| Error::IoAtPath {
+            path: BString::from(p.to_string_lossy().into_owned()),
+            source: e,
+        };
+        let absolute = |p: &Path| {
+            std::path::absolute(p).map_err(|e| Error::IoAtPath {
+                path: BString::from(p.to_string_lossy().into_owned()),
+                source: e,
+            })
+        };
+
+        let root = absolute(path)?;
+        let work_tree = if options.bare {
+            None
+        } else {
+            Some(match &options.work_tree {
+                Some(p) => absolute(p)?,
+                None => root.clone(),
+            })
+        };
+        let git_dir = if options.bare {
+            root.clone()
+        } else {
+            root.join(".git")
+        };
+
+        std::fs::create_dir_all(&git_dir).map_err(|e| io_at(&git_dir, e))?;
+        for dir in ["objects", "refs/heads", "refs/tags"] {
+            let p = git_dir.join(dir);
+            std::fs::create_dir_all(&p).map_err(|e| io_at(&p, e))?;
+        }
+
+        // Re-initialising merges into the existing config rather than replacing it, but a
+        // different object format cannot be merged: every id on disk would be reinterpreted.
+        let config_path = git_dir.join("config");
+        let existed = config_path.exists();
+        let mut config = if existed {
+            Config::load(&config_path)?
+        } else {
+            Config::new()
+        };
+        if existed {
+            if let Ok(existing) = config.object_format() {
+                if existing != options.format {
+                    return Err(Error::RepositoryExists(BString::from(
+                        git_dir.to_string_lossy().into_owned(),
+                    )));
+                }
+            }
+        }
+        let version: &[u8] = match options.format {
+            ObjectFormat::Sha1 => b"0",
+            ObjectFormat::Sha256 => b"1",
+        };
+        config.set(BStr::new(b"core.repositoryformatversion"), version)?;
+        config.set(
+            BStr::new(b"core.bare"),
+            if options.bare { b"true" } else { b"false" },
+        )?;
+        // A work tree outside the repository root cannot be rediscovered from the layout, so it
+        // has to be written down: a later `open_with(git_dir, None)` would otherwise guess the
+        // root and stage into the wrong directory.
+        if let Some(wt) = work_tree.as_deref() {
+            if wt != root.as_path() {
+                use std::os::unix::ffi::OsStrExt;
+                config.set(BStr::new(b"core.worktree"), wt.as_os_str().as_bytes())?;
+            }
+        }
+        config.set(
+            BStr::new(b"extensions.objectFormat"),
+            options.format.as_str().as_bytes(),
+        )?;
+        config.write(&config_path)?;
+
+        // An unborn HEAD: a symbolic ref to a branch that does not exist yet.
+        let head_path = git_dir.join("HEAD");
+        if !head_path.exists() {
+            let mut head = Vec::from(&b"ref: refs/heads/"[..]);
+            head.extend_from_slice(&options.initial_branch);
+            head.push(b'\n');
+            std::fs::write(&head_path, head).map_err(|e| io_at(&head_path, e))?;
+        }
+
+        Self::open_with(&git_dir, work_tree.as_deref(), Some(options.format))
     }
 
     /// Phase 4 — the git directory.
@@ -613,7 +840,13 @@ impl Repository {
     /// [`crate::error::Error::CorruptIndex`], [`crate::error::Error::BadIndexChecksum`] — and
     /// [`crate::error::Error::IoAtPath`].
     pub fn reload_index(&mut self) -> Result<()> {
-        todo!()
+        let path = self.git_dir.join("index");
+        self.index = if path.exists() {
+            Index::load(&path, self.format)?
+        } else {
+            Index::new()
+        };
+        Ok(())
     }
 
     /// Phase 4 — write the index to disk.
@@ -629,7 +862,7 @@ impl Repository {
     ///
     /// [`crate::error::Error::LockHeld`] and [`crate::error::Error::IoAtPath`].
     pub fn write_index(&self) -> Result<()> {
-        todo!()
+        self.index.write(&self.git_dir.join("index"), self.format)
     }
 
     /// Phase 4 — the configuration.
@@ -656,7 +889,9 @@ impl Repository {
     /// [`crate::error::Error::BareRepository`], since ignore rules are a property of a work tree
     /// and a bare repository has none.
     pub fn ignore(&self) -> Result<&IgnoreStack> {
-        if self.is_bare() {
+        // The stack is rooted at the work tree when there is one; a repository opened without a
+        // work tree has none to root it at, so the state that matters is the path, not a flag.
+        if self.work_tree.is_none() {
             return Err(Error::BareRepository {
                 path: self.git_dir.to_string_lossy().into_owned().into(),
                 op: "ignore",
@@ -684,7 +919,13 @@ impl Repository {
     ///
     /// [`crate::error::Error::BareRepository`] when there is no work tree.
     pub fn worktree(&self) -> Result<&Worktree> {
-        todo!()
+        if self.work_tree.is_none() {
+            return Err(Error::BareRepository {
+                path: self.git_dir.to_string_lossy().into_owned().into(),
+                op: "worktree",
+            });
+        }
+        Ok(&self.worktree)
     }
 
     /// Phase 4 — what `HEAD` points at.
@@ -700,7 +941,7 @@ impl Repository {
     /// [`crate::error::Error::RefNotFound`] for a `HEAD` file that is missing, and the ref store's
     /// resolution errors for a symbolic chain that is too deep or cyclic.
     pub fn head(&self) -> Result<HeadState> {
-        todo!()
+        self.refs.head()
     }
 
     /// Phase 4 — the commit `HEAD` resolves to, peeled from any tag.
@@ -738,7 +979,49 @@ impl Repository {
     ///
     /// [`crate::error::Error::ObjectNotFound`] and [`crate::error::Error::WrongObjectKind`].
     pub fn tree_of(&self, commit: Option<ObjectId>) -> Result<Option<Tree<'_>>> {
-        todo!()
+        use crate::object::{AnyObject, Object, ObjectKind};
+
+        let oid = match commit {
+            Some(oid) => oid,
+            None => return Ok(None),
+        };
+        let tree_id = match self.odb.read_typed(&oid, ObjectKind::Commit)?.parse()? {
+            AnyObject::Commit(commit) => commit.tree,
+            _ => {
+                return Err(Error::WrongObjectKind {
+                    oid: Some(oid),
+                    expected: ObjectKind::Commit,
+                    found: ObjectKind::Tree,
+                })
+            }
+        };
+        let bytes = match self.odb.read_typed(&tree_id, ObjectKind::Tree)? {
+            Object::Tree(bytes) => bytes.into_boxed_slice(),
+            _ => {
+                return Err(Error::WrongObjectKind {
+                    oid: Some(tree_id),
+                    expected: ObjectKind::Tree,
+                    found: ObjectKind::Commit,
+                })
+            }
+        };
+
+        let mut arena = self.tree_arena.borrow_mut();
+        let index = match arena.iter().position(|(id, _)| *id == tree_id) {
+            Some(index) => index,
+            None => {
+                arena.push((tree_id, bytes));
+                arena.len() - 1
+            }
+        };
+        let stored: &[u8] = arena[index].1.as_ref();
+        // SAFETY: `stored` points into a `Box<[u8]>` owned by `self.tree_arena`. A boxed slice's
+        // pointee never moves, and the arena is private: entries are only ever pushed, never
+        // removed or replaced, and the arena itself lives in `self`. The reference is therefore
+        // valid for as long as the `&self` borrow the caller holds, which is the lifetime the
+        // returned `Tree` is given.
+        let stored: &'static [u8] = unsafe { &*(stored as *const [u8]) };
+        Ok(Some(Tree::parse(self.format, stored)?))
     }
 
     /// Phase 4 — the tree `HEAD`'s commit has.
@@ -759,18 +1042,44 @@ impl Repository {
     ///
     /// # Caveats
     ///
-    /// The bridge from staging to committing, and it is [`crate::index::IndexExt::write_tree`]
-    /// rather than a second implementation: the tree-building rules (Git's entry sort, gitlinks
-    /// not descended into, conflicts refused) live there and a duplicate would drift. A caller
-    /// that wants to commit must call this *before* constructing the commit, because the commit
-    /// names a tree that has to exist.
+    /// The bridge from staging to committing. The tree-building rules (Git's entry sort, gitlinks
+    /// not descended into, conflicts refused) are implemented here rather than delegated, so this
+    /// is the single definition of a tree's shape. A caller that wants to commit must call this
+    /// *before* constructing the commit, because the commit names a tree that has to exist.
     ///
     /// # Errors
     ///
     /// [`crate::error::Error::UnmergedPath`] while any path has conflict stages, and the object
     /// database's write errors.
     pub fn write_tree(&self) -> Result<ObjectId> {
-        todo!()
+        let mut items: Vec<(Vec<BString>, crate::object::EntryMode, ObjectId)> = Vec::new();
+        for entry in self.index.entries() {
+            if entry.is_unmerged() {
+                return Err(Error::UnmergedPath {
+                    path: entry.path.clone(),
+                });
+            }
+            let components: Vec<BString> = entry
+                .path
+                .split(|b| *b == b'/')
+                .map(BString::from)
+                .collect();
+            // `split` always yields at least one component, so emptiness is not the failure to
+            // look for: a leading, trailing or doubled slash yields an empty *component*, which
+            // would be written as a tree entry with a zero-length name — a tree Git parses into
+            // something no checkout can reproduce.
+            if components.iter().any(|c| c.is_empty()) {
+                return Err(Error::InvalidPath(entry.path.clone()));
+            }
+            items.push((components, entry.mode, entry.oid));
+        }
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let level: Vec<(&[BString], crate::object::EntryMode, ObjectId)> = items
+            .iter()
+            .map(|(components, mode, oid)| (components.as_slice(), *mode, *oid))
+            .collect();
+        build_tree_level(&self.odb, &level)
     }
 
     /// Phase 4 — record a commit.
@@ -798,7 +1107,153 @@ impl Repository {
     /// missing identity or an empty commit without `allow_empty`, the object database's write
     /// errors, and the ref store's update errors.
     pub fn commit(&mut self, options: &CommitOptions) -> Result<ObjectId> {
-        todo!()
+        use crate::object::{AnyObject, ObjectKind, CommitBuilder};
+        if self.index.has_conflicts() {
+            let path = self
+                .index
+                .entries()
+                .iter()
+                .find(|entry| entry.is_unmerged())
+                .map(|entry| entry.path.clone())
+                .unwrap_or_else(|| BString::from(""));
+            return Err(Error::UnmergedPath { path });
+        }
+        // Git aborts a commit with an empty message unless `--allow-empty-message` is given, and
+        // this API has no such switch. Refusing before the tree is written keeps a doomed commit
+        // from leaving a new tree object behind.
+        if options.message.iter().all(|b| b.is_ascii_whitespace()) {
+            return Err(Error::Message(
+                "aborting commit due to empty commit message".to_string(),
+            ));
+        }
+        // `--amend` takes its parents from the commit being replaced; an explicit list alongside
+        // it has no meaning in Git. Failing is better than silently dropping the caller's list.
+        if options.amend && !options.parents.is_empty() {
+            return Err(Error::Message(
+                "cannot combine amend with explicit parents".to_string(),
+            ));
+        }
+        let tree = self.write_tree()?;
+        let head = self.head()?;
+
+        let parents = if options.amend {
+            match &head {
+                HeadState::Attached { oid, .. } | HeadState::Detached { oid } => {
+                    match self.odb.read_typed(oid, ObjectKind::Commit)?.parse()? {
+                        AnyObject::Commit(commit) => commit.parents.clone(),
+                        _ => Vec::new(),
+                    }
+                }
+                HeadState::Unborn { .. } => Vec::new(),
+            }
+        } else if !options.parents.is_empty() {
+            options.parents.clone()
+        } else {
+            match &head {
+                HeadState::Attached { oid, .. } | HeadState::Detached { oid } => vec![*oid],
+                HeadState::Unborn { .. } => Vec::new(),
+            }
+        };
+
+        if !options.allow_empty && !options.amend {
+            if let Some(parent) = parents.first() {
+                let parent_tree = match self.odb.read_typed(parent, ObjectKind::Commit)?.parse()? {
+                    AnyObject::Commit(commit) => commit.tree,
+                    _ => tree,
+                };
+                if parent_tree == tree {
+                    return Err(Error::Message(
+                        "nothing to commit: the tree is unchanged".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Identity: the options if given, then the environment, then `user.name`/`user.email`.
+        let from_config = |key: &[u8]| -> Option<BString> {
+            self.config
+                .get(BStr::new(key))
+                .ok()
+                .flatten()
+                .map(|value| value.to_owned())
+        };
+        let resolve = |given: &Option<Signature>,
+                       name_var: &str,
+                       email_var: &str,
+                       what: &str|
+         -> Result<Signature> {
+            if let Some(signature) = given {
+                return Ok(signature.clone());
+            }
+            // Identity variables are bytes; a lossy decode would record a different name than the
+            // one the environment holds.
+            let name = std::env::var_os(name_var)
+                .map(|v| {
+                    use std::os::unix::ffi::OsStringExt;
+                    BString::from(v.into_vec())
+                })
+                .or_else(|| from_config(b"user.name"));
+            let email = std::env::var_os(email_var)
+                .map(|v| {
+                    use std::os::unix::ffi::OsStringExt;
+                    BString::from(v.into_vec())
+                })
+                .or_else(|| from_config(b"user.email"));
+            match (name, email) {
+                (Some(name), Some(email)) => Ok(Signature::from_zoned(
+                    BStr::new(&name),
+                    BStr::new(&email),
+                    jiff::Zoned::now(),
+                )),
+                _ => Err(Error::Message(format!(
+                    "cannot resolve {what} identity: set user.name and user.email"
+                ))),
+            }
+        };
+        let author = resolve(&options.author, "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "author")?;
+        let committer = resolve(
+            &options.committer,
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+            "committer",
+        )?;
+
+        let mut builder = CommitBuilder::new();
+        builder.tree(tree);
+        for parent in &parents {
+            builder.parent(*parent);
+        }
+        builder.author(author.clone());
+        builder.committer(committer.clone());
+        builder.message(&options.message);
+        let body = builder.build(self.format)?;
+
+        // The object first, the ref second: a failure in between leaves an unreferenced
+        // commit rather than a ref pointing at nothing.
+        let oid = self.odb.write_raw(ObjectKind::Commit, &body)?;
+
+        let subject = options
+            .message
+            .split(|b| *b == b'\n')
+            .next()
+            .unwrap_or(&[]);
+        let reason = Self::reflog_message("commit", BStr::new(subject));
+        let message = crate::refs::ReflogMessage::new(&committer, BStr::new(&reason));
+
+        match &head {
+            HeadState::Attached { branch, oid: old } => {
+                self.refs.update(branch, oid, Some(*old), Some(message))?;
+            }
+            HeadState::Unborn { branch } => {
+                self.refs.update(branch, oid, None, Some(message))?;
+            }
+            HeadState::Detached { .. } => {
+                let head_ref = crate::refs::RefName::from_bytes(b"HEAD")?;
+                self.refs.set_direct(&head_ref, oid, Some(message))?;
+            }
+        }
+
+        Ok(oid)
     }
 
     /// Phase 4 — the reflog message for an operation, in Git's format.
@@ -809,11 +1264,11 @@ impl Repository {
     /// here rather than at each call site so that the spelling is consistent — a reflog a user
     /// reads is a user interface, and `commit:` versus `Commit:` versus `committed` are three
     /// different-looking histories for the same repository.
-    pub fn reflog_message<'a>(
-        operation: &'a str,
-        description: &'a BStr,
-    ) -> crate::refs::ReflogMessage<'a> {
-        todo!()
+    pub fn reflog_message(operation: &str, description: &BStr) -> BString {
+        let mut message = BString::from(operation);
+        message.extend_from_slice(b": ");
+        message.extend_from_slice(description);
+        message
     }
 }
 
@@ -843,7 +1298,87 @@ impl Repository {
 /// [`crate::error::Error::InvalidPath`] for a gitfile whose target is missing, is not a directory,
 /// or escapes the repository.
 pub fn find_git_dir(start: &Path) -> Result<PathBuf> {
-    todo!()
+    let start = std::path::absolute(start).map_err(|e| Error::IoAtPath {
+        path: BString::from(start.to_string_lossy().into_owned()),
+        source: e,
+    })?;
+
+    let mut current: Option<&Path> = if start.is_file() {
+        start.parent()
+    } else {
+        Some(start.as_path())
+    };
+    while let Some(dir) = current {
+        let dot_git = dir.join(".git");
+        if dot_git.is_dir() {
+            return Ok(dot_git);
+        }
+        if dot_git.is_file() {
+            // A `.git` file is a gitfile and must parse; skipping it would find an outer
+            // repository and silently operate on the wrong one.
+            return gitfile_target(&dot_git);
+        }
+        // A bare repository is its own git directory.
+        if dir.join("HEAD").is_file() && dir.join("objects").is_dir() {
+            return Ok(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+
+    Err(Error::NotARepository(BString::from(
+        start.to_string_lossy().into_owned(),
+    )))
+}
+
+/// The work tree the repository discovered from `start` belongs to.
+///
+/// Git's rule is the directory holding the `.git` marker, not the directory the caller happened
+/// to pass: `discover("/repo/src")` reports `/repo` as the work tree, and a bare repository
+/// discovered from anywhere inside it has no work tree at all. Handing back the starting
+/// directory instead makes every relative path a caller derives from the work tree wrong by the
+/// depth of the subdirectory it started in.
+fn discovered_work_tree(git_dir: &Path, start: &Path) -> Option<PathBuf> {
+    let start = std::path::absolute(start).ok()?;
+    let mut current: Option<&Path> = if start.is_file() {
+        start.parent()
+    } else {
+        Some(start.as_path())
+    };
+    while let Some(dir) = current {
+        if dir.join(".git").exists() {
+            return Some(dir.to_path_buf());
+        }
+        if dir == git_dir {
+            // Reached the git directory without passing a `.git` marker: bare.
+            return None;
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+/// Collapse `.` and `..` components without touching the filesystem.
+///
+/// [`std::fs::canonicalize`] would also resolve symlinks and fail on a missing path; discovery has
+/// to report the path Git would print, which is only lexically normalised.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::RootDir) | Some(Component::Prefix(_)) => {}
+                _ => out.push(".."),
+            },
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Phase 4 — read and resolve a `.git` file's target.
@@ -874,5 +1409,102 @@ pub fn find_git_dir(start: &Path) -> Result<PathBuf> {
 /// with additional non-empty lines, and for a target that is not an existing directory;
 /// [`crate::error::Error::IoAtPath`] for a file that cannot be read.
 pub fn gitfile_target(gitfile: &Path) -> Result<PathBuf> {
-    todo!()
+    use std::os::unix::ffi::OsStringExt;
+
+    let at = |p: &Path| BString::from(p.to_string_lossy().into_owned());
+    let data = std::fs::read(gitfile).map_err(|e| Error::IoAtPath {
+        path: at(gitfile),
+        source: e,
+    })?;
+
+    // Trim surrounding ASCII whitespace (Git accepts a trailing `\r` and spaces) but reject
+    // any other line: a parser that scanned for the first `gitdir:` would accept a comment.
+    let text: &[u8] = &data;
+    let text = text.trim_ascii();
+    let rest = text
+        .strip_prefix(b"gitdir:")
+        .ok_or_else(|| Error::InvalidPath(at(gitfile)))?;
+    let rest = rest.trim_ascii();
+    if rest.is_empty() || rest.contains(&b'\n') || rest.contains(&b'\r') {
+        return Err(Error::InvalidPath(at(gitfile)));
+    }
+
+    let target = PathBuf::from(std::ffi::OsString::from_vec(rest.to_vec()));
+    let target = if target.is_absolute() {
+        target
+    } else {
+        // Relative to the gitfile's own directory, never the process's working directory.
+        gitfile
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(&target)
+    };
+    // Git normalises `..` in the target before reporting it. Without this, discovery hands back
+    // `repo/worktree/../repo/.git`, which compares unequal to the same directory spelled without
+    // the detour even though both name one place.
+    let target = normalize_lexically(&target);
+    if !target.is_dir() {
+        return Err(Error::InvalidPath(at(&target)));
+    }
+    Ok(target)
+}
+
+/// Build one level of a tree from index paths, writing the result to the object database.
+///
+/// `level` holds each remaining path as its components and must be sorted, so that every path
+/// sharing a first component is contiguous. A lone component becomes a leaf entry with the
+/// entry's own mode; anything longer recurses and becomes a subtree.
+fn build_tree_level(
+    odb: &Odb,
+    level: &[(&[BString], crate::object::EntryMode, ObjectId)],
+) -> Result<ObjectId> {
+    use crate::object::{EntryMode, ObjectKind, Tree, TreeEntry};
+
+    let mut entries: Vec<TreeEntry> = Vec::new();
+    let mut i = 0;
+    while i < level.len() {
+        let name = level[i].0[0].clone();
+        let mut j = i + 1;
+        while j < level.len() && level[j].0[0] == name {
+            j += 1;
+        }
+        if level[i].0.len() == 1 {
+            entries.push(TreeEntry {
+                mode: level[i].1,
+                name,
+                oid: level[i].2,
+            });
+        } else {
+            let children: Vec<(&[BString], EntryMode, ObjectId)> = level[i..j]
+                .iter()
+                .map(|(path, mode, oid)| (&path[1..], *mode, *oid))
+                .collect();
+            let oid = build_tree_level(odb, &children)?;
+            entries.push(TreeEntry {
+                mode: EntryMode::Tree,
+                name,
+                oid,
+            });
+        }
+        i = j;
+    }
+
+    entries.sort_by(|a, b| tree_sort_key(a).cmp(&tree_sort_key(b)));
+
+    // `data` is the payload `id()` hashes; it is filled in here because the payload is
+    // exactly what `serialize` produces from these entries.
+    let tree = Tree {
+        data: &[],
+        entries,
+    };
+    odb.write_raw(ObjectKind::Tree, &tree.serialize())
+}
+
+/// Git's tree sort: by name bytes, with a directory compared as if its name ended in `/`.
+fn tree_sort_key(entry: &crate::object::TreeEntry) -> Vec<u8> {
+    let mut key = entry.name.as_slice().to_vec();
+    if entry.mode == crate::object::EntryMode::Tree {
+        key.push(b'/');
+    }
+    key
 }

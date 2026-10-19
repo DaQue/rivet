@@ -328,7 +328,19 @@ impl Pattern {
     ///   priority rules are [`IgnoreStack`]'s; a caller testing patterns one at a time will get a
     ///   negated pattern backwards.
     pub fn matches(&self, path: &BStr, kind: PathKind) -> bool {
-        self.is_inapplicable(kind) || self.matches_ancestor(path, kind)
+        let rel = self.relative_to_base(path);
+        let is_dir = matches!(kind, PathKind::Directory | PathKind::Other);
+        let mut end = rel.len();
+        if self.core_match(BStr::new(&rel[..end]), is_dir) {
+            return true;
+        }
+        while let Some(i) = rel[..end].iter().rposition(|b| *b == b'/') {
+            end = i;
+            if self.core_match(BStr::new(&rel[..end]), true) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Phase 5 — whether this pattern matches a path or any of its ancestors.
@@ -342,15 +354,54 @@ impl Pattern {
     /// because the ancestor of a file is a directory whatever the file is. A caller that passed the
     /// path's own kind through to every prefix would miss exactly the case this exists for.
     pub fn matches_ancestor(&self, path: &BStr, kind: PathKind) -> bool {
-        self.matches(path, kind)
-        || {
-            let mut p = path.to_vec();
-            while p.pop().is_some() {
-                if self.matches(BStr::new(&p), kind) {
-                    return true;
-                }
+        let _ = kind;
+        let rel = self.relative_to_base(path);
+        let mut end = rel.len();
+        while let Some(i) = rel[..end].iter().rposition(|b| *b == b'/') {
+            end = i;
+            if self.core_match(BStr::new(&rel[..end]), true) {
+                return true;
             }
-            false
+        }
+        false
+    }
+
+    /// Phase 5 — the path made relative to this pattern's base directory.
+    ///
+    /// A path outside the base cannot be matched by this pattern; an empty result is returned and
+    /// matches nothing, which is the right answer rather than a panic.
+    fn relative_to_base(&self, path: &BStr) -> Vec<u8> {
+        let path: &[u8] = path.as_ref();
+        let base: &[u8] = self.base.as_ref();
+        if base.is_empty() {
+            return path.to_vec();
+        }
+        if path.len() > base.len() && path.starts_with(base) && path[base.len()] == b'/' {
+            path[base.len() + 1..].to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Phase 5 — whether this pattern matches one exact path, with no ancestor expansion.
+    ///
+    /// `rel` is already relative to [`Pattern::base`]. A directory-only pattern is inapplicable to
+    /// a non-directory, an anchored (or slash-containing) pattern is matched against the whole
+    /// relative path, and an unanchored one against the basename at any depth.
+    fn core_match(&self, rel: &BStr, is_dir: bool) -> bool {
+        if self.directory_only && !is_dir {
+            return false;
+        }
+        let rel: &[u8] = rel.as_ref();
+        let text: &[u8] = self.text.as_ref();
+        if self.anchored || text.contains(&b'/') {
+            glob_match(text, rel)
+        } else {
+            let basename = match rel.iter().rposition(|b| *b == b'/') {
+                Some(i) => &rel[i + 1..],
+                None => rel,
+            };
+            glob_match(text, basename)
         }
     }
 
@@ -475,9 +526,9 @@ impl IgnoreFrame {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IgnoreDecision {
     /// A pattern matched and it was not negated.
-    Ignored,
+    Ignored(Pattern),
     /// A negated pattern matched, re-including the path unless an ancestor is excluded.
-    ReIncluded,
+    ReIncluded(Pattern),
     /// No pattern in any source matched.
     Unmatched,
 }
@@ -491,12 +542,15 @@ impl IgnoreDecision {
     /// which is what `check-ignore -v` prints for a path that is *not* ignored — the report names the
     /// rule that saved it, not the one that condemned it.
     pub fn pattern(&self) -> Option<&Pattern> {
-        None
+        match self {
+            IgnoreDecision::Ignored(p) | IgnoreDecision::ReIncluded(p) => Some(p),
+            IgnoreDecision::Unmatched => None,
+        }
     }
 
     /// Phase 5 — whether this decision re-includes.
     pub const fn is_reincluded(&self) -> bool {
-        matches!(self, IgnoreDecision::ReIncluded)
+        matches!(self, IgnoreDecision::ReIncluded(_))
     }
 
     /// Phase 5 — whether this decision ignores.
@@ -507,7 +561,7 @@ impl IgnoreDecision {
     /// ignored" wants [`IgnoreStack::is_ignored`], which also applies the ancestor rule; this is the
     /// raw answer of one match.
     pub const fn is_ignored(&self) -> bool {
-        matches!(self, IgnoreDecision::Ignored)
+        matches!(self, IgnoreDecision::Ignored(_))
     }
 }
 
@@ -605,7 +659,12 @@ impl IgnoreStack {
             Ok(d) => d,
             Err(_) => return Ok(()),
         };
-        let frame = IgnoreFrame::parse(&data, IgnoreSource::Gitignore(BString::from(dir)), dir, self.frames.len())?;
+        let dir_bytes: &[u8] = dir.as_ref();
+        let depth = dir_bytes
+            .split(|b| *b == b'/')
+            .filter(|c| !c.is_empty())
+            .count();
+        let frame = IgnoreFrame::parse(&data, IgnoreSource::Gitignore(BString::from(dir)), dir, depth)?;
         self.frames.push(frame);
         Ok(())
     }
@@ -624,14 +683,8 @@ impl IgnoreStack {
         let Ok(bytes) = std::fs::read(&path) else {
             return Ok(());
         };
-        let text = String::from_utf8_lossy(&bytes);
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            self.push_dir(line.as_bytes().into());
-        }
+        let frame = IgnoreFrame::parse(&bytes, IgnoreSource::InfoExclude, BStr::new(""), 0)?;
+        self.frames.push(frame);
         Ok(())
     }
 
@@ -655,14 +708,8 @@ impl IgnoreStack {
         let Ok(bytes) = std::fs::read(path) else {
             return Ok(());
         };
-        let text = String::from_utf8_lossy(&bytes);
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            self.push_dir(line.as_bytes().into());
-        }
+        let frame = IgnoreFrame::parse(&bytes, IgnoreSource::CoreExcludesFile, BStr::new(""), 0)?;
+        self.frames.push(frame);
         Ok(())
     }
 
@@ -678,8 +725,17 @@ impl IgnoreStack {
     /// line — have the lowest depth and must survive every truncation, which is why they are pushed
     /// with a depth that no directory can have.
     pub fn truncate(&mut self, depth: usize) {
-        while self.frames.last().map(|f| f.depth).is_some_and(|d| d >= depth) {
-            self.frames.pop();
+        // Root-level frames (`.gitignore` at depth 0, `info/exclude`, `core.excludesFile` and the
+        // command line) survive every truncation; only `.gitignore` frames from subdirectories are
+        // dropped as the walk leaves them.
+        while let Some(frame) = self.frames.last() {
+            let subdirectory_gitignore =
+                matches!(frame.source, IgnoreSource::Gitignore(_)) && frame.depth > 0;
+            if subdirectory_gitignore && frame.depth >= depth {
+                self.frames.pop();
+            } else {
+                break;
+            }
         }
     }
 
@@ -702,7 +758,33 @@ impl IgnoreStack {
     /// [`crate::error::Error::InvalidPath`] for a path that is absolute or escapes the root; a
     /// question about a path outside the work tree has no answer and must not be guessed.
     pub fn check(&self, path: &BStr, kind: PathKind) -> Result<IgnoreDecision> {
-        todo!()
+        let bytes: &[u8] = path.as_ref();
+        if bytes.first() == Some(&b'/') || bytes.split(|b| *b == b'/').any(|c| c == b"..") {
+            return Err(Error::InvalidPath(BString::from(path)));
+        }
+        // Command-line patterns outrank every file, whatever order the frames were pushed in.
+        let in_order = self
+            .frames
+            .iter()
+            .filter(|f| matches!(f.source, IgnoreSource::CommandLine))
+            .chain(
+                self.frames
+                    .iter()
+                    .rev()
+                    .filter(|f| !matches!(f.source, IgnoreSource::CommandLine)),
+            );
+        for frame in in_order {
+            for pattern in frame.patterns.iter().rev() {
+                if pattern.matches(path, kind) {
+                    return Ok(if pattern.negated {
+                        IgnoreDecision::ReIncluded(pattern.clone())
+                    } else {
+                        IgnoreDecision::Ignored(pattern.clone())
+                    });
+                }
+            }
+        }
+        Ok(IgnoreDecision::Unmatched)
     }
 
     /// Phase 5 — whether a path is ignored, with the ancestor rule applied.
@@ -730,22 +812,18 @@ impl IgnoreStack {
             return Ok(true);
         }
         if decision.is_reincluded() {
-            let mut ancestor_ignored = false;
-            for frame in self.frames() {
-                for pattern in frame.patterns() {
-                    if pattern.negated {
-                        continue;
-                    }
-                    if pattern.matches_ancestor(path, kind) {
-                        ancestor_ignored = true;
-                        break;
-                    }
-                }
-                if ancestor_ignored {
-                    break;
+            // A re-included path stays ignored when any ancestor directory is itself ignored. Each
+            // ancestor is decided by this same stack, because a deeper `.gitignore` can re-include
+            // the directory even when a shallower one excluded it.
+            let bytes: &[u8] = path.as_ref();
+            let mut end = bytes.len();
+            while let Some(i) = bytes[..end].iter().rposition(|b| *b == b'/') {
+                end = i;
+                if self.check(BStr::new(&bytes[..end]), PathKind::Directory)?.is_ignored() {
+                    return Ok(true);
                 }
             }
-            return Ok(!ancestor_ignored);
+            return Ok(false);
         }
         Ok(false)
     }
@@ -766,26 +844,28 @@ impl IgnoreStack {
     ///
     /// [`crate::error::Error::InvalidPath`] as [`IgnoreStack::check`].
     pub fn explain(&self, path: &BStr, kind: PathKind) -> Result<Vec<&Pattern>> {
+        let bytes: &[u8] = path.as_ref();
+        if bytes.first() == Some(&b'/') || bytes.split(|b| *b == b'/').any(|c| c == b"..") {
+            return Err(Error::InvalidPath(BString::from(path)));
+        }
         let mut out = Vec::new();
-        let mut depth = self.frames.len();
-        let mut i = self.frames.len();
-        while i > 0 {
-            i -= 1;
-            let frame = &self.frames[i];
-            let mut j = frame.patterns.len();
-            while j > 0 {
-                j -= 1;
-                let pat = &frame.patterns[j];
-                if pat.is_inapplicable(kind) {
-                    continue;
-                }
+        let in_order = self
+            .frames
+            .iter()
+            .filter(|f| matches!(f.source, IgnoreSource::CommandLine))
+            .chain(
+                self.frames
+                    .iter()
+                    .rev()
+                    .filter(|f| !matches!(f.source, IgnoreSource::CommandLine)),
+            );
+        for frame in in_order {
+            for pat in frame.patterns.iter().rev() {
                 if pat.matches(path, kind) {
                     out.push(pat);
                 }
             }
-            depth = frame.depth;
         }
-        let _ = depth;
         Ok(out)
     }
 
@@ -832,4 +912,80 @@ impl IgnoreStack {
     pub fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }
+}
+
+/// Phase 5 — match one path component sequence against a `.gitignore` glob.
+///
+/// `*` and `?` never cross a `/`, `**` does (and `**/` may match zero directories), `[...]` is a
+/// character class with ranges and `!`/`^` negation, and `\` escapes the next byte. This is the
+/// subset of `fnmatch` Git uses for ignore patterns; anything outside it (brace alternation, for
+/// instance) is not part of the format and is treated literally.
+fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
+    let Some(&first) = pattern.first() else {
+        return text.is_empty();
+    };
+    match first {
+        b'\\' if pattern.len() > 1 => {
+            !text.is_empty() && text[0] == pattern[1] && glob_match(&pattern[2..], &text[1..])
+        }
+        b'*' => {
+            let double = pattern.get(1) == Some(&b'*');
+            let rest = if double { &pattern[2..] } else { &pattern[1..] };
+            if double && rest.first() == Some(&b'/') && glob_match(&rest[1..], text) {
+                return true;
+            }
+            if glob_match(rest, text) {
+                return true;
+            }
+            for i in 0..text.len() {
+                if !double && text[i] == b'/' {
+                    return false;
+                }
+                if glob_match(rest, &text[i + 1..]) {
+                    return true;
+                }
+            }
+            false
+        }
+        b'?' => !text.is_empty() && text[0] != b'/' && glob_match(&pattern[1..], &text[1..]),
+        b'[' => {
+            let Some(close) = pattern.iter().skip(1).position(|b| *b == b']').map(|p| p + 1) else {
+                return !text.is_empty()
+                    && text[0] == b'['
+                    && glob_match(&pattern[1..], &text[1..]);
+            };
+            if text.is_empty() || text[0] == b'/' {
+                return false;
+            }
+            let mut class = &pattern[1..close];
+            let negated = matches!(class.first(), Some(b'!') | Some(b'^'));
+            if negated {
+                class = &class[1..];
+            }
+            if class_match(class, text[0]) == negated {
+                return false;
+            }
+            glob_match(&pattern[close + 1..], &text[1..])
+        }
+        byte => !text.is_empty() && text[0] == byte && glob_match(&pattern[1..], &text[1..]),
+    }
+}
+
+/// Whether `byte` is in a bracket expression body (without the surrounding brackets).
+fn class_match(class: &[u8], byte: u8) -> bool {
+    let mut i = 0;
+    while i < class.len() {
+        if i + 2 < class.len() && class[i + 1] == b'-' {
+            if class[i] <= byte && byte <= class[i + 2] {
+                return true;
+            }
+            i += 3;
+        } else {
+            if class[i] == byte {
+                return true;
+            }
+            i += 1;
+        }
+    }
+    false
 }

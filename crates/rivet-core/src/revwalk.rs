@@ -230,8 +230,15 @@ impl Default for WalkOptions {
     /// Phase 4 — the defaults of [`WalkOptions::new`].
     fn default() -> Self {
         Self {
+            sort: SortOrder::default(),
+            first_parent: false,
+            max_count: None,
+            skip: 0,
+            since: None,
+            until: None,
+            terms: Vec::new(),
             all: false,
-            ..Self::default()
+            paths: Vec::new(),
         }
     }
 }
@@ -424,7 +431,64 @@ impl RevSpec {
     /// [`crate::error::Error::TagCycle`] for a tag loop, and
     /// [`crate::error::Error::InvalidRevision`] for a suffix naming a parent that does not exist.
     pub fn resolve(&self, format: ObjectFormat, refs: &RefStore, odb: &Odb) -> Result<Revision> {
-        todo!()
+        use crate::object::{Commit, Object, Tag};
+
+        let spec = match self {
+            RevSpec::Head | RevSpec::DetachedHead => BString::from("HEAD"),
+            RevSpec::Oid(oid) | RevSpec::Resolved(oid) => oid.to_hex(),
+            RevSpec::Abbrev(prefix) => prefix.clone(),
+            RevSpec::Ref(name) => BString::from(name.as_bytes()),
+        };
+
+        // Resolve the name to an object first; peeling to a commit is a separate step because a
+        // tag has to be remembered on the way down.
+        let mut current = match self {
+            RevSpec::Head | RevSpec::DetachedHead => refs.head_commit(odb)?,
+            RevSpec::Oid(oid) | RevSpec::Resolved(oid) => *oid,
+            RevSpec::Abbrev(prefix) => {
+                let abbreviated = ObjectId::from_hex_prefix(format, BStr::new(prefix))?;
+                odb.resolve_prefix(&abbreviated)?
+            }
+            RevSpec::Ref(name) => refs.resolve_oid(name)?,
+        };
+
+        // Peel annotated tags. A lightweight tag is just a commit id in the refs and never enters
+        // this loop; a tag chain is legal, a tag cycle is not.
+        let mut tag: Option<ObjectId> = None;
+        let mut from_tag = false;
+        let mut hops = 0usize;
+        let commit_oid = loop {
+            match odb.read(&current)? {
+                Object::Commit(_) => break current,
+                Object::Tag(data) => {
+                    if tag == Some(current) || hops >= 32 {
+                        return Err(Error::TagCycle { oid: current });
+                    }
+                    let parsed = Tag::parse(format, &data)?;
+                    if tag.is_none() {
+                        tag = Some(current);
+                        from_tag = true;
+                    }
+                    current = parsed.object();
+                    hops += 1;
+                }
+                _ => {
+                    return Err(Error::NotACommit {
+                        name: spec.clone(),
+                    })
+                }
+            }
+        };
+
+        let data = odb.read(&commit_oid)?;
+        let commit = Commit::parse(format, data.data())?;
+        Ok(Revision {
+            commit: commit_oid,
+            tree: commit.tree,
+            tag,
+            from_tag,
+            spec,
+        })
     }
 
     /// Phase 4 — the base of the spec, excluding any `~`/`^` suffixes.

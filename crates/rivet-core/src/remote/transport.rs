@@ -66,7 +66,8 @@ use crate::error::Result;
 use crate::hash::ObjectFormat;
 
 use crate::remote::RefUpdate;
-use crate::remote::url::RemoteUrl;
+use crate::remote::pktline::{FLUSH_PACKET, PktLine};
+use crate::remote::url::{RemoteScheme, RemoteUrl};
 use crate::error::Error;
 use crate::hash::ObjectId;
 
@@ -338,7 +339,28 @@ impl<'a> CapabilitySet<'a> {
     /// `git check-ref-format`-valid — a hostile server must not be able to make Rivet write a ref
     /// outside `refs/`.
     pub fn symrefs(&self) -> Result<Vec<(BString, BString)>> {
-        todo!()
+        let mut out = Vec::new();
+        for capability in &self.entries {
+            if &capability.name[..] != b"symref" {
+                continue;
+            }
+            let value = capability
+                .value
+                .as_ref()
+                .ok_or_else(|| Error::Protocol("symref capability without a value".to_string()))?;
+            let colon = value
+                .iter()
+                .position(|&b| b == b':')
+                .ok_or_else(|| Error::Protocol("symref value without a colon".to_string()))?;
+            let source = &value[..colon];
+            let target = &value[colon + 1..];
+            // Both halves are ref names the peer chose. `HEAD` is a legal one-level pseudo-ref and
+            // passes the same validation as everything else, which is why no branch is special-cased.
+            crate::refs::RefName::from_bytes(source)?;
+            crate::refs::RefName::from_bytes(target)?;
+            out.push((BString::from(source), BString::from(target)));
+        }
+        Ok(out)
     }
 
     /// Phase 11 — whether the peer speaks protocol v2.
@@ -929,7 +951,30 @@ impl LocalTransport {
     /// [`crate::error::Error::InvalidRemoteUrl`] for a `file:` URL naming a host, and
     /// [`crate::error::Error::IoAtPath`] if the directory cannot be read.
     pub fn open(url: &RemoteUrl) -> Result<Self> {
-        todo!()
+        if url.scheme == RemoteScheme::File {
+            // `parse` already refuses a remote host, but a hand-built value can still carry one and
+            // this is the last place before the local filesystem is read.
+            if let Some(host) = url.host.as_ref() {
+                if !host.is_empty() && &host[..] != b"localhost" {
+                    return Err(Error::InvalidRemoteUrl {
+                        url: url.redacted(),
+                        reason: "file URL naming a remote host",
+                    });
+                }
+            }
+        }
+
+        use std::os::unix::ffi::OsStringExt;
+        let path = PathBuf::from(std::ffi::OsString::from_vec(url.path.to_vec()));
+        let repo = crate::repo::Repository::discover(&path)?;
+        // Store the work tree when there is one: rediscovering from it keeps `is_bare` honest,
+        // which the push-side check depends on.
+        let root = repo.worktree_path().unwrap_or_else(|| repo.git_dir()).to_path_buf();
+        Ok(Self {
+            path: root,
+            is_bare: repo.is_bare(),
+            advertisement: None,
+        })
     }
 
     /// Phase 11 — the repository directory this transport reads.
@@ -971,24 +1016,47 @@ impl Transport for LocalTransport {
     ///
     /// [`crate::error::Error::ObjectFormatMismatch`], [`crate::error::Error::NotARepository`], and
     /// the ref store's read errors.
-    fn connect(&mut self, url: &RemoteUrl, format: ObjectFormat) -> Result<RefAdvertisement> {
-        let path = self.path.clone();
-        let mut caps = CapabilitySet::default();
-        caps.insert(b"side-band-64k").expect("cap");
-        caps.insert(b"ofs-delta").expect("cap");
-        caps.insert(b"multi_ack_detailed").expect("cap");
-        caps.insert(b"object-format").expect("cap");
-        caps.insert(b"symref").expect("cap");
-        let refs = self.ls_refs(&[], false)?;
-        let ad = RefAdvertisement {
+    fn connect(&mut self, _url: &RemoteUrl, format: ObjectFormat) -> Result<RefAdvertisement> {
+        let repo = crate::repo::Repository::discover(&self.path)?;
+        if repo.format() != format {
+            return Err(Error::ObjectFormatMismatch {
+                expected: format,
+                found: repo.format(),
+            });
+        }
+        self.is_bare = repo.is_bare();
+
+        // There is no server to advertise, so the set is the one a local `git-upload-pack` or
+        // `git-receive-pack` would send. Every name here is one this transport can honour.
+        let mut caps = CapabilitySet { entries: Vec::new(), raw: &[] };
+        for name in [
+            "multi_ack_detailed",
+            "side-band-64k",
+            "thin-pack",
+            "ofs-delta",
+            "no-progress",
+            "report-status",
+        ] {
+            caps.insert(name.as_bytes())?;
+        }
+        caps.insert(format!("object-format={}", format.as_str()).as_bytes())?;
+        if let Ok(head) = repo.head() {
+            if let Some(branch) = head.branch() {
+                let value = format!("symref=HEAD:{}", String::from_utf8_lossy(branch.as_bytes()));
+                caps.insert(value.as_bytes())?;
+            }
+        }
+
+        let refs = local_advertised_refs(&repo)?;
+        let advertisement = RefAdvertisement {
             capabilities: caps,
             refs,
             format,
             agent: None,
             version: ProtocolVersion::V0,
         };
-        self.advertisement = Some(ad.clone());
-        Ok(ad)
+        self.advertisement = Some(advertisement.clone());
+        Ok(advertisement)
     }
 
     /// Phase 11 — the capabilities from the last [`Transport::connect`].
@@ -1027,11 +1095,28 @@ impl Transport for LocalTransport {
         haves: &[crate::hash::ObjectId],
         into: &mut dyn Write,
     ) -> Result<()> {
-        let mut buf = Vec::new();
-        let mut hasher = ObjectFormat::Sha1.hasher();
-        hasher.update(&buf);
-        let id = hasher.finish().expect("hash collision");
-        buf.extend_from_slice(id.as_bytes());
+        let repo = crate::repo::Repository::discover(&self.path)?;
+        let format = repo.format();
+        let odb = repo.odb();
+
+        // Everything the receiver already has is pruned, closure included: a want that is an
+        // ancestor of a have contributes nothing, and a `have` tip alone is not enough to prune the
+        // objects below it.
+        let mut already_have = std::collections::HashSet::new();
+        collect_objects(odb, haves, &std::collections::HashSet::new(), &mut already_have)?;
+
+        let mut to_send = std::collections::HashSet::new();
+        collect_objects(odb, wants, &already_have, &mut to_send)?;
+
+        let mut writer = crate::pack::PackWriter::new(format);
+        for id in &to_send {
+            let object = odb.read(id)?;
+            // The raw body, not a re-serialisation: a commit with headers Rivet does not model must
+            // travel byte-for-byte or its id changes on the other side.
+            writer.write_raw(object.kind(), object.data())?;
+        }
+        let (pack, _summary) = writer.finish()?;
+        into.write_all(&pack)?;
         Ok(())
     }
 
@@ -1065,7 +1150,71 @@ impl Transport for LocalTransport {
         updates: &[RefUpdate],
         pack: &[u8],
     ) -> Result<Vec<crate::remote::PushStatus>> {
-        todo!()
+        // A local push receives the same undeltified pack a network peer would, and adopting it
+        // needs `crate::pack::index_pack` — which still has to be written. Reporting that is the
+        // honest answer: silently accepting the ref updates would leave the target repository
+        // naming objects its object database does not contain.
+        if !pack.is_empty() {
+            return Err(Error::Protocol(
+                "local push cannot store a received pack: pack indexing is not implemented"
+                    .to_string(),
+            ));
+        }
+        let repo = crate::repo::Repository::discover(&self.path)?;
+        let mut statuses = Vec::new();
+        for update in updates {
+            let name = match crate::refs::RefName::from_bytes(&update.name) {
+                Ok(name) => name,
+                Err(error) => {
+                    statuses.push(crate::remote::PushStatus {
+                        name: update.name.clone(),
+                        ok: false,
+                        message: BString::from(error.to_string()),
+                    });
+                    continue;
+                }
+            };
+            let outcome = (|| -> Result<()> {
+                let expected = if update.old.is_zero() { None } else { Some(update.old) };
+                if !update.force {
+                    if let Some(old) = expected {
+                        if repo.refs().try_read(&name)?.is_some()
+                            && !is_fast_forward(repo.odb(), old, update.new)?
+                        {
+                            return Err(Error::NonFastForward {
+                                name: update.name.clone(),
+                                old,
+                                new: update.new,
+                            });
+                        }
+                    }
+                }
+                if !self.is_bare {
+                    if let Ok(head) = repo.head() {
+                        if head.branch().map(|b| b.as_bytes() == &update.name[..]).unwrap_or(false) {
+                            return Err(Error::Protocol(format!(
+                                "refusing to update checked-out branch {} of a non-bare repository",
+                                update.name
+                            )));
+                        }
+                    }
+                }
+                repo.refs().update(&name, update.new, expected, None)
+            })();
+            match outcome {
+                Ok(()) => statuses.push(crate::remote::PushStatus {
+                    name: update.name.clone(),
+                    ok: true,
+                    message: BString::new(Vec::new()),
+                }),
+                Err(error) => statuses.push(crate::remote::PushStatus {
+                    name: update.name.clone(),
+                    ok: false,
+                    message: BString::from(error.to_string()),
+                }),
+            }
+        }
+        Ok(statuses)
     }
 
     /// Phase 11 — unsupported over a local transport.
@@ -1135,26 +1284,37 @@ pub fn wants_request(
     if wants.is_empty() {
         return Err(Error::Protocol("empty want list".to_string()));
     }
+
+    // Only ask for what the peer offered. Requesting `side-band-64k` from a server that did not
+    // advertise it is either an error or, worse, a response with no channel bytes that the reader
+    // then strips one byte from — so each name is gated on the advertisement.
+    let mut requested: Vec<String> = Vec::new();
+    if capabilities.value(b"object-format").is_some() {
+        requested.push(format!("object-format={}", format.as_str()));
+    }
+    for name in ["multi_ack_detailed", "side-band-64k", "side-band", "thin-pack", "ofs-delta"] {
+        if capabilities.contains(name.as_bytes()) {
+            requested.push(name.to_string());
+        }
+    }
+    // `agent` is the one capability a client may always send, advertised or not.
+    requested.push(format!("agent={}", crate::remote::http::USER_AGENT));
+
     let mut out = Vec::new();
     for (i, want) in wants.iter().enumerate() {
         if want.format() != format {
             return Err(Error::Protocol("want format mismatch".to_string()));
         }
-        out.extend_from_slice(b"want ");
-        out.extend_from_slice(want.as_bytes());
+        let mut line = Vec::new();
+        line.extend_from_slice(b"want ");
+        line.extend_from_slice(want.to_hex().as_ref());
         if i == 0 {
-            let mut caps = Vec::new();
-            caps.push(b' ');
-            if let Some(fmt) = capabilities.object_format().ok() {
-                caps.extend_from_slice(b"object-format=");
-                caps.extend_from_slice(fmt.as_str().as_bytes());
-            }
-            caps.extend_from_slice(b"agent=");
-            out.extend_from_slice(&caps);
+            line.push(b' ');
+            line.extend_from_slice(requested.join(" ").as_bytes());
         }
-        out.push(b'\n');
+        PktLine::new_data(&line).write_to(&mut out)?;
     }
-    out.push(0u8);
+    out.extend_from_slice(FLUSH_PACKET);
     Ok(out)
 }
 
@@ -1185,10 +1345,14 @@ pub fn haves_request(haves: &[crate::hash::ObjectId], format: ObjectFormat) -> R
         if id.format() != format {
             return Err(Error::Protocol("have format mismatch".to_string()));
         }
-        out.extend_from_slice(b"have ");
-        out.extend_from_slice(id.as_bytes());
-        out.push(b'\n');
+        let mut line = Vec::new();
+        line.extend_from_slice(b"have ");
+        line.extend_from_slice(id.to_hex().as_ref());
+        PktLine::new_data(&line).write_to(&mut out)?;
     }
+    // A round always ends with a flush, which is what makes an empty round legal: it carries no
+    // `have` lines and still tells the server the client is finished with this round.
+    out.extend_from_slice(FLUSH_PACKET);
     Ok(out)
 }
 
@@ -1211,7 +1375,34 @@ pub fn haves_request(haves: &[crate::hash::ObjectId], format: ObjectFormat) -> R
 /// [`crate::error::Error::Protocol`] for an unparseable line, a short id, or an `ERR` line, and
 /// [`crate::error::Error::InvalidHex`] for an ACK naming something that is not a valid id.
 pub fn parse_ack(line: &[u8], format: ObjectFormat) -> Result<Ack> {
-    todo!()
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    if line == b"NAK" {
+        return Ok(Ack::Nak);
+    }
+    if let Some(message) = line.strip_prefix(b"ERR ") {
+        // `ERR` is the server refusing the exchange, not a protocol violation on our side, but the
+        // only way to report it is as a protocol error carrying the server's own text.
+        return Err(Error::Protocol(String::from_utf8_lossy(message).into_owned()));
+    }
+    let rest = line
+        .strip_prefix(b"ACK ")
+        .ok_or_else(|| Error::Protocol(format!("unrecognised negotiation line: {:?}", BStr::new(line))))?;
+    let mut fields = rest.split(|&b| b == b' ');
+    let hex = fields
+        .next()
+        .filter(|hex| !hex.is_empty())
+        .ok_or_else(|| Error::Protocol("ACK without an id".to_string()))?;
+    let id = ObjectId::from_hex(format, BStr::new(hex))?;
+    match fields.next() {
+        None => Ok(Ack::Plain(id)),
+        Some(b"common") => Ok(Ack::Common(id)),
+        Some(b"ready") => Ok(Ack::Ready(id)),
+        Some(other) => Err(Error::Protocol(format!(
+            "unrecognised ACK status: {:?}",
+            BStr::new(other)
+        ))),
+    }
 }
 
 /// Phase 11 — one parsed negotiation response.
@@ -1289,5 +1480,296 @@ pub fn is_fast_forward(
     old: crate::hash::ObjectId,
     new: crate::hash::ObjectId,
 ) -> Result<bool> {
-    todo!()
+    // Creating a ref has nothing to go backwards from, and deleting one is not this question.
+    if old.is_zero() || new.is_zero() {
+        return Ok(true);
+    }
+    if old == new {
+        return Ok(true);
+    }
+
+    let format = odb.format();
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![new];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if id == old {
+            return Ok(true);
+        }
+        let object = odb.read(&id)?;
+        let kind = object.kind();
+        if kind != crate::object::ObjectKind::Commit {
+            return Err(Error::WrongObjectKind {
+                oid: Some(id),
+                expected: crate::object::ObjectKind::Commit,
+                found: kind,
+            });
+        }
+        let commit = crate::object::commit::Commit::parse(format, object.data())?;
+        for parent in commit.parents {
+            stack.push(parent);
+        }
+    }
+    // The walk exhausted everything `new` reaches without meeting `old`: the update loses commits.
+    Ok(false)
+}
+
+/// Phase 11 — every object reachable from `roots`, skipping anything in `stop`.
+///
+/// The traversal follows Git's own edges: a commit names its tree and parents, a tree names its
+/// entries (except submodule gitlinks, whose objects live in another repository), and a tag names
+/// its target. `out` doubles as the visited set, so a diamond in the history is walked once.
+fn collect_objects(
+    odb: &crate::odb::Odb,
+    roots: &[ObjectId],
+    stop: &std::collections::HashSet<ObjectId>,
+    out: &mut std::collections::HashSet<ObjectId>,
+) -> Result<()> {
+    let format = odb.format();
+    let mut stack: Vec<ObjectId> = roots.to_vec();
+    while let Some(id) = stack.pop() {
+        if stop.contains(&id) || !out.insert(id) {
+            continue;
+        }
+        let object = odb.read(&id)?;
+        match object.kind() {
+            crate::object::ObjectKind::Blob => {}
+            crate::object::ObjectKind::Tree => {
+                let tree = crate::object::tree::Tree::parse(format, object.data())?;
+                for entry in tree.entries {
+                    if entry.mode != crate::object::EntryMode::Commit {
+                        stack.push(entry.oid);
+                    }
+                }
+            }
+            crate::object::ObjectKind::Commit => {
+                let commit = crate::object::commit::Commit::parse(format, object.data())?;
+                stack.push(commit.tree);
+                for parent in commit.parents {
+                    stack.push(parent);
+                }
+            }
+            crate::object::ObjectKind::Tag => {
+                let tag = crate::object::tag::Tag::parse(format, object.data())?;
+                stack.push(tag.object);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Phase 11 — the refs a local repository advertises, in the shape a v0 server would send them.
+///
+/// `HEAD` is included because a v0 advertisement always names it, and annotated tags carry their
+/// peeled commit because a client resolving a tag without a pack needs it. Symbolic refs are
+/// skipped: they are not objects and advertising one would make the client try to resolve an id
+/// that does not exist.
+fn local_advertised_refs(repo: &crate::repo::Repository) -> Result<Vec<AdvertisedRef>> {
+    let odb = repo.odb();
+    let refs = repo.refs();
+    let mut out = Vec::new();
+    for (name, target) in refs.list(b"refs/")? {
+        let oid = match target {
+            crate::refs::RefTarget::Direct(oid) => oid,
+            crate::refs::RefTarget::Symbolic(_) => continue,
+        };
+        let peeled = match odb.read_header(&oid) {
+            Ok((crate::object::ObjectKind::Tag, _)) => refs.peel_oid(oid, odb).ok(),
+            _ => None,
+        };
+        out.push(AdvertisedRef {
+            name: BString::from(name.as_bytes()),
+            oid,
+            peeled,
+        });
+    }
+    if let Ok(head) = refs.head() {
+        if let Some(oid) = head.oid() {
+            out.push(AdvertisedRef {
+                name: BString::from("HEAD"),
+                oid,
+                peeled: None,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::ObjectFormat;
+
+    fn pkt_texts(bytes: &[u8]) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        let mut at = 0usize;
+        while at < bytes.len() {
+            let (line, used) = PktLine::decode(&bytes[at..]).expect("valid pkt-line");
+            at += used;
+            if line.is_flush() {
+                break;
+            }
+            out.push(line.data().to_vec());
+        }
+        out
+    }
+
+    fn oid(hex: &str) -> ObjectId {
+        ObjectId::from_hex(ObjectFormat::Sha1, BStr::new(hex.as_bytes())).expect("hex")
+    }
+
+    #[test]
+    fn wants_request_frames_each_want_and_requests_only_advertised_capabilities() {
+        let mut caps = CapabilitySet::default();
+        caps.insert(b"multi_ack_detailed").unwrap();
+        caps.insert(b"side-band-64k").unwrap();
+        caps.insert(b"ofs-delta").unwrap();
+        caps.insert(b"object-format=sha1").unwrap();
+
+        let body = wants_request(&[oid(&"1".repeat(40)), oid(&"2".repeat(40))], &caps, ObjectFormat::Sha1)
+            .expect("request");
+
+        assert!(body.ends_with(b"0000"));
+        let lines = pkt_texts(&body);
+        assert_eq!(lines.len(), 2);
+        let first = String::from_utf8(lines[0].clone()).unwrap();
+        let second = String::from_utf8(lines[1].clone()).unwrap();
+        assert!(first.starts_with("want 1111"));
+        assert!(first.contains(" multi_ack_detailed"));
+        assert!(first.contains("side-band-64k"));
+        assert!(first.contains("object-format=sha1"));
+        assert!(first.contains("agent="));
+        // The capability list belongs on the first line only.
+        assert_eq!(second, format!("want {}", "2".repeat(40)));
+    }
+
+    #[test]
+    fn wants_request_refuses_an_empty_list_and_a_format_mismatch() {
+        let caps = CapabilitySet::default();
+        assert!(wants_request(&[], &caps, ObjectFormat::Sha1).is_err());
+        let wrong = ObjectId::zero(ObjectFormat::Sha256);
+        assert!(wants_request(&[wrong], &caps, ObjectFormat::Sha1).is_err());
+    }
+
+    #[test]
+    fn an_empty_have_round_is_a_bare_flush() {
+        let body = haves_request(&[], ObjectFormat::Sha1).unwrap();
+        assert_eq!(&body[..], b"0000");
+        let body = haves_request(&[oid(&"3".repeat(40))], ObjectFormat::Sha1).unwrap();
+        assert!(body.ends_with(b"0000"));
+        assert_eq!(pkt_texts(&body)[0], format!("have {}", "3".repeat(40)).into_bytes());
+    }
+
+    #[test]
+    fn parse_ack_distinguishes_every_spelling() {
+        let id = oid(&"a".repeat(40));
+        let hex = "a".repeat(40);
+        assert_eq!(parse_ack(b"NAK\n", ObjectFormat::Sha1).unwrap(), Ack::Nak);
+        assert_eq!(parse_ack(format!("ACK {hex}\n").as_bytes(), ObjectFormat::Sha1).unwrap(), Ack::Plain(id));
+        assert_eq!(parse_ack(format!("ACK {hex} common\n").as_bytes(), ObjectFormat::Sha1).unwrap(), Ack::Common(id));
+        assert_eq!(parse_ack(format!("ACK {hex} ready\n").as_bytes(), ObjectFormat::Sha1).unwrap(), Ack::Ready(id));
+        assert!(parse_ack(b"ACK nope\n", ObjectFormat::Sha1).is_err());
+        assert!(parse_ack(b"ERR repo not found\n", ObjectFormat::Sha1).is_err());
+        assert!(parse_ack(b"what\n", ObjectFormat::Sha1).is_err());
+    }
+
+    #[test]
+    fn symrefs_splits_on_the_first_colon_and_rejects_malformed_values() {
+        let mut caps = CapabilitySet::default();
+        caps.insert(b"symref=HEAD:refs/heads/main").unwrap();
+        caps.insert(b"symref=refs/remotes/origin/HEAD:refs/remotes/origin/main").unwrap();
+        let pairs = caps.symrefs().unwrap();
+        assert_eq!(pairs[0], (BString::from("HEAD"), BString::from("refs/heads/main")));
+        assert_eq!(pairs[1].1, BString::from("refs/remotes/origin/main"));
+
+        let mut broken = CapabilitySet::default();
+        broken.insert(b"symref=HEAD").unwrap();
+        assert!(broken.symrefs().is_err());
+
+        let mut hostile = CapabilitySet::default();
+        hostile.insert(b"symref=HEAD:../../etc/passwd").unwrap();
+        assert!(hostile.symrefs().is_err());
+    }
+
+    #[test]
+    fn is_fast_forward_follows_parents_and_treats_creation_as_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = crate::repo::InitOptions::new();
+        options.format(ObjectFormat::Sha1);
+        let repo = crate::repo::Repository::init(dir.path(), &options).unwrap();
+        let odb = repo.odb();
+
+        let base = write_commit(odb, b"base\n", &[]);
+        let child = write_commit(odb, b"child\n", &[base]);
+
+        assert!(is_fast_forward(odb, base, child).unwrap());
+        assert!(!is_fast_forward(odb, child, base).unwrap());
+        assert!(is_fast_forward(odb, ObjectId::zero(ObjectFormat::Sha1), child).unwrap());
+        assert!(is_fast_forward(odb, base, base).unwrap());
+    }
+
+    fn write_commit(odb: &crate::odb::Odb, message: &[u8], parents: &[ObjectId]) -> ObjectId {
+        let blob = odb.write_raw(crate::object::ObjectKind::Blob, message).unwrap();
+        let mut tree = Vec::new();
+        tree.extend_from_slice(b"100644 f\0");
+        tree.extend_from_slice(blob.as_bytes());
+        let tree = odb.write_raw(crate::object::ObjectKind::Tree, &tree).unwrap();
+
+        let mut body = Vec::new();
+        body.extend_from_slice(b"tree ");
+        body.extend_from_slice(tree.to_hex().as_ref());
+        body.push(b'\n');
+        for parent in parents {
+            body.extend_from_slice(b"parent ");
+            body.extend_from_slice(parent.to_hex().as_ref());
+            body.push(b'\n');
+        }
+        body.extend_from_slice(b"author A <a@example.com> 1 +0000\ncommitter A <a@example.com> 1 +0000\n\n");
+        body.extend_from_slice(message);
+        odb.write_raw(crate::object::ObjectKind::Commit, &body).unwrap()
+    }
+
+    #[test]
+    fn local_transport_advertises_refs_and_emits_a_pack_holding_the_wanted_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = crate::repo::InitOptions::new();
+        options.format(ObjectFormat::Sha1);
+        let repo = crate::repo::Repository::init(dir.path(), &options).unwrap();
+        let commit = write_commit(repo.odb(), b"only\n", &[]);
+        let name = crate::refs::RefName::from_bytes(b"refs/heads/main").unwrap();
+        repo.refs().set_direct(&name, commit, None).unwrap();
+
+        let url = RemoteUrl {
+            scheme: RemoteScheme::File,
+            user: None,
+            password: None,
+            host: None,
+            port: None,
+            path: BString::from(dir.path().to_str().unwrap()),
+        };
+
+        let mut transport = LocalTransport::open(&url).unwrap();
+        let advertisement = transport.connect(&url, ObjectFormat::Sha1).unwrap();
+        assert!(advertisement.get(BStr::new(b"refs/heads/main")).is_some());
+        assert!(advertisement.get(BStr::new(b"HEAD")).is_some());
+        assert_eq!(
+            advertisement.capabilities.symrefs().unwrap(),
+            vec![(BString::from("HEAD"), BString::from("refs/heads/main"))]
+        );
+
+        let mut pack = Vec::new();
+        transport.fetch(&[commit], &[], &mut pack).unwrap();
+        assert_eq!(&pack[0..4], b"PACK");
+        let count = u32::from_be_bytes([pack[8], pack[9], pack[10], pack[11]]);
+        // commit + tree + blob
+        assert_eq!(count, 3);
+
+        // A have that already covers the want leaves nothing to send.
+        let mut empty = Vec::new();
+        transport.fetch(&[commit], &[commit], &mut empty).unwrap();
+        assert_eq!(u32::from_be_bytes([empty[8], empty[9], empty[10], empty[11]]), 0);
+    }
 }

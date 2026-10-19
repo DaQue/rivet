@@ -314,7 +314,15 @@ impl StatCache {
     /// [`crate::error::Error::InvalidPath`] for one that escapes the work tree. A missing file
     /// is `Ok(None)` and is not cached.
     pub fn stat(&mut self, worktree: &Worktree, path: &BStr) -> Result<Option<&StatData>> {
-        todo!()
+        if !self.entries.contains_key(path) {
+            match worktree.stat(path)? {
+                Some(data) => {
+                    let _ = self.entries.insert(path.to_owned(), data);
+                }
+                None => return Ok(None),
+            }
+        }
+        Ok(self.entries.get(path))
     }
 
     /// Phase 4 — whether a path's file is unchanged according to its entry.
@@ -340,17 +348,11 @@ impl StatCache {
         entry: &IndexEntry,
         index_mtime: (u32, u32),
     ) -> Result<bool> {
-        let stat = worktree.stat(path)?;
-        let stat = match stat {
-            Some(s) => s,
+        let stat = match self.stat(worktree, path)? {
+            Some(s) => *s,
             None => return Ok(false),
         };
-        let (mtime_sec, mtime_nsec) = index_mtime;
-        let unchanged = stat.mtime_seconds == mtime_sec
-        && stat.mtime_nanos == mtime_nsec
-        && stat.size == entry.size
-        && stat.mode == entry.mode;
-        Ok(unchanged)
+        Ok(stat.is_unchanged(entry, index_mtime))
     }
 }
 

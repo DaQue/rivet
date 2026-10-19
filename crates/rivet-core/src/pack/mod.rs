@@ -219,7 +219,7 @@ impl EntryKind {
             ObjectKind::Blob => Self::Blob,
             ObjectKind::Tree => Self::Tree,
             ObjectKind::Commit => Self::Commit,
-            ObjectKind::Tag => Self::Blob,
+            ObjectKind::Tag => Self::Tag,
         }
     }
 
@@ -231,13 +231,19 @@ impl EntryKind {
     /// real kind is inherited from the base at the bottom of the chain — a delta against a tree
     /// is a tree — which is another reason a delta cannot be treated as its own object kind.
     pub const fn object_kind(self) -> Option<ObjectKind> {
-        None
+        match self {
+            Self::Commit => Some(ObjectKind::Commit),
+            Self::Tree => Some(ObjectKind::Tree),
+            Self::Blob => Some(ObjectKind::Blob),
+            Self::Tag => Some(ObjectKind::Tag),
+            Self::OfsDelta | Self::RefDelta => None,
+        }
     }
 
     /// Phase 10 — whether this entry is deltified, i.e. whether its payload is an instruction
     /// stream rather than object content.
     pub const fn is_delta(self) -> bool {
-        true
+        matches!(self, Self::OfsDelta | Self::RefDelta)
     }
 }
 
@@ -340,7 +346,170 @@ pub fn index_pack(
     format: ObjectFormat,
     bases: Option<&dyn BaseProvider>,
 ) -> Result<IndexPackResult> {
-    todo!()
+    use std::collections::HashMap;
+
+    let file = PackFile::open(pack, None, format)?;
+    file.verify_checksum()?;
+    let count = file.object_count() as usize;
+    let trailer_start = pack.len() - format.len();
+
+    // Pass 1 — walk every entry in file order, inflating as we go. An entry's end is only
+    // discoverable by consuming its zlib stream, so this is the only way to find the next one.
+    struct RawEntry {
+        entry: PackEntry,
+        payload: Vec<u8>,
+        end: usize,
+    }
+    let mut raws: Vec<RawEntry> = Vec::with_capacity(count);
+    let mut pos = 12usize;
+    for _ in 0..count {
+        if pos >= trailer_start {
+            return Err(Error::CorruptPack {
+                reason: "pack ends before its declared object count".into(),
+            });
+        }
+        let entry = file.entry_at(pos as u64)?;
+        let (payload, consumed) = inflate_at(pack, entry.data_offset as usize)?;
+        if payload.len() as u64 != entry.size {
+            return Err(Error::CorruptPack {
+                reason: "entry payload length disagrees with its header".into(),
+            });
+        }
+        let end = entry.data_offset as usize + consumed;
+        if end > trailer_start {
+            return Err(Error::CorruptPack {
+                reason: "entry runs past the trailer".into(),
+            });
+        }
+        pos = end;
+        raws.push(RawEntry { entry, payload, end });
+    }
+    if pos != trailer_start {
+        return Err(Error::TrailingPackBytes {
+            offset: pos as u64,
+            remaining: trailer_start - pos,
+        });
+    }
+
+    let by_offset: HashMap<u64, usize> = raws
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.entry.offset, i))
+        .collect();
+
+    // Pass 2 — resolve delta chains. An OFS_DELTA names an offset in this pack, so its base is
+    // known immediately; a REF_DELTA names an id that may be here, in another pack, loose, or
+    // absent because the pack is thin. Resolution is repeated in rounds so that a REF_DELTA whose
+    // base is a later entry can be satisfied once that entry has been resolved, without any
+    // recursion over the pack.
+    let mut resolved: Vec<Option<(ObjectKind, Vec<u8>)>> = vec![None; raws.len()];
+    let mut by_oid: HashMap<ObjectId, usize> = HashMap::new();
+    let mut thin = false;
+
+    for (i, raw) in raws.iter().enumerate() {
+        if let Some(kind) = raw.entry.kind.object_kind() {
+            let (oid, _) = crate::object::hash_object(format, kind, &raw.payload)?;
+            by_oid.entry(oid).or_insert(i);
+            resolved[i] = Some((kind, raw.payload.clone()));
+        }
+    }
+
+    loop {
+        let mut progress = false;
+        for i in 0..raws.len() {
+            if resolved[i].is_some() {
+                continue;
+            }
+            let raw = &raws[i];
+            let base = match raw.entry.kind {
+                EntryKind::OfsDelta => {
+                    let base_offset = raw.entry.base_offset.ok_or_else(|| Error::CorruptPack {
+                        reason: "OFS_DELTA entry has no base offset".into(),
+                    })?;
+                    match by_offset.get(&base_offset) {
+                        Some(&bi) => Some((bi, None)),
+                        None => {
+                            return Err(Error::CorruptDelta {
+                                reason: "OFS_DELTA base offset is not an entry boundary".into(),
+                            })
+                        }
+                    }
+                }
+                EntryKind::RefDelta => {
+                    let base_oid = raw.entry.base_oid.ok_or_else(|| Error::CorruptPack {
+                        reason: "REF_DELTA entry has no base id".into(),
+                    })?;
+                    match by_oid.get(&base_oid) {
+                        Some(&bi) => Some((bi, None)),
+                        None => bases.map(|_| (usize::MAX, Some(base_oid))),
+                    }
+                }
+                _ => None,
+            };
+            let Some((bi, provider_oid)) = base else {
+                continue;
+            };
+            let base_object = if bi == usize::MAX {
+                let oid = provider_oid.expect("provider base id");
+                match bases.expect("provider").base_object(&oid) {
+                    Ok(v) => {
+                        thin = true;
+                        Some(v)
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                resolved[bi].clone()
+            };
+            let Some((kind, base_data)) = base_object else {
+                continue;
+            };
+            let data = apply_delta(&base_data, &raw.payload)?;
+            let (oid, _) = crate::object::hash_object(format, kind, &data)?;
+            by_oid.entry(oid).or_insert(i);
+            resolved[i] = Some((kind, data));
+            progress = true;
+        }
+        if resolved.iter().all(|r| r.is_some()) {
+            break;
+        }
+        if !progress {
+            break;
+        }
+    }
+
+    let mut entries: Vec<PackIndexEntry> = Vec::with_capacity(raws.len());
+    for (i, raw) in raws.iter().enumerate() {
+        let (kind, data) = match &resolved[i] {
+            Some(v) => v.clone(),
+            None => {
+                let base = raw
+                    .entry
+                    .base_oid
+                    .unwrap_or_else(|| ObjectId::zero(format));
+                return Err(Error::MissingDeltaBase {
+                    oid: ObjectId::zero(format),
+                    base,
+                });
+            }
+        };
+        let (oid, _) = crate::object::hash_object(format, kind, &data)?;
+        let start = raw.entry.offset as usize;
+        entries.push(PackIndexEntry {
+            oid,
+            offset: raw.entry.offset,
+            crc32: crc32(&pack[start..raw.end]),
+        });
+    }
+
+    let pack_checksum = ObjectId::from_bytes(format, &pack[trailer_start..])?;
+    let index = OwnedPackIndex::from_entries(entries.clone(), pack_checksum, format)?;
+    Ok(IndexPackResult {
+        index,
+        pack_checksum,
+        entries,
+        thin,
+    })
 }
 
 /// Phase 10 — complete a thin pack by appending the base objects it omitted, so that it can be
@@ -375,7 +544,79 @@ pub fn fix_thin_pack(
     format: ObjectFormat,
     bases: &dyn BaseProvider,
 ) -> Result<Vec<u8>> {
-    todo!()
+    let result = index_pack(pack, format, Some(bases))?;
+    if !result.thin {
+        return Ok(pack.to_vec());
+    }
+
+    let file = PackFile::open(pack, None, format)?;
+    let count = file.object_count();
+    let trailer_start = pack.len() - format.len();
+
+    // Every REF_DELTA whose base the completed pack still does not describe names a base the
+    // sender assumed we had. Those are precisely the bytes `--fix-thin` appends.
+    let index = result.index.as_index();
+    let mut missing: Vec<ObjectId> = Vec::new();
+    let mut pos = 12usize;
+    for _ in 0..count {
+        let entry = file.entry_at(pos as u64)?;
+        if entry.kind == EntryKind::RefDelta {
+            if let Some(oid) = entry.base_oid {
+                if index.lookup(&oid).is_none() && !missing.contains(&oid) {
+                    missing.push(oid);
+                }
+            }
+        }
+        let (_payload, consumed) = inflate_at(pack, entry.data_offset as usize)?;
+        pos = entry.data_offset as usize + consumed;
+    }
+
+    let mut out = Vec::with_capacity(pack.len() + 1024 * missing.len().max(1));
+    out.extend_from_slice(&pack[..8]);
+    out.extend_from_slice(&(count + missing.len() as u32).to_be_bytes());
+    out.extend_from_slice(&pack[12..trailer_start]);
+    for oid in &missing {
+        let (kind, data) = bases.base_object(oid)?;
+        write_entry(&mut out, kind, &data)?;
+    }
+    let mut hasher = format.hasher();
+    hasher.update(&out);
+    let checksum = hasher.finish()?;
+    out.extend_from_slice(checksum.as_bytes());
+    Ok(out)
+}
+
+/// Phase 10 — append one undeltified entry (header + zlib payload) to a pack under construction.
+///
+/// # Caveats
+///
+/// The size is the **object's** inflated length, encoded in the entry header's 4-then-7-bit
+/// varint. The caller owns the pack header, the object count and the trailer; this writes only the
+/// entry, because those three are the parts a thin-pack repair must recompute as a whole.
+pub(crate) fn write_entry(out: &mut Vec<u8>, kind: ObjectKind, data: &[u8]) -> Result<()> {
+    let code = match kind {
+        ObjectKind::Commit => 1u8,
+        ObjectKind::Tree => 2,
+        ObjectKind::Blob => 3,
+        ObjectKind::Tag => 4,
+    };
+    let mut size = data.len() as u64;
+    let mut first = (code << 4) | ((size & 0x0f) as u8);
+    size >>= 4;
+    if size > 0 {
+        first |= 0x80;
+    }
+    out.push(first);
+    while size > 0 {
+        let mut byte = (size & 0x7f) as u8;
+        size >>= 7;
+        if size > 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+    }
+    out.extend_from_slice(&deflate(data)?);
+    Ok(())
 }
 
 /// Phase 10 — wrap an owned payload as the [`Object`] variant its kind names.
@@ -455,7 +696,44 @@ pub(crate) fn read_u64_be(data: &[u8], at: usize) -> Result<u64> {
 /// [`crate::error::Error::CorruptPack`] if `at` is past the end, the stream is truncated, or the
 /// zlib framing is invalid.
 pub(crate) fn inflate_at(data: &[u8], at: usize) -> Result<(Vec<u8>, usize)> {
-    todo!()
+    use flate2::{Decompress, FlushDecompress, Status};
+
+    if at >= data.len() {
+        return Err(Error::CorruptPack {
+            reason: "zlib stream starts past the end of the pack".into(),
+        });
+    }
+    let mut decoder = Decompress::new(true);
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        let produced_before = decoder.total_out() as usize;
+        let status = decoder
+            .decompress(&data[at..], &mut chunk, FlushDecompress::None)
+            .map_err(|e| Error::CorruptPack {
+                reason: format!("bad zlib stream: {e}"),
+            })?;
+        let produced = decoder.total_out() as usize - produced_before;
+        out.extend_from_slice(&chunk[..produced]);
+        match status {
+            Status::StreamEnd => break,
+            Status::Ok | Status::BufError => {
+                let consumed_all_input = decoder.total_in() as usize >= data.len() - at;
+                if consumed_all_input && produced == 0 {
+                    return Err(Error::CorruptPack {
+                        reason: "truncated zlib stream".into(),
+                    });
+                }
+            }
+        }
+    }
+    let consumed = decoder.total_in() as usize;
+    if consumed == 0 || at + consumed > data.len() {
+        return Err(Error::CorruptPack {
+            reason: "zlib stream overran the pack".into(),
+        });
+    }
+    Ok((out, consumed))
 }
 
 /// Phase 10 — deflate with zlib framing, the inverse of [`inflate_at`].
@@ -474,27 +752,16 @@ pub(crate) fn inflate_at(data: &[u8], at: usize) -> Result<(Vec<u8>, usize)> {
 /// [`crate::error::Error::CorruptPack`] only as a wrapper for a compressor failure; with a valid
 /// backend this is not reachable.
 pub(crate) fn deflate(data: &[u8]) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(data.len() + 6);
-    out.extend_from_slice(&[0x78, 0x9c]);
-    let mut w = out.len();
-    let mut i = 0;
-    while i < data.len() {
-        let chunk = &data[i..];
-        let n = chunk.len().min(65535);
-        let block = &chunk[..n];
-        let btype = 0u8;
-        let len = n as u32;
-        let nlen = !len;
-        out.push(btype);
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&nlen.to_le_bytes());
-        out.extend_from_slice(block);
-        i += n;
-    }
-    out.push(0x00);
-    let crc = crc32(data);
-    out.extend_from_slice(&crc.to_be_bytes());
-    Ok(out)
+    use std::io::Write;
+
+    let mut encoder =
+        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(data).map_err(|e| Error::CorruptPack {
+        reason: format!("zlib compression failed: {e}"),
+    })?;
+    encoder.finish().map_err(|e| Error::CorruptPack {
+        reason: format!("zlib compression failed: {e}"),
+    })
 }
 
 /// Phase 10 — CRC-32 of a pack entry's on-disk bytes, as the `.idx` v2 records it.
@@ -509,13 +776,13 @@ pub(crate) fn deflate(data: &[u8]) -> Result<Vec<u8>> {
 /// * This is the same CRC-32 as zlib's (the IEEE polynomial), and `flate2` already exposes it —
 ///   do not hand-roll a table, and do not substitute a different 32-bit check.
 pub(crate) fn crc32(data: &[u8]) -> u32 {
-    let mut state: u32 = 0xFFFFFFFF;
+    let mut state: u32 = 0xffff_ffff;
     for &byte in data {
         state ^= byte as u32;
         for _ in 0..8 {
-            let mask = !(state & 1);
-            state = (state >> 1) ^ (0xEDB88320 & mask);
+            let mask = (state & 1).wrapping_neg();
+            state = (state >> 1) ^ (0xedb8_8320 & mask);
         }
     }
-    state ^ 0xFFFFFFFF
+    !state
 }

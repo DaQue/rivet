@@ -154,48 +154,94 @@ pub enum DeltaBase {
 /// off the end); a copy reaching outside the base; a result longer than `target_len`; a stream that
 /// ends before `target_len` bytes exist; or bytes left over once the target is complete.
 pub fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
-    let header = parse_delta_header(delta)?;
-    if header.base_len != base.len() as u64 {
-        return Err(Error::CorruptDelta { reason: "base length mismatch".to_string() });
-    }
-    let mut out = Vec::with_capacity(header.target_len as usize);
     let mut pos = 0usize;
-    while out.len() < header.target_len as usize {
-        if pos >= delta.len() {
-            return Err(Error::CorruptDelta { reason: "delta stream ended before target length".to_string() });
-        }
-        let op = delta[pos];
+    let base_len = read_delta_varint(delta, &mut pos)?;
+    let target_len = read_delta_varint(delta, &mut pos)?;
+    if base_len != base.len() as u64 {
+        return Err(Error::CorruptDelta {
+            reason: "base length mismatch".to_string(),
+        });
+    }
+    if target_len > usize::MAX as u64 {
+        return Err(Error::CorruptDelta {
+            reason: "target length out of range".to_string(),
+        });
+    }
+    let target = target_len as usize;
+    let mut out = Vec::with_capacity(target);
+
+    while out.len() < target {
+        let op = *delta.get(pos).ok_or_else(|| Error::CorruptDelta {
+            reason: "delta stream ended before target length".to_string(),
+        })?;
         pos += 1;
-        match op {
-            0 => return Err(Error::CorruptDelta { reason: "reserved opcode".to_string() }),
-            1..=32 => {
-                let len = op as usize;
-                if out.len() + len > header.target_len as usize {
-                    return Err(Error::CorruptDelta { reason: "insert exceeds target length".to_string() });
+
+        if op & 0x80 != 0 {
+            // Copy: the low seven bits are a presence mask over offset and length bytes.
+            let mut copy_offset = 0u64;
+            let mut copy_len = 0u64;
+            for (bit, shift) in [(0x01u8, 0u32), (0x02, 8), (0x04, 16), (0x08, 24)] {
+                if op & bit != 0 {
+                    let byte = *delta.get(pos).ok_or_else(|| Error::CorruptDelta {
+                        reason: "truncated copy offset".to_string(),
+                    })?;
+                    pos += 1;
+                    copy_offset |= (byte as u64) << shift;
                 }
-                if pos + len > delta.len() {
-                    return Err(Error::CorruptDelta { reason: "insert runs off end".to_string() });
-                }
-                out.extend_from_slice(&delta[pos..pos + len]);
-                pos += len;
             }
-            33..=127 => {
-                let len = (op - 32) as usize;
-                let offset = decode_ofs_distance(delta, pos, header.base_len)?;
-                pos += (offset as usize) + 1;
-                if offset + len as u64 > base.len() as u64 {
-                    return Err(Error::CorruptDelta { reason: "copy reaches outside base".to_string() });
+            for (bit, shift) in [(0x10u8, 0u32), (0x20, 8), (0x40, 16)] {
+                if op & bit != 0 {
+                    let byte = *delta.get(pos).ok_or_else(|| Error::CorruptDelta {
+                        reason: "truncated copy length".to_string(),
+                    })?;
+                    pos += 1;
+                    copy_len |= (byte as u64) << shift;
                 }
-                if out.len() + len > header.target_len as usize {
-                    return Err(Error::CorruptDelta { reason: "copy exceeds target length".to_string() });
-                }
-                out.extend_from_slice(&base[offset as usize..offset as usize + len]);
             }
-            _ => return Err(Error::CorruptDelta { reason: "unknown opcode".to_string() }),
+            // An omitted length means 64 KiB, not zero: the special case that a naive reader
+            // rejects as a zero-length copy on a pack Git wrote.
+            if copy_len == 0 {
+                copy_len = 0x10000;
+            }
+            let copy_end = copy_offset.checked_add(copy_len).ok_or_else(|| Error::CorruptDelta {
+                reason: "copy range overflow".to_string(),
+            })?;
+            if copy_end > base.len() as u64 {
+                return Err(Error::CorruptDelta {
+                    reason: "copy reaches outside base".to_string(),
+                });
+            }
+            if out.len() + copy_len as usize > target {
+                return Err(Error::CorruptDelta {
+                    reason: "copy exceeds target length".to_string(),
+                });
+            }
+            out.extend_from_slice(&base[copy_offset as usize..copy_end as usize]);
+        } else if op != 0 {
+            let len = op as usize;
+            if pos + len > delta.len() {
+                return Err(Error::CorruptDelta {
+                    reason: "insert runs off end".to_string(),
+                });
+            }
+            if out.len() + len > target {
+                return Err(Error::CorruptDelta {
+                    reason: "insert exceeds target length".to_string(),
+                });
+            }
+            out.extend_from_slice(&delta[pos..pos + len]);
+            pos += len;
+        } else {
+            return Err(Error::CorruptDelta {
+                reason: "reserved opcode".to_string(),
+            });
         }
     }
+
     if pos != delta.len() {
-        return Err(Error::CorruptDelta { reason: "trailing bytes in delta".to_string() });
+        return Err(Error::CorruptDelta {
+            reason: "trailing bytes in delta".to_string(),
+        });
     }
     Ok(out)
 }
@@ -223,9 +269,35 @@ pub fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
 /// overflows a `u64`.
 pub fn parse_delta_header(delta: &[u8]) -> Result<DeltaHeader> {
     let mut pos = 0usize;
-    let base_len = decode_ofs_distance(delta, pos, 0)?;
-    let target_len = decode_ofs_distance(delta, pos, 0)?;
-    Ok(DeltaHeader { base_len, target_len })
+    let base_len = read_delta_varint(delta, &mut pos)?;
+    let target_len = read_delta_varint(delta, &mut pos)?;
+    Ok(DeltaHeader {
+        base_len,
+        target_len,
+    })
+}
+
+/// Phase 10 — read one little-endian, 7-bits-per-byte varint from a delta payload.
+fn read_delta_varint(data: &[u8], pos: &mut usize) -> Result<u64> {
+    let mut value = 0u64;
+    let mut shift = 0u32;
+    loop {
+        let byte = *data.get(*pos).ok_or_else(|| Error::CorruptDelta {
+            reason: "truncated length varint".to_string(),
+        })?;
+        *pos += 1;
+        let chunk = (byte & 0x7f) as u64;
+        if shift > 63 || (shift == 63 && chunk > 1) {
+            return Err(Error::CorruptDelta {
+                reason: "length varint overflow".to_string(),
+            });
+        }
+        value |= chunk << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+        shift += 7;
+    }
 }
 
 /// Phase 10 — decode an `OFS_DELTA`'s backward distance into an absolute offset.
@@ -248,29 +320,30 @@ pub fn parse_delta_header(delta: &[u8]) -> Result<DeltaHeader> {
 /// distance that does not land on an offset strictly before `offset`.
 pub fn decode_ofs_distance(data: &[u8], at: usize, offset: u64) -> Result<u64> {
     let mut pos = at;
-    let mut value: u64 = 0;
-    let mut shift: u32 = 0;
-    loop {
-        if pos >= data.len() {
-            return Err(Error::CorruptPack { reason: "truncated OFS_DELTA distance".into() });
-        }
-        let byte = data[pos];
+    let mut byte = *data.get(pos).ok_or_else(|| Error::CorruptPack {
+        reason: "truncated OFS_DELTA distance".into(),
+    })?;
+    pos += 1;
+    let mut distance = (byte & 0x7f) as u64;
+    while byte & 0x80 != 0 {
+        byte = *data.get(pos).ok_or_else(|| Error::CorruptPack {
+            reason: "truncated OFS_DELTA distance".into(),
+        })?;
         pos += 1;
-        let group = (byte & 0x7f) as u64;
-        let addend = ((group + 1) << shift).checked_sub(1).ok_or_else(|| Error::CorruptPack { reason: "OFS_DELTA distance overflow".into() })?;
-        value = value.checked_add(addend).ok_or_else(|| Error::CorruptPack { reason: "OFS_DELTA distance overflow".into() })?;
-        if byte & 0x80 == 0 {
-            break;
-        }
-        shift += 7;
-        if shift > 63 {
-            return Err(Error::CorruptPack { reason: "OFS_DELTA distance overflow".into() });
-        }
+        distance = distance
+            .checked_add(1)
+            .and_then(|d| d.checked_shl(7))
+            .map(|d| d | (byte & 0x7f) as u64)
+            .ok_or_else(|| Error::CorruptPack {
+                reason: "OFS_DELTA distance overflow".into(),
+            })?;
     }
-    if value == 0 || value > offset {
-        return Err(Error::CorruptPack { reason: "OFS_DELTA distance out of range".into() });
+    if distance == 0 || distance > offset {
+        return Err(Error::CorruptPack {
+            reason: "OFS_DELTA distance out of range".into(),
+        });
     }
-    Ok(value)
+    Ok(distance)
 }
 
 /// Phase 10 — resolve a deltified entry to its reconstructed object.
@@ -314,5 +387,8 @@ pub fn resolve_delta(
     format: ObjectFormat,
     bases: Option<&dyn BaseProvider>,
 ) -> Result<(ObjectKind, Vec<u8>)> {
-    todo!()
+    let _ = format;
+    // The offset-addressed read is the one implementation of chain resolution; duplicating it
+    // here would give two places for the depth guard and the base-kind inheritance to drift.
+    pack.get_at_offset(entry.offset, bases)
 }

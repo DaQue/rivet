@@ -181,15 +181,12 @@ impl ConfigEntry {
         let Some(last_dot) = flat.iter().rposition(|b| *b == b'.') else {
             return Err(Error::ConfigSyntax { line: flat.len(), reason: "no dot in flat key" });
         };
-        if first_dot == last_dot {
-            return Err(Error::ConfigSyntax { line: flat.len(), reason: "empty section or key" });
-        }
         let section = BString::from(&flat[..first_dot]);
         let key = BString::from(&flat[last_dot + 1..]);
         if section.is_empty() || key.is_empty() {
             return Err(Error::ConfigSyntax { line: flat.len(), reason: "empty section or key" });
         }
-        let subsection = if first_dot + 1 < last_dot {
+        let subsection = if last_dot > first_dot {
             Some(BString::from(&flat[first_dot + 1..last_dot]))
         } else {
             None
@@ -557,7 +554,22 @@ impl Config {
     /// [`crate::error::Error::ConfigSyntax`] if the flat key does not have the shape
     /// `section.key` or `section.subsection.key`; see [`ConfigEntry::parse_key`].
     pub fn get(&self, key: &BStr) -> Result<Option<&BStr>> {
-        Ok(self.entries.iter().rev().find(|e| e.key == key).map(|e| e.value.as_ref()))
+        let entry = Self::parse_lookup_key(key)?;
+        Ok(self
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.section == entry.0 && e.subsection == entry.1 && e.key == entry.2)
+            .map(|e| e.value.as_ref()))
+    }
+
+    /// Split a flat lookup key (`core.bare`) into the three fields an entry stores.
+    ///
+    /// Entries keep the section, subsection and bare key separately, so every accessor must
+    /// compare against those fields rather than against the flat spelling — comparing `entry.key`
+    /// to `core.bare` matches nothing.
+    fn parse_lookup_key(key: &BStr) -> Result<(BString, Option<BString>, BString)> {
+        ConfigEntry::parse_key(key)
     }
 
     /// Phase 2 — every value of a key, in file order.
@@ -574,7 +586,14 @@ impl Config {
     ///
     /// As [`Config::get`].
     pub fn get_all(&self, key: &BStr) -> Result<Vec<&BStr>> {
-        Ok(self.entries.iter().rev().filter(|e| e.key == key).map(|e| e.value.as_ref()).collect())
+        let entry = Self::parse_lookup_key(key)?;
+        Ok(self
+            .entries
+            .iter()
+            .rev()
+            .filter(|e| e.section == entry.0 && e.subsection == entry.1 && e.key == entry.2)
+            .map(|e| e.value.as_ref())
+            .collect())
     }
 
     /// Phase 2 — whether a key is present at all.
@@ -590,7 +609,11 @@ impl Config {
     ///
     /// As [`Config::get`].
     pub fn contains(&self, key: &BStr) -> Result<bool> {
-        Ok(self.entries.iter().any(|e| e.key == key))
+        let entry = Self::parse_lookup_key(key)?;
+        Ok(self
+            .entries
+            .iter()
+            .any(|e| e.section == entry.0 && e.subsection == entry.1 && e.key == entry.2))
     }
 
     /// Phase 2 — a value parsed as a Git boolean.
@@ -677,7 +700,10 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key. A missing key is `Ok(None)`.
     pub fn get_path(&self, key: &BStr) -> Result<Option<BString>> {
-        todo!()
+        let Some(value) = self.get(key)? else {
+            return Ok(None);
+        };
+        Ok(Some(expand_tilde(value)))
     }
 
     /// Phase 2 — set a key, replacing every existing value.
@@ -960,11 +986,13 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn default_branch(&self) -> Result<BString> {
-        let value = config_env_override("init.defaultBranch");
-        match value {
-            Some(v) => Ok(v),
-            None => Ok(BString::from("main")),
+        if let Some(v) = config_env_override("init.defaultBranch") {
+            return Ok(v);
         }
+        Ok(match self.get(BStr::new(b"init.defaultBranch"))? {
+            Some(v) => v.to_owned(),
+            None => BString::from("main"),
+        })
     }
 
     /// Phase 2 — whether the repository is bare (`core.bare`).
@@ -980,11 +1008,10 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigInvalidValue`] for a present value that is not a boolean.
     pub fn is_bare(&self) -> Result<bool> {
-        let value = config_env_override("core.bare");
-        match value {
-            Some(v) => parse_bool(v.as_ref()),
-            None => Ok(false),
+        if let Some(v) = config_env_override("core.bare") {
+            return parse_bool(v.as_ref());
         }
+        Ok(self.get_bool(BStr::new(b"core.bare"))?.unwrap_or(false))
     }
 
     /// Phase 2 — whether `$GIT_DIR/config`-style config should be trusted for this repository.
@@ -1005,17 +1032,15 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn is_safe_directory(&self, path: &BStr) -> Result<bool> {
-        let value = config_env_override("safe.directory");
-        match value {
-            Some(v) => {
-                if v == b"*" {
-                    Ok(true)
-                } else {
-                    Ok(v == path)
-                }
-            }
-            None => Ok(false),
+        if let Some(v) = config_env_override("safe.directory") {
+            return Ok(&v[..] == b"*" || v == path);
         }
+        for value in self.get_all(BStr::new(b"safe.directory"))? {
+            if &value[..] == b"*" || value == path {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -1063,6 +1088,27 @@ pub fn parse_bool(value: &BStr) -> Result<bool> {
             expected: "a boolean",
         })
     }
+}
+
+/// Phase 2 — expand a leading `~` in a path value.
+///
+/// Only `~` and `~/…` are expanded; `~user/…` is left alone because Git does not expand it. A
+/// missing `$HOME` leaves the value untouched rather than turning it into a rooted `/…`.
+fn expand_tilde(value: &BStr) -> BString {
+    let bytes = &value[..];
+    if bytes.first() != Some(&b'~') {
+        return value.to_owned();
+    }
+    let rest = &bytes[1..];
+    if !rest.is_empty() && rest.first() != Some(&b'/') {
+        return value.to_owned();
+    }
+    let Some(home) = std::env::var_os("HOME") else {
+        return value.to_owned();
+    };
+    let mut expanded = BString::from(home.as_encoded_bytes());
+    expanded.extend_from_slice(rest);
+    expanded
 }
 
 /// Phase 2 — parse a Git integer, with its size suffixes.

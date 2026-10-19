@@ -62,7 +62,7 @@ use bstr::{BStr, BString};
 use crate::error::Result;
 use crate::hash::ObjectId;
 use crate::odb::Odb;
-use crate::refs::RefStore;
+use crate::refs::{RefName, RefStore};
 
 use crate::remote::transport::Transport;
 use crate::remote::url::RemoteUrl;
@@ -580,7 +580,11 @@ pub fn write_tracking_refs(
 ///   function assumes a name of the shape the config allows.
 pub fn tracking_ref_name(remote: &BStr, advertised: &BStr) -> Option<BString> {
     let prefix = advertised.strip_prefix(b"refs/heads/").or_else(|| advertised.strip_prefix(b"refs/tags/"))?;
-    Some(BString::from(format!("refs/remotes/{}/{:?}", remote, prefix)))
+    let mut name = BString::from("refs/remotes/");
+    name.extend_from_slice(remote);
+    name.push(b'/');
+    name.extend_from_slice(prefix);
+    Some(name)
 }
 
 /// Phase 11 — the remote an advertisement's refs would be tracked under, if the URL names one.
@@ -614,10 +618,22 @@ pub fn is_up_to_date(
     remote: &BStr,
     refs: &RefStore,
 ) -> Result<bool> {
-    let Ok(up_to_date) = is_up_to_date(advertisement, remote, refs) else {
-        return Ok(false)
-    };
-    Ok(up_to_date)
+    let mut tracked = 0usize;
+    for advertised in &advertisement.refs {
+        let Some(tracking) = tracking_ref_name(remote, BStr::new(&advertised.name)) else {
+            continue;
+        };
+        let Ok(name) = RefName::parse(BStr::new(&tracking)) else {
+            continue;
+        };
+        tracked += 1;
+        match refs.resolve_oid(&name) {
+            Ok(oid) if oid == advertised.oid => {}
+            Ok(_) | Err(Error::RefNotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(tracked > 0)
 }
 
 /// Phase 11 — the advertised refs that are not objects the local repository has.

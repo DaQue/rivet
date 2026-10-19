@@ -152,7 +152,26 @@ impl<'a> PackFile<'a> {
     /// Whatever [`PackFile::open`] raises, plus [`crate::error::Error::IoAtPath`] for the `.pack`
     /// itself.
     pub fn open_path(pack: &Path, format: ObjectFormat) -> Result<OwnedPackFile> {
-        todo!()
+        let data = std::fs::read(pack).map_err(|e| Error::IoAtPath {
+            path: pack.to_string_lossy().into_owned().into(),
+            source: e,
+        })?;
+        let index_path = pack.with_extension("idx");
+        let index_data = match std::fs::read(&index_path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(Error::IoAtPath {
+                    path: index_path.to_string_lossy().into_owned().into(),
+                    source: e,
+                })
+            }
+        };
+        let owned = OwnedPackFile::new(data, index_data, format);
+        // Validate the pair now: a corrupt index must surface at open, where the caller can still
+        // name the file, rather than at the first object read.
+        owned.pack()?;
+        Ok(owned)
     }
 
     /// Phase 10 — the pack's version from its header.
@@ -179,9 +198,9 @@ impl<'a> PackFile<'a> {
     /// *verify* it, hash the bytes up to the trailer and compare; that is what
     /// [`PackFile::verify_checksum`] is for, and it is linear in the pack's size.
     pub fn checksum(&self) -> ObjectId {
-        let mut hasher = self.format.hasher();
-        hasher.update(&self.data[..self.data.len() - 20]);
-        hasher.finish().expect("hash collision")
+        let start = self.data.len() - self.format.len();
+        ObjectId::from_bytes(self.format, &self.data[start..])
+            .expect("pack was validated at open")
     }
 
     /// Phase 10 — the index beside this pack, if it was opened with one.
@@ -202,7 +221,7 @@ impl<'a> PackFile<'a> {
     /// index's [`PackIndex::len`] for the two files to describe each other, and it bounds only a
     /// sequential walk — a lookup by offset never consults it.
     pub fn object_count(&self) -> u32 {
-        self.index.as_ref().map(|i| i.len() as u32).unwrap_or(0)
+        u32::from_be_bytes([self.data[8], self.data[9], self.data[10], self.data[11]])
     }
 
     /// Phase 10 — whether the object count came from a header that agrees with the index.
@@ -248,7 +267,18 @@ impl<'a> PackFile<'a> {
     /// [`crate::error::Error::MissingDeltaBase`] from the resolver; and
     /// [`crate::error::Error::HashMismatch`] when the content does not match the id.
     pub fn get(&self, oid: &ObjectId, bases: Option<&dyn BaseProvider>) -> Result<Object> {
-        todo!()
+        let index = self.index.as_ref().ok_or(Error::ObjectNotFound { oid: *oid })?;
+        let entry = index.lookup(oid).ok_or(Error::ObjectNotFound { oid: *oid })?;
+        let (kind, data) = self.get_at_offset(entry.offset, bases)?;
+        let object = crate::pack::wrap_object(kind, data);
+        let actual = object.id(self.format)?;
+        if actual != *oid {
+            return Err(Error::HashMismatch {
+                expected: *oid,
+                actual,
+            });
+        }
+        Ok(object)
     }
 
     /// Phase 10 — read the object a specific entry describes, resolving its delta chain.
@@ -281,7 +311,86 @@ impl<'a> PackFile<'a> {
         offset: u64,
         bases: Option<&dyn BaseProvider>,
     ) -> Result<(ObjectKind, Vec<u8>)> {
-        todo!()
+        use crate::pack::{apply_delta, inflate_at, MAX_DELTA_DEPTH};
+
+        // Chain links are collected top-down, then applied bottom-up: recursion over the pack
+        // format would make the depth limit a stack-depth question, which is exactly what the
+        // limit exists to prevent.
+        let mut deltas: Vec<Vec<u8>> = Vec::new();
+        let mut current = offset;
+        let mut depth = 0usize;
+
+        loop {
+            let entry = self.entry_at(current)?;
+            let (payload, _consumed) = inflate_at(self.data, entry.data_offset as usize)?;
+            if payload.len() as u64 != entry.size {
+                return Err(Error::CorruptPack {
+                    reason: "entry payload length disagrees with its header".into(),
+                });
+            }
+
+            match entry.kind {
+                EntryKind::OfsDelta => {
+                    if depth >= MAX_DELTA_DEPTH {
+                        return Err(Error::DeltaChainTooDeep {
+                            oid: ObjectId::zero(self.format),
+                            depth: MAX_DELTA_DEPTH,
+                        });
+                    }
+                    let base = entry.base_offset.ok_or_else(|| Error::CorruptPack {
+                        reason: "OFS_DELTA entry has no base offset".into(),
+                    })?;
+                    deltas.push(payload);
+                    current = base;
+                    depth += 1;
+                }
+                EntryKind::RefDelta => {
+                    if depth >= MAX_DELTA_DEPTH {
+                        return Err(Error::DeltaChainTooDeep {
+                            oid: ObjectId::zero(self.format),
+                            depth: MAX_DELTA_DEPTH,
+                        });
+                    }
+                    let base_oid = entry.base_oid.ok_or_else(|| Error::CorruptPack {
+                        reason: "REF_DELTA entry has no base id".into(),
+                    })?;
+                    deltas.push(payload);
+                    if let Some(base_offset) = self
+                        .index
+                        .as_ref()
+                        .and_then(|index| index.lookup(&base_oid))
+                        .map(|e| e.offset)
+                    {
+                        current = base_offset;
+                        depth += 1;
+                        continue;
+                    }
+                    let (kind, mut data) = match bases {
+                        Some(provider) => provider.base_object(&base_oid)?,
+                        None => {
+                            return Err(Error::MissingDeltaBase {
+                                oid: ObjectId::zero(self.format),
+                                base: base_oid,
+                            })
+                        }
+                    };
+                    for delta in deltas.iter().rev() {
+                        data = apply_delta(&data, delta)?;
+                    }
+                    return Ok((kind, data));
+                }
+                kind => {
+                    let kind = kind.object_kind().ok_or_else(|| Error::CorruptPack {
+                        reason: "entry has no object kind".into(),
+                    })?;
+                    let mut data = payload;
+                    for delta in deltas.iter().rev() {
+                        data = apply_delta(&data, delta)?;
+                    }
+                    return Ok((kind, data));
+                }
+            }
+        }
     }
 
     /// Phase 10 — decode the entry header at `offset`, without inflating anything.
@@ -307,63 +416,84 @@ impl<'a> PackFile<'a> {
     /// the size varint overflows, or the type nibble is one of the two reserved values.
     pub fn entry_at(&self, offset: u64) -> Result<PackEntry> {
         let data = self.data;
+        let trailer_start = data.len() - self.format.len();
         let pos = offset as usize;
-        if pos >= data.len() {
-            return Err(Error::CorruptPack { reason: "offset past end of pack".into() });
+        if pos >= trailer_start {
+            return Err(Error::CorruptPack {
+                reason: "entry offset is past the pack trailer".into(),
+            });
         }
         let mut i = pos;
-        let header_byte = data[i];
+        let first = data[i];
         i += 1;
-        let type_nibble = header_byte & 0x0f;
-        let kind = match type_nibble {
-            0 => EntryKind::Commit,
-            1 => EntryKind::Tree,
-            2 => EntryKind::Blob,
-            3 => EntryKind::Tag,
-            4 => EntryKind::Commit,
-            5 => EntryKind::Tree,
-            6 => EntryKind::Blob,
-            7 => EntryKind::Tag,
-            8 => EntryKind::Commit,
-            9 => EntryKind::Tree,
-            10 => EntryKind::Blob,
-            11 => EntryKind::Tag,
-            12 => EntryKind::Commit,
-            13 => EntryKind::Tree,
-            14 => EntryKind::Blob,
-            15 => EntryKind::Tag,
-            _ => return Err(Error::CorruptPack { reason: "reserved type nibble".into() }),
-        };
-        let mut size: u64 = 0;
-        let mut shift: u64 = 0;
-        loop {
-            if i >= data.len() {
-                return Err(Error::CorruptPack { reason: "truncated size varint".into() });
+        // The type is the top three bits of the first byte; the low four are the size's low bits.
+        let kind = EntryKind::from_nibble((first >> 4) & 0x07)?;
+        let mut size = (first & 0x0f) as u64;
+        let mut shift = 4u32;
+        let mut byte = first;
+        while byte & 0x80 != 0 {
+            if i >= trailer_start {
+                return Err(Error::CorruptPack {
+                    reason: "truncated entry size varint".into(),
+                });
             }
-            let b = data[i];
+            byte = data[i];
             i += 1;
-            size |= ((b & 0x7f) as u64) << shift;
+            if shift >= 64 || (shift > 60 && byte & 0x7f != 0) {
+                return Err(Error::CorruptPack {
+                    reason: "entry size varint overflow".into(),
+                });
+            }
+            size |= ((byte & 0x7f) as u64) << shift;
             shift += 7;
-            if b & 0x80 == 0 {
-                break;
-            }
-            if shift > 63 {
-                return Err(Error::CorruptPack { reason: "size varint overflow".into() });
-            }
         }
+
         let mut base_offset = None;
         let mut base_oid = None;
-        if type_nibble >= 8 {
-            if i + 20 > data.len() {
-                return Err(Error::CorruptPack { reason: "truncated base oid".into() });
+        match kind {
+            EntryKind::OfsDelta => {
+                let mut byte = *data.get(i).ok_or_else(|| Error::CorruptPack {
+                    reason: "truncated OFS_DELTA distance".into(),
+                })?;
+                i += 1;
+                let mut distance = (byte & 0x7f) as u64;
+                while byte & 0x80 != 0 {
+                    byte = *data.get(i).ok_or_else(|| Error::CorruptPack {
+                        reason: "truncated OFS_DELTA distance".into(),
+                    })?;
+                    i += 1;
+                    distance = distance
+                        .checked_add(1)
+                        .and_then(|d| d.checked_shl(7))
+                        .map(|d| d | (byte & 0x7f) as u64)
+                        .ok_or_else(|| Error::CorruptPack {
+                            reason: "OFS_DELTA distance overflow".into(),
+                        })?;
+                }
+                if distance == 0 || distance > offset {
+                    return Err(Error::CorruptPack {
+                        reason: "OFS_DELTA distance points outside the pack".into(),
+                    });
+                }
+                base_offset = Some(offset - distance);
             }
-            base_oid = Some(ObjectId::from_bytes(ObjectFormat::Sha1, &data[i..i + 20]).expect("base oid"));
-            i += 20;
-            if i + 8 > data.len() {
-                return Err(Error::CorruptPack { reason: "truncated base offset".into() });
+            EntryKind::RefDelta => {
+                let width = self.format.len();
+                if i + width > trailer_start {
+                    return Err(Error::CorruptPack {
+                        reason: "truncated REF_DELTA base id".into(),
+                    });
+                }
+                base_oid = Some(ObjectId::from_bytes(self.format, &data[i..i + width])?);
+                i += width;
             }
-            base_offset = Some(u64::from_le_bytes(data[i..i + 8].try_into().unwrap()));
-            i += 8;
+            _ => {}
+        }
+
+        if i > trailer_start {
+            return Err(Error::CorruptPack {
+                reason: "entry header runs into the trailer".into(),
+            });
         }
         Ok(PackEntry {
             offset,
@@ -419,13 +549,16 @@ impl<'a> PackFile<'a> {
     /// past the trailer.
     pub fn entry_range(&self, offset: u64) -> Result<Range<usize>> {
         let entry = self.entry_at(offset)?;
-        let inflated_len = entry.size as usize;
+        let (_, consumed) = crate::pack::inflate_at(self.data, entry.data_offset as usize)?;
         let start = entry.data_offset as usize;
-        let end = start + inflated_len;
-        if end > self.data.len() {
-            return Err(Error::CorruptPack { reason: "zlib stream runs past trailer".to_string() });
+        let end = start + consumed;
+        let trailer_start = self.data.len() - self.format.len();
+        if end > trailer_start {
+            return Err(Error::CorruptPack {
+                reason: "zlib stream runs past the trailer".into(),
+            });
         }
-        Ok(start..end)
+        Ok(offset as usize..end)
     }
 
     /// Phase 10 — hash the pack and compare against its trailer.
@@ -443,12 +576,14 @@ impl<'a> PackFile<'a> {
     /// [`crate::error::Error::CorruptPack`] if the recomputed checksum differs from the trailer,
     /// and [`crate::error::Error::Io`] from the hasher.
     pub fn verify_checksum(&self) -> Result<()> {
+        let trailer_start = self.data.len() - self.format.len();
         let mut hasher = self.format.hasher();
-        hasher.update(&self.data);
+        hasher.update(&self.data[..trailer_start]);
         let computed = hasher.finish()?;
-        let expected = self.checksum();
-        if computed != expected {
-            return Err(Error::CorruptPack { reason: "checksum mismatch".to_string() });
+        if computed != self.checksum() {
+            return Err(Error::CorruptPack {
+                reason: "checksum mismatch".to_string(),
+            });
         }
         Ok(())
     }
@@ -549,11 +684,23 @@ impl<'a> Iterator for PackReader<'a> {
             return None;
         }
         let offset = self.next_offset;
+        let entry = match self.pack.entry_at(offset) {
+            Ok(entry) => entry,
+            Err(e) => return Some(Err(e)),
+        };
+        let (payload, consumed) =
+            match crate::pack::inflate_at(self.pack.data, entry.data_offset as usize) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+        if payload.len() as u64 != entry.size {
+            return Some(Err(Error::CorruptPack {
+                reason: "entry payload length disagrees with its header".into(),
+            }));
+        }
+        self.next_offset = entry.data_offset + consumed as u64;
         self.produced += 1;
-        let entry = self.pack.entry_at(offset).ok()?;
-        let data = self.pack.get_at_offset(offset, None).ok()?;
-        self.next_offset = entry.data_offset + entry.size;
-        Some(Ok((entry, data.1)))
+        Some(Ok((entry, payload)))
     }
 
     /// Phase 10 — how many entries remain, from the pack header's count.

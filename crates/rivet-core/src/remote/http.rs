@@ -62,14 +62,17 @@
 //! throws that away and pays a TLS handshake each time. The transport owns one agent for its life,
 //! which is why [`HttpTransport::new`] builds it once rather than per call.
 
-use bstr::BString;
+use bstr::{BStr, BString};
 
 use crate::error::Result;
 use crate::hash::ObjectFormat;
 
 use crate::remote::transport::{CapabilitySet, HttpResponse, Service};
 use crate::remote::url::RemoteUrl;
-use crate::remote::{AdvertisedRef, PushStatus, RefAdvertisement, RefUpdate, Transport};
+use crate::remote::{
+    AdvertisedRef, DELIM_PACKET, FLUSH_PACKET, PktLine, ProtocolVersion, PushStatus,
+    RefAdvertisement, RefUpdate, Transport, haves_request, wants_request,
+};
 use crate::remote::url::RemoteScheme;
 use crate::error::Error;
 
@@ -120,6 +123,14 @@ pub struct HttpTransport {
     /// The credentials to send, resolved lazily by the credential chain (plan §4 Phase 11). `None`
     /// until a `401` says they are needed, so that a public clone never touches a helper.
     credentials: Option<(BString, BString)>,
+    /// The capabilities of the last advertisement. Owned, because the response buffer they came
+    /// from is reused per request; `raw` is empty because [`Capability::raw`] is already owned.
+    capabilities: CapabilitySet<'static>,
+    /// Which generation the last [`Transport::connect`] answered in. Decides how `fetch` and
+    /// `ls_refs` frame their requests.
+    version: ProtocolVersion,
+    /// The peer's object format, established at `connect` and used to parse ids afterwards.
+    format: ObjectFormat,
 }
 
 impl HttpTransport {
@@ -143,7 +154,7 @@ impl HttpTransport {
     /// build-time condition rather than a network one, and worth reporting at construction instead
     /// of at the first request.
     pub fn new(url: RemoteUrl) -> Result<Self> {
-        todo!()
+        Self::with_timeout(url, DEFAULT_TIMEOUT)
     }
 
     /// Phase 11 — build a transport with an explicit request timeout.
@@ -160,8 +171,38 @@ impl HttpTransport {
     ///
     /// As [`HttpTransport::new`].
     pub fn with_timeout(url: RemoteUrl, timeout: std::time::Duration) -> Result<Self> {
-        let agent = ureq::agent();
-        Ok(Self { url, agent, credentials: None })
+        if !matches!(url.scheme, RemoteScheme::Http | RemoteScheme::Https) {
+            return Err(Error::InvalidRemoteUrl {
+                url: display_url(&url),
+                reason: "not an HTTP URL",
+            });
+        }
+        if url.host.is_none() {
+            return Err(Error::InvalidRemoteUrl { url: display_url(&url), reason: "no host" });
+        }
+        // `http_status_as_error(false)` keeps a 401's headers and body reachable: ureq's default
+        // turns every 4xx into `Error::StatusCode`, which loses both and would make the
+        // authentication mapping below impossible.
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .user_agent(USER_AGENT)
+            .http_status_as_error(false)
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+        let credentials = match (&url.user, &url.password) {
+            (Some(user), password) => {
+                Some((user.clone(), password.clone().unwrap_or_else(|| BString::from(""))))
+            }
+            _ => None,
+        };
+        Ok(Self {
+            url,
+            agent,
+            credentials,
+            capabilities: CapabilitySet::default(),
+            version: ProtocolVersion::V0,
+            format: ObjectFormat::Sha1,
+        })
     }
 
     /// Phase 11 — supply credentials to send, bypassing the credential chain.
@@ -180,6 +221,7 @@ impl HttpTransport {
     pub fn set_credentials(&mut self, user: &bstr::BStr, password: &bstr::BStr) {
         self.url.user = Some(user.to_owned());
         self.url.password = Some(password.to_owned());
+        self.credentials = Some((user.to_owned(), password.to_owned()));
     }
 
     /// Phase 11 — whether the URL is plain `http`.
@@ -208,7 +250,7 @@ impl HttpTransport {
     pub fn refs_url(&self, service: Service) -> BString {
         let path = &self.url.path;
         let service_str = service.as_str();
-        BString::from(format!("{}info/refs?service={}", path, service_str).as_bytes())
+        BString::from(format!("{}/info/refs?service={}", path, service_str).as_bytes())
     }
 
     /// Phase 11 — the absolute service URL for a POST.
@@ -221,8 +263,161 @@ impl HttpTransport {
     pub fn service_url(&self, service: Service) -> BString {
         let path = &self.url.path;
         let service_str = service.as_str();
-        BString::from(format!("{}info/refs?service={}", path, service_str).as_bytes())
+        BString::from(format!("{}/{}", path, service_str).as_bytes())
     }
+
+    /// The absolute URL a request is sent to, optionally carrying the credentials in the userinfo.
+    ///
+    /// ureq turns `user:password@host` into a `Basic` header itself and drops the userinfo from the
+    /// request line, which is the only way credentials reach the wire without being written into
+    /// [`HttpRequest::headers`] — a value a caller may log or a test may snapshot.
+    fn base_url(&self, url: &RemoteUrl, credentials: bool) -> BString {
+        let mut out = BString::from(url.scheme.as_str());
+        out.extend_from_slice(b"://");
+        if credentials {
+            if let Some((user, password)) = &self.credentials {
+                out.extend_from_slice(&user[..]);
+                out.push(b':');
+                out.extend_from_slice(&password[..]);
+                out.push(b'@');
+            }
+        }
+        if let Some(host) = url.host_port() {
+            out.extend_from_slice(&host[..]);
+        }
+        out.extend_from_slice(&url.path[..]);
+        out
+    }
+}
+
+/// Render a URL for an error message without its password.
+///
+/// Built from the parsed fields rather than from [`RemoteUrl::redacted`], whose userinfo handling
+/// still appends the password; this is the string that ends up in a message a user may paste into a
+/// bug report.
+fn display_url(url: &RemoteUrl) -> BString {
+    let mut out = BString::from(url.scheme.as_str());
+    out.extend_from_slice(b"://");
+    if let Some(user) = &url.user {
+        out.extend_from_slice(&user[..]);
+        out.push(b'@');
+    }
+    if let Some(host) = url.host_port() {
+        out.extend_from_slice(&host[..]);
+    }
+    out.extend_from_slice(&url.path[..]);
+    out
+}
+
+/// Join a base URL and a relative target with exactly one slash between them.
+fn join_url(base: &[u8], target: &[u8]) -> BString {
+    let mut out = BString::from(base);
+    if !out.ends_with(b"/") {
+        out.push(b'/');
+    }
+    out.extend_from_slice(target);
+    out
+}
+
+/// Map a `ureq` failure onto the crate's error, with the URL already redacted.
+fn map_ureq(error: ureq::Error, url: &BStr) -> Error {
+    match error {
+        ureq::Error::StatusCode(status) => Error::HttpStatus { url: url.to_owned(), status },
+        other => Error::Transport(format!("{}: {}", url, other)),
+    }
+}
+
+/// Read one pkt-line frame from a stream, keeping the four header bytes when they are not hex.
+///
+/// The raw variant is what makes a v0 fetch without `side-band-64k` readable: the pack begins
+/// immediately after the `NAK` pkt-line, so the next four bytes are `PACK` and not a length. A
+/// reader that only knew pkt-lines would consume them and leave the pack unparseable.
+enum Frame {
+    Flush,
+    Data(Vec<u8>),
+    Raw([u8; 4]),
+}
+
+fn read_frame<R: std::io::Read>(reader: &mut R) -> Result<Option<Frame>> {
+    let mut head = [0u8; 4];
+    match reader.read_exact(&mut head) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(err) => return Err(Error::Io(err)),
+    }
+    if head == *FLUSH_PACKET {
+        return Ok(Some(Frame::Flush));
+    }
+    if head == *DELIM_PACKET {
+        return Ok(Some(Frame::Data(Vec::new())));
+    }
+    let parsed = std::str::from_utf8(&head).ok().and_then(|text| usize::from_str_radix(text, 16).ok());
+    let Some(len) = parsed.filter(|len| *len >= 4) else {
+        return Ok(Some(Frame::Raw(head)));
+    };
+    let mut payload = vec![0u8; len - 4];
+    reader.read_exact(&mut payload)?;
+    Ok(Some(Frame::Data(payload)))
+}
+
+/// Copy the rest of a stream into a writer without needing a sized writer type.
+fn copy_stream<R: std::io::Read, W: std::io::Write + ?Sized>(reader: &mut R, out: &mut W) -> Result<()> {
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(());
+        }
+        out.write_all(&buffer[..read])?;
+    }
+}
+
+/// Split a pkt-line section into its payloads concatenated, ignoring framing and stopping at the
+/// first flush. Used for a push's `report-status`, which is itself pkt-framed inside channel 1.
+fn pkt_payloads(input: &[u8]) -> Result<Vec<u8>> {
+    let mut cursor = input;
+    let mut out = Vec::new();
+    loop {
+        if cursor.is_empty() {
+            break;
+        }
+        let pkt = PktLine::read_from(&mut cursor)?;
+        if pkt.is_flush() {
+            break;
+        }
+        out.extend_from_slice(pkt.data());
+    }
+    Ok(out)
+}
+
+/// Split a v0 ref advertisement line into `(hex id, name, capabilities)`.
+///
+/// The id stays hex because the peer's object format is only known from the first line's own
+/// capability section — parsing it at the local width first would reject a SHA-256 peer before the
+/// mismatch could be reported as such.
+fn split_ref_line(line: &[u8]) -> Result<(BString, BString, Option<Vec<u8>>)> {
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    if line.is_empty() {
+        return Err(Error::Protocol("empty ref line".to_string()));
+    }
+    if let Some(message) = line.strip_prefix(b"ERR ") {
+        return Err(Error::Protocol(String::from_utf8_lossy(message).into_owned()));
+    }
+    let space = line
+        .iter()
+        .position(|&b| b == b' ')
+        .ok_or_else(|| Error::Protocol("ref line without a space".to_string()))?;
+    let hex = &line[..space];
+    let mut rest = &line[space + 1..];
+    let caps = match rest.iter().position(|&b| b == 0) {
+        Some(nul) => {
+            let caps = rest[nul + 1..].to_vec();
+            rest = &rest[..nul];
+            Some(caps)
+        }
+        None => None,
+    };
+    Ok((BString::from(hex), BString::from(rest), caps))
 }
 
 /// Phase 11 — build the `GET` request for a service's ref advertisement.
@@ -248,7 +443,22 @@ pub fn advertise_request(
     service: Service,
     version: crate::remote::ProtocolVersion,
 ) -> Result<crate::remote::HttpRequest> {
-    todo!()
+    if url.host.is_none() {
+        return Err(Error::InvalidRemoteUrl { url: display_url(url), reason: "no host" });
+    }
+    let mut headers = Vec::new();
+    headers.push(("Accept-Encoding", BString::from("gzip")));
+    // `receive-pack` has no v2, so asking for it there would be a request the server cannot honour.
+    if version == ProtocolVersion::V2 && service.supports_v2() {
+        headers.push(("Git-Protocol", BString::from("version=2")));
+    }
+    Ok(crate::remote::HttpRequest {
+        is_get: true,
+        target: BString::from(format!("info/refs?service={}", service.as_str())),
+        content_type: None,
+        body: Vec::new(),
+        headers,
+    })
 }
 
 /// Phase 11 — build the `POST` request for a service exchange.
@@ -275,7 +485,28 @@ pub fn service_request(
     service: Service,
     body: Vec<u8>,
 ) -> Result<crate::remote::HttpRequest> {
-    todo!()
+    if url.host.is_none() {
+        return Err(Error::InvalidRemoteUrl { url: display_url(url), reason: "no host" });
+    }
+    // Validate the pkt-line section only: a push appends the raw pack after the flush, and the pack
+    // is deliberately not pkt-line framed.
+    let mut cursor = &body[..];
+    loop {
+        if cursor.is_empty() {
+            return Err(Error::Protocol("request body without a flush".to_string()));
+        }
+        let pkt = PktLine::read_from(&mut cursor)?;
+        if pkt.is_flush() {
+            break;
+        }
+    }
+    Ok(crate::remote::HttpRequest {
+        is_get: false,
+        target: BString::from(service.as_str()),
+        content_type: Some(service.request_content_type()),
+        body,
+        headers: vec![("Accept-Encoding", BString::from("gzip"))],
+    })
 }
 
 /// Phase 11 — send one request and read its response.
@@ -310,7 +541,79 @@ pub fn send(
     request: &crate::remote::HttpRequest,
     redacted_url: &bstr::BStr,
 ) -> Result<HttpResponse> {
-    todo!()
+    let full = join_url(redacted_url, &request.target);
+    let safe = crate::remote::redact_url(BStr::new(&full));
+    let response = if request.is_get {
+        let mut builder = agent.get(&full[..]);
+        for (name, value) in &request.headers {
+            builder = builder.header(*name, &value[..]);
+        }
+        builder.call()
+    } else {
+        let mut builder = agent.post(&full[..]);
+        for (name, value) in &request.headers {
+            builder = builder.header(*name, &value[..]);
+        }
+        if let Some(content_type) = request.content_type {
+            builder = builder.header("Content-Type", content_type);
+        }
+        builder.send(request.body.clone())
+    };
+    let mut response = response.map_err(|err| map_ureq(err, BStr::new(&safe)))?;
+
+    let status = response.status().as_u16();
+    if is_auth_challenge(status) {
+        return Err(Error::Authentication {
+            url: safe,
+            reason: format!("HTTP {} from the remote", status),
+        });
+    }
+    if !is_success(status) {
+        return Err(Error::HttpStatus { url: safe, status });
+    }
+
+    let content_type = header_string(&response, "content-type").map(|text| media_type(BStr::new(&text)));
+    let encoding = header_string(&response, "content-encoding");
+    let body = response.body_mut().read_to_vec().map_err(|err| {
+        Error::Transport(format!("{}: {}", safe, err))
+    })?;
+    let body = decode_body(encoding.as_ref().map(|enc| BStr::new(&enc[..])), body)?;
+
+    if let Some(content_type) = &content_type {
+        if !is_git_content_type(BStr::new(content_type)) {
+            return Err(Error::Protocol(format!(
+                "unexpected content type {}: {}",
+                content_type,
+                body_preview(&body)
+            )));
+        }
+    }
+    Ok(HttpResponse { status, content_type, body })
+}
+
+/// The header as text, or `None` when it is absent or not printable ASCII.
+fn header_string(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<BString> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(|text| BString::from(text))
+}
+
+/// Whether a media type is one of the smart-HTTP ones.
+///
+/// The advertisement is `…-advertisement` and a service response is `…-result`; both start with the
+/// same prefix, and anything else is a server's human-readable complaint rather than a protocol
+/// body.
+fn is_git_content_type(content_type: &BStr) -> bool {
+    content_type.starts_with(b"application/x-git-") || content_type.starts_with(b"application/x-git")
+}
+
+/// The first few bytes of a body, for an error message.
+fn body_preview(body: &[u8]) -> String {
+    const LIMIT: usize = 200;
+    let slice = &body[..body.len().min(LIMIT)];
+    String::from_utf8_lossy(slice).into_owned()
 }
 
 /// Phase 11 — send a request and hand the response body to a callback as a stream.
@@ -341,7 +644,53 @@ pub fn send_streaming<T>(
     redacted_url: &bstr::BStr,
     consume: &mut dyn FnMut(&mut dyn std::io::Read) -> Result<T>,
 ) -> Result<T> {
-    todo!()
+    let full = join_url(redacted_url, &request.target);
+    let safe = crate::remote::redact_url(BStr::new(&full));
+    let response = if request.is_get {
+        let mut builder = agent.get(&full[..]);
+        for (name, value) in &request.headers {
+            builder = builder.header(*name, &value[..]);
+        }
+        builder.call()
+    } else {
+        let mut builder = agent.post(&full[..]);
+        for (name, value) in &request.headers {
+            builder = builder.header(*name, &value[..]);
+        }
+        if let Some(content_type) = request.content_type {
+            builder = builder.header("Content-Type", content_type);
+        }
+        builder.send(request.body.clone())
+    };
+    let mut response = response.map_err(|err| map_ureq(err, BStr::new(&safe)))?;
+
+    let status = response.status().as_u16();
+    if is_auth_challenge(status) {
+        return Err(Error::Authentication {
+            url: safe,
+            reason: format!("HTTP {} from the remote", status),
+        });
+    }
+    if !is_success(status) {
+        return Err(Error::HttpStatus { url: safe, status });
+    }
+
+    if let Some(content_type) = header_string(&response, "content-type") {
+        if !is_git_content_type(BStr::new(&content_type)) {
+            // The body is the server's explanation, and this is the only chance to read it: the
+            // caller's callback expects protocol bytes and would report a framing error instead.
+            let body = response.body_mut().read_to_vec().unwrap_or_default();
+            return Err(Error::Protocol(format!(
+                "unexpected content type {}: {}",
+                content_type,
+                body_preview(&body)
+            )));
+        }
+    }
+
+    let mut body = response.body_mut();
+    let mut reader = body.as_reader();
+    consume(&mut reader)
 }
 
 /// Phase 11 — undo a response's `Content-Encoding`.
@@ -456,12 +805,136 @@ impl Transport for HttpTransport {
     /// [`crate::error::Error::ObjectFormatMismatch`], [`crate::error::Error::Transport`], and
     /// [`crate::error::Error::Protocol`] for an advertisement that does not parse.
     fn connect(&mut self, url: &RemoteUrl, format: ObjectFormat) -> Result<RefAdvertisement> {
-        todo!()
+        let request = advertise_request(url, Service::UploadPack, ProtocolVersion::V2)?;
+        let base = self.base_url(url, true);
+        let response = send(&self.agent, &request, BStr::new(&base))?;
+
+        let mut cursor = &response.body[..];
+        let first = PktLine::read_from(&mut cursor)?;
+
+        // An empty repository can answer with nothing but a flush; that is legal and means no refs.
+        if first.is_flush() {
+            let advertisement = RefAdvertisement {
+                capabilities: CapabilitySet::default(),
+                refs: Vec::new(),
+                format,
+                agent: None,
+                version: ProtocolVersion::V0,
+            };
+            self.capabilities = CapabilitySet::default();
+            self.version = ProtocolVersion::V0;
+            self.format = format;
+            return Ok(advertisement);
+        }
+
+        if first.data() == b"version 2" || first.data() == b"version 2\n" {
+            let mut capabilities = CapabilitySet { entries: Vec::new(), raw: &[] };
+            loop {
+                let pkt = PktLine::read_from(&mut cursor)?;
+                if pkt.is_flush() {
+                    break;
+                }
+                if pkt.is_control() {
+                    continue;
+                }
+                let text = pkt.data();
+                let text = text.strip_suffix(b"\n").unwrap_or(text);
+                if text.is_empty() {
+                    continue;
+                }
+                capabilities.insert(text)?;
+            }
+            let peer = capabilities.object_format()?;
+            if peer != format {
+                return Err(Error::ObjectFormatMismatch { expected: format, found: peer });
+            }
+            let agent = capabilities.value(b"agent").map(|value| BString::from(&value[..]));
+            self.capabilities = capabilities.clone();
+            self.version = ProtocolVersion::V2;
+            self.format = peer;
+            return Ok(RefAdvertisement {
+                capabilities,
+                refs: Vec::new(),
+                format: peer,
+                agent,
+                version: ProtocolVersion::V2,
+            });
+        }
+
+        // v0: an optional `# service=…` prelude, then one ref per line with the capabilities after
+        // the NUL on the first line.
+        let mut lines: Vec<Vec<u8>> = Vec::new();
+        if first.data().starts_with(b"# service=") {
+            let flush = PktLine::read_from(&mut cursor)?;
+            if !flush.is_flush() {
+                return Err(Error::Protocol(
+                    "advertisement prelude was not followed by a flush".to_string(),
+                ));
+            }
+        } else {
+            lines.push(first.data().to_vec());
+        }
+        loop {
+            if cursor.is_empty() {
+                break;
+            }
+            let pkt = PktLine::read_from(&mut cursor)?;
+            if pkt.is_flush() {
+                break;
+            }
+            if pkt.is_control() {
+                continue;
+            }
+            lines.push(pkt.data().to_vec());
+        }
+
+        let capabilities = match lines.first() {
+            Some(line) => match split_ref_line(line)?.2 {
+                Some(bytes) => {
+                    let parsed = CapabilitySet::parse(&bytes)?;
+                    CapabilitySet { entries: parsed.entries.clone(), raw: &[] }
+                }
+                None => CapabilitySet::default(),
+            },
+            None => CapabilitySet::default(),
+        };
+        let peer = capabilities.object_format()?;
+        if peer != format {
+            return Err(Error::ObjectFormatMismatch { expected: format, found: peer });
+        }
+        let mut refs: Vec<AdvertisedRef> = Vec::new();
+        for line in &lines {
+            let (hex, name, _) = split_ref_line(line)?;
+            if let Some(base) = name.strip_suffix(b"^{}") {
+                if let Some(entry) = refs.iter_mut().find(|entry| entry.name == BStr::new(base)) {
+                    entry.peeled = Some(crate::hash::ObjectId::from_hex(peer, BStr::new(&hex))?);
+                }
+                continue;
+            }
+            refs.push(AdvertisedRef {
+                name,
+                oid: crate::hash::ObjectId::from_hex(peer, BStr::new(&hex))?,
+                peeled: None,
+            });
+        }
+        refs.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let agent = capabilities.value(b"agent").map(|value| BString::from(&value[..]));
+        self.capabilities = capabilities.clone();
+        self.version = ProtocolVersion::V0;
+        self.format = peer;
+        Ok(RefAdvertisement {
+            capabilities,
+            refs,
+            format: peer,
+            agent,
+            version: ProtocolVersion::V0,
+        })
     }
 
     /// Phase 11 — the capabilities from the last [`Transport::connect`].
     fn capabilities(&self) -> &CapabilitySet<'_> {
-        todo!()
+        &self.capabilities
     }
 
     /// Phase 11 — negotiate a fetch and stream the pack into `into`.
@@ -494,7 +967,106 @@ impl Transport for HttpTransport {
         haves: &[crate::hash::ObjectId],
         into: &mut dyn std::io::Write,
     ) -> Result<()> {
-        todo!()
+
+        let v2 = self.version == ProtocolVersion::V2;
+        let sideband = self.capabilities.contains(b"side-band-64k")
+            || self.capabilities.contains(b"side-band");
+
+        let mut body = Vec::new();
+        if v2 {
+            PktLine::new_data(b"command=fetch").write_to(&mut body)?;
+            PktLine::new_data(format!("agent={}", USER_AGENT).as_bytes()).write_to(&mut body)?;
+            body.extend_from_slice(DELIM_PACKET);
+            PktLine::new_data(b"thin-pack").write_to(&mut body)?;
+            PktLine::new_data(b"ofs-delta").write_to(&mut body)?;
+            for want in wants {
+                PktLine::new_data(format!("want {}", want.to_hex()).as_bytes()).write_to(&mut body)?;
+            }
+            for have in haves {
+                PktLine::new_data(format!("have {}", have.to_hex()).as_bytes()).write_to(&mut body)?;
+            }
+            PktLine::new_data(b"done").write_to(&mut body)?;
+            body.extend_from_slice(FLUSH_PACKET);
+        } else {
+            body = wants_request(wants, &self.capabilities, self.format)?;
+            body.extend_from_slice(&haves_request(haves, self.format)?);
+            PktLine::new_data(b"done").write_to(&mut body)?;
+        }
+
+        let request = service_request(&self.url, Service::UploadPack, body)?;
+        let base = self.base_url(&self.url, true);
+        let mut server_error: Option<String> = None;
+
+        send_streaming(&self.agent, &request, BStr::new(&base), &mut |reader| {
+            let mut reader = std::io::BufReader::new(reader);
+            let mut packfile = v2 == false;
+
+            loop {
+                match read_frame(&mut reader)? {
+                    None | Some(Frame::Flush) => break,
+                    Some(Frame::Raw(head)) => {
+                        // No sideband: the pack starts raw, right after the NAK pkt-line.
+                        if v2 {
+                            return Err(Error::Protocol(
+                                "protocol v2 sent an unframed pack".to_string(),
+                            ));
+                        }
+                        into.write_all(&head)?;
+                        copy_stream(&mut reader, into)?;
+                        break;
+                    }
+                    Some(Frame::Data(data)) => {
+                        if data.is_empty() {
+                            continue;
+                        }
+                        if let Some(message) = data.strip_prefix(b"ERR ") {
+                            server_error = Some(String::from_utf8_lossy(message).into_owned());
+                            break;
+                        }
+                        if v2 && !packfile {
+                            let line = data.strip_suffix(b"\n").unwrap_or(&data);
+                            if line == b"packfile" {
+                                packfile = true;
+                            }
+                            continue;
+                        }
+                        if !v2
+                            && (data.starts_with(b"ack ")
+                                || data.starts_with(b"NAK")
+                                || data.starts_with(b"shallow ")
+                                || data.starts_with(b"unshallow "))
+                        {
+                            continue;
+                        }
+                        if sideband {
+                            match data[0] {
+                                1 => into.write_all(&data[1..])?,
+                                2 => {}
+                                3 => server_error = Some(
+                                    String::from_utf8_lossy(&data[1..]).into_owned(),
+                                ),
+                                other => {
+                                    return Err(Error::Protocol(format!(
+                                        "unknown sideband channel {other}"
+                                    )));
+                                }
+                            }
+                        } else if v2 {
+                            // v2 always sidebands the packfile section.
+                            into.write_all(&data[1..])?;
+                        } else {
+                            into.write_all(&data)?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })?;
+
+        match server_error {
+            Some(message) => Err(Error::Protocol(message)),
+            None => Ok(()),
+        }
     }
 
     /// Phase 11 — `POST` the updates and the pack, and read `report-status`.
@@ -517,7 +1089,84 @@ impl Transport for HttpTransport {
     ///
     /// As [`Transport::push`]: protocol and transport failures only, never a rejected ref.
     fn push(&mut self, updates: &[RefUpdate], pack: &[u8]) -> Result<Vec<PushStatus>> {
-        todo!()
+        if updates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sideband = self.capabilities.contains(b"side-band-64k")
+            || self.capabilities.contains(b"side-band");
+        let report = self.capabilities.contains(b"report-status")
+            || self.capabilities.contains(b"report-status-v2");
+
+        let mut requested: Vec<&str> = Vec::new();
+        if self.capabilities.contains(b"side-band-64k") {
+            requested.push("side-band-64k");
+        } else if self.capabilities.contains(b"side-band") {
+            requested.push("side-band");
+        }
+        if report {
+            requested.push("report-status");
+        }
+        requested.push("agent=Rivet");
+
+        let mut body = Vec::new();
+        for (index, update) in updates.iter().enumerate() {
+            let mut line = update.command_line(self.format).to_vec();
+            if index == 0 {
+                line.push(0);
+                line.extend_from_slice(requested.join(" ").as_bytes());
+            }
+            line.push(b'\n');
+            PktLine::new_data(&line).write_to(&mut body)?;
+        }
+        body.extend_from_slice(FLUSH_PACKET);
+        body.extend_from_slice(pack);
+
+        let request = service_request(&self.url, Service::ReceivePack, body)?;
+        let base = self.base_url(&self.url, true);
+        let response = send(&self.agent, &request, BStr::new(&base))?;
+
+        if !report {
+            return Ok(Vec::new());
+        }
+
+        // A sideband push wraps the status pkt-lines in channel-1 packets; a plain one sends them
+        // directly. Either way the payload is a pkt-line section of its own.
+        let status_bytes = if sideband {
+            let mut cursor = &response.body[..];
+            let mut channel_one = Vec::new();
+            loop {
+                if cursor.is_empty() {
+                    break;
+                }
+                let pkt = PktLine::read_from(&mut cursor)?;
+                if pkt.is_flush() {
+                    break;
+                }
+                let data = pkt.data();
+                if data.is_empty() {
+                    continue;
+                }
+                match data[0] {
+                    1 => channel_one.extend_from_slice(&data[1..]),
+                    2 => {}
+                    3 => {
+                        return Err(Error::Protocol(
+                            String::from_utf8_lossy(&data[1..]).into_owned(),
+                        ));
+                    }
+                    other => {
+                        return Err(Error::Protocol(format!("unknown sideband channel {other}")));
+                    }
+                }
+            }
+            channel_one
+        } else {
+            response.body.clone()
+        };
+
+        let status = pkt_payloads(&status_bytes)?;
+        let outcome = crate::remote::push::parse_report_status(&status, false)?;
+        Ok(outcome.statuses)
     }
 
     /// Phase 11 — send a v2 `ls-refs` request.
@@ -538,7 +1187,78 @@ impl Transport for HttpTransport {
     /// [`crate::error::Error::Protocol`] against a v0 peer or for a malformed response, and the
     /// transport errors of [`Transport::connect`].
     fn ls_refs(&mut self, prefixes: &[BString], peel: bool) -> Result<Vec<AdvertisedRef>> {
-        todo!()
+        if self.version != ProtocolVersion::V2 {
+            return Err(Error::Protocol(
+                "ls-refs requires protocol v2; the peer answered in v0".to_string(),
+            ));
+        }
+
+        let mut body = Vec::new();
+        PktLine::new_data(b"command=ls-refs").write_to(&mut body)?;
+        PktLine::new_data(format!("agent={}", USER_AGENT).as_bytes()).write_to(&mut body)?;
+        body.extend_from_slice(DELIM_PACKET);
+        if peel {
+            PktLine::new_data(b"peel").write_to(&mut body)?;
+        }
+        PktLine::new_data(b"symrefs").write_to(&mut body)?;
+        for prefix in prefixes {
+            PktLine::new_data(format!("ref-prefix {}", prefix).as_bytes()).write_to(&mut body)?;
+        }
+        body.extend_from_slice(FLUSH_PACKET);
+
+        let request = service_request(&self.url, Service::UploadPack, body)?;
+        let base = self.base_url(&self.url, true);
+        let response = send(&self.agent, &request, BStr::new(&base))?;
+
+        let mut cursor = &response.body[..];
+        let mut refs = Vec::new();
+        loop {
+            if cursor.is_empty() {
+                break;
+            }
+            let pkt = PktLine::read_from(&mut cursor)?;
+            if pkt.is_flush() {
+                break;
+            }
+            if pkt.is_control() {
+                continue;
+            }
+            let line = pkt.data();
+            let line = line.strip_suffix(b"\n").unwrap_or(line);
+            if let Some(message) = line.strip_prefix(b"ERR ") {
+                return Err(Error::Protocol(String::from_utf8_lossy(message).into_owned()));
+            }
+            if line.is_empty() {
+                continue;
+            }
+            let space = line
+                .iter()
+                .position(|&b| b == b' ')
+                .ok_or_else(|| Error::Protocol("ls-refs line without a space".to_string()))?;
+            let hex = &line[..space];
+            let mut rest = &line[space + 1..];
+            let mut name = rest;
+            let mut peeled = None;
+            let mut symref_target: Option<BString> = None;
+            if let Some(tab) = rest.iter().position(|&b| b == b' ') {
+                name = &rest[..tab];
+                for attribute in rest[tab + 1..].split(|&b| b == b' ') {
+                    if let Some(value) = attribute.strip_prefix(b"peeled:") {
+                        peeled = Some(crate::hash::ObjectId::from_hex(self.format, BStr::new(value))?);
+                    } else if let Some(value) = attribute.strip_prefix(b"symref-target:") {
+                        symref_target = Some(BString::from(value));
+                    }
+                }
+            }
+            rest = name;
+            let _ = symref_target;
+            refs.push(AdvertisedRef {
+                name: BString::from(rest),
+                oid: crate::hash::ObjectId::from_hex(self.format, BStr::new(hex))?,
+                peeled,
+            });
+        }
+        Ok(refs)
     }
 
     /// Phase 11 — drop the advertisement and let the agent's idle connections go.

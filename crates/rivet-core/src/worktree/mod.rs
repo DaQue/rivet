@@ -66,16 +66,18 @@
 //!   checking out different commits into one work tree will interleave, and the index's own
 //!   lock is the only thing that keeps the *index* consistent.
 
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString};
 
 use crate::config::Config;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::hash::ObjectFormat;
 use crate::ignore::{IgnoreStack, PathKind};
 use crate::index::Index;
-use crate::object::EntryMode;
+use crate::object::{EntryMode, ObjectKind, hash_object};
 use crate::odb::Odb;
 
 pub mod add;
@@ -187,7 +189,13 @@ impl Worktree {
     /// [`crate::error::Error::BareRepository`] with `op` naming the operation that needed a work
     /// tree, because the user's next question is always "which command was that".
     pub fn require_root(&self, op: &'static str) -> Result<&Path> {
-        todo!()
+        match self.root.as_deref() {
+            Some(root) => Ok(root),
+            None => Err(Error::BareRepository {
+                path: BString::default(),
+                op,
+            }),
+        }
     }
 
     /// Phase 4 — whether the repository has no work tree.
@@ -202,17 +210,17 @@ impl Worktree {
 
     /// Phase 4 — whether the executable bit is meaningful on this filesystem.
     pub fn filemode(&self) -> bool {
-        self.is_bare()
+        self.filemode
     }
 
     /// Phase 4 — whether symlinks can be stored as symlinks here.
     pub fn symlinks(&self) -> bool {
-        self.filemode()
+        self.symlinks
     }
 
     /// Phase 4 — whether the filesystem folds case.
     pub fn ignore_case(&self) -> bool {
-        self.root.as_ref().map(|p| p.join("case_test").exists()).unwrap_or(false)
+        self.ignore_case
     }
 
     /// Phase 4 — turn a work-tree-relative path into a filesystem path.
@@ -233,7 +241,16 @@ impl Worktree {
     /// [`crate::error::Error::InvalidPath`] for a path that violates the rules above, and
     /// [`crate::error::Error::BareRepository`] when there is no root to join to.
     pub fn join(&self, path: &BStr) -> Result<PathBuf> {
-        todo!()
+        let root = self.require_root("path lookup")?;
+        check_relative_path(path, self.protect_ntfs)?;
+        let mut out = root.to_path_buf();
+        for comp in path.split(|b| *b == b'/') {
+            if comp.is_empty() {
+                continue;
+            }
+            out.push(OsStr::from_bytes(comp));
+        }
+        Ok(out)
     }
 
     /// Phase 4 — the work-tree-relative path for a filesystem path under the root.
@@ -253,7 +270,18 @@ impl Worktree {
     /// the work tree has no index-relative spelling and must not be guessed at by stripping
     /// components until something fits.
     pub fn relative_path(&self, path: &Path) -> Result<BString> {
-        todo!()
+        let root = self.require_root("relative path")?;
+        let rel = path.strip_prefix(root).map_err(|_| {
+            Error::OutsideWorktree(BString::from(path.as_os_str().as_bytes()))
+        })?;
+        let mut out: Vec<u8> = Vec::new();
+        for comp in rel.components() {
+            if !out.is_empty() {
+                out.push(b'/');
+            }
+            out.extend_from_slice(comp.as_os_str().as_bytes());
+        }
+        Ok(BString::from(out))
     }
 
     /// Phase 4 — walk the work tree, applying ignore rules.
@@ -286,7 +314,50 @@ impl Worktree {
         ignore: &IgnoreStack,
         options: &WorktreeWalkOptions,
     ) -> Result<Vec<WorktreeEntry>> {
-        todo!()
+        let mut out = Vec::new();
+        // The stack is cloned so the walk can push each directory's `.gitignore` as it descends
+        // and truncate as it leaves; a caller's stack is left exactly as it was found.
+        let mut stack = ignore.clone();
+        self.walk_into(options.prefix.as_ref(), &mut stack, options, &mut out)?;
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(out)
+    }
+
+    /// One directory of [`Worktree::walk`], with the ignore stack pushed and truncated around it.
+    fn walk_into(
+        &self,
+        dir: &BStr,
+        ignore: &mut IgnoreStack,
+        options: &WorktreeWalkOptions,
+        out: &mut Vec<WorktreeEntry>,
+    ) -> Result<()> {
+        let depth = dir
+            .split(|b| *b == b'/')
+            .filter(|c| !c.is_empty())
+            .count();
+        ignore.push_dir(dir)?;
+        let entries = self.walk_dir(dir, ignore)?;
+        for entry in entries {
+            let ignored = entry.ignored;
+            let is_dir = entry.kind == PathKind::Directory;
+            if ignored && !options.include_ignored {
+                continue;
+            }
+            if is_dir {
+                let descend = !ignored
+                    && options.recursive
+                    && ignore.should_descend(entry.path.as_ref())?;
+                let path = entry.path.clone();
+                out.push(entry);
+                if descend {
+                    self.walk_into(BStr::new(&path), ignore, options, out)?;
+                }
+            } else {
+                out.push(entry);
+            }
+        }
+        ignore.truncate(depth);
+        Ok(())
     }
 
     /// Phase 4 — walk one directory, without recursing.
@@ -299,7 +370,63 @@ impl Worktree {
     /// [`crate::error::Error::IoAtPath`] if the directory cannot be read, and
     /// [`crate::error::Error::InvalidPath`] for `dir` itself.
     pub fn walk_dir(&self, dir: &BStr, ignore: &IgnoreStack) -> Result<Vec<WorktreeEntry>> {
-        todo!()
+        let fs_dir = self.join(dir)?;
+        let rd = std::fs::read_dir(&fs_dir).map_err(|e| Error::IoAtPath {
+            path: dir.to_owned(),
+            source: e,
+        })?;
+        let mut out = Vec::new();
+        for item in rd {
+            let item = match item {
+                Ok(i) => i,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    return Err(Error::IoAtPath {
+                        path: dir.to_owned(),
+                        source: e,
+                    });
+                }
+            };
+            let name = item.file_name();
+            let name = BString::from(name.as_os_str().as_bytes());
+            if name == b".git" {
+                continue;
+            }
+            let mut path_bytes = dir.to_vec();
+            if !path_bytes.is_empty() {
+                path_bytes.push(b'/');
+            }
+            path_bytes.extend_from_slice(&name[..]);
+            let path = BString::from(path_bytes);
+            let meta = match std::fs::symlink_metadata(item.path()) {
+                Ok(m) => m,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    return Err(Error::IoAtPath {
+                        path: path.clone(),
+                        source: e,
+                    });
+                }
+            };
+            let ft = meta.file_type();
+            let kind = if ft.is_dir() {
+                PathKind::Directory
+            } else if ft.is_file() || ft.is_symlink() {
+                PathKind::File
+            } else {
+                PathKind::Other
+            };
+            let stat = StatData::from_metadata(&meta, self.filemode, self.symlinks)?;
+            let ignored = ignore.is_ignored(path.as_ref(), kind)?;
+            out.push(WorktreeEntry {
+                path,
+                kind,
+                mode: stat.mode,
+                size: meta.len(),
+                ignored,
+            });
+        }
+        Ok(out)
     }
 
     /// Phase 4 — `lstat` one path, as the index's stat cache would record it.
@@ -317,7 +444,19 @@ impl Worktree {
     /// [`crate::error::Error::IoAtPath`] for a path that exists and cannot be stat'd, and
     /// [`crate::error::Error::InvalidPath`] for one that escapes the root.
     pub fn stat(&self, path: &BStr) -> Result<Option<StatData>> {
-        todo!()
+        let fs_path = self.join(path)?;
+        match std::fs::symlink_metadata(&fs_path) {
+            Ok(meta) => Ok(Some(StatData::from_metadata(
+                &meta,
+                self.filemode,
+                self.symlinks,
+            )?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(Error::IoAtPath {
+                path: path.to_owned(),
+                source: e,
+            }),
+        }
     }
 
     /// Phase 4 — read a file's content as Git would store it.
@@ -339,7 +478,22 @@ impl Worktree {
     /// [`crate::error::Error::IoAtPath`] if the file cannot be read or the link target cannot be
     /// resolved, and [`crate::error::Error::InvalidPath`] for a path that escapes the root.
     pub fn read_file(&self, path: &BStr) -> Result<Vec<u8>> {
-        todo!()
+        let fs_path = self.join(path)?;
+        let meta = std::fs::symlink_metadata(&fs_path).map_err(|e| Error::IoAtPath {
+            path: path.to_owned(),
+            source: e,
+        })?;
+        if meta.file_type().is_symlink() && self.symlinks {
+            let target = std::fs::read_link(&fs_path).map_err(|e| Error::IoAtPath {
+                path: path.to_owned(),
+                source: e,
+            })?;
+            return Ok(target.as_os_str().as_bytes().to_vec());
+        }
+        std::fs::read(&fs_path).map_err(|e| Error::IoAtPath {
+            path: path.to_owned(),
+            source: e,
+        })
     }
 
     /// Phase 4 — hash a file's content into an object id, without storing it.
@@ -359,10 +513,47 @@ impl Worktree {
     /// As [`Worktree::read_file`], plus the hasher's collision-detection path.
     pub fn hash_file(&self, path: &BStr) -> Result<crate::hash::ObjectId> {
         let buf = self.read_file(path)?;
-        let format = ObjectFormat::Sha1;
-        let mut hasher = format.hasher();
-        hasher.update(&buf);
-        hasher.finish()
+        // The header is part of the identity: Git hashes `<kind> <len>\0` followed by the body,
+        // so hashing the bytes alone yields an id no blob in the repository can match.
+        let (id, _) = hash_object(self.format, ObjectKind::Blob, &buf)?;
+        Ok(id)
+    }
+
+    /// Phase 4 — the modification time of this work tree's index file.
+    ///
+    /// Used by the racy-git check, which has to know when the index was written to decide
+    /// whether an entry whose stat data matches could have been modified in the same
+    /// timestamp tick.
+    ///
+    /// # Caveats
+    ///
+    /// * **Best effort.** A bare repository, a work tree with no index yet, or a `.git` that
+    ///   cannot be read yields `(0, 0)`. That disables the racy check instead of failing
+    ///   `status`: the fallback is to hash the file, which is slower but always correct.
+    /// * **Linked work trees are followed.** When `.git` is a file rather than a directory, its
+    ///   `gitdir:` line is read so the per-work-tree index is found and not the main one's.
+    pub fn index_mtime(&self) -> (u32, u32) {
+        let Some(root) = self.root() else {
+            return (0, 0);
+        };
+        let dot_git = root.join(".git");
+        let git_dir = if dot_git.is_file() {
+            match std::fs::read_to_string(&dot_git) {
+                Ok(text) => {
+                    let target = text.strip_prefix("gitdir:").map(str::trim).unwrap_or("");
+                    let target = std::path::Path::new(target);
+                    if target.is_absolute() {
+                        target.to_path_buf()
+                    } else {
+                        root.join(target)
+                    }
+                }
+                Err(_) => return (0, 0),
+            }
+        } else {
+            dot_git
+        };
+        stat::index_mtime(&git_dir.join("index")).unwrap_or((0, 0))
     }
 
     /// Phase 4 — compute the status of the work tree.
@@ -397,7 +588,7 @@ impl Worktree {
         ignore: &IgnoreStack,
         options: &StatusOptions,
     ) -> Result<Status> {
-        todo!()
+        crate::worktree::status::compute(self, index, head_tree, odb, ignore, options)
     }
 }
 
@@ -497,5 +688,51 @@ impl WorktreeWalkOptions {
 /// `protect_ntfs` — a component containing `\` or `:`, ending in a dot or a space, or naming a
 /// Windows device.
 pub fn check_relative_path(path: &BStr, protect_ntfs: bool) -> Result<()> {
-    todo!()
+    if path.is_empty() {
+        return Ok(());
+    }
+    let bytes: &[u8] = path.as_ref();
+    if bytes.contains(&0) {
+        return Err(Error::InvalidPath(path.to_owned()));
+    }
+    // An absolute path, POSIX or Windows-style.
+    if bytes[0] == b'/' || (bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()) {
+        return Err(Error::InvalidPath(path.to_owned()));
+    }
+    let mut components: Vec<&[u8]> = Vec::new();
+    for comp in bytes.split(|b| *b == b'/') {
+        if comp.is_empty() {
+            continue;
+        }
+        if comp == b".." {
+            return Err(Error::InvalidPath(path.to_owned()));
+        }
+        components.push(comp);
+    }
+    if protect_ntfs {
+        for comp in &components {
+            if comp.iter().any(|b| *b == b':' || *b == b'\\') {
+                return Err(Error::InvalidPath(path.to_owned()));
+            }
+            if matches!(comp.last(), Some(b'.') | Some(b' ')) {
+                return Err(Error::InvalidPath(path.to_owned()));
+            }
+            let stem = comp
+                .split(|b| *b == b'.')
+                .next()
+                .unwrap_or(&[]);
+            let upper: Vec<u8> = stem.iter().map(|b| b.to_ascii_uppercase()).collect();
+            let reserved = matches!(
+                upper.as_slice(),
+                b"CON" | b"PRN" | b"AUX" | b"NUL"
+            ) || (upper.len() == 4
+                && (upper.starts_with(b"COM") || upper.starts_with(b"LPT"))
+                && upper[3].is_ascii_digit()
+                && upper[3] != b'0');
+            if reserved {
+                return Err(Error::InvalidPath(path.to_owned()));
+            }
+        }
+    }
+    Ok(())
 }

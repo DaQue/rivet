@@ -179,7 +179,97 @@ fn odb_read_agrees_with_git_on_blob_and_tree() {
         .expect("git fsck must report no errors");
 }
 
+/// `Odb` over a repository whose objects have all moved into a pack.
+///
+/// This is the case every real clone is in and the loose tests never reach: every read goes
+/// through `PackedObjectStore`, delta chains included, and a failure here is invisible until
+/// someone opens a `git gc`'d repository.
+#[test]
+fn odb_reads_a_gc_packed_repository() {
+    let Some(git_exe) = git_path() else {
+        eprintln!("git not on PATH; skipping");
+        return;
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path();
+    let repo_str = repo.to_str().expect("repo path is valid utf-8");
+    git(&git_exe, &["init", repo_str], None).expect("git init");
+    git(&git_exe, &["-C", repo_str, "config", "user.email", "a@example.com"], None).unwrap();
+    git(&git_exe, &["-C", repo_str, "config", "user.name", "A"], None).unwrap();
+
+    let base: String = (0..300)
+        .map(|i| format!("line {i} shared by every revision\n"))
+        .collect();
+    std::fs::write(repo.join("big.txt"), &base).unwrap();
+    std::fs::write(repo.join("small.txt"), "hello\n").unwrap();
+    git(&git_exe, &["-C", repo_str, "add", "."], None).unwrap();
+    git(&git_exe, &["-C", repo_str, "commit", "--quiet", "-m", "one"], None).unwrap();
+    for revision in 0..3 {
+        std::fs::write(
+            repo.join("big.txt"),
+            format!("{base}revision {revision}\n"),
+        )
+        .unwrap();
+        git(&git_exe, &["-C", repo_str, "add", "."], None).unwrap();
+        git(
+            &git_exe,
+            &["-C", repo_str, "commit", "--quiet", "-m", &format!("r{revision}")],
+            None,
+        )
+        .unwrap();
+    }
+    git(
+        &git_exe,
+        &["-C", repo_str, "gc", "--quiet", "--aggressive", "--prune=now"],
+        None,
+    )
+    .unwrap();
+
+    // Every object must actually be packed for this test to mean anything.
+    let loose_dirs = std::fs::read_dir(repo.join(".git/objects"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.len() == 2 && e.path().is_dir()
+        });
+    assert_eq!(loose_dirs.count(), 0, "gc left loose objects behind");
+
+    let odb = Odb::open(&repo.join(".git"), ObjectFormat::Sha1).expect("open packed odb");
+    assert_eq!(odb.packs().len(), 1, "one pack after gc");
+
+    let listing = git(&git_exe, &["-C", repo_str, "cat-file", "--batch-all-objects", "--batch-check"], None)
+        .expect("git batch-check");
+    let mut checked = 0usize;
+    for line in listing.lines() {
+        let mut fields = line.split_whitespace();
+        let hex = fields.next().expect("id");
+        let kind = fields.next().expect("kind");
+        if kind == "blob" || kind == "tree" || kind == "commit" {
+            let oid = ObjectId::from_hex(ObjectFormat::Sha1, bstr::BStr::new(hex.as_bytes()))
+                .expect("parse id");
+            let object = odb.read(&oid).expect("read packed object");
+            // Binary, not text: a tree's payload contains raw 20-byte ids, which a lossy UTF-8
+            // decode would replace with U+FFFD and then "differ" from a correct read.
+            let output = Command::new(&git_exe)
+                .args(["-C", repo_str, "cat-file", kind, hex])
+                .output()
+                .expect("git cat-file");
+            assert!(output.status.success());
+            assert_eq!(object.data(), output.stdout.as_slice(), "content for {hex}");
+            let (header_kind, size) = odb.read_header(&oid).expect("packed read_header");
+            assert_eq!(header_kind, object.kind());
+            assert_eq!(size, object.data().len() as u64);
+            checked += 1;
+        }
+    }
+    assert!(checked >= 6, "expected the history's objects, saw {checked}");
+}
+
 /// rivet writes a blob; real git reads it back and recomputes the same id.
+///
 /// `git cat-file -t`/`-p` and `git hash-object -t blob --stdin` must agree with rivet's
 /// reported id, and `git fsck --strict` must not report anything but dangling/notice.
 #[test]

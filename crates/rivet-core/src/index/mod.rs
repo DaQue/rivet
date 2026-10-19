@@ -375,12 +375,23 @@ impl IndexEntryFlags {
     ///
     /// # Caveats
     ///
-    /// `path_len` includes the NUL and is clamped to [`IndexEntryFlags::NAME_LENGTH_MAX`], which is
-    /// why a writer cannot use this alone to round-trip a long path — the path itself is what the
-    /// reader uses, so the clamp is harmless on write and fatal to trust on read.
+    /// `path_len` is the path's byte length *excluding* the NUL, which is the value Git stores;
+    /// the reader compares against the same count. Values at or above the 12-bit saturation point
+    /// clamp to [`IndexEntryFlags::NAME_LENGTH_MAX`], which is why a writer must not rely on this
+    /// field alone to recover a long path — the path itself is what the reader uses.
     pub const fn with(stage: Stage, path_len: usize) -> Self {
         let len = if path_len > 0x0FFF { 0x0FFF } else { path_len } as u16;
         Self((stage.as_bits() as u16) << 12 | len)
+    }
+
+    /// Phase 3 — replace the path-length field, keeping every other bit.
+    ///
+    /// The length is derived from the path and therefore has to be recomputed when an entry is
+    /// serialised: an entry built in memory with [`IndexEntryFlags::empty`] carries a zero hint,
+    /// and a reader that trusts it rejects the entry as corrupt.
+    pub const fn with_name_length(self, path_len: usize) -> Self {
+        let len = if path_len > 0x0FFF { 0x0FFF } else { path_len } as u16;
+        Self((self.0 & !0x0FFF) | len)
     }
 
     /// Phase 3 — set the assume-valid bit.
@@ -405,7 +416,7 @@ impl IndexEntryFlags {
 ///
 /// # Caveats
 ///
-/// * **Only bit 15 has a meaning Rivet implements**: `skip-worktree`. Bits 0–12 are the *extended
+/// * **Only bit 14 has a meaning Rivet implements**: `skip-worktree`. Bits 0–12 are the *extended
 ///   mode bits*, used by a repository that stores modes beyond the five canonical ones — a
 ///   `core.filemode` experiment, or a Windows checkout that needs a mode Git does not model. Rivet
 ///   preserves the word verbatim and does not interpret those bits, which is the only safe option:
@@ -755,7 +766,11 @@ impl IndexEntry {
         out.extend_from_slice(&self.gid.to_be_bytes());
         out.extend_from_slice(&self.size.to_be_bytes());
         out.extend_from_slice(self.oid.as_bytes());
-        out.extend_from_slice(&self.flags.bits().to_be_bytes());
+        // The 12-bit path-length field is derived from the path, so recompute it here rather than
+        // trusting whatever the in-memory entry was built with: an entry created through
+        // `IndexEntryFlags::empty()` carries a zero hint, and the parser rejects a mismatch.
+        let flags = self.flags.with_name_length(self.path.len());
+        out.extend_from_slice(&flags.bits().to_be_bytes());
         if ext_word {
             out.extend_from_slice(&self.extended_flags.to_be_bytes());
         }
@@ -1030,16 +1045,27 @@ impl Index {
             });
         }
         let entry_count = u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        // The trailer checksum is not extension data: every scan for entries and extensions must
+        // stop at `body_end`, or the parser reads the checksum's first bytes as an extension header
+        // and calls a well-formed file truncated.
+        let trailer = format.len();
+        if data.len() < 12 + trailer {
+            return Err(Error::CorruptIndex {
+                offset: data.len(),
+                reason: "missing checksum",
+            });
+        }
+        let body_end = data.len() - trailer;
         let mut offset = 12usize;
         let mut entries = Vec::with_capacity(entry_count);
         for _ in 0..entry_count {
-            let (entry, consumed) = IndexEntry::parse(format, version, &data[offset..])?;
+            let (entry, consumed) = IndexEntry::parse(format, version, &data[offset..body_end])?;
             offset += consumed;
             entries.push(entry);
         }
         let mut extensions = Vec::new();
-        while offset < data.len() {
-            if data.len() - offset < 8 {
+        while offset < body_end {
+            if body_end - offset < 8 {
                 return Err(Error::CorruptIndex {
                     offset,
                     reason: "truncated extension",
@@ -1048,7 +1074,7 @@ impl Index {
             let sig = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]];
             let ext_len = u32::from_be_bytes([data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7]]) as usize;
             offset += 8;
-            if data.len() - offset < ext_len {
+            if body_end - offset < ext_len {
                 return Err(Error::CorruptIndex {
                     offset,
                     reason: "truncated extension data",
@@ -1058,8 +1084,13 @@ impl Index {
             offset += ext_len;
             extensions.push(IndexExtension::new(sig, ext_data));
         }
-        let expected_checksum = ObjectId::read(format, &data[offset..])?;
-        let actual_checksum = ObjectId::read(format, &data[offset..])?;
+        let expected_checksum = ObjectId::read(format, &data[body_end..])?;
+        let mut hasher = format.hasher();
+        hasher.update(&data[..body_end]);
+        let actual_checksum = hasher.finish().map_err(|_| Error::CorruptIndex {
+            offset: 0,
+            reason: "checksum computation failed".into(),
+        })?;
         if expected_checksum != actual_checksum {
             return Err(Error::BadIndexChecksum {
                 expected: expected_checksum,
@@ -1154,14 +1185,18 @@ impl Index {
         } else {
             IndexVersion::V2
         };
-        out.extend_from_slice(&version.as_u32().to_le_bytes());
-        out.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
+        // Git's index header is big-endian, like every other on-disk integer Git writes.
+        out.extend_from_slice(&version.as_u32().to_be_bytes());
+        out.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
         for entry in &self.entries {
             let bytes = entry.to_bytes(format, version).expect("entry serialization failed");
             out.extend_from_slice(&bytes);
         }
         for ext in &self.extensions {
             out.extend_from_slice(&ext.signature);
+            // A cached extension is a signature, a big-endian byte count, then the bytes; writing
+            // the payload without its length produces a file whose next read walks into the data.
+            out.extend_from_slice(&(ext.data.len() as u32).to_be_bytes());
             out.extend_from_slice(&ext.data);
         }
         let mut hasher = format.hasher();

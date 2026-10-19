@@ -52,7 +52,9 @@
 //!   changes the repository, and Git's own does so only under `--refresh`; the signature has no
 //!   `&mut Index` for that reason.
 
-use bstr::BString;
+use std::collections::{BTreeMap, BTreeSet};
+
+use bstr::{BStr, BString};
 
 use crate::error::Result;
 use crate::hash::ObjectId;
@@ -102,7 +104,13 @@ impl ChangeKind {
     /// only the first letter — a caller that needs Git's full unmerged code has to look at the
     /// index's stages itself.
     pub const fn code(self) -> char {
-        'A'
+        match self {
+            ChangeKind::Added => 'A',
+            ChangeKind::Modified => 'M',
+            ChangeKind::Deleted => 'D',
+            ChangeKind::TypeChanged => 'T',
+            ChangeKind::Unmerged => 'U',
+        }
     }
 }
 
@@ -332,7 +340,7 @@ pub fn compute(
 ) -> Result<Status> {
     let staged = staged_changes(index, head_tree, odb)?;
     let mut stat_cache = crate::worktree::StatCache::new();
-    let unstaged = unstaged_changes(worktree, index, odb, &mut stat_cache)?;
+    let unstaged = unstaged_changes(worktree, index, odb, options.refresh, &mut stat_cache)?;
     let (untracked, ignored) = untracked_paths(worktree, index, ignore, options)?;
     Ok(Status {
         staged,
@@ -367,7 +375,124 @@ pub fn staged_changes(
     head_tree: Option<ObjectId>,
     odb: &Odb,
 ) -> Result<Vec<StatusEntry>> {
-    todo!()
+    // The tree side is collected first, because the index can only tell us about additions:
+    // a path that HEAD has and the index no longer does is invisible from the index's list.
+    let mut tracked: BTreeMap<BString, (crate::object::EntryMode, ObjectId)> = BTreeMap::new();
+    if let Some(tree_id) = head_tree {
+        let mut prefix = Vec::new();
+        collect_tree_entries(odb, odb.format(), tree_id, &mut prefix, &mut tracked)?;
+    }
+
+    let mut out = Vec::new();
+    let mut conflicted: BTreeSet<BString> = BTreeSet::new();
+
+    for entry in index.entries() {
+        if entry.flags.stage()? != crate::index::Stage::Normal {
+            conflicted.insert(entry.path.clone());
+            continue;
+        }
+        match tracked.remove(&entry.path) {
+            None => out.push(StatusEntry {
+                path: entry.path.clone(),
+                kind: ChangeKind::Added,
+                old_oid: None,
+                new_oid: Some(entry.oid),
+                old_mode: None,
+                new_mode: Some(entry.mode),
+            }),
+            Some((mode, oid)) => {
+                if oid == entry.oid && mode == entry.mode {
+                    continue;
+                }
+                // A change of object type, or a mode-only change with the same blob id, is a
+                // type change: the content is identical and an id-only comparison would miss it.
+                let kind = if file_type(mode) != file_type(entry.mode) || oid == entry.oid {
+                    ChangeKind::TypeChanged
+                } else {
+                    ChangeKind::Modified
+                };
+                out.push(StatusEntry {
+                    path: entry.path.clone(),
+                    kind,
+                    old_oid: Some(oid),
+                    new_oid: Some(entry.oid),
+                    old_mode: Some(mode),
+                    new_mode: Some(entry.mode),
+                });
+            }
+        }
+    }
+
+    // Whatever HEAD still has was removed from the index. A path that is conflicted is not a
+    // deletion: it has no stage 0 to compare and is reported as unmerged instead.
+    for (path, (mode, oid)) in tracked {
+        if conflicted.contains(&path) {
+            continue;
+        }
+        out.push(StatusEntry {
+            path,
+            kind: ChangeKind::Deleted,
+            old_oid: Some(oid),
+            new_oid: None,
+            old_mode: Some(mode),
+            new_mode: None,
+        });
+    }
+
+    for path in conflicted {
+        out.push(StatusEntry {
+            path,
+            kind: ChangeKind::Unmerged,
+            old_oid: None,
+            new_oid: None,
+            old_mode: None,
+            new_mode: None,
+        });
+    }
+
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+/// Walk one tree recursively, recording every non-tree entry by its full path.
+///
+/// Gitlinks are recorded rather than descended into: a submodule's tree lives in another
+/// repository and reading it here would report another repository's state as this one's.
+fn collect_tree_entries(
+    odb: &Odb,
+    format: crate::hash::ObjectFormat,
+    tree_id: ObjectId,
+    prefix: &mut Vec<u8>,
+    out: &mut BTreeMap<BString, (crate::object::EntryMode, ObjectId)>,
+) -> Result<()> {
+    let object = odb.read(&tree_id)?;
+    if object.kind() != crate::object::ObjectKind::Tree {
+        return Err(crate::error::Error::WrongObjectKind {
+            oid: Some(tree_id),
+            expected: crate::object::ObjectKind::Tree,
+            found: object.kind(),
+        });
+    }
+    let tree = crate::object::Tree::parse(format, object.data())?;
+    for item in tree.iter() {
+        let len = prefix.len();
+        if len > 0 {
+            prefix.push(b'/');
+        }
+        prefix.extend_from_slice(item.name.as_ref());
+        if file_type(item.mode) == 0o040000 {
+            collect_tree_entries(odb, format, item.oid, prefix, out)?;
+        } else {
+            out.insert(BString::from(prefix.as_slice()), (item.mode, item.oid));
+        }
+        prefix.truncate(len);
+    }
+    Ok(())
+}
+
+/// The object type encoded in a mode's high bits: regular, directory, symlink or gitlink.
+fn file_type(mode: crate::object::EntryMode) -> u32 {
+    mode.to_u32() & 0o170000
 }
 
 /// Phase 4 — the difference between the index and the work tree.
@@ -393,10 +518,78 @@ pub fn staged_changes(
 pub fn unstaged_changes(
     worktree: &Worktree,
     index: &Index,
-    odb: &Odb,
+    _odb: &Odb,
+    refresh: bool,
     stat_cache: &mut crate::worktree::StatCache,
 ) -> Result<Vec<StatusEntry>> {
-    todo!()
+    let index_mtime = worktree.index_mtime();
+    let mut out = Vec::new();
+
+    for entry in index.entries() {
+        // Conflicted paths were reported by `staged_changes`; there is no work-tree side to
+        // compare them against until the conflict is resolved.
+        if entry.flags.stage()? != crate::index::Stage::Normal {
+            continue;
+        }
+        // A gitlink's work-tree side is another repository. Comparing it here would report that
+        // repository's state as a modification of this one.
+        if matches!(entry.mode, crate::object::EntryMode::Commit) {
+            continue;
+        }
+        // Both flags mean "do not look at this file": assume-valid is the user's promise and
+        // skip-worktree is the sparse-checkout machinery's. Git reports neither.
+        let extended = crate::index::IndexEntryExtendedFlags::from_bits(entry.extended_flags);
+        if entry.flags.assume_valid() || extended.skip_worktree() {
+            continue;
+        }
+
+        let cached = stat_cache.stat(worktree, BStr::new(&entry.path))?.copied();
+        let Some(data) = cached else {
+            // The file is gone. A file that exists but cannot be read surfaces as an error from
+            // `stat`, above, and must not be folded into "deleted".
+            out.push(StatusEntry {
+                path: entry.path.clone(),
+                kind: ChangeKind::Deleted,
+                old_oid: Some(entry.oid),
+                new_oid: None,
+                old_mode: Some(entry.mode),
+                new_mode: None,
+            });
+            continue;
+        };
+
+        // A stat match is only trustworthy when it is not racy: an entry written in the same
+        // timestamp tick as the index could have been modified again without the mtime moving.
+        // `--refresh` asks to distrust every stat match and read the file regardless.
+        let racy = refresh || index.is_racy(entry, index_mtime);
+        if !racy && data.is_unchanged(entry, index_mtime) {
+            continue;
+        }
+
+        let mode = data.mode;
+        let new_oid = worktree.hash_file(BStr::new(&entry.path))?;
+        if new_oid == entry.oid && mode == entry.mode {
+            continue;
+        }
+        // The repository's own convention: a mode change is a type change even when the blob id
+        // is unchanged, because an id-only comparison cannot see it at all.
+        let kind = if mode != entry.mode && (new_oid == entry.oid || file_type(mode) != file_type(entry.mode)) {
+            ChangeKind::TypeChanged
+        } else {
+            ChangeKind::Modified
+        };
+        out.push(StatusEntry {
+            path: entry.path.clone(),
+            kind,
+            old_oid: Some(entry.oid),
+            new_oid: Some(new_oid),
+            old_mode: Some(entry.mode),
+            new_mode: Some(mode),
+        });
+    }
+
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
 }
 
 /// Phase 4 — the paths in the work tree that the index does not know about.
@@ -425,5 +618,106 @@ pub fn untracked_paths(
     ignore: &IgnoreStack,
     options: &StatusOptions,
 ) -> Result<(Vec<BString>, Vec<BString>)> {
-    todo!()
+    if options.untracked_files == UntrackedMode::No && !options.ignored {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let mut walk_options = crate::worktree::WorktreeWalkOptions::new();
+    walk_options.include_ignored = options.ignored;
+    walk_options.recursive = true;
+    if !options.pathspec.is_empty() {
+        walk_options.prefix(BStr::new(&options.pathspec));
+    }
+    let entries = worktree.walk(ignore, &walk_options)?;
+
+    // Every path the index knows, plus every directory that contains one. Membership of
+    // `tracked_dirs` is what distinguishes a directory whose untracked children are reported
+    // individually from one that is itself reported as a single untracked entry.
+    let mut tracked: BTreeSet<BString> = BTreeSet::new();
+    let mut tracked_dirs: BTreeSet<BString> = BTreeSet::new();
+    for entry in index.entries() {
+        tracked.insert(entry.path.clone());
+        let bytes: &[u8] = entry.path.as_ref();
+        for (i, byte) in bytes.iter().enumerate() {
+            if *byte == b'/' {
+                tracked_dirs.insert(BString::from(&bytes[..i]));
+            }
+        }
+    }
+
+    let mut ignored_paths: BTreeSet<BString> = BTreeSet::new();
+    let mut untracked_files: BTreeSet<BString> = BTreeSet::new();
+    let mut untracked_dirs: BTreeSet<BString> = BTreeSet::new();
+
+    for entry in entries {
+        let path = entry.path;
+        let is_dir = entry.kind == crate::ignore::PathKind::Directory;
+        if entry.ignored {
+            let mut path = path;
+            if is_dir {
+                path.push(b'/');
+            }
+            ignored_paths.insert(path);
+            continue;
+        }
+        if options.untracked_files == UntrackedMode::No {
+            continue;
+        }
+        if is_dir {
+            // The walk has already declined to descend into an ignored directory, so a
+            // directory seen here is untracked unless some tracked path lives under it.
+            if !tracked_dirs.contains(&path) {
+                untracked_dirs.insert(path);
+            }
+        } else if !tracked.contains(&path) {
+            untracked_files.insert(path);
+        }
+    }
+
+    let mut untracked: BTreeSet<BString> = BTreeSet::new();
+    match options.untracked_files {
+        UntrackedMode::No => {}
+        UntrackedMode::All => untracked.extend(untracked_files),
+        UntrackedMode::Normal => {
+            // `normal` reports the shallowest untracked directory once, instead of every file
+            // under it, and nothing is reported twice: a path under a directory that is already
+            // an entry of its own is dropped.
+            for dir in &untracked_dirs {
+                if !has_untracked_ancestor(BStr::new(dir), &untracked_dirs) {
+                    let mut path = dir.clone();
+                    path.push(b'/');
+                    untracked.insert(path);
+                }
+            }
+            for file in untracked_files {
+                if !has_untracked_ancestor(BStr::new(&file), &untracked_dirs) {
+                    untracked.insert(file);
+                }
+            }
+        }
+    }
+
+    // BTreeSet iteration is byte order, which is the order the differential tests compare
+    // against; the sets also deduplicate, as two walk routes cannot report one path twice.
+    Ok((
+        untracked.into_iter().collect(),
+        ignored_paths.into_iter().collect(),
+    ))
+}
+
+/// Whether any ancestor of `path` is a directory in `dirs`.
+///
+/// The path itself is not its own ancestor, so an untracked directory is not suppressed by
+/// being in the set it is being tested against.
+fn has_untracked_ancestor(path: &BStr, dirs: &BTreeSet<BString>) -> bool {
+    let bytes: &[u8] = path.as_ref();
+    for (i, byte) in bytes.iter().enumerate() {
+        if *byte == b'/' {
+            let candidate = &bytes[..i];
+            if dirs.contains::<BStr>(BStr::new(candidate)) {
+                return true;
+            }
+        }
+    }
+    false
 }

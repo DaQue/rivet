@@ -163,7 +163,9 @@ impl PackWriter {
     ///
     /// Only hasher collision detection, from computing the object's id.
     pub fn write_object(&mut self, object: &Object) -> Result<ObjectId> {
-        todo!()
+        let kind = object.kind();
+        let data = object.data();
+        self.write_raw(kind, data)
     }
 
     /// Phase 10 — append one object that is already serialised, as a blob, tree, commit or tag.
@@ -184,12 +186,46 @@ impl PackWriter {
     ///
     /// Only hasher collision detection, from computing the object's id.
     pub fn write_raw(&mut self, kind: crate::object::ObjectKind, data: &[u8]) -> Result<ObjectId> {
+        // The id is the object's, computed over Git's canonical header — not over the pack entry,
+        // which is compressed and prefixed differently.
         let mut hasher = self.format.hasher();
-        hasher.update(kind.as_bytes());
+        hasher.update(kind.as_str().as_bytes());
+        hasher.update(b" ");
+        hasher.update(data.len().to_string().as_bytes());
+        hasher.update(b"\0");
         hasher.update(data);
         let id = hasher.finish()?;
-        self.data.extend_from_slice(kind.as_bytes());
-        self.data.extend_from_slice(data);
+
+        let offset = self.data.len() as u64;
+
+        // Entry header: three bits of type, then the size as a little-endian base-128 varint with
+        // the first four bits packed into the type byte and the continuation bit on every byte but
+        // the last.
+        let mut header = Vec::with_capacity(10);
+        let mut size = data.len() as u64;
+        let mut byte = (type_code(kind) << 4) | (size & 0x0f) as u8;
+        size >>= 4;
+        while size > 0 {
+            header.push(byte | 0x80);
+            byte = (size & 0x7f) as u8;
+            size >>= 7;
+        }
+        header.push(byte);
+
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, data)?;
+        let compressed = encoder.finish()?;
+
+        // The index's CRC covers the entry header and the compressed body as they sit in the pack.
+        let crc = crc32(&[&header, &compressed]);
+
+        self.data.extend_from_slice(&header);
+        self.data.extend_from_slice(&compressed);
+        self.entries.push(PackIndexEntry {
+            oid: id,
+            offset,
+            crc32: crc,
+        });
         Ok(id)
     }
 
@@ -241,19 +277,22 @@ impl PackWriter {
     pub fn finish(self) -> Result<(Vec<u8>, PackWriteSummary)> {
         let count = self.entries.len() as u32;
         let mut data = self.data;
-        data[8..12].copy_from_slice(&count.to_le_bytes());
+        // The header's count is big-endian, like every other integer in the pack format.
+        data[8..12].copy_from_slice(&count.to_be_bytes());
         let mut hasher = self.format.hasher();
         hasher.update(&data);
         let checksum = hasher.finish()?;
-        let mut index = Vec::new();
-        for entry in &self.entries {
-            let mut rec = Vec::with_capacity(40);
-            rec.extend_from_slice(entry.offset.to_le_bytes().as_slice());
-            rec.extend_from_slice(&[0; 20]);
-            rec.extend_from_slice(entry.oid.as_bytes());
-            index.extend_from_slice(&rec);
-        }
-        Ok((data, PackWriteSummary { checksum, entry_count: count, index }))
+        // The trailer is part of the file but not part of the bytes the checksum covers.
+        data.extend_from_slice(checksum.as_bytes());
+        let index = build_index(&self.entries, checksum, self.format)?;
+        Ok((
+            data,
+            PackWriteSummary {
+                checksum,
+                entry_count: count,
+                index,
+            },
+        ))
     }
 
     /// Phase 10 — seal the pack and write `pack-<checksum>.pack` and its `.idx` under `dir`.
@@ -291,5 +330,158 @@ impl PackWriter {
         std::fs::rename(&pack_tmp, &pack_path).map_err(|e| Error::IoAtPath { path: pack_path.to_string_lossy().into_owned().into(), source: e })?;
         std::fs::rename(&idx_tmp, &idx_path).map_err(|e| Error::IoAtPath { path: idx_path.to_string_lossy().into_owned().into(), source: e })?;
         Ok((pack_path, summary))
+    }
+}
+
+/// Phase 10 — the pack's type nibble for an object kind.
+///
+/// The numbers are the format's, not an enum discriminant: 1 commit, 2 tree, 3 blob, 4 tag, with 6
+/// and 7 reserved for the two delta encodings this writer never emits.
+fn type_code(kind: crate::object::ObjectKind) -> u8 {
+    match kind {
+        crate::object::ObjectKind::Commit => 1,
+        crate::object::ObjectKind::Tree => 2,
+        crate::object::ObjectKind::Blob => 3,
+        crate::object::ObjectKind::Tag => 4,
+    }
+}
+
+/// Phase 10 — CRC-32 (IEEE 802.3), the checksum a pack index stores per entry.
+fn crc32(parts: &[&[u8]]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for part in parts {
+        for &byte in *part {
+            crc ^= byte as u32;
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+            }
+        }
+    }
+    !crc
+}
+
+/// Phase 10 — the `.idx` v2 bytes for a finished pack.
+///
+/// Entries are sorted by id, which is what makes the index binary-searchable; the fanout table is
+/// cumulative so that `fanout[b] - fanout[b-1]` is the number of ids beginning with byte `b`.
+fn build_index(
+    entries: &[PackIndexEntry],
+    pack_checksum: ObjectId,
+    format: ObjectFormat,
+) -> Result<Vec<u8>> {
+    let mut sorted: Vec<&PackIndexEntry> = entries.iter().collect();
+    sorted.sort_by(|a, b| a.oid.as_bytes().cmp(b.oid.as_bytes()));
+
+    let mut out = Vec::new();
+    out.extend_from_slice(b"\xfftOc");
+    out.extend_from_slice(&2u32.to_be_bytes());
+
+    let mut fanout = [0u32; 256];
+    for entry in &sorted {
+        fanout[entry.oid.as_bytes()[0] as usize] += 1;
+    }
+    let mut running = 0u32;
+    for slot in fanout.iter_mut() {
+        running += *slot;
+        *slot = running;
+        out.extend_from_slice(&running.to_be_bytes());
+    }
+
+    for entry in &sorted {
+        out.extend_from_slice(entry.oid.as_bytes());
+    }
+    for entry in &sorted {
+        out.extend_from_slice(&entry.crc32.to_be_bytes());
+    }
+
+    let mut large_offsets = Vec::new();
+    for entry in &sorted {
+        if entry.offset < 0x8000_0000 {
+            out.extend_from_slice(&(entry.offset as u32).to_be_bytes());
+        } else {
+            let slot = 0x8000_0000u32 | (large_offsets.len() as u32);
+            out.extend_from_slice(&slot.to_be_bytes());
+            large_offsets.push(entry.offset);
+        }
+    }
+    for offset in large_offsets {
+        out.extend_from_slice(&offset.to_be_bytes());
+    }
+
+    out.extend_from_slice(pack_checksum.as_bytes());
+    let mut hasher = format.hasher();
+    hasher.update(&out);
+    let index_checksum = hasher.finish()?;
+    out.extend_from_slice(index_checksum.as_bytes());
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::ObjectFormat;
+
+    /// The pack format is only right if Git accepts the bytes: `index-pack` re-reads every entry,
+    /// inflates it, hashes it and checks the trailer, so a wrong varint, a wrong type nibble or a
+    /// missing checksum fails here rather than surviving until the first clone.
+    #[test]
+    fn git_index_pack_accepts_a_written_pack() {
+        let git = match std::process::Command::new("git").arg("--version").output() {
+            Ok(output) if output.status.success() => (),
+            _ => return,
+        };
+        let _ = git;
+
+        let mut writer = PackWriter::new(ObjectFormat::Sha1);
+        let blob = writer.write_raw(crate::object::ObjectKind::Blob, b"hello\n").unwrap();
+        let mut tree = Vec::new();
+        tree.extend_from_slice(b"100644 hello.txt\0");
+        tree.extend_from_slice(blob.as_bytes());
+        let tree_id = writer.write_raw(crate::object::ObjectKind::Tree, &tree).unwrap();
+
+        let mut commit = Vec::new();
+        commit.extend_from_slice(b"tree ");
+        commit.extend_from_slice(tree_id.to_hex().as_ref());
+        commit.extend_from_slice(
+            b"\nauthor A <a@example.com> 1 +0000\ncommitter A <a@example.com> 1 +0000\n\ninitial\n",
+        );
+        writer.write_raw(crate::object::ObjectKind::Commit, &commit).unwrap();
+
+        let (bytes, summary) = writer.finish().unwrap();
+        assert_eq!(summary.entry_count, 3);
+
+        let dir = tempfile::tempdir().unwrap();
+        let pack_path = dir.path().join("p.pack");
+        std::fs::write(&pack_path, &bytes).unwrap();
+        let output = std::process::Command::new("git")
+            .arg("index-pack")
+            .arg("--strict")
+            .arg(&pack_path)
+            .output()
+            .expect("git index-pack");
+        assert!(
+            output.status.success(),
+            "git rejected the pack: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // `index-pack` writes `p.idx` beside the pack.
+        assert!(dir.path().join("p.idx").is_file());
+
+        // The summary's own index must describe the same pack; `verify-pack` locates the pack by
+        // the index's stem, so both files have to share a name.
+        std::fs::write(dir.path().join("ours.pack"), &bytes).unwrap();
+        let idx_path = dir.path().join("ours.idx");
+        std::fs::write(&idx_path, &summary.index).unwrap();
+        let verify = std::process::Command::new("git")
+            .arg("verify-pack")
+            .arg(&idx_path)
+            .output()
+            .expect("git verify-pack");
+        assert!(
+            verify.status.success(),
+            "git rejected the index: {}",
+            String::from_utf8_lossy(&verify.stderr)
+        );
     }
 }

@@ -98,7 +98,26 @@ impl PackedObjectStore {
     /// version; [`crate::error::Error::CorruptPackIndex`] and
     /// [`crate::error::Error::UnsupportedPackIndexVersion`] from parsing the index.
     pub fn open(data: Vec<u8>, index: Vec<u8>, format: ObjectFormat) -> Result<Self> {
-        todo!()
+        let file = crate::pack::PackFile::open(&data, None, format)?;
+        let index = OwnedPackIndex::parse(index, format)?;
+        {
+            let parsed = index.as_index();
+            if parsed.pack_checksum() != file.checksum() {
+                return Err(Error::CorruptPack {
+                    reason: "index names a different pack checksum".to_string(),
+                });
+            }
+            if parsed.len() != file.object_count() as usize {
+                return Err(Error::CorruptPack {
+                    reason: "index entry count disagrees with the pack header".to_string(),
+                });
+            }
+        }
+        Ok(Self {
+            pack: OwnedPackFile::new(data, None, format),
+            index,
+            format,
+        })
     }
 
     /// Phase 10 — how many objects the pack holds.
@@ -109,7 +128,7 @@ impl PackedObjectStore {
     /// header carries its own copy of the count and the two are compared at
     /// [`PackedObjectStore::open`]; a mismatch means the files do not describe each other.
     pub fn len(&self) -> usize {
-        todo!()
+        self.index.as_index().len()
     }
 
     /// Phase 10 — whether the pack holds no objects.
@@ -140,7 +159,9 @@ impl PackedObjectStore {
     /// It is also the cache key's first half in [`crate::odb::Odb`]: offsets are only meaningful
     /// within one pack, so the checksum is what keeps two packs' offset spaces apart.
     pub fn checksum(&self) -> ObjectId {
-        todo!()
+        // The index's copy was verified equal to the pack trailer at open; reading it back avoids
+        // holding a second borrow of the pack buffer for a value that cannot change.
+        self.index.as_index().pack_checksum()
     }
 
     /// Phase 10 — the parsed index, for callers that need the tables themselves.
@@ -165,7 +186,7 @@ impl PackedObjectStore {
     /// * **False is not an error and not a verdict.** The object may be loose or in a sibling pack;
     ///   this says only that *this* pack does not describe it.
     pub fn contains(&self, oid: &ObjectId) -> bool {
-        todo!()
+        self.index.as_index().lookup(oid).is_some()
     }
 
     /// Phase 10 — read one object, resolving its delta chain and verifying its hash.
@@ -194,19 +215,24 @@ impl PackedObjectStore {
     /// through `bases`; and [`crate::error::Error::HashMismatch`] when the resolved content does
     /// not hash to `oid`.
     pub fn read(&self, oid: &ObjectId, bases: Option<&dyn BaseProvider>) -> Result<Object> {
-        if !self.contains(oid) {
-            return Err(Error::ObjectNotFound { oid: *oid });
-        }
-        let (kind, data) = self.read_at(0, bases)?;
+        let entry = self
+            .index
+            .as_index()
+            .lookup(oid)
+            .ok_or(Error::ObjectNotFound { oid: *oid })?;
+        let (kind, data) = self.read_at(entry.offset, bases)?;
         let obj = match kind {
             ObjectKind::Blob => Object::Blob(data),
             ObjectKind::Tree => Object::Tree(data),
             ObjectKind::Commit => Object::Commit(data),
             ObjectKind::Tag => Object::Tag(data),
         };
-        let id = obj.id(self.format()).expect("hash collision");
+        let id = obj.id(self.format)?;
         if id != *oid {
-            return Err(Error::HashMismatch { expected: *oid, actual: id });
+            return Err(Error::HashMismatch {
+                expected: *oid,
+                actual: id,
+            });
         }
         Ok(obj)
     }
@@ -240,7 +266,7 @@ impl PackedObjectStore {
         offset: u64,
         bases: Option<&dyn BaseProvider>,
     ) -> Result<(ObjectKind, Vec<u8>)> {
-        todo!()
+        self.pack.pack()?.get_at_offset(offset, bases)
     }
 
     /// Phase 10 — every object id this pack contains, in id order.
@@ -260,16 +286,12 @@ impl PackedObjectStore {
     /// None from the tables, which were validated at open; the signature is [`Result`] so that a
     /// later implementation that re-validates the pair does not change every call site.
     pub fn oids(&self) -> Result<Vec<ObjectId>> {
-        let mut ids = Vec::with_capacity(self.len());
-        for i in 0..self.len() {
-            let (kind, data) = self.read_at(i as u64, None)?;
-            let obj = match kind {
-                ObjectKind::Blob => Object::Blob(data),
-                ObjectKind::Tree => Object::Tree(data),
-                ObjectKind::Commit => Object::Commit(data),
-                ObjectKind::Tag => Object::Tag(data),
-            };
-            ids.push(obj.id(self.format())?);
+        let index = self.index.as_index();
+        let mut ids = Vec::with_capacity(index.len());
+        for i in 0..index.len() {
+            if let Some(entry) = index.entry(i) {
+                ids.push(entry.oid);
+            }
         }
         Ok(ids)
     }
@@ -288,7 +310,7 @@ impl PackedObjectStore {
     /// [`crate::error::Error::CorruptPack`] if the recomputed checksum differs from the trailer,
     /// and [`crate::error::Error::Io`] from the hasher.
     pub fn verify_checksum(&self) -> Result<()> {
-        todo!()
+        self.pack.pack()?.verify_checksum()
     }
 }
 
