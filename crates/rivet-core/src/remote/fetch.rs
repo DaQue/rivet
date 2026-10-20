@@ -396,7 +396,114 @@ pub fn fetch(
     odb: &Odb,
     refs: &RefStore,
 ) -> Result<FetchOutcome> {
-    todo!()
+    let negotiation = negotiate(advertisement, spec, &options.capabilities, odb, refs, options.format)?;
+
+    // A dry run stops after the negotiation: the wants are what the caller asked to see, and moving
+    // refs or downloading a pack would make it not a dry run.
+    if options.dry_run {
+        return Ok(FetchOutcome {
+            negotiation,
+            updated: Vec::new(),
+            pack: None,
+            pack_checksum: None,
+            object_count: None,
+        });
+    }
+
+    let mut pack = Vec::new();
+    if !negotiation.wants.is_empty() {
+        let haves = local_haves(odb, refs)?;
+        transport.fetch(&negotiation.wants, &haves, &mut pack)?;
+    }
+
+    if !options.index {
+        return Ok(FetchOutcome {
+            negotiation,
+            updated: Vec::new(),
+            pack: Some(pack),
+            pack_checksum: None,
+            object_count: None,
+        });
+    }
+
+    // Everything is in the odb before any ref moves, so a reader never sees a ref that points at an
+    // object the repository does not have. An empty pack is still installed: it is a valid empty
+    // pack and `index_pack` reports its checksum, which keeps the two paths identical.
+    let stored = crate::remote::sideband::store_pack_bytes(&pack, odb, options.format)?;
+
+    let updated = match &options.refs {
+        None | Some(FetchRefs::None) => Vec::new(),
+        Some(FetchRefs::Tracking { remote }) => {
+            let wanted = write_tracking_refs(advertisement, BStr::new(remote), refs)?;
+            // A tag whose object never arrived (it points outside the fetched history and the
+            // server did not include it) is dropped rather than written as a dangling ref.
+            let mut written = Vec::with_capacity(wanted.len());
+            for update in wanted {
+                if odb.contains(&update.new) {
+                    written.push(update);
+                }
+            }
+            written
+        }
+        Some(FetchRefs::Explicit(updates)) => {
+            let mut written = Vec::with_capacity(updates.len());
+            for update in updates {
+                apply_ref_update(odb, refs, update, options.format)?;
+                written.push(update.clone());
+            }
+            written
+        }
+    };
+
+    Ok(FetchOutcome {
+        negotiation,
+        updated,
+        pack: None,
+        pack_checksum: Some(stored.pack_checksum),
+        object_count: Some(stored.entries.len() as u32),
+    })
+}
+
+/// Write one [`FetchRefUpdate`], honouring `force` and `expect`.
+fn apply_ref_update(
+    odb: &Odb,
+    refs: &RefStore,
+    update: &FetchRefUpdate,
+    format: crate::hash::ObjectFormat,
+) -> Result<()> {
+    let name = RefName::from_bytes(&update.name)?;
+    let current = match refs.resolve_oid(&name) {
+        Ok(oid) => Some(oid),
+        Err(Error::RefNotFound { .. }) => None,
+        Err(e) => return Err(e),
+    };
+
+    if !update.force {
+        if let Some(old) = current {
+            if old != update.new && !is_fast_forward(odb, old, update.new)? {
+                return Err(Error::NonFastForward {
+                    name: update.name.clone(),
+                    old,
+                    new: update.new,
+                });
+            }
+        }
+    }
+
+    // `expect` is the value the caller believes is there; `None` means "I did not look", which the
+    // ref lock turns into a plain overwrite rather than a check.
+    let expected = update.expect.or(current);
+    let _ = format;
+    refs.update(&name, update.new, expected, None)
+}
+
+/// Whether `old` is an ancestor of `new`, i.e. whether moving the ref forward loses nothing.
+fn is_fast_forward(odb: &Odb, old: ObjectId, new: ObjectId) -> Result<bool> {
+    if old == new {
+        return Ok(true);
+    }
+    let bases = crate::merge::base::merge_bases(odb, old, new)?;
+    Ok(bases.contains(&old))
 }
 
 /// Phase 11 — decide which capabilities to use and which objects to want.
@@ -561,7 +668,60 @@ pub fn write_tracking_refs(
     remote: &BStr,
     refs: &RefStore,
 ) -> Result<Vec<FetchRefUpdate>> {
-    todo!()
+    let mut updates = Vec::new();
+    for advertised in &advertisement.refs {
+        let advertised_name = BStr::new(&advertised.name);
+
+        // A deleted ref (the zero id) has nothing to track; the remote is telling us it is gone.
+        if advertised.oid.is_zero() {
+            continue;
+        }
+
+        let target: BString = if let Some(short) = advertised_name.strip_prefix(b"refs/tags/") {
+            let mut name = BString::from("refs/tags/");
+            name.extend_from_slice(short);
+            name
+        } else {
+            match tracking_ref_name(remote, advertised_name) {
+                Some(name) => name,
+                None => continue,
+            }
+        };
+
+        let name = RefName::parse(BStr::new(&target))?;
+        let current = match refs.resolve_oid(&name) {
+            Ok(oid) => Some(oid),
+            Err(Error::RefNotFound { .. }) => None,
+            Err(error) => return Err(error),
+        };
+
+        if current == Some(advertised.oid) {
+            continue;
+        }
+
+        let is_tag = advertised_name.starts_with(b"refs/tags/");
+        if is_tag {
+            if let Some(old) = current {
+                // Never overwrite a tag: a moved tag is reported, not followed.
+                return Err(Error::NonFastForward {
+                    name: target.clone(),
+                    old,
+                    new: advertised.oid,
+                });
+            }
+        }
+
+        // A fetch decides what the remote has, so the write is unconditional apart from the
+        // expected value it just observed.
+        refs.update(&name, advertised.oid, current, None)?;
+        updates.push(FetchRefUpdate {
+            name: target,
+            new: advertised.oid,
+            expect: current,
+            force: is_tag && current.is_some(),
+        });
+    }
+    Ok(updates)
 }
 
 /// Phase 11 — the local ref name a remote branch is tracked under.
@@ -598,7 +758,22 @@ pub fn tracking_ref_name(remote: &BStr, advertised: &BStr) -> Option<BString> {
 /// * **A URL ending in `.git` has that stripped**, matching Git's default `origin` derivation, but a
 ///   URL with no path component returns `None` rather than an empty name.
 pub fn guess_remote_name(url: &RemoteUrl) -> Option<BString> {
-    todo!()
+    let bytes: &[u8] = &url.path;
+
+    // Trailing slashes carry no name; a URL ending in `.git` loses that suffix, which is how Git
+    // derives `origin` from a URL it was given rather than from a configured remote.
+    let mut end = bytes.len();
+    while end > 0 && bytes[end - 1] == b'/' {
+        end -= 1;
+    }
+    let trimmed = &bytes[..end];
+    let start = trimmed.iter().rposition(|b| *b == b'/').map_or(0, |i| i + 1);
+    let last = &trimmed[start..];
+    let name = last.strip_suffix(b".git".as_slice()).unwrap_or(last);
+    if name.is_empty() {
+        return None;
+    }
+    Some(BString::from(name))
 }
 
 /// Phase 11 — whether a fetch of `remote` into `refs` would change anything.

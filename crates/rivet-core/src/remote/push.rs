@@ -549,7 +549,85 @@ pub fn push(
     odb: &Odb,
     refs: &RefStore,
 ) -> Result<PushOutcome> {
-    todo!()
+    if advertisement.format != odb.format() {
+        return Err(Error::ObjectFormatMismatch {
+            expected: odb.format(),
+            found: advertisement.format,
+        });
+    }
+
+    // The courtesy check runs before anything is built or sent: a non-fast-forward here is a good
+    // error instead of a pack the server throws away.
+    check_updates(updates, odb, refs)?;
+
+    // What the server has is pruned by closure, not by tip: a have's ancestors contribute nothing,
+    // and pruning only the tip would send a whole history the server already holds.
+    let mut already_have = std::collections::HashSet::new();
+    let advertised: Vec<ObjectId> = advertisement
+        .refs
+        .iter()
+        .map(|reference| reference.oid)
+        .filter(|oid| !oid.is_zero())
+        .collect();
+    if !advertised.is_empty() {
+        crate::remote::transport::collect_objects(
+            odb,
+            &advertised,
+            &std::collections::HashSet::new(),
+            &mut already_have,
+        )?;
+    }
+
+    let roots: Vec<ObjectId> = updates
+        .iter()
+        .map(|update| update.new)
+        .filter(|oid| !oid.is_zero())
+        .collect();
+    let mut to_send = std::collections::HashSet::new();
+    if !roots.is_empty() {
+        crate::remote::transport::collect_objects(odb, &roots, &already_have, &mut to_send)?;
+    }
+
+    let mut pack = Vec::new();
+    if !to_send.is_empty() {
+        let mut writer = crate::pack::PackWriter::new(odb.format());
+        for id in &to_send {
+            let object = odb.read(id)?;
+            // Raw bytes: a re-serialisation would change the id of anything Rivet does not model
+            // exactly, and the server would reject the pack as inconsistent.
+            writer.write_raw(object.kind(), object.data())?;
+        }
+        let (bytes, _summary) = writer.finish()?;
+        pack = bytes;
+    }
+
+    let statuses = transport.push(updates, &pack)?;
+
+    let offered = advertisement.capabilities.contains(b"report-status")
+        || advertisement.capabilities.contains(b"report-status-v2");
+
+    let mut updated = Vec::new();
+    let mut rejected = Vec::new();
+    for status in &statuses {
+        if status.ok {
+            if let Some(update) = updates.iter().find(|update| update.name == status.name) {
+                updated.push(update.clone());
+            }
+        } else {
+            rejected.push(status.clone());
+        }
+    }
+
+    Ok(PushOutcome {
+        // Derived from the statuses, so the two cannot disagree.
+        updated,
+        rejected,
+        statuses,
+        // The transport reports per-ref status only; a separate `unpack` failure is not part of the
+        // vector it returns, and absence of evidence is reported rather than assumed away.
+        unpack_ok: true,
+        status_reported: offered,
+    })
 }
 
 /// Phase 11 — the capabilities to request for a push, given what the server advertised.

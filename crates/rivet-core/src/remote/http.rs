@@ -395,7 +395,7 @@ fn pkt_payloads(input: &[u8]) -> Result<Vec<u8>> {
 /// The id stays hex because the peer's object format is only known from the first line's own
 /// capability section — parsing it at the local width first would reject a SHA-256 peer before the
 /// mismatch could be reported as such.
-fn split_ref_line(line: &[u8]) -> Result<(BString, BString, Option<Vec<u8>>)> {
+pub(crate) fn split_ref_line(line: &[u8]) -> Result<(BString, BString, Option<Vec<u8>>)> {
     let line = line.strip_suffix(b"\n").unwrap_or(line);
     if line.is_empty() {
         return Err(Error::Protocol("empty ref line".to_string()));

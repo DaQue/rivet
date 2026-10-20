@@ -212,11 +212,15 @@ pub fn store_pack<R: Read>(
 ) -> Result<IndexPackResult> {
     let mut pack = Vec::new();
     stream_pack(reader, options, &mut pack, progress)?;
+    store_pack_bytes(&pack, odb, format)
+}
 
-    // A server may send a thin pack whether or not `thin-pack` was requested, so the fix is
-    // decided by the index attempt rather than by what was negotiated. `fix_thin_pack` returns the
-    // input unchanged when there is nothing to complete.
-    let pack = crate::pack::fix_thin_pack(&pack, format, odb)?;
+/// Phase 11 — fix, index, and install a pack that has already been read into memory.
+///
+/// The bytes may be a thin pack; the fix is decided by the index attempt rather than by what was
+/// negotiated, because a server may send one whether or not `thin-pack` was requested.
+pub fn store_pack_bytes(pack: &[u8], odb: &Odb, format: ObjectFormat) -> Result<IndexPackResult> {
+    let pack = crate::pack::fix_thin_pack(pack, format, odb)?;
     let result = crate::pack::index_pack(&pack, format, Some(odb))?;
 
     // Pack first, index second: an `.idx` that points into a pack which is not there is a

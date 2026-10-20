@@ -1150,17 +1150,14 @@ impl Transport for LocalTransport {
         updates: &[RefUpdate],
         pack: &[u8],
     ) -> Result<Vec<crate::remote::PushStatus>> {
-        // A local push receives the same undeltified pack a network peer would, and adopting it
-        // needs `crate::pack::index_pack` — which still has to be written. Reporting that is the
-        // honest answer: silently accepting the ref updates would leave the target repository
-        // naming objects its object database does not contain.
-        if !pack.is_empty() {
-            return Err(Error::Protocol(
-                "local push cannot store a received pack: pack indexing is not implemented"
-                    .to_string(),
-            ));
-        }
         let repo = crate::repo::Repository::discover(&self.path)?;
+
+        // The pack is undeltified and already carries its header and trailer, but adopting it still
+        // means indexing it into the target's object database. Doing that before any ref moves keeps
+        // the target from naming objects it does not have if an update is refused.
+        if !pack.is_empty() {
+            crate::remote::sideband::store_pack_bytes(pack, repo.odb(), repo.format())?;
+        }
         let mut statuses = Vec::new();
         for update in updates {
             let name = match crate::refs::RefName::from_bytes(&update.name) {
@@ -1521,7 +1518,7 @@ pub fn is_fast_forward(
 /// The traversal follows Git's own edges: a commit names its tree and parents, a tree names its
 /// entries (except submodule gitlinks, whose objects live in another repository), and a tag names
 /// its target. `out` doubles as the visited set, so a diamond in the history is walked once.
-fn collect_objects(
+pub(crate) fn collect_objects(
     odb: &crate::odb::Odb,
     roots: &[ObjectId],
     stop: &std::collections::HashSet<ObjectId>,
