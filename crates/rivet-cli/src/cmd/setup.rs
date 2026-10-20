@@ -282,7 +282,7 @@ pub fn run_init(global: &GlobalArgs, args: &InitArgs) -> Result<i32> {
         .unwrap_or(ObjectFormat::Sha1);
     let initial_branch = match &args.initial_branch {
         Some(name) => BString::from(name.as_str()),
-        None => BString::from("main"),
+        None => rivet_core::ops::default_branch_name()?,
     };
 
     let options = InitOptions {
@@ -297,6 +297,9 @@ pub fn run_init(global: &GlobalArgs, args: &InitArgs) -> Result<i32> {
     // tests compare this line byte-for-byte.
     let shown = repository.git_dir().join("");
     let shown = shown.display();
+    if global.quiet {
+        return Ok(0);
+    }
     if existed {
         println!("Reinitialized existing Git repository in {shown}");
     } else {

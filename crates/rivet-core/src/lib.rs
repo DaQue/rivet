@@ -48,6 +48,7 @@ pub mod index;
 pub mod merge;
 pub mod object;
 pub mod odb;
+pub mod ops;
 pub mod pack;
 pub mod refs;
 pub mod remote;
@@ -65,7 +66,7 @@ pub use crate::config::{
 };
 pub use crate::diff::{
     DiffAlgorithm, DiffLine, DiffOptions, DiffStat, Edit, FileDiff, Hunk, HunkLine, LineKind,
-    TreeDiff, blob_diff, change_letter, entry_diff, format_name_status, format_stat,
+    TreeDiff, blob_diff, change_letter, entry_diff, format_name_status, format_stat, format_stat_sized,
     format_unified, histogram_diff, index_diff, index_line_abbrev, is_binary, line_count,
     myers_diff, split_lines, tree_diff, work_tree_diff, write_unified,
 };

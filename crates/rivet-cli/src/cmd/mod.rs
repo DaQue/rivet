@@ -182,7 +182,7 @@ pub fn open_or_init(global: &GlobalArgs) -> Result<Repository> {
         Err(rivet_core::Error::NotARepository(_)) => {
             let options = rivet_core::InitOptions {
                 bare: false,
-                initial_branch: bstr::BString::from("main"),
+                initial_branch: rivet_core::ops::default_branch_name()?,
                 format: rivet_core::ObjectFormat::Sha1,
                 work_tree: None,
             };
@@ -277,4 +277,128 @@ pub fn worktree_path(repository: &Repository, path: &Path, op: &str) -> Result<b
         return Ok(bstr::BString::from("."));
     }
     Ok(path_arg(relative)?.into())
+}
+
+/// The seven-hex-digit abbreviation Git prints by default.
+pub fn short_oid(oid: &rivet_core::ObjectId) -> String {
+    oid.to_string().chars().take(7).collect()
+}
+
+/// Resolve a revision to the object it names, without peeling.
+pub fn resolve_rev(repository: &Repository, spec: &str) -> Result<rivet_core::ObjectId> {
+    rivet_core::revparse::resolve(
+        repository.format(),
+        repository.refs(),
+        repository.odb(),
+        bstr::BStr::new(spec.as_bytes()),
+    )
+    .map_err(|_| anyhow::anyhow!("not a valid object name: '{spec}'"))
+}
+
+/// Resolve a revision and peel it to a commit, with Git's wording on failure.
+pub fn resolve_commit(repository: &Repository, spec: &str) -> Result<rivet_core::ObjectId> {
+    let oid = resolve_rev(repository, spec)?;
+    repository
+        .refs()
+        .peel_oid(oid, repository.odb())
+        .map_err(|_| anyhow::anyhow!("Not a valid commit name {spec}"))
+}
+
+/// The first line of a commit's message, as `--oneline` and the switch/reset messages print it.
+pub fn commit_subject(repository: &Repository, oid: &rivet_core::ObjectId) -> Result<String> {
+    let object = repository.odb().read(oid)?;
+    match object.parse()? {
+        rivet_core::AnyObject::Commit(commit) => {
+            let message = commit.message;
+            let first = message
+                .split(|b| *b == b'\n')
+                .find(|line| !line.iter().all(u8::is_ascii_whitespace))
+                .unwrap_or(&[]);
+            Ok(String::from_utf8_lossy(first).trim_end().to_string())
+        }
+        _ => Ok(String::new()),
+    }
+}
+
+/// How the reflog names where `HEAD` was: the branch's short name, or the full id when detached.
+pub fn head_reflog_label(repository: &Repository) -> Result<String> {
+    Ok(match repository.head()? {
+        rivet_core::HeadState::Attached { branch, .. } | rivet_core::HeadState::Unborn { branch } => {
+            branch.short_name().to_string()
+        }
+        rivet_core::HeadState::Detached { oid } => oid.to_string(),
+    })
+}
+
+/// Print the diffstat and the `create mode`/`delete mode` summary `merge` and `pull` show
+/// after updating a branch.
+pub fn print_diffstat(
+    repository: &Repository,
+    old_tree: Option<rivet_core::ObjectId>,
+    new_tree: rivet_core::ObjectId,
+) -> Result<()> {
+    let old_tree = match old_tree {
+        Some(tree) => tree,
+        None => empty_tree(repository)?,
+    };
+    let options = rivet_core::DiffOptions::new();
+    let diff = rivet_core::tree_diff(repository.format(), old_tree, new_tree, repository.odb(), &options)?;
+    let mut out = Vec::new();
+    rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
+    print_summary(&diff, &mut out);
+    use std::io::Write as _;
+    std::io::stdout().write_all(&out)?;
+    Ok(())
+}
+
+/// Git's `--summary` lines: creations, deletions and mode changes.
+pub fn print_summary(diff: &rivet_core::TreeDiff, out: &mut Vec<u8>) {
+    for file in &diff.files {
+        let path = file.path();
+        if file.is_new {
+            let mode = file.new_mode.map(|m| m.to_u32()).unwrap_or(0);
+            out.extend_from_slice(format!(" create mode {mode:06o} {path}\n").as_bytes());
+        } else if file.is_deleted {
+            let mode = file.old_mode.map(|m| m.to_u32()).unwrap_or(0);
+            out.extend_from_slice(format!(" delete mode {mode:06o} {path}\n").as_bytes());
+        } else if let (Some(old), Some(new)) = (file.old_mode, file.new_mode) {
+            if old != new && old.to_u32() & 0o170000 == new.to_u32() & 0o170000 {
+                out.extend_from_slice(
+                    format!(" mode change {:06o} => {:06o} {path}\n", old.to_u32(), new.to_u32()).as_bytes(),
+                );
+            }
+        }
+    }
+}
+
+/// The one-line shortstat plus the `create mode` summary, as `git commit` prints them.
+pub fn print_shortstat_summary(
+    repository: &Repository,
+    old_tree: Option<rivet_core::ObjectId>,
+    new_tree: rivet_core::ObjectId,
+) -> Result<()> {
+    let old_tree = match old_tree {
+        Some(tree) => tree,
+        None => empty_tree(repository)?,
+    };
+    let options = rivet_core::DiffOptions::new();
+    let diff = rivet_core::tree_diff(repository.format(), old_tree, new_tree, repository.odb(), &options)?;
+    let mut stat = Vec::new();
+    rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut stat)?;
+    let text = String::from_utf8_lossy(&stat);
+    let mut out = Vec::new();
+    if let Some(last) = text.lines().last() {
+        out.extend_from_slice(last.as_bytes());
+        out.push(b'\n');
+    }
+    print_summary(&diff, &mut out);
+    use std::io::Write as _;
+    std::io::stdout().write_all(&out)?;
+    Ok(())
+}
+
+/// The id of the empty tree, which the diff machinery treats as "no entries" without it being
+/// stored — writing it would leave a dangling object for `fsck` to report.
+pub fn empty_tree(repository: &Repository) -> Result<rivet_core::ObjectId> {
+    Ok(rivet_core::hash_object(repository.format(), rivet_core::ObjectKind::Tree, b"")?.0)
 }

@@ -159,7 +159,7 @@ impl Signature {
 
     /// Phase 1 — serialise to `name <email> seconds ±hhmm`, without a trailing newline.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let (hours, minutes) = format_offset(self.tz_offset_minutes);
+        let (sign, hours, minutes) = format_offset(self.tz_offset_minutes);
         let mut out = Vec::new();
         out.extend_from_slice(&self.name[..]);
         out.push(b' ');
@@ -169,7 +169,7 @@ impl Signature {
         out.push(b' ');
         out.extend_from_slice(self.when.to_string().as_bytes());
         out.push(b' ');
-        out.extend_from_slice(format!("{:+03}{:02}", hours, minutes).as_bytes());
+        out.extend_from_slice(format!("{sign}{hours:02}{minutes:02}").as_bytes());
         out
     }
 
@@ -804,8 +804,8 @@ pub fn parse_git_date(value: &BStr) -> Option<(i64, i32)> {
         Some((civil, offset)) => (civil, offset),
         None => (body.as_str(), local_offset_minutes()),
     };
-    let (hours, minutes) = format_offset(offset);
-    let normalised = format!("{civil}{hours:+03}:{minutes:02}");
+    let (sign, hours, minutes) = format_offset(offset);
+    let normalised = format!("{civil}{sign}{hours:02}:{minutes:02}");
     let stamp: jiff::Timestamp = normalised.parse().ok()?;
     Some((stamp.as_second(), offset))
 }
@@ -843,10 +843,12 @@ fn local_offset_minutes() -> i32 {
 }
 
 /// Inverse of `parse_tz_offset` for serialising: `(hours, non-negative minutes)`.
-fn format_offset(total_minutes: i32) -> (i32, i32) {
-    let sign = if total_minutes < 0 { -1 } else { 1 };
+/// Split an offset in minutes into Git's `±HHMM` parts. The sign is separate so that offsets
+/// under an hour west of UTC (`-0030`) keep their sign; a signed hour field would print `+00`.
+fn format_offset(total_minutes: i32) -> (char, i32, i32) {
+    let sign = if total_minutes < 0 { '-' } else { '+' };
     let abs = total_minutes.abs();
-    (sign * (abs / 60), abs % 60)
+    (sign, abs / 60, abs % 60)
 }
 
 #[cfg(test)]

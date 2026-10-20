@@ -789,8 +789,9 @@ pub fn write_merged_worktree(
                     options.conflict_style,
                     options.diff_algorithm,
                 )?;
-                let oid = odb.write(&crate::object::Object::Blob(merged.data.to_vec()))?;
-                crate::worktree::checkout::write_blob(worktree, path, oid, mode, odb)?;
+                // The marker-laden file is work tree content only; storing it as a blob would
+                // leave an object nothing references for `fsck` to report as dangling.
+                crate::worktree::checkout::write_bytes(worktree, path, &merged.data, mode)?;
             }
             ConflictKind::Binary | ConflictKind::ModifyDelete => {
                 if let Some(oid) = conflict.ours {

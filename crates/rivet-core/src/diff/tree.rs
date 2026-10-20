@@ -467,6 +467,11 @@ fn walk_trees(
     use crate::object::TreeEntry;
 
     let read_entries = |oid: &ObjectId| -> Result<Vec<TreeEntry>> {
+        // The empty tree is a well-known id Git never needs on disk (`git diff 4b825dc`);
+        // treating it as "no entries" saves every root-commit diff from writing it.
+        if *oid == crate::object::hash_object(format, crate::object::ObjectKind::Tree, b"")?.0 {
+            return Ok(Vec::new());
+        }
         let data = odb
             .read_typed(oid, crate::object::ObjectKind::Tree)?
             .into_data();
@@ -507,7 +512,7 @@ fn walk_trees(
                         out,
                     )?;
                 } else {
-                    let path = child_prefix(BStr::new(&prefix[..]), BStr::new(&entry.name[..]));
+                    let path = child_path(BStr::new(&prefix[..]), BStr::new(&entry.name[..]));
                     if in_pathspec(BStr::new(&path[..]), BStr::new(&options.pathspec[..])) {
                         out.push(blob_diff(
                             format,
@@ -534,7 +539,7 @@ fn walk_trees(
                         out,
                     )?;
                 } else {
-                    let path = child_prefix(BStr::new(&prefix[..]), BStr::new(&entry.name[..]));
+                    let path = child_path(BStr::new(&prefix[..]), BStr::new(&entry.name[..]));
                     if in_pathspec(BStr::new(&path[..]), BStr::new(&options.pathspec[..])) {
                         out.push(blob_diff(
                             format,
@@ -565,7 +570,7 @@ fn walk_trees(
                         )?;
                     }
                 } else if a.oid != b.oid || a.mode != b.mode {
-                    let path = child_prefix(BStr::new(&prefix[..]), BStr::new(&a.name[..]));
+                    let path = child_path(BStr::new(&prefix[..]), BStr::new(&a.name[..]));
                     if in_pathspec(BStr::new(&path[..]), BStr::new(&options.pathspec[..])) {
                         out.push(blob_diff(
                             format,
@@ -599,6 +604,13 @@ fn child_prefix(prefix: &BStr, name: &BStr) -> BString {
     let mut path = BString::from(prefix);
     path.extend_from_slice(name);
     path.push(b'/');
+    path
+}
+
+/// A file's full path: the directory prefix (which ends in `/` when non-empty) plus its name.
+fn child_path(prefix: &BStr, name: &BStr) -> BString {
+    let mut path = BString::from(prefix);
+    path.extend_from_slice(name);
     path
 }
 

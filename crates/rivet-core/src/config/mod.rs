@@ -145,6 +145,18 @@ impl ConfigEntry {
     /// cannot be split back unambiguously — [`ConfigEntry::parse_key`] resolves that by taking the
     /// first and last dots, which is what Git does, but a round trip through this string is not
     /// always lossless. It is for display and for error messages, not for a lookup.
+    /// Whether this entry is in `section` / `subsection`: the section name compares
+    /// case-insensitively, the subsection byte-exactly, as Git does.
+    pub fn in_section(&self, section: &[u8], subsection: Option<&[u8]>) -> bool {
+        self.section.eq_ignore_ascii_case(section)
+            && self.subsection.as_ref().map(|s| s.as_slice()) == subsection
+    }
+
+    /// Whether this entry is `section.subsection.key`, with Git's case rules.
+    pub fn matches(&self, section: &[u8], subsection: Option<&[u8]>, key: &[u8]) -> bool {
+        self.in_section(section, subsection) && self.key.eq_ignore_ascii_case(key)
+    }
+
     pub fn flat_key(&self) -> BString {
         let mut out = self.section.clone();
         if let Some(sub) = &self.subsection {
@@ -367,7 +379,8 @@ impl Config {
                 } else {
                     None
                 };
-                section = Some((name_folded, sub));
+                let _ = name_folded;
+                section = Some((BString::from(name_str), sub));
                 continue;
             }
             let sec = section.as_ref().ok_or_else(|| Error::ConfigSyntax { line: line_no, reason: "key before section" })?;
@@ -432,7 +445,8 @@ impl Config {
                 }
                 BString::from(out)
             };
-            let entry = ConfigEntry::new(sec.0.clone(), sec.1.clone(), key_folded, value);
+            let _ = key_folded;
+            let entry = ConfigEntry::new(sec.0.clone(), sec.1.clone(), BString::from(key_str), value);
             cfg.entries.push(entry);
         }
         Ok(cfg)
@@ -497,16 +511,29 @@ impl Config {
                 out.push(b'\n');
                 header = Some((section, subsection));
             }
+            // Git's own layout: a tab, the key, ` = `, the value.
+            out.push(b'\t');
             out.extend_from_slice(key);
-            out.push(b'=');
-            let needs_quote = value.iter().any(|b| *b == b'\\' || *b == b'"')
-            || (value.first().map(|b| b.is_ascii_whitespace()).unwrap_or(false))
-            || (value.last().map(|b| b.is_ascii_whitespace()).unwrap_or(false))
-            || value.windows(2).any(|w| w[0].is_ascii_whitespace() && (w[1] == b'#' || w[1] == b';'));
+            out.extend_from_slice(b" = ");
+            // Git's `write_pair`: quote when the value starts or ends with a space or contains
+            // a comment character; escape newline, tab, quote and backslash either way.
+            let needs_quote = value.first() == Some(&b' ')
+                || value.last() == Some(&b' ')
+                || value.iter().any(|b| *b == b';' || *b == b'#');
             if needs_quote {
-                push_quoted(&mut out, value);
-            } else {
-                out.extend_from_slice(value);
+                out.push(b'"');
+            }
+            for b in value {
+                match *b {
+                    b'\n' => out.extend_from_slice(b"\\n"),
+                    b'\t' => out.extend_from_slice(b"\\t"),
+                    b'"' => out.extend_from_slice(b"\\\""),
+                    b'\\' => out.extend_from_slice(b"\\\\"),
+                    other => out.push(other),
+                }
+            }
+            if needs_quote {
+                out.push(b'"');
             }
             out.push(b'\n');
         }
@@ -569,7 +596,7 @@ impl Config {
             .entries
             .iter()
             .rev()
-            .find(|e| e.section == entry.0 && e.subsection == entry.1 && e.key == entry.2)
+            .find(|e| e.matches(&entry.0, entry.1.as_ref().map(|v| v.as_slice()), &entry.2))
             .map(|e| e.value.as_ref()))
     }
 
@@ -601,7 +628,7 @@ impl Config {
             .entries
             .iter()
             .rev()
-            .filter(|e| e.section == entry.0 && e.subsection == entry.1 && e.key == entry.2)
+            .filter(|e| e.matches(&entry.0, entry.1.as_ref().map(|v| v.as_slice()), &entry.2))
             .map(|e| e.value.as_ref())
             .collect())
     }
@@ -623,7 +650,7 @@ impl Config {
         Ok(self
             .entries
             .iter()
-            .any(|e| e.section == entry.0 && e.subsection == entry.1 && e.key == entry.2))
+            .any(|e| e.matches(&entry.0, entry.1.as_ref().map(|v| v.as_slice()), &entry.2)))
     }
 
     /// Phase 2 — a value parsed as a Git boolean.
@@ -735,25 +762,20 @@ impl Config {
     pub fn set(&mut self, key: &BStr, value: &[u8]) -> Result<()> {
         let (section, subsection, key) = ConfigEntry::parse_key(key)?;
         let value = BString::from(value);
-        let mut entries = self.entries.clone();
-        let mut found = false;
-        for entry in &mut entries {
-            if entry.section == section && entry.subsection == subsection && entry.key == key {
-                entry.value = value.clone();
-                entry.origin = None;
-                found = true;
-                break;
-            }
+        // Git replaces the last occurrence (the one in effect) and, for a new key, appends it to
+        // the end of the existing section rather than starting a duplicate section.
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .rev()
+            .find(|e| e.matches(&section, subsection.as_ref().map(|v| v.as_slice()), &key))
+        {
+            entry.value = value;
+            entry.origin = None;
+            return Ok(());
         }
-        if !found {
-            entries.push(ConfigEntry::new(
-            section,
-            subsection,
-            key,
-            value,
-        ));
-        }
-        self.entries = entries;
+        let pos = self.section_end(&section, subsection.as_ref().map(|v| v.as_slice()));
+        self.entries.insert(pos, ConfigEntry::new(section, subsection, key, value));
         Ok(())
     }
 
@@ -774,15 +796,18 @@ impl Config {
     pub fn add(&mut self, key: &BStr, value: &[u8]) -> Result<()> {
         let (section, subsection, key) = ConfigEntry::parse_key(key)?;
         let value = BString::from(value);
-        let mut entries = self.entries.clone();
-        let last_idx = entries.iter().rposition(|e| e.flat_key() == key);
-        let pos = match last_idx {
-            Some(i) => i + 1,
-            None => entries.len(),
-        };
-        entries.insert(pos, ConfigEntry::new(section, subsection, key, value));
-        self.entries = entries;
+        let pos = self.section_end(&section, subsection.as_ref().map(|v| v.as_slice()));
+        self.entries.insert(pos, ConfigEntry::new(section, subsection, key, value));
         Ok(())
+    }
+
+    /// Where a new key of this section goes: after the section's last entry, or at the end.
+    fn section_end(&self, section: &[u8], subsection: Option<&[u8]>) -> usize {
+        self.entries
+            .iter()
+            .rposition(|e| e.in_section(section, subsection))
+            .map(|i| i + 1)
+            .unwrap_or(self.entries.len())
     }
 
     /// Phase 2 — remove every value of a key.
@@ -797,18 +822,11 @@ impl Config {
     ///
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn remove(&mut self, key: &BStr) -> Result<bool> {
-        let mut removed = false;
-        let mut i = 0;
-        while i < self.entries.len() {
-            let entry = &self.entries[i];
-            if entry.key == key {
-                self.entries.remove(i);
-                removed = true;
-            } else {
-                i += 1;
-            }
-        }
-        Ok(removed)
+        let (section, subsection, key) = ConfigEntry::parse_key(key)?;
+        let before = self.entries.len();
+        self.entries
+            .retain(|e| !e.matches(&section, subsection.as_ref().map(|v| v.as_slice()), &key));
+        Ok(self.entries.len() != before)
     }
 
     /// Phase 2 — remove a whole section, subsection included.
@@ -828,27 +846,9 @@ impl Config {
     /// Nothing. The signature is infallible because a section name is a plain byte string, not a
     /// dotted key that needs parsing.
     pub fn remove_section(&mut self, section: &BStr, subsection: Option<&BStr>) -> bool {
-        let mut removed = false;
-        let mut i = 0;
-        while i < self.entries.len() {
-            let entry = &self.entries[i];
-            if entry.key.eq_ignore_ascii_case(section) {
-                if let Some(sub) = subsection {
-                    if entry.key == sub {
-                        self.entries.remove(i);
-                        removed = true;
-                    } else {
-                        i += 1;
-                    }
-                } else {
-                    self.entries.remove(i);
-                    removed = true;
-                }
-            } else {
-                i += 1;
-            }
-        }
-        removed
+        let before = self.entries.len();
+        self.entries.retain(|e| !e.in_section(section, subsection.map(|v| v.as_ref())));
+        self.entries.len() != before
     }
 
     /// Phase 2 — the names of every section, in file order, duplicates included.
@@ -860,10 +860,13 @@ impl Config {
     /// distinct regions of the file. A caller listing remotes deduplicates; a caller rewriting the
     /// file must not, because merging two `[remote]` headers would reorder entries.
     pub fn sections(&self) -> Vec<(BString, Option<BString>)> {
-        let mut out = Vec::new();
+        let mut out: Vec<(BString, Option<BString>)> = Vec::new();
         for entry in &self.entries {
-            if entry.key.is_empty() {
-                out.push((entry.value.clone(), None));
+            let seen = out
+                .iter()
+                .any(|(s, sub)| entry.in_section(s, sub.as_ref().map(|v| v.as_slice())));
+            if !seen {
+                out.push((entry.section.clone(), entry.subsection.clone()));
             }
         }
         out
@@ -879,20 +882,11 @@ impl Config {
     /// The section is matched case-insensitively and the subsection case-sensitively; passing
     /// `None` matches a bare section and is **not** the same as matching any subsection.
     pub fn keys(&self, section: &BStr, subsection: Option<&BStr>) -> Vec<BString> {
-        let mut out = Vec::new();
-        let mut in_section = false;
+        let mut out: Vec<BString> = Vec::new();
         for entry in &self.entries {
-            if entry.key.is_empty() {
-                let section = entry.value.as_slice();
-                let section_match = section.eq_ignore_ascii_case(section);
-                let sub_match = match subsection {
-                    Some(sub) => section == sub,
-                    None => section.is_empty(),
-                };
-                in_section = section_match && sub_match;
-                continue;
-            }
-            if in_section {
+            if entry.in_section(section, subsection.map(|v| v.as_ref()))
+                && !out.iter().any(|k| k.eq_ignore_ascii_case(&entry.key))
+            {
                 out.push(entry.key.clone());
             }
         }

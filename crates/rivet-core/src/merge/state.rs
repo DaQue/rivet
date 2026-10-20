@@ -308,6 +308,14 @@ pub fn clear_merge_state(git_dir: &Path) -> Result<()> {
     if merge_msg.exists() {
         std::fs::remove_file(&merge_msg).map_err(|e| crate::error::Error::IoAtPath { path: merge_msg.to_string_lossy().into_owned().into(), source: e })?;
     }
+    // Git's companions to `MERGE_HEAD`; leaving them makes the next `git commit` think a merge
+    // with the old mode or `AUTO_MERGE` tree is still in progress.
+    for name in ["MERGE_MODE", "AUTO_MERGE"] {
+        let path = git_dir.join(name);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| crate::error::Error::IoAtPath { path: path.to_string_lossy().into_owned().into(), source: e })?;
+        }
+    }
     Ok(())
 }
 

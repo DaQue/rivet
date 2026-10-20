@@ -674,7 +674,7 @@ impl Repository {
         };
 
         std::fs::create_dir_all(&git_dir).map_err(|e| io_at(&git_dir, e))?;
-        for dir in ["objects", "refs/heads", "refs/tags"] {
+        for dir in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks", "info"] {
             let p = git_dir.join(dir);
             std::fs::create_dir_all(&p).map_err(|e| io_at(&p, e))?;
         }
@@ -701,11 +701,17 @@ impl Repository {
             ObjectFormat::Sha1 => b"0",
             ObjectFormat::Sha256 => b"1",
         };
+        // The keys and their order are the ones `git init` writes, so a fresh rivet config is
+        // byte-identical to a fresh git one.
         config.set(BStr::new(b"core.repositoryformatversion"), version)?;
+        config.set(BStr::new(b"core.filemode"), b"true")?;
         config.set(
             BStr::new(b"core.bare"),
             if options.bare { b"true" } else { b"false" },
         )?;
+        if !options.bare {
+            config.set(BStr::new(b"core.logallrefupdates"), b"true")?;
+        }
         // A work tree outside the repository root cannot be rediscovered from the layout, so it
         // has to be written down: a later `open_with(git_dir, None)` would otherwise guess the
         // root and stage into the wrong directory.
@@ -725,6 +731,29 @@ impl Repository {
             )?;
         }
         config.write(&config_path)?;
+
+        // The two template files every `git init` leaves behind; neither is overwritten on a
+        // re-init, so a user's edits survive.
+        for (name, contents) in [
+            (
+                "description",
+                &b"Unnamed repository; edit this file 'description' to name the repository.\n"[..],
+            ),
+            (
+                "info/exclude",
+                &b"# git ls-files --others --exclude-from=.git/info/exclude\n\
+                   # Lines that start with '#' are comments.\n\
+                   # For a project mostly in C, the following would be a good set of\n\
+                   # exclude patterns (uncomment them if you want to use them):\n\
+                   # *.[oa]\n\
+                   # *~\n"[..],
+            ),
+        ] {
+            let p = git_dir.join(name);
+            if !p.exists() {
+                std::fs::write(&p, contents).map_err(|e| io_at(&p, e))?;
+            }
+        }
 
         // An unborn HEAD: a symbolic ref to a branch that does not exist yet.
         let head_path = git_dir.join("HEAD");
@@ -1247,13 +1276,22 @@ impl Repository {
         } else if !options.parents.is_empty() {
             options.parents.clone()
         } else {
-            match &head {
+            let mut parents = match &head {
                 HeadState::Attached { oid, .. } | HeadState::Detached { oid } => vec![*oid],
                 HeadState::Unborn { .. } => Vec::new(),
+            };
+            // A conflicted or `--no-commit` merge is concluded by an ordinary commit, which
+            // takes the merged heads as its extra parents — `MERGE_HEAD` is that record.
+            if let Some(state) = crate::merge::read_merge_state(&self.git_dir, self.format)? {
+                parents.extend(state.merge_head.iter().copied());
             }
+            parents
         };
+        let concluding_merge = !options.amend
+            && options.parents.is_empty()
+            && crate::merge::merge_in_progress(&self.git_dir);
 
-        if !options.allow_empty && !options.amend {
+        if !options.allow_empty && !options.amend && parents.len() < 2 {
             if let Some(parent) = parents.first() {
                 let parent_tree = match self.odb.read_typed(parent, ObjectKind::Commit)?.parse()? {
                     AnyObject::Commit(commit) => commit.tree,
@@ -1267,81 +1305,16 @@ impl Repository {
             }
         }
 
-        // Identity: the options if given, then the environment, then `user.name`/`user.email`.
-        let from_config = |key: &[u8]| -> Option<BString> {
-            self.config
-                .get(BStr::new(key))
-                .ok()
-                .flatten()
-                .map(|value| value.to_owned())
+        // Identity: the options if given, then the environment, then the configuration
+        // (repository, global, system — Git's precedence).
+        let author = match &options.author {
+            Some(signature) => signature.clone(),
+            None => self.author_signature()?,
         };
-        let resolve = |given: &Option<Signature>,
-                       name_var: &str,
-                       email_var: &str,
-                       date_var: &str,
-                       what: &str|
-         -> Result<Signature> {
-            if let Some(signature) = given {
-                return Ok(signature.clone());
-            }
-            // Identity variables are bytes; a lossy decode would record a different name than the
-            // one the environment holds.
-            let name = std::env::var_os(name_var)
-                .map(|v| {
-                    use std::os::unix::ffi::OsStringExt;
-                    BString::from(v.into_vec())
-                })
-                .or_else(|| from_config(b"user.name"));
-            let email = std::env::var_os(email_var)
-                .map(|v| {
-                    use std::os::unix::ffi::OsStringExt;
-                    BString::from(v.into_vec())
-                })
-                .or_else(|| from_config(b"user.email"));
-            match (name, email) {
-                (Some(name), Some(email)) => {
-                    // `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` pin the timestamp, which is what
-                    // makes a rivet commit byte-identical to a git one in a differential test.
-                    // Without one, now — but the offset still comes from the local zone.
-                    let date = std::env::var_os(date_var)
-                        .map(|v| {
-                            use std::os::unix::ffi::OsStringExt;
-                            BString::from(v.into_vec())
-                        })
-                        .and_then(|v| crate::object::commit::parse_git_date(BStr::new(&v)));
-                    Ok(match date {
-                        Some((when, tz_offset_minutes)) => Signature {
-                            name,
-                            email,
-                            when,
-                            tz_offset_minutes,
-                        },
-                        None => Signature::from_zoned(
-                            BStr::new(&name),
-                            BStr::new(&email),
-                            jiff::Zoned::now(),
-                        ),
-                    })
-                }
-                _ => Err(Error::Message(format!(
-                    "cannot resolve {what} identity: set user.name and user.email"
-                ))),
-            }
+        let committer = match &options.committer {
+            Some(signature) => signature.clone(),
+            None => self.committer_signature()?,
         };
-        let author = resolve(
-            &options.author,
-            "GIT_AUTHOR_NAME",
-            "GIT_AUTHOR_EMAIL",
-            "GIT_AUTHOR_DATE",
-            "author",
-        )?;
-        let committer = resolve(
-            &options.committer,
-            "GIT_COMMITTER_NAME",
-            "GIT_COMMITTER_EMAIL",
-            "GIT_COMMITTER_DATE",
-            "committer",
-        )?;
 
         let mut builder = CommitBuilder::new();
         builder.tree(tree);
@@ -1362,19 +1335,48 @@ impl Repository {
             .split(|b| *b == b'\n')
             .next()
             .unwrap_or(&[]);
-        let reason = Self::reflog_message("commit", BStr::new(subject));
-        let message = crate::refs::ReflogMessage::new(&committer, BStr::new(&reason));
+        // Git distinguishes the first commit and an amend in the reflog; `HEAD@{n}` searches
+        // and `git reflog` output depend on the exact words.
+        let operation = if options.amend {
+            "commit (amend)"
+        } else if parents.is_empty() {
+            "commit (initial)"
+        } else if parents.len() > 1 {
+            "commit (merge)"
+        } else {
+            "commit"
+        };
+        let reason = Self::reflog_message(operation, BStr::new(subject));
+        let message = self
+            .should_log_ref(&crate::refs::RefName::head())
+            .then(|| crate::refs::ReflogMessage::new(&committer, BStr::new(&reason)));
 
         match &head {
             HeadState::Attached { branch, oid: old } => {
-                self.refs.update(branch, oid, Some(*old), Some(message))?;
+                self.refs.update(branch, oid, Some(*old), None)?;
             }
             HeadState::Unborn { branch } => {
-                self.refs.update(branch, oid, None, Some(message))?;
+                self.refs.update(branch, oid, None, None)?;
             }
             HeadState::Detached { .. } => {
                 let head_ref = crate::refs::RefName::from_bytes(b"HEAD")?;
-                self.refs.set_direct(&head_ref, oid, Some(message))?;
+                self.refs.set_direct(&head_ref, oid, message)?;
+                return Ok(oid);
+            }
+        }
+        if concluding_merge {
+            crate::merge::clear_merge_state(&self.git_dir)?;
+        }
+        // The branch moved through `HEAD`: both logs get the line, as Git writes them.
+        if let Some(branch) = head.branch() {
+            let old = head.oid().unwrap_or_else(|| ObjectId::zero(self.format));
+            if self.should_log_ref(branch) {
+                let entry = crate::refs::ReflogEntry::new(old, oid, committer.clone(), reason.clone());
+                self.refs.append_reflog(branch, &entry)?;
+            }
+            if message.is_some() {
+                let entry = crate::refs::ReflogEntry::new(old, oid, committer.clone(), reason.clone());
+                self.refs.append_reflog(&crate::refs::RefName::head(), &entry)?;
             }
         }
 

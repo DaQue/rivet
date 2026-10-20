@@ -166,46 +166,44 @@ pub fn merge_base(odb: &Odb, ours: ObjectId, theirs: ObjectId) -> Result<MergeBa
 ///
 /// As [`merge_base`].
 pub fn merge_bases(odb: &Odb, ours: ObjectId, theirs: ObjectId) -> Result<Vec<ObjectId>> {
-    let mut bases = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut stack = vec![(ours, theirs)];
+    if ours == theirs {
+        return Ok(vec![ours]);
+    }
     let mut steps = 0usize;
-    while let Some((a, b)) = stack.pop() {
-        if a == b {
-            if seen.insert(a) {
-                bases.push(a);
-            }
+    let ours_ancestors = ancestors(odb, ours, &mut steps)?;
+
+    // Walk back from `theirs`; the first commits found that `ours` can also reach are the
+    // candidates, and their own ancestors are common but never maximal, so the walk stops there.
+    let mut candidates = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::from([theirs]);
+    while let Some(oid) = queue.pop_front() {
+        if !seen.insert(oid) {
+            continue;
+        }
+        if ours_ancestors.contains(&oid) {
+            candidates.push(oid);
             continue;
         }
         steps += 1;
-        if steps > 1000 {
-            break;
+        if steps > crate::merge::MAX_MERGE_BASE_STEPS {
+            return Err(Error::NoMergeBase { ours, theirs });
         }
-        let (kind_a, _) = odb.read_header(&a)?;
-        let (kind_b, _) = odb.read_header(&b)?;
-        let a_parents = if kind_a == ObjectKind::Commit {
-            match odb.read_typed(&a, ObjectKind::Commit) {
-                Ok(obj) => obj.data().to_vec(),
-                Err(_) => Vec::new(),
+        queue.extend(parents_of(odb, oid)?);
+    }
+
+    // A candidate that another candidate can reach is not a *best* common ancestor.
+    let mut bases = Vec::new();
+    for (i, candidate) in candidates.iter().enumerate() {
+        let mut dominated = false;
+        for (j, other) in candidates.iter().enumerate() {
+            if i != j && ancestors(odb, *other, &mut steps)?.contains(candidate) {
+                dominated = true;
+                break;
             }
-        } else {
-            Vec::new()
-        };
-        let b_parents = if kind_b == ObjectKind::Commit {
-            match odb.read_typed(&b, ObjectKind::Commit) {
-                Ok(obj) => obj.data().to_vec(),
-                Err(_) => Vec::new(),
-            }
-        } else {
-            Vec::new()
-        };
-        let a_parent = a_parents.first().map(|_| a);
-        let b_parent = b_parents.first().map(|_| b);
-        if let Some(ap) = a_parent {
-            stack.push((ap, b));
         }
-        if let Some(bp) = b_parent {
-            stack.push((a, bp));
+        if !dominated {
+            bases.push(*candidate);
         }
     }
     bases.sort();
@@ -214,4 +212,31 @@ pub fn merge_bases(odb: &Odb, ours: ObjectId, theirs: ObjectId) -> Result<Vec<Ob
         return Err(Error::NoMergeBase { ours, theirs });
     }
     Ok(bases)
+}
+
+/// The parents a commit records.
+fn parents_of(odb: &Odb, oid: ObjectId) -> Result<Vec<ObjectId>> {
+    let object = odb.read_typed(&oid, ObjectKind::Commit)?;
+    Ok(crate::object::Commit::parse(odb.format(), object.data())?.parents)
+}
+
+/// Every commit reachable from `start`, itself included.
+fn ancestors(
+    odb: &Odb,
+    start: ObjectId,
+    steps: &mut usize,
+) -> Result<std::collections::HashSet<ObjectId>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![start];
+    while let Some(oid) = stack.pop() {
+        if !seen.insert(oid) {
+            continue;
+        }
+        *steps += 1;
+        if *steps > crate::merge::MAX_MERGE_BASE_STEPS {
+            return Err(Error::NoMergeBase { ours: start, theirs: start });
+        }
+        stack.extend(parents_of(odb, oid)?);
+    }
+    Ok(seen)
 }

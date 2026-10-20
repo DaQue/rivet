@@ -174,7 +174,8 @@ pub fn split_lines(data: &[u8]) -> Vec<DiffLine<'_>> {
     while start < len {
         let end = data[start..].iter().position(|&b| b == b'\n').map(|i| start + i + 1).unwrap_or(len);
         let content = &data[start..end];
-        let has_newline = end < len;
+        // Whether *this* line is terminated, which the final line of a file usually is too.
+        let has_newline = content.last() == Some(&b'\n');
         lines.push(DiffLine { content, has_newline });
         start = end;
     }

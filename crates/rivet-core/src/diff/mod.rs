@@ -57,7 +57,7 @@ pub use myers::{
 };
 pub use tree::{FileDiff, TreeDiff, blob_diff, entry_diff, index_diff, tree_diff, work_tree_diff};
 pub use unified::{
-    DiffStat, Hunk, HunkLine, LineKind, change_letter, format_name_status, format_stat,
+    DiffStat, Hunk, HunkLine, LineKind, change_letter, format_name_status, format_stat, format_stat_sized,
     format_unified, index_line_abbrev, write_unified,
 };
 

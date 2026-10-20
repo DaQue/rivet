@@ -674,6 +674,18 @@ pub fn write_blob(
         });
     }
     let data = odb.read_typed(&oid, ObjectKind::Blob)?.into_data();
+    write_bytes(worktree, path, &data, mode)
+}
+
+/// Write `data` to a work tree path with the file mode `mode`, as [`write_blob`] does for a
+/// blob — for content that is not (and should not become) an object, such as a file with
+/// conflict markers.
+pub fn write_bytes(
+    worktree: &Worktree,
+    path: &bstr::BStr,
+    data: &[u8],
+    mode: EntryMode,
+) -> Result<()> {
     let file = worktree.join(path)?;
     let existed = match file.symlink_metadata() {
         // Never follow a symlink: writing through one writes into whatever it points at, which

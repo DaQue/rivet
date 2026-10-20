@@ -657,40 +657,113 @@ pub fn write_unified(
 ///
 /// The writer's errors, as [`crate::error::Error::Io`].
 pub fn format_stat(diff: &crate::diff::TreeDiff, out: &mut impl Write) -> Result<()> {
-    let total_added: usize = diff.stats.iter().map(|s| s.added).sum();
-    let total_deleted: usize = diff.stats.iter().map(|s| s.deleted).sum();
-    let max_count = diff.stats.iter().map(|s| s.added.max(s.deleted)).max().unwrap_or(0);
-    let bar_width = if max_count == 0 { 0 } else { 50 };
-    for stat in &diff.stats {
-        let display = if stat.is_binary {
-            "Binary".to_string()
+    format_stat_sized(diff, None, out)
+}
+
+/// [`format_stat`], with binary files shown as `Bin <old> -> <new> bytes` the way Git prints
+/// them, which needs the object database to size the blobs.
+pub fn format_stat_sized(
+    diff: &crate::diff::TreeDiff,
+    odb: Option<&crate::odb::Odb>,
+    out: &mut impl Write,
+) -> Result<()> {
+    // Git's `show_stats` with the non-terminal width of 80 columns.
+    const WIDTH: usize = 80;
+    let decimal_width = |n: usize| n.to_string().len();
+    let size_of = |oid: Option<crate::hash::ObjectId>| -> usize {
+        match (oid, odb) {
+            (Some(oid), Some(odb)) => odb.read_header(&oid).map(|(_, size)| size as usize).unwrap_or(0),
+            _ => 0,
+        }
+    };
+
+    let mut max_change = 0usize;
+    let mut name_width = 0usize;
+    let mut number_width = 0usize;
+    for (stat, file) in diff.stats.iter().zip(diff.files.iter()) {
+        name_width = name_width.max(stat.path.len());
+        if stat.is_binary {
+            // "Bin" occupies the number column.
+            number_width = number_width.max(3);
+            let _ = file;
+        } else {
+            max_change = max_change.max(stat.added + stat.deleted);
+        }
+    }
+    number_width = number_width.max(decimal_width(max_change));
+    let mut graph_width = max_change;
+    if name_width + number_width + 6 + graph_width > WIDTH {
+        let limit = (WIDTH * 3 / 8).saturating_sub(number_width + 6);
+        if graph_width > limit {
+            graph_width = limit.max(6);
+        }
+        if name_width > WIDTH.saturating_sub(number_width + 6 + graph_width) {
+            name_width = WIDTH.saturating_sub(number_width + 6 + graph_width);
+        } else {
+            graph_width = WIDTH - number_width - 6 - name_width;
+        }
+    }
+    // Git's `scale_linear`: a non-zero count always gets at least one mark.
+    let scale = |n: usize| -> usize {
+        if n == 0 { 0 } else { 1 + n * (graph_width.saturating_sub(1)) / max_change }
+    };
+
+    let mut total_added = 0usize;
+    let mut total_deleted = 0usize;
+    for (stat, file) in diff.stats.iter().zip(diff.files.iter()) {
+        let mut name = stat.path.to_string();
+        if name.len() > name_width {
+            // Git keeps the tail of a long name behind "...".
+            let keep = name_width.saturating_sub(3);
+            let cut = name.len() - keep;
+            let mut start = cut;
+            while !name.is_char_boundary(start) {
+                start += 1;
+            }
+            name = format!("...{}", &name[start..]);
+        }
+        let mut line = format!(" {name:<name_width$} |");
+        if stat.is_binary {
+            let old = size_of(file.old_oid);
+            let new = size_of(file.new_oid);
+            line.push_str(&format!(" {:>number_width$} {old} -> {new} bytes", "Bin"));
         } else {
             let total = stat.added + stat.deleted;
-            let bar_len = if total == 0 { 0 } else { (total * bar_width) / max_count };
-            let mut bar = String::new();
-            for _ in 0..bar_len {
-                bar.push('#');
+            total_added += stat.added;
+            total_deleted += stat.deleted;
+            let (mut plus, mut minus) = (stat.added, stat.deleted);
+            if graph_width <= max_change {
+                let mut scaled = scale(total);
+                if scaled < 2 && plus > 0 && minus > 0 {
+                    scaled = 2;
+                }
+                if plus < minus {
+                    plus = scale(plus);
+                    minus = scaled - plus;
+                } else {
+                    minus = scale(minus);
+                    plus = scaled - minus;
+                }
             }
-            format!("{} ({})", bar, total)
-        };
-        let path = stat.path.to_string();
-        let pad = 50usize.saturating_sub(path.len());
-        let line = format!("{}{} {:>width$}\n", path, " ".repeat(pad), display, width = 50);
+            line.push_str(&format!(" {total:>number_width$}"));
+            if total > 0 {
+                line.push(' ');
+            }
+            line.push_str(&"+".repeat(plus));
+            line.push_str(&"-".repeat(minus));
+        }
+        line.push('\n');
         out.write_all(line.as_bytes())?;
     }
     let files = diff.stats.len();
-    let mut summary = format!("{} file{} changed", files, if files == 1 { "" } else { "s" });
-    if total_added > 0 {
-        summary.push_str(&format!(", {} insertion{}", total_added, if total_added == 1 { "" } else { "s" }));
-        summary.push_str("(+)");
+    let mut summary = format!(" {} file{} changed", files, if files == 1 { "" } else { "s" });
+    if total_added > 0 || total_deleted == 0 {
+        summary.push_str(&format!(", {} insertion{}(+)", total_added, if total_added == 1 { "" } else { "s" }));
     }
-    if total_deleted > 0 {
-        if total_added > 0 {
-            summary.push_str(", ");
-        }
-        summary.push_str(&format!("{} deletion{}", total_deleted, if total_deleted == 1 { "" } else { "s" }));
-        summary.push_str("(-)");
+    if total_deleted > 0 || total_added == 0 {
+        summary.push_str(&format!(", {} deletion{}(-)", total_deleted, if total_deleted == 1 { "" } else { "s" }));
     }
+    summary.push('\n');
     out.write_all(summary.as_bytes())?;
     Ok(())
 }

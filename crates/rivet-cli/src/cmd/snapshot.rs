@@ -596,10 +596,33 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
     options.amend = args.amend;
 
     let oid = repository.commit(&options)?;
+    if global.quiet {
+        return Ok(0);
+    }
 
-    let branch = branch_name(&repository.head()?);
-    let subject = message.lines().next().unwrap_or_default();
-    println!("[{branch} {}] {subject}", short_oid(&oid));
+    let head = repository.head()?;
+    let branch = match &head {
+        HeadState::Detached { .. } => "detached HEAD".to_string(),
+        other => branch_name(other),
+    };
+    let parents = repository.commit_parents(oid)?;
+    let root = if parents.is_empty() { " (root-commit)" } else { "" };
+    let subject = super::commit_subject(&repository, &oid)?;
+    println!("[{branch}{root} {}] {subject}", short_oid(&oid));
+    let author = repository.author_signature()?;
+    let committer = repository.committer_signature()?;
+    if author.name != committer.name || author.email != committer.email {
+        println!(" Author: {} <{}>", author.name, author.email);
+    }
+    // Like `git log`, the summary shows no diff for a merge commit.
+    if parents.len() < 2 {
+        let old_tree = match parents.first() {
+            Some(parent) => Some(repository.commit_tree(*parent)?),
+            None => None,
+        };
+        let new_tree = repository.commit_tree(oid)?;
+        super::print_shortstat_summary(&repository, old_tree, new_tree)?;
+    }
 
     Ok(0)
 }
@@ -678,8 +701,35 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         options.pathspec = super::worktree_path(&repository, path, "status")?;
     }
 
-    let status = repository.status(&options)?;
+    let mut status = repository.status(&options)?;
     let head = repository.head()?;
+    // Conflicted paths get their own section and two-letter codes, decided by which stages exist.
+    let unmerged: Vec<(BString, &'static str, &'static str)> = {
+        use rivet_core::index::{IndexExt as _, Stage};
+        let mut out = Vec::new();
+        for path in status.conflicts().into_iter().cloned().collect::<Vec<_>>() {
+            let stages: Vec<Stage> = repository
+                .index()
+                .stages(bstr::BStr::new(&path[..]))
+                .iter()
+                .map(|e| e.stage())
+                .collect();
+            let has = |s: Stage| stages.contains(&s);
+            let (code, label) = match (has(Stage::Base), has(Stage::Ours), has(Stage::Theirs)) {
+                (true, true, true) => ("UU", "both modified:"),
+                (false, true, true) => ("AA", "both added:"),
+                (true, false, true) => ("DU", "deleted by us:"),
+                (true, true, false) => ("UD", "deleted by them:"),
+                (false, true, false) => ("AU", "added by us:"),
+                (false, false, true) => ("UA", "added by them:"),
+                _ => ("DD", "both deleted:"),
+            };
+            out.push((path, code, label));
+        }
+        out
+    };
+    status.staged.retain(|e| e.kind != ChangeKind::Unmerged);
+    status.unstaged.retain(|e| e.kind != ChangeKind::Unmerged);
 
     let head_line = || -> String {
         match &head {
@@ -706,6 +756,9 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         for entry in &status.unstaged {
             println!(" {} {}", entry.kind.code(), entry.path);
         }
+        for (path, code, _) in &unmerged {
+            println!("{code} {path}");
+        }
         for path in &status.untracked {
             println!("?? {}", path);
         }
@@ -728,12 +781,29 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         println!();
     }
 
+    if !unmerged.is_empty() {
+        println!("You have unmerged paths.");
+        println!("  (fix conflicts and run \"git commit\")");
+        println!("  (use \"git merge --abort\" to abort the merge)");
+        println!();
+    }
     let mut wrote_section = false;
     if !status.staged.is_empty() {
         println!("Changes to be committed:");
         println!("  (use \"git restore --staged <file>...\" to unstage)");
         for entry in &status.staged {
             println!("\t{:<12}{}", section_label(entry.kind), entry.path);
+        }
+        wrote_section = true;
+    }
+    if !unmerged.is_empty() {
+        if wrote_section {
+            println!();
+        }
+        println!("Unmerged paths:");
+        println!("  (use \"git add <file>...\" to mark resolution)");
+        for (path, _, label) in &unmerged {
+            println!("\t{:<17}{}", label, path);
         }
         wrote_section = true;
     }
