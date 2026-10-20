@@ -301,40 +301,67 @@ impl RemoteUrl {
             RemoteScheme::File
         };
         let rest = if let Some(end) = scheme_end { &bytes[end + 1..] } else { bytes };
+        let mut user: Option<BString> = None;
+        let mut password: Option<BString> = None;
         let (host, port, path) = if scheme == RemoteScheme::File {
             (None, None, BString::from(rest))
         } else {
             let host_start = if rest.starts_with(b"//") { 2 } else { 0 };
-            let host_end = rest[host_start..].iter().position(|&b| b == b'/').map(|p| host_start + p).unwrap_or(rest.len());
-            let host_str = &rest[host_start..host_end];
+            let authority_end = rest[host_start..]
+                .iter()
+                .position(|&b| b == b'/')
+                .map(|p| host_start + p)
+                .unwrap_or(rest.len());
+            let authority = &rest[host_start..authority_end];
+            // `user[:password]@host[:port]`; the host may be a bracketed IPv6 literal.
+            let (userinfo, hostport) = match authority.iter().rposition(|&b| b == b'@') {
+                Some(at) => (Some(&authority[..at]), &authority[at + 1..]),
+                None => (None, authority),
+            };
+            if let Some(info) = userinfo {
+                match info.iter().position(|&b| b == b':') {
+                    Some(c) => {
+                        user = Some(BString::from(&info[..c]));
+                        password = Some(BString::from(&info[c + 1..]));
+                    }
+                    None => user = Some(BString::from(info)),
+                }
+            }
+            let (host_str, port_str): (&[u8], Option<&[u8]>) = if hostport.starts_with(b"[") {
+                match hostport.iter().position(|&b| b == b']') {
+                    Some(close) => {
+                        let after = &hostport[close + 1..];
+                        (&hostport[1..close], after.strip_prefix(b":"))
+                    }
+                    None => return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "unterminated IPv6 literal" }),
+                }
+            } else {
+                match hostport.iter().rposition(|&b| b == b':') {
+                    Some(c) => (&hostport[..c], Some(&hostport[c + 1..])),
+                    None => (hostport, None),
+                }
+            };
             if host_str.is_empty() {
                 return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "no host" });
             }
-            let host = BString::from(host_str);
-            let port = if host_end < rest.len() && rest[host_end] == b':' {
-                let port_start = host_end + 1;
-                let port_end = rest[port_start..].iter().position(|&b| b == b'/').map(|p| port_start + p).unwrap_or(rest.len());
-                let port_str = &rest[port_start..port_end];
-                if port_str.is_empty() {
+            let port = match port_str {
+                Some(text) if text.is_empty() => {
                     return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "empty port" });
                 }
-                match std::str::from_utf8(port_str) {
-                    Ok(s) => match s.parse::<u16>() {
-                        Ok(p) => Some(p),
-                        Err(_) => return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "port is not a number" }),
-                    },
-                    Err(_) => return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "port is not a number" }),
-                }
-            } else {
-                None
+                Some(text) => match std::str::from_utf8(text).ok().and_then(|t| t.parse::<u16>().ok()) {
+                    Some(p) => Some(p),
+                    None => return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "port is not a number" }),
+                },
+                None => None,
             };
-            let path_bytes = if host_end < rest.len() { &rest[host_end..] } else { &b""[..] };
+            let path_bytes = if authority_end < rest.len() { &rest[authority_end..] } else { &b""[..] };
             if path_bytes.is_empty() {
                 return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "empty path" });
             }
+            let host = BString::from(host_str);
             (Some(host), port, BString::from(path_bytes))
         };
-        Ok(Self { scheme, user: None, password: None, host, port, path })
+        Ok(Self { scheme, user, password, host, port, path })
     }
 
     /// Phase 11 — parse a local path, without URL syntax being considered.

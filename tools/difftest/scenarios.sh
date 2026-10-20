@@ -509,12 +509,100 @@ s_ssh() {
     v status
 }
 
+s_http() {
+    local port=18771 root=$PWD
+    mkdir -p http/cgi-bin http/repos
+    printf '#!/bin/sh\nexport GIT_PROJECT_ROOT=%s/http/repos GIT_HTTP_EXPORT_ALL=1\nexec git http-backend\n' "$root" >http/cgi-bin/git-http
+    chmod +x http/cgi-bin/git-http
+    g init -q --bare http/repos/origin.git; g -C http/repos/origin.git config http.receivepack true
+    (cd http && exec python3 -m http.server $port --cgi --bind 127.0.0.1 >/dev/null 2>&1) &
+    local server=$!
+    sleep 1
+    local url=http://127.0.0.1:$port/cgi-bin/git-http/origin.git
+    g clone -q http/repos/origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g tag v1 && g push -q origin HEAD:main --tags 2>/dev/null)
+    v clone -q $url repo
+    (cd seed && tick && echo b >b && g add b && g commit -qm two && g push -q origin HEAD:main 2>/dev/null)
+    cd repo
+    v fetch
+    v pull
+    v log --oneline
+    tick; echo c >c; v add c; v commit -q -m three
+    v push
+    v push origin HEAD:refs/heads/side
+    v status
+    kill $server 2>/dev/null; wait $server 2>/dev/null
+}
+
+# Seeded random walk over the porcelain: the same operations, in the same order, for both tools.
+random_walk() {
+    local seed=$1 steps=${2:-60}
+    RANDOM=$seed
+    v init -q repo; cd repo
+    local files=(a.txt b.txt c.txt d/e.txt d/f.txt g.txt)
+    local branches=(main)
+    local n i f b
+    echo base >a.txt; v add a.txt; v commit -q -m base
+    for ((n = 0; n < steps; n++)); do
+        case $((RANDOM % 14)) in
+            0|1|2) # edit a file with a few short lines (small alphabet => frequent merge overlaps)
+                f=${files[$((RANDOM % ${#files[@]}))]}; mkdir -p "$(dirname "$f")"
+                : >"$f"; for ((i = 0; i < RANDOM % 5 + 1; i++)); do echo "line $((RANDOM % 4))" >>"$f"; done ;;
+            3) f=${files[$((RANDOM % ${#files[@]}))]}; rm -f "$f"; v rm -q --cached "$f" 2>/dev/null ;;
+            4|5) v add -A ;;
+            6|7) tick; v commit -q -a -m "step $n"; v commit -q -m "step $n staged" ;;
+            8) b="br$((RANDOM % 3))"; v branch "$b" 2>/dev/null; branches+=("$b") ;;
+            9) b=${branches[$((RANDOM % ${#branches[@]}))]}; v switch -q "$b" ;;
+            10) b=${branches[$((RANDOM % ${#branches[@]}))]}; tick; v merge -q -m "merge $b" "$b" ;;
+            11) case $((RANDOM % 3)) in 0) v reset -q --soft HEAD~1 ;; 1) v reset -q --mixed HEAD~1 ;; 2) v reset -q --hard HEAD~1 ;; esac ;;
+            12) f=${files[$((RANDOM % ${#files[@]}))]}; v restore "$f"; v restore --staged "$f" ;;
+            13) v status -s; v diff --stat; v log --oneline -n 3 ;;
+        esac
+        # leave any conflict behind so the walk can continue
+        if v ls-files -u | grep -q .; then v merge --abort; fi
+    done
+    v status -s; v log --oneline --all
+}
+s_random_1() { random_walk 1; }
+s_random_2() { random_walk 2; }
+s_random_3() { random_walk 3; }
+s_random_4() { random_walk 4; }
+s_random_5() { random_walk 5; }
+s_random_6() { random_walk 6; }
+s_random_7() { random_walk 7; }
+s_random_8() { random_walk 8; }
+
+s_renames() {
+    v init -q repo; cd repo
+    seq 1 40 >a.txt; seq 100 140 >b.txt; mkdir -p src/old; seq 1 30 >src/old/deep.txt; echo tiny >t.txt; seq 1 20 >c.txt
+    v add -A; v commit -q -m base
+    mv a.txt renamed.txt                       # exact
+    seq 100 140 | sed 's/^120$/CHANGED/' >bb.txt; rm b.txt     # similar
+    mkdir -p src/new; mv src/old/deep.txt src/new/deep.txt      # directory move
+    chmod +x c.txt; mv c.txt c2.txt                              # rename + mode
+    echo unrelated >u.txt; rm t.txt                              # not a rename
+    v status
+    v status -s
+    v add -A
+    v status
+    v status -s
+    v diff --cached
+    v diff --cached --stat
+    v diff --cached --name-status
+    v diff --cached --name-only
+    tick; v commit -m "renames"
+    v show
+    v log --stat --oneline
+    v diff HEAD~1 HEAD --name-status
+    v diff HEAD~1 HEAD
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
 for s in "$@"; do
     case $s in
-        s_remote_fetch_push|s_ssh|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags) run_scenario "$s" repo origin.git ;;
+        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags) run_scenario "$s" repo origin.git ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         *) run_scenario "$s" ;;
     esac

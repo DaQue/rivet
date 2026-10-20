@@ -41,6 +41,10 @@ v() {
         sed -e "s#$ROOT#<ROOT>#g" "$TMPERR" >>"$TRANSCRIPT"
     fi
     echo "[exit $rc]" >>"$TRANSCRIPT"
+    # Debugging aid: freeze the scenario (and its directories) at the first matching error.
+    if [ -n "${STOP_ON:-}" ] && [ "$IMPL" = rivet ] && grep -q "$STOP_ON" "$TMPERR"; then
+        echo "STOPPED in $PWD" >>"$base_stop"; exit 77
+    fi
     return $rc
 }
 
@@ -77,7 +81,7 @@ state_of() {
 run_scenario() {
     local name=$1; shift
     local base; base=$(mktemp -d "${TMPDIR:-/tmp}/difftest.XXXXXX")
-    TMPOUT=$base/out TMPERR=$base/err
+    TMPOUT=$base/out TMPERR=$base/err; base_stop=$base/stopped
     for IMPL in git rivet; do
         ROOT=$base/$IMPL
         mkdir -p "$ROOT"

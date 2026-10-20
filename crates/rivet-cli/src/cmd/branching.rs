@@ -1637,12 +1637,16 @@ pub fn merge_commit(
     // Git records the pre-merge tip before deciding anything, "Already up to date" included.
     rivet_core::write_orig_head(&git_dir, ours)?;
     if repository.is_ancestor(theirs, ours)? {
-        println!("Already up to date.");
+        if show_stat {
+            println!("Already up to date.");
+        }
         return Ok(0);
     }
 
     if ff != FastForward::Never && repository.is_ancestor(ours, theirs)? {
-        println!("Updating {}..{}", super::short_oid(&ours), super::short_oid(&theirs));
+        if show_stat {
+            println!("Updating {}..{}", super::short_oid(&ours), super::short_oid(&theirs));
+        }
         let old_tree = repository.commit_tree(ours)?;
         let new_tree = repository.commit_tree(theirs)?;
         if let Err(error) = repository.checkout_tree(new_tree, false) {
@@ -1650,7 +1654,9 @@ pub fn merge_commit(
         }
         let reason = if action.starts_with("pull") { format!("{action}: Fast-forward") } else { format!("{action} {label}: Fast-forward") };
         repository.move_head(theirs, BStr::new(reason.as_bytes()))?;
-        println!("Fast-forward");
+        if show_stat {
+            println!("Fast-forward");
+        }
         if show_stat {
             super::print_diffstat(repository, Some(old_tree), new_tree)?;
         }
@@ -1757,7 +1763,9 @@ pub fn merge_commit(
         format!("{action} {label}: Merge made by the 'ort' strategy.")
     };
     repository.move_head(commit, BStr::new(reason.as_bytes()))?;
-    println!("Merge made by the 'ort' strategy.");
+    if show_stat {
+        println!("Merge made by the 'ort' strategy.");
+    }
     if show_stat {
         let old_tree = repository.commit_tree(ours)?;
         super::print_diffstat(repository, Some(old_tree), tree)?;

@@ -49,12 +49,14 @@
 use bstr::{BStr, BString};
 
 pub mod myers;
+pub mod rename;
 pub mod tree;
 pub mod unified;
 
 pub use myers::{
     DiffLine, Edit, histogram_diff, line_count, myers_diff, needs_newline_marker, split_lines,
 };
+pub use rename::{RenamePair, RenameSide, detect_renames, pair_renames, pprint_rename};
 pub use tree::{FileDiff, TreeDiff, blob_diff, entry_diff, index_diff, tree_diff, work_tree_diff};
 pub use unified::{
     DiffStat, Hunk, HunkLine, LineKind, change_letter, format_name_status, format_stat, format_stat_sized,

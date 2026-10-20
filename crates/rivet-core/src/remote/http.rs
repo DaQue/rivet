@@ -778,34 +778,12 @@ pub const fn is_success(status: u16) -> bool {
     status == 200 || status == 304
 }
 
-impl Transport for HttpTransport {
-    /// Phase 11 — `GET` the advertisement and parse it.
-    ///
-    /// # Caveats
-    ///
-    /// * **The v2 and v0 responses are shaped differently and both must be handled.** A v2 response
-    ///   is a capability list, a delim packet, then either nothing (the client must send `ls-refs`)
-    ///   or, for a server that pre-empts it, the refs. A v0 response is a ref list with the
-    ///   capabilities on the first line. Which arrived is decided by the response's own content, not
-    ///   by the header the client sent.
-    /// * **The `service=` line is the first line of a v0 body** (`# service=git-upload-pack\n`
-    ///   followed by a flush) and must be consumed before the ref list. A parser that started at the
-    ///   refs sees `# service=…` as a ref name.
-    /// * **The object-format check happens here**, against the `format` argument, so that a
-    ///   mismatched peer is [`crate::error::Error::ObjectFormatMismatch`] before any id is parsed at
-    ///   the wrong width (plan §2.1 rule 5).
-    /// * **A `401` triggers the credential chain once**, and only once: a second `401` after
-    ///   credentials were supplied is [`crate::error::Error::Authentication`], because retrying a
-    ///   rejected credential in a loop is how a user gets locked out of a service that bans repeated
-    ///   failures.
-    ///
-    /// # Errors
-    ///
-    /// [`crate::error::Error::HttpStatus`], [`crate::error::Error::Authentication`],
-    /// [`crate::error::Error::ObjectFormatMismatch`], [`crate::error::Error::Transport`], and
-    /// [`crate::error::Error::Protocol`] for an advertisement that does not parse.
-    fn connect(&mut self, url: &RemoteUrl, format: ObjectFormat) -> Result<RefAdvertisement> {
-        let request = advertise_request(url, Service::UploadPack, ProtocolVersion::V2)?;
+impl HttpTransport {
+    /// Fetch and parse the ref advertisement of one service.
+    fn advertise(&mut self, url: &RemoteUrl, format: ObjectFormat, service: Service) -> Result<RefAdvertisement> {
+        // v0 advertises every ref in the first response, which is what the fetch layer consumes;
+        // asking for v2 would also need a separate `ls-refs` round before any ref is known.
+        let request = advertise_request(url, service, ProtocolVersion::V0)?;
         let base = self.base_url(url, true);
         let response = send(&self.agent, &request, BStr::new(&base))?;
 
@@ -931,6 +909,37 @@ impl Transport for HttpTransport {
             version: ProtocolVersion::V0,
         })
     }
+}
+
+impl Transport for HttpTransport {
+    /// Phase 11 — `GET` the advertisement and parse it.
+    ///
+    /// # Caveats
+    ///
+    /// * **The v2 and v0 responses are shaped differently and both must be handled.** A v2 response
+    ///   is a capability list, a delim packet, then either nothing (the client must send `ls-refs`)
+    ///   or, for a server that pre-empts it, the refs. A v0 response is a ref list with the
+    ///   capabilities on the first line. Which arrived is decided by the response's own content, not
+    ///   by the header the client sent.
+    /// * **The `service=` line is the first line of a v0 body** (`# service=git-upload-pack\n`
+    ///   followed by a flush) and must be consumed before the ref list. A parser that started at the
+    ///   refs sees `# service=…` as a ref name.
+    /// * **The object-format check happens here**, against the `format` argument, so that a
+    ///   mismatched peer is [`crate::error::Error::ObjectFormatMismatch`] before any id is parsed at
+    ///   the wrong width (plan §2.1 rule 5).
+    /// * **A `401` triggers the credential chain once**, and only once: a second `401` after
+    ///   credentials were supplied is [`crate::error::Error::Authentication`], because retrying a
+    ///   rejected credential in a loop is how a user gets locked out of a service that bans repeated
+    ///   failures.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Error::HttpStatus`], [`crate::error::Error::Authentication`],
+    /// [`crate::error::Error::ObjectFormatMismatch`], [`crate::error::Error::Transport`], and
+    /// [`crate::error::Error::Protocol`] for an advertisement that does not parse.
+    fn connect(&mut self, url: &RemoteUrl, format: ObjectFormat) -> Result<RefAdvertisement> {
+        self.advertise(url, format, Service::UploadPack)
+    }
 
     /// Phase 11 — the capabilities from the last [`Transport::connect`].
     fn capabilities(&self) -> &CapabilitySet<'_> {
@@ -989,8 +998,12 @@ impl Transport for HttpTransport {
             body.extend_from_slice(FLUSH_PACKET);
         } else {
             body = wants_request(wants, &self.capabilities, self.format)?;
-            body.extend_from_slice(&haves_request(haves, self.format)?);
-            PktLine::new_data(b"done").write_to(&mut body)?;
+            // One stateless round: the haves go straight into `done`. A flush between them would
+            // end the round and leave the server waiting for a request that never comes.
+            for have in haves {
+                PktLine::new_data(format!("have {}\n", have.to_hex()).as_bytes()).write_to(&mut body)?;
+            }
+            PktLine::new_data(b"done\n").write_to(&mut body)?;
         }
 
         let request = service_request(&self.url, Service::UploadPack, body)?;
@@ -1032,6 +1045,7 @@ impl Transport for HttpTransport {
                         }
                         if !v2
                             && (data.starts_with(b"ack ")
+                                || data.starts_with(b"ACK ")
                                 || data.starts_with(b"NAK")
                                 || data.starts_with(b"shallow ")
                                 || data.starts_with(b"unshallow "))
@@ -1092,6 +1106,11 @@ impl Transport for HttpTransport {
         if updates.is_empty() {
             return Ok(Vec::new());
         }
+        // `receive-pack` advertises its own capabilities (`report-status`, `delete-refs`, …);
+        // the ones learned from `upload-pack` during `connect` describe the wrong service.
+        let url = self.url.clone();
+        let format = self.format;
+        self.advertise(&url, format, Service::ReceivePack)?;
         let sideband = self.capabilities.contains(b"side-band-64k")
             || self.capabilities.contains(b"side-band");
         let report = self.capabilities.contains(b"report-status")

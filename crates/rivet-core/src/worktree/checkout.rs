@@ -384,8 +384,14 @@ impl CheckoutPlan {
                 CheckoutAction::Update | CheckoutAction::Remove => {}
             }
             let Some(index_entry) = index.entry(path) else {
-                // Untracked: nothing in the index to lose, and `untracked_obstructions` is the
-                // function that decides whether the file is in the way.
+                // Not in the index. If the tree being left has it, the index deletes it: a staged
+                // removal the checkout would silently undo. Otherwise it is untracked, and
+                // `untracked_obstructions` decides whether the file is in the way.
+                if let Some(from_tree) = self.from_tree {
+                    if lookup_tree_entry(odb, self.format, from_tree, path)?.is_some() {
+                        dirty.push(entry.path.clone());
+                    }
+                }
                 continue;
             };
             // Clause one: the file on disk differs from what the index last recorded.

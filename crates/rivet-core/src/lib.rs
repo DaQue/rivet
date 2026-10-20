@@ -68,7 +68,7 @@ pub use crate::config::{
 };
 pub use crate::diff::{
     DiffAlgorithm, DiffLine, DiffOptions, DiffStat, Edit, FileDiff, Hunk, HunkLine, LineKind,
-    TreeDiff, blob_diff, change_letter, entry_diff, format_name_status, format_stat, format_stat_sized,
+    TreeDiff, blob_diff, change_letter, detect_renames, pair_renames, pprint_rename, RenamePair, RenameSide, entry_diff, format_name_status, format_stat, format_stat_sized,
     format_unified, histogram_diff, index_diff, index_line_abbrev, is_binary, line_count,
     myers_diff, split_lines, tree_diff, work_tree_diff, write_unified,
 };

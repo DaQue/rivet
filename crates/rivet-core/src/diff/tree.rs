@@ -98,6 +98,8 @@ pub struct FileDiff {
     pub is_deleted: bool,
     /// Which algorithm produced `hunks`.
     pub algorithm: crate::diff::DiffAlgorithm,
+    /// For a detected rename, the similarity percentage (100 for an exact rename).
+    pub similarity: Option<u32>,
 }
 
 impl FileDiff {
@@ -141,7 +143,16 @@ impl FileDiff {
     /// file — which is what `git diff` prints as `T` in `--name-status`. It is not a mode change
     /// between `100644` and `100755`, which is [`FileDiff::is_mode_only`].
     pub fn is_type_change(&self) -> bool {
-        self.old_mode.is_some() && self.new_mode.is_some() && self.old_mode.unwrap() != self.new_mode.unwrap()
+        // A change of file type (regular file, symlink, gitlink), not a `chmod`.
+        match (self.old_mode, self.new_mode) {
+            (Some(old), Some(new)) => old.to_u32() & 0o170000 != new.to_u32() & 0o170000,
+            _ => false,
+        }
+    }
+
+    /// Whether this entry is a detected rename.
+    pub fn is_rename(&self) -> bool {
+        self.similarity.is_some() && self.old_path != self.new_path
     }
 
     /// Phase 8 — the counts `--stat` and `--numstat` need.
@@ -320,6 +331,7 @@ pub fn blob_diff(
             is_new,
             is_deleted,
             algorithm: options.algorithm,
+            similarity: None,
         });
     }
 
@@ -380,6 +392,7 @@ fn assemble_bytes(
         is_new,
         is_deleted,
         algorithm: options.algorithm,
+        similarity: None,
     })
 }
 

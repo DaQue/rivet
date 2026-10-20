@@ -578,7 +578,28 @@ pub fn format_unified(
         out.write_all(&side("b/", new_name))?;
         out.write_all(b"\n")?;
 
-        if file.is_new {
+        if file.is_rename() {
+            if file.old_mode != file.new_mode {
+                out.write_all(format!("old mode {:06o}\n", file.old_mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+                out.write_all(format!("new mode {:06o}\n", file.new_mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+            }
+            out.write_all(format!("similarity index {}%\n", file.similarity.unwrap_or(100)).as_bytes())?;
+            out.write_all(b"rename from ")?;
+            out.write_all(&crate::ops::quote_path(old_name, false))?;
+            out.write_all(b"\nrename to ")?;
+            out.write_all(&crate::ops::quote_path(new_name, false))?;
+            out.write_all(b"\n")?;
+            if file.old_oid != file.new_oid {
+                out.write_all(b"index ")?;
+                out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+                out.write_all(b"..")?;
+                out.write_all(file.new_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+                if file.old_mode == file.new_mode {
+                    out.write_all(format!(" {:06o}", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+                }
+                out.write_all(b"\n")?;
+            }
+        } else if file.is_new {
             out.write_all(b"new file mode ")?;
             out.write_all(format!("{:06o}\n", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
             out.write_all(b"index ")?;
@@ -714,6 +735,10 @@ pub fn format_stat_sized(
     out: &mut impl Write,
 ) -> Result<()> {
     // Git's `show_stats` with the non-terminal width of 80 columns.
+    // Git prints nothing at all for an empty diff, not a `0 files changed` line.
+    if diff.stats.is_empty() {
+        return Ok(());
+    }
     const WIDTH: usize = 80;
     let decimal_width = |n: usize| n.to_string().len();
     let size_of = |oid: Option<crate::hash::ObjectId>| -> usize {
@@ -727,7 +752,7 @@ pub fn format_stat_sized(
     let mut name_width = 0usize;
     let mut number_width = 0usize;
     for (stat, file) in diff.stats.iter().zip(diff.files.iter()) {
-        name_width = name_width.max(crate::ops::quote_path(&stat.path[..], false).len());
+        name_width = name_width.max(String::from_utf8_lossy(&stat_name(stat, file)).chars().count());
         if stat.is_binary {
             // "Bin" occupies the number column.
             number_width = number_width.max(3);
@@ -757,7 +782,7 @@ pub fn format_stat_sized(
     let mut total_added = 0usize;
     let mut total_deleted = 0usize;
     for (stat, file) in diff.stats.iter().zip(diff.files.iter()) {
-        let mut name = String::from_utf8_lossy(&crate::ops::quote_path(&stat.path[..], false)).into_owned();
+        let mut name = String::from_utf8_lossy(&stat_name(stat, file)).into_owned();
         if name.len() > name_width {
             // Git keeps the tail of a long name behind "...".
             let keep = name_width.saturating_sub(3);
@@ -831,6 +856,14 @@ pub fn format_stat_sized(
 /// The writer's errors, as [`crate::error::Error::Io`].
 pub fn format_name_status(diff: &crate::diff::TreeDiff, out: &mut impl Write) -> Result<()> {
     for file in &diff.files {
+        if file.is_rename() {
+            out.write_all(format!("R{:03}\t", file.similarity.unwrap_or(100)).as_bytes())?;
+            out.write_all(&crate::ops::quote_path(file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&b""[..]), false))?;
+            out.write_all(b"\t")?;
+            out.write_all(&crate::ops::quote_path(&file.path()[..], false))?;
+            out.write_all(b"\n")?;
+            continue;
+        }
         let letter = change_letter(file.is_new, file.is_deleted, file.is_type_change());
         out.write_all(letter.to_string().as_bytes())?;
         out.write_all(b"\t")?;
@@ -871,4 +904,21 @@ pub fn index_line_abbrev(
     let old_abbr = BString::from(&old_hex[..abbrev.min(old_hex.len())]);
     let new_abbr = BString::from(&new_hex[..abbrev.min(new_hex.len())]);
     BString::from(format!("index {}..{} {}\n", old_abbr, new_abbr, mode.to_string()))
+}
+
+/// The name column of a `--stat` line: the quoted path, or `old => new` for a rename.
+fn stat_name(stat: &DiffStat, file: &crate::diff::FileDiff) -> Vec<u8> {
+    if file.is_rename() {
+        let old = file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&b""[..]);
+        let new = file.path();
+        let (qo, qn) = (crate::ops::quote_path(old, false), crate::ops::quote_path(&new[..], false));
+        if qo.as_slice() != old || qn.as_slice() != &new[..] {
+            let mut out = qo.to_vec();
+            out.extend_from_slice(b" => ");
+            out.extend_from_slice(&qn);
+            return out;
+        }
+        return crate::diff::rename::pprint_rename(old, &new[..]).to_vec();
+    }
+    crate::ops::quote_path(&stat.path[..], false).to_vec()
 }

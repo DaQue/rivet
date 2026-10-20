@@ -674,6 +674,14 @@ pub fn untracked_paths(
         }
     }
 
+    // A directory with nothing untracked inside — empty, or holding only ignored files — is not
+    // reported: Git does not track directories, so it has nothing to say about them.
+    untracked_dirs.retain(|dir| {
+        let mut prefix = dir.clone();
+        prefix.push(b'/');
+        untracked_files.iter().any(|file| file.starts_with(&prefix[..]))
+    });
+
     let mut untracked: BTreeSet<BString> = BTreeSet::new();
     match options.untracked_files {
         UntrackedMode::No => {}

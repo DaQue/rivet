@@ -342,7 +342,8 @@ pub fn print_diffstat(
         None => empty_tree(repository)?,
     };
     let options = rivet_core::DiffOptions::new();
-    let diff = rivet_core::tree_diff(repository.format(), old_tree, new_tree, repository.odb(), &options)?;
+    let mut diff = rivet_core::tree_diff(repository.format(), old_tree, new_tree, repository.odb(), &options)?;
+    rivet_core::detect_renames(&mut diff, repository.odb(), &options)?;
     let mut out = Vec::new();
     rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
     print_summary(&diff, &mut out);
@@ -355,7 +356,18 @@ pub fn print_diffstat(
 pub fn print_summary(diff: &rivet_core::TreeDiff, out: &mut Vec<u8>) {
     for file in &diff.files {
         let path = String::from_utf8_lossy(&rivet_core::ops::quote_path(&file.path()[..], false)).into_owned();
-        if file.is_new {
+        if file.is_rename() {
+            let old = file.old_path.as_ref().map(|p| p.to_vec()).unwrap_or_default();
+            let shown = rivet_core::diff::pprint_rename(&old, &file.path()[..]);
+            out.extend_from_slice(format!(" rename {shown} ({}%)\n", file.similarity.unwrap_or(100)).as_bytes());
+            if let (Some(old_mode), Some(new_mode)) = (file.old_mode, file.new_mode) {
+                if old_mode != new_mode {
+                    out.extend_from_slice(
+                        format!(" mode change {:06o} => {:06o}\n", old_mode.to_u32(), new_mode.to_u32()).as_bytes(),
+                    );
+                }
+            }
+        } else if file.is_new {
             let mode = file.new_mode.map(|m| m.to_u32()).unwrap_or(0);
             out.extend_from_slice(format!(" create mode {mode:06o} {path}\n").as_bytes());
         } else if file.is_deleted {
@@ -382,7 +394,8 @@ pub fn print_shortstat_summary(
         None => empty_tree(repository)?,
     };
     let options = rivet_core::DiffOptions::new();
-    let diff = rivet_core::tree_diff(repository.format(), old_tree, new_tree, repository.odb(), &options)?;
+    let mut diff = rivet_core::tree_diff(repository.format(), old_tree, new_tree, repository.odb(), &options)?;
+    rivet_core::detect_renames(&mut diff, repository.odb(), &options)?;
     let mut stat = Vec::new();
     rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut stat)?;
     let text = String::from_utf8_lossy(&stat);
