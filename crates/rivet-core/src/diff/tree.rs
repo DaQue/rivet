@@ -303,14 +303,74 @@ pub fn blob_diff(
     let new_mode = new.map(|(_, m)| m);
     let is_new = old_oid.is_none();
     let is_deleted = new_oid.is_none();
-    let is_type_change = old_mode != new_mode;
-    let is_binary = false;
-    let hunks = Vec::new();
-    let old_path = if is_new { None } else { Some(BString::from(path)) };
-    let new_path = if is_deleted { None } else { Some(BString::from(path)) };
+
+    // A gitlink names a commit in another repository: comparing its content would mean fetching
+    // that repository, so it is reported as a one-line change with no hunks.
+    let gitlink = |mode: Option<EntryMode>| mode == Some(EntryMode::Commit);
+    if gitlink(old_mode) || gitlink(new_mode) {
+        return Ok(FileDiff {
+            old_path: if is_new { None } else { Some(BString::from(path)) },
+            new_path: if is_deleted { None } else { Some(BString::from(path)) },
+            old_mode,
+            new_mode,
+            old_oid,
+            new_oid,
+            hunks: Vec::new(),
+            is_binary: false,
+            is_new,
+            is_deleted,
+            algorithm: options.algorithm,
+        });
+    }
+
+    let read_blob = |oid: &ObjectId| -> Result<Vec<u8>> {
+        Ok(odb.read_typed(oid, crate::object::ObjectKind::Blob)?.into_data())
+    };
+    let old_data = match old_oid {
+        Some(oid) => read_blob(&oid)?,
+        None => Vec::new(),
+    };
+    let new_data = match new_oid {
+        Some(oid) => read_blob(&oid)?,
+        None => Vec::new(),
+    };
+
+    assemble_bytes(path, old, new, &old_data, &new_data, options)
+}
+
+/// The tail shared by every comparison: given both sides' identities *and* their bytes, build the
+/// [`FileDiff`] — binary detection, the edit script, the hunks.
+///
+/// [`blob_diff`] passes bytes read from the object database, [`entry_diff`] passes a work tree
+/// file's bytes, and the two must produce the same diff for the same bytes; splitting the tail out
+/// is what keeps that true instead of being two implementations that drift.
+fn assemble_bytes(
+    path: &BStr,
+    old: Option<(ObjectId, EntryMode)>,
+    new: Option<(ObjectId, EntryMode)>,
+    old_data: &[u8],
+    new_data: &[u8],
+    options: &crate::diff::DiffOptions,
+) -> Result<FileDiff> {
+    let old_oid = old.map(|(o, _)| o);
+    let old_mode = old.map(|(_, m)| m);
+    let new_oid = new.map(|(o, _)| o);
+    let new_mode = new.map(|(_, m)| m);
+    let is_new = old_oid.is_none();
+    let is_deleted = new_oid.is_none();
+
+    let is_binary = options.detect_binary
+        && (crate::diff::is_binary(old_data) || crate::diff::is_binary(new_data));
+
+    let hunks = if is_binary || old_oid == new_oid {
+        Vec::new()
+    } else {
+        compute_hunks(old_data, new_data, options)?
+    };
+
     Ok(FileDiff {
-        old_path,
-        new_path,
+        old_path: if is_new { None } else { Some(BString::from(path)) },
+        new_path: if is_deleted { None } else { Some(BString::from(path)) },
         old_mode,
         new_mode,
         old_oid,
@@ -319,8 +379,39 @@ pub fn blob_diff(
         is_binary,
         is_new,
         is_deleted,
-        algorithm: crate::diff::DiffAlgorithm::Myers,
+        algorithm: options.algorithm,
     })
+}
+
+/// The edit script and hunks for two byte strings.
+///
+/// Returns the binary flag alongside the hunks because the two decisions are made in one place:
+/// a file detected as binary must have *no* hunks, and returning `(hunks, is_binary)` separately
+/// from two functions would let a caller print hunk text for a file it then labels binary.
+fn compute_hunks(
+    old_data: &[u8],
+    new_data: &[u8],
+    options: &crate::diff::DiffOptions,
+) -> Result<Vec<Hunk>> {
+    use crate::diff::myers::{histogram_diff, myers_diff, split_lines};
+
+    let old_lines = split_lines(old_data);
+    let new_lines = split_lines(new_data);
+    let edits = match options.algorithm {
+        crate::diff::DiffAlgorithm::Myers => myers_diff(&old_lines, &new_lines),
+        crate::diff::DiffAlgorithm::Histogram => histogram_diff(&old_lines, &new_lines)?,
+    };
+    Ok(crate::diff::unified::build_hunks(
+        old_data,
+        new_data,
+        &edits,
+        options.context,
+    ))
+}
+
+fn tree_diff_from(files: Vec<FileDiff>) -> TreeDiff {
+    let stats = files.iter().map(FileDiff::stat).collect();
+    TreeDiff { files, stats }
 }
 
 /// Phase 8 — the diff between two trees.
@@ -354,7 +445,173 @@ pub fn tree_diff(
     odb: &Odb,
     options: &crate::diff::DiffOptions,
 ) -> Result<TreeDiff> {
-    todo!()
+    let mut files = Vec::new();
+    walk_trees(format, Some(&old), Some(&new), BString::new(Vec::new()), odb, options, &mut files)?;
+    Ok(tree_diff_from(files))
+}
+
+/// The parallel walk behind [`tree_diff`].
+///
+/// Either side may be absent, which is how a subtree that exists on only one side is flattened:
+/// every entry under it becomes an addition or a deletion. `prefix` is the directory path of the
+/// two trees, already ending in `/` when non-empty.
+fn walk_trees(
+    format: ObjectFormat,
+    old: Option<&ObjectId>,
+    new: Option<&ObjectId>,
+    prefix: BString,
+    odb: &Odb,
+    options: &crate::diff::DiffOptions,
+    out: &mut Vec<FileDiff>,
+) -> Result<()> {
+    use crate::object::TreeEntry;
+
+    let read_entries = |oid: &ObjectId| -> Result<Vec<TreeEntry>> {
+        let data = odb
+            .read_typed(oid, crate::object::ObjectKind::Tree)?
+            .into_data();
+        Ok(crate::object::Tree::parse(format, &data)?.entries)
+    };
+
+    let old_entries = match old {
+        Some(oid) => read_entries(oid)?,
+        None => Vec::new(),
+    };
+    let new_entries = match new {
+        Some(oid) => read_entries(oid)?,
+        None => Vec::new(),
+    };
+
+    let mut oi = 0usize;
+    let mut ni = 0usize;
+    while oi < old_entries.len() || ni < new_entries.len() {
+        let ordering = match (old_entries.get(oi), new_entries.get(ni)) {
+            (Some(a), Some(b)) => tree_entry_cmp(a, b),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => break,
+        };
+
+        match ordering {
+            std::cmp::Ordering::Less => {
+                let entry = &old_entries[oi];
+                oi += 1;
+                if entry.mode == EntryMode::Tree {
+                    walk_trees(
+                        format,
+                        Some(&entry.oid),
+                        None,
+                        child_prefix(BStr::new(&prefix[..]), BStr::new(&entry.name[..])),
+                        odb,
+                        options,
+                        out,
+                    )?;
+                } else {
+                    let path = child_prefix(BStr::new(&prefix[..]), BStr::new(&entry.name[..]));
+                    if in_pathspec(BStr::new(&path[..]), BStr::new(&options.pathspec[..])) {
+                        out.push(blob_diff(
+                            format,
+                            BStr::new(&path[..]),
+                            Some((entry.oid, entry.mode)),
+                            None,
+                            odb,
+                            options,
+                        )?);
+                    }
+                }
+            }
+            std::cmp::Ordering::Greater => {
+                let entry = &new_entries[ni];
+                ni += 1;
+                if entry.mode == EntryMode::Tree {
+                    walk_trees(
+                        format,
+                        None,
+                        Some(&entry.oid),
+                        child_prefix(BStr::new(&prefix[..]), BStr::new(&entry.name[..])),
+                        odb,
+                        options,
+                        out,
+                    )?;
+                } else {
+                    let path = child_prefix(BStr::new(&prefix[..]), BStr::new(&entry.name[..]));
+                    if in_pathspec(BStr::new(&path[..]), BStr::new(&options.pathspec[..])) {
+                        out.push(blob_diff(
+                            format,
+                            BStr::new(&path[..]),
+                            None,
+                            Some((entry.oid, entry.mode)),
+                            odb,
+                            options,
+                        )?);
+                    }
+                }
+            }
+            std::cmp::Ordering::Equal => {
+                let a = &old_entries[oi];
+                let b = &new_entries[ni];
+                oi += 1;
+                ni += 1;
+                if a.mode == EntryMode::Tree && b.mode == EntryMode::Tree {
+                    if a.oid != b.oid {
+                        walk_trees(
+                            format,
+                            Some(&a.oid),
+                            Some(&b.oid),
+                            child_prefix(BStr::new(&prefix[..]), BStr::new(&a.name[..])),
+                            odb,
+                            options,
+                            out,
+                        )?;
+                    }
+                } else if a.oid != b.oid || a.mode != b.mode {
+                    let path = child_prefix(BStr::new(&prefix[..]), BStr::new(&a.name[..]));
+                    if in_pathspec(BStr::new(&path[..]), BStr::new(&options.pathspec[..])) {
+                        out.push(blob_diff(
+                            format,
+                            BStr::new(&path[..]),
+                            Some((a.oid, a.mode)),
+                            Some((b.oid, b.mode)),
+                            odb,
+                            options,
+                        )?);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Git's tree ordering: a directory's name sorts as if it ended in `/`.
+fn tree_entry_cmp(a: &crate::object::TreeEntry, b: &crate::object::TreeEntry) -> std::cmp::Ordering {
+    fn key(name: &BStr, mode: EntryMode) -> Vec<u8> {
+        let mut key = name.to_vec();
+        if mode == EntryMode::Tree {
+            key.push(b'/');
+        }
+        key
+    }
+    key(BStr::new(&a.name[..]), a.mode).cmp(&key(BStr::new(&b.name[..]), b.mode))
+}
+
+fn child_prefix(prefix: &BStr, name: &BStr) -> BString {
+    let mut path = BString::from(prefix);
+    path.extend_from_slice(name);
+    path.push(b'/');
+    path
+}
+
+fn in_pathspec(path: &BStr, spec: &BStr) -> bool {
+    if spec.is_empty() {
+        return true;
+    }
+    let path: &[u8] = path.as_ref();
+    let spec: &[u8] = spec.as_ref();
+    if !path.starts_with(spec) {
+        return false;
+    }
+    path.len() == spec.len() || spec.ends_with(b"/") || path[spec.len()] == b'/'
 }
 
 /// Phase 8 — the diff between an index and a tree.
@@ -386,7 +643,41 @@ pub fn index_diff(
     odb: &Odb,
     options: &crate::diff::DiffOptions,
 ) -> Result<TreeDiff> {
-    todo!()
+    use crate::object::ObjectKind;
+
+    // The comparison is *staged*: index against `HEAD`'s tree. Doing it the other way round —
+    // walking `HEAD` and asking the index about each path — would miss nothing, but it would
+    // report the paths in the tree's order and re-read the index for every one of them; the
+    // status code has already solved this comparison once, so this reuses its rules.
+    let changes = crate::worktree::status::staged_changes(index, tree, odb)?;
+    let mut files = Vec::with_capacity(changes.len());
+    for change in changes {
+        if !in_pathspec(BStr::new(&change.path[..]), BStr::new(&options.pathspec[..])) {
+            continue;
+        }
+        // A conflicted path has three contents and none of them is "the" staged side; `status`
+        // reports it as unmerged and `diff` skips it (see the caveats above).
+        if matches!(change.kind, crate::worktree::status::ChangeKind::Unmerged) {
+            continue;
+        }
+        let old_data = match change.old_oid {
+            Some(oid) => odb.read_typed(&oid, ObjectKind::Blob)?.into_data(),
+            None => Vec::new(),
+        };
+        let new_data = match change.new_oid {
+            Some(oid) => odb.read_typed(&oid, ObjectKind::Blob)?.into_data(),
+            None => Vec::new(),
+        };
+        files.push(assemble_bytes(
+            BStr::new(&change.path[..]),
+            change.old_oid.zip(change.old_mode),
+            change.new_oid.zip(change.new_mode),
+            &old_data,
+            &new_data,
+            options,
+        )?);
+    }
+    Ok(tree_diff_from(files))
 }
 
 /// Phase 8 — the diff between the work tree and the index.
@@ -422,12 +713,58 @@ pub fn work_tree_diff(
     odb: &Odb,
     options: &crate::diff::DiffOptions,
 ) -> Result<TreeDiff> {
-    todo!()
+    // `unstaged_changes` already owns the two decisions that are easy to get wrong here: whether
+    // the stat cache lets the file be skipped without reading it, and what the file's mode is
+    // after a fresh `lstat`. Re-deciding either in the diff would let `status` and `diff`
+    // disagree about the same file, which is exactly the class of bug this module exists to
+    // avoid — so the scan runs once and the bytes are read only for the paths it reports.
+    let changes =
+        crate::worktree::status::unstaged_changes(worktree, index, odb, false, stat_cache)?;
+    let mut files = Vec::with_capacity(changes.len());
+    for change in changes {
+        if !in_pathspec(BStr::new(&change.path[..]), BStr::new(&options.pathspec[..])) {
+            continue;
+        }
+        let new_data = match change.new_oid {
+            Some(_) => match worktree.read_file(BStr::new(&change.path[..])) {
+                Ok(data) => Some(data),
+                // The scan saw the file a moment ago; if it is gone now the honest reading is a
+                // deletion, which is also what a fresh scan would report.
+                Err(crate::error::Error::IoAtPath { source, .. })
+                    if source.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    None
+                }
+                Err(error) => return Err(error),
+            },
+            None => None,
+        };
+        let old_data = match change.old_oid {
+            Some(oid) => odb
+                .read_typed(&oid, crate::object::ObjectKind::Blob)?
+                .into_data(),
+            None => Vec::new(),
+        };
+        // The right-hand identity is dropped when the bytes could not be read, so that a file
+        // that vanished between the scan and the read is a deletion rather than an empty file.
+        let new = match new_data {
+            Some(_) => change.new_oid.zip(change.new_mode),
+            None => None,
+        };
+        files.push(assemble_bytes(
+            BStr::new(&change.path[..]),
+            change.old_oid.zip(change.old_mode),
+            new,
+            &old_data,
+            new_data.as_deref().unwrap_or(&[]),
+            options,
+        )?);
+    }
+    Ok(tree_diff_from(files))
 }
 
 /// Phase 8 — the diff for one index entry against one work tree file.
 ///
-/// The inner step of [`work_tree_diff`], exposed because `status`'s refresh and the CLI's
 /// single-path `diff <path>` both need exactly this and a second implementation would be a second
 /// set of rules about stat data, symlinks and binary detection.
 ///
@@ -455,5 +792,38 @@ pub fn entry_diff(
     odb: &Odb,
     options: &crate::diff::DiffOptions,
 ) -> Result<FileDiff> {
-    todo!()
+    let old = Some((entry.oid, entry.mode));
+
+    let new = match worktree_data {
+        Some(data) => {
+            // The new id is the hash of the bytes the caller read, never the entry's id: the
+            // entry describes the *index* side, and reusing it would diff the file against
+            // itself. Hashing here is what makes a `chmod`-only change fall through
+            // `assemble_bytes`' `old_oid == new_oid` shortcut and report a mode change with no
+            // hunks, exactly as Git does.
+            let id = crate::object::Object::Blob(data.to_vec()).id(worktree.format())?;
+            let mode = match worktree.stat(BStr::new(&entry.path[..]))? {
+                Some(stat) => stat.mode,
+                // The bytes were readable a moment ago and the file is gone now: report the
+                // deletion rather than an empty file with the index's mode.
+                None => {
+                    return assemble_bytes(BStr::new(&entry.path[..]), old, None, &[], &[], options);
+                }
+            };
+            Some((id, mode))
+        }
+        None => None,
+    };
+
+    let old_data = odb
+        .read_typed(&entry.oid, crate::object::ObjectKind::Blob)?
+        .into_data();
+    assemble_bytes(
+        BStr::new(&entry.path[..]),
+        old,
+        new,
+        &old_data,
+        worktree_data.unwrap_or(&[]),
+        options,
+    )
 }

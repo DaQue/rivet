@@ -1135,7 +1135,11 @@ impl Index {
             entries.push(entry);
         }
         let mut extensions = Vec::new();
-        while offset < data_len {
+        // The last twenty bytes are the checksum, not extension data. Stopping at `data_len`
+        // instead of `data_len - 20` reads the checksum as an extension header and rejects every
+        // index Git ever wrote.
+        const CHECKSUM: usize = 20;
+        while offset + CHECKSUM < data_len {
             if data_len - offset < 8 {
                 return Err(Error::CorruptIndex { offset, reason: "truncated extension" });
             }

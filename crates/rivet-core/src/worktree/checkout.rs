@@ -61,12 +61,14 @@
 //!   target is the blob's bytes; removing one removes the link. A checkout that resolved a link
 //!   before writing would write through it, which is how a repository escapes its own work tree.
 
-use bstr::BString;
+use std::collections::BTreeSet;
+
+use bstr::{BStr, BString};
 
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
-use crate::index::Index;
-use crate::object::EntryMode;
+use crate::index::{Index, IndexEntryFlags, Stage};
+use crate::object::{EntryMode, ObjectKind, Tree};
 use crate::odb::Odb;
 use crate::worktree::{StatCache, Worktree};
 use crate::error::Error;
@@ -244,14 +246,23 @@ impl CheckoutPlan {
         odb: &Odb,
         options: &CheckoutOptions,
     ) -> Result<Self> {
+        // The plan is a function of the two trees alone. Whether a path is dirty or obstructed
+        // is a later question asked against the index and the work tree; answering it here
+        // would make `checkout -n` disagree with the run it is supposed to predict.
         let mut entries = Vec::new();
-        let from = from_tree;
-        let to = to_tree;
-        let from_tree = from;
-        let to_tree = to;
-        let _ = format;
-        let _ = odb;
-        let _ = options;
+        let mut prefix = Vec::new();
+        walk_plan(
+            format,
+            odb,
+            from_tree,
+            Some(to_tree),
+            &mut prefix,
+            options,
+            &mut entries,
+        )?;
+        // Git's own order, so a plan printed twice looks the same and a caller may binary
+        // search it by path.
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(Self {
             entries,
             from_tree,
@@ -288,12 +299,20 @@ impl CheckoutPlan {
 
     /// Phase 4 — the paths whose content the plan would write.
     pub fn written_paths(&self) -> Vec<&bstr::BStr> {
-        self.entries.iter().filter(|e| matches!(e.mode, Some(EntryMode::Blob) | Some(EntryMode::BlobExecutable))).map(|e| e.path.as_ref()).collect()
+        self.entries
+            .iter()
+            .filter(|e| matches!(e.action, CheckoutAction::Create | CheckoutAction::Update))
+            .map(|e| e.path.as_ref())
+            .collect()
     }
 
     /// Phase 4 — the paths the plan would delete.
     pub fn removed_paths(&self) -> Vec<&bstr::BStr> {
-        self.entries.iter().filter(|e| matches!(e.mode, Some(EntryMode::Link) | Some(EntryMode::Tree) | Some(EntryMode::Commit))).map(|e| e.path.as_ref()).collect()
+        self.entries
+            .iter()
+            .filter(|e| matches!(e.action, CheckoutAction::Remove))
+            .map(|e| e.path.as_ref())
+            .collect()
     }
 
     /// Phase 4 — how many entries each action accounts for, as `(create, update, remove, keep)`.
@@ -306,19 +325,14 @@ impl CheckoutPlan {
         let mut update = 0;
         let mut remove = 0;
         let mut keep = 0;
+        // The action, not the mode, is what separates these: a newly created executable and a
+        // kept one share a mode, so counting modes can only ever be a guess.
         for e in &self.entries {
-            match e.mode {
-                Some(EntryMode::Blob) | Some(EntryMode::BlobExecutable) => {
-                    if e.path.is_empty() {
-                        keep += 1;
-                    } else {
-                        create += 1;
-                    }
-                }
-                Some(EntryMode::Link) | Some(EntryMode::Tree) | Some(EntryMode::Commit) => {
-                    remove += 1;
-                }
-                _ => {}
+            match e.action {
+                CheckoutAction::Create => create += 1,
+                CheckoutAction::Update => update += 1,
+                CheckoutAction::Remove => remove += 1,
+                CheckoutAction::Keep => keep += 1,
             }
         }
         (create, update, remove, keep)
@@ -355,9 +369,48 @@ impl CheckoutPlan {
         &self,
         worktree: &Worktree,
         index: &Index,
+        odb: &Odb,
         stat_cache: &mut StatCache,
     ) -> Result<Vec<BString>> {
-        todo!()
+        // Neither clause can be answered from the plan alone: the first needs the work tree's
+        // bytes, the second needs the index's ids. A path that fails both is reported once.
+        let mut dirty = Vec::new();
+        for entry in &self.entries {
+            let path = BStr::new(&entry.path[..]);
+            match entry.action {
+                // A keep loses nothing, and a create writes a path the index does not track, so
+                // neither can destroy a modification.
+                CheckoutAction::Keep | CheckoutAction::Create => continue,
+                CheckoutAction::Update | CheckoutAction::Remove => {}
+            }
+            let Some(index_entry) = index.entry(path) else {
+                // Untracked: nothing in the index to lose, and `untracked_obstructions` is the
+                // function that decides whether the file is in the way.
+                continue;
+            };
+            // Clause one: the file on disk differs from what the index last recorded.
+            if worktree.stat(path)?.is_some() {
+                let on_disk = worktree.hash_file(path)?;
+                if on_disk != index_entry.oid {
+                    dirty.push(entry.path.clone());
+                    continue;
+                }
+            }
+            // Clause two: the index entry differs from the from-side tree, so a staged change
+            // would be silently replaced by the checkout.
+            if let Some(from_tree) = self.from_tree {
+                let staged =
+                    lookup_tree_entry(odb, self.format, from_tree, BStr::new(&entry.path[..]))?;
+                let differs = match staged {
+                    Some((mode, oid)) => mode != index_entry.mode || oid != index_entry.oid,
+                    None => true,
+                };
+                if differs {
+                    dirty.push(entry.path.clone());
+                }
+            }
+        }
+        Ok(dirty)
     }
 
     /// Phase 4 — the untracked files the plan would overwrite.
@@ -375,7 +428,23 @@ impl CheckoutPlan {
         worktree: &Worktree,
         index: &Index,
     ) -> Result<Vec<BString>> {
-        todo!()
+        // Git's second rule of checkout: never write over a file it is not tracking. Without
+        // this, a checkout that creates `build/notes.txt` silently eats an untracked file of
+        // that name and the user's first suspicion is the wrong command.
+        let mut obstructed = Vec::new();
+        for entry in &self.entries {
+            if !matches!(entry.action, CheckoutAction::Create | CheckoutAction::Update) {
+                continue;
+            }
+            let path = BStr::new(&entry.path[..]);
+            if index.entry(path).is_some() {
+                continue;
+            }
+            if worktree.stat(path)?.is_some() {
+                obstructed.push(entry.path.clone());
+            }
+        }
+        Ok(obstructed)
     }
 
     /// Phase 4 — prove the whole plan safe, or refuse it whole.
@@ -405,6 +474,7 @@ impl CheckoutPlan {
         &self,
         worktree: &Worktree,
         index: &Index,
+        odb: &Odb,
         stat_cache: &mut StatCache,
         options: &CheckoutOptions,
     ) -> Result<()> {
@@ -415,7 +485,7 @@ impl CheckoutPlan {
         if !untracked.is_empty() {
             return Err(Error::UntrackedOverwrite(untracked[0].clone()));
         }
-        let dirty = self.dirty_paths(worktree, index, stat_cache)?;
+        let dirty = self.dirty_paths(worktree, index, odb, stat_cache)?;
         if !dirty.is_empty() {
             return Err(Error::DirtyWorktree { paths: dirty });
         }
@@ -451,7 +521,53 @@ impl CheckoutPlan {
     /// [`crate::error::Error::ObjectNotFound`] for a blob the plan names that the database does
     /// not have — which can only happen if the object was removed between planning and applying.
     pub fn apply(&self, worktree: &Worktree, odb: &Odb) -> Result<()> {
-        todo!()
+        // Writes before deletes, because a path is often both: renaming `a.txt` to `b.txt` is a
+        // create of `b.txt` and a remove of `a.txt`, and doing the remove first gives a window
+        // in which neither exists.
+        for entry in &self.entries {
+            if entry.action != CheckoutAction::Create {
+                continue;
+            }
+            let (oid, mode) = match (entry.oid, entry.mode) {
+                (Some(oid), Some(mode)) => (oid, mode),
+                // Only a remove carries neither; the plan cannot produce any other pair.
+                _ => continue,
+            };
+            write_blob(worktree, BStr::new(&entry.path[..]), oid, mode, odb)?;
+        }
+        for entry in &self.entries {
+            if entry.action != CheckoutAction::Update {
+                continue;
+            }
+            let (oid, mode) = match (entry.oid, entry.mode) {
+                (Some(oid), Some(mode)) => (oid, mode),
+                _ => continue,
+            };
+            write_blob(worktree, BStr::new(&entry.path[..]), oid, mode, odb)?;
+        }
+        for entry in &self.entries {
+            if entry.action != CheckoutAction::Keep {
+                continue;
+            }
+            // A keep with a mode change is a chmod and nothing else: the bytes are already
+            // right, and rewriting them would change the inode for no reason.
+            if let Some(mode) = entry.mode {
+                apply_mode(worktree, BStr::new(&entry.path[..]), mode)?;
+            }
+        }
+        // Longest paths first, so a path that only exists because a directory did is not
+        // removed after something that could take the directory out from under it.
+        let mut removals: Vec<&CheckoutEntry> = self
+            .entries
+            .iter()
+            .filter(|e| e.action == CheckoutAction::Remove)
+            .collect();
+        removals.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+        let mut removals = removals.into_iter();
+        for entry in removals.by_ref() {
+            remove_path(worktree, BStr::new(&entry.path[..]))?;
+        }
+        Ok(())
     }
 
     /// Phase 4 — the index entries this plan should produce.
@@ -479,8 +595,44 @@ impl CheckoutPlan {
     ///
     /// [`crate::error::Error::ObjectNotFound`] if the plan names an object the database lacks.
     pub fn index_entries(&self, odb: &Odb) -> Result<Vec<crate::index::IndexEntry>> {
-        Ok(Vec::new())
-    }
+        // No stat data is filled in: this function promises not to touch the work tree, and the
+        // caller that just wrote or checked the files has the stat result in hand. A zeroed
+        // entry is what Git itself writes for a path whose stat cache it has not filled yet.
+        let mut entries: Vec<crate::index::IndexEntry> = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            if entry.action == CheckoutAction::Remove {
+                continue;
+            }
+            let (oid, mode) = match (entry.oid, entry.mode) {
+                (Some(oid), Some(mode)) => (oid, mode),
+                _ => continue,
+            };
+            // A gitlink's commit lives in another repository; there is no object here to
+            // promise, and an index entry for one would be a lie the next `status` acts on.
+            if mode == EntryMode::Commit {
+                continue;
+            }
+            if !odb.contains(&oid) {
+                return Err(Error::ObjectNotFound { oid });
+            }
+            entries.push(crate::index::IndexEntry {
+                ctime_seconds: 0,
+                ctime_nanos: 0,
+                mtime_seconds: 0,
+                mtime_nanos: 0,
+                dev: 0,
+                ino: 0,
+                mode,
+                uid: 0,
+                gid: 0,
+                size: 0,
+                oid,
+                flags: IndexEntryFlags::with(Stage::Normal, entry.path.len()),
+                extended_flags: crate::index::IndexEntryExtendedFlags::empty().bits(),
+                path: entry.path.clone(),
+            });
+        }
+        Ok(entries)    }
 }
 
 /// Phase 4 — read a blob for checkout, applying the filesystem's symlink setting.
@@ -513,7 +665,70 @@ pub fn write_blob(
     mode: EntryMode,
     odb: &Odb,
 ) -> Result<()> {
-    todo!()
+    // A gitlink's content lives in another repository; writing anything here would create a
+    // stray file at the submodule's path and make the next status report a modification.
+    if mode == EntryMode::Commit {
+        return Err(Error::InvalidEntryMode {
+            name: path.to_owned(),
+            mode: mode.to_u32(),
+        });
+    }
+    let data = odb.read_typed(&oid, ObjectKind::Blob)?.into_data();
+    let file = worktree.join(path)?;
+    let existed = match file.symlink_metadata() {
+        // Never follow a symlink: writing through one writes into whatever it points at, which
+        // is the classic way a checkout escapes the work tree.
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+            std::fs::remove_file(&file)?;
+            true
+        }
+        Ok(_) => {
+            return Err(Error::IoAtPath {
+                path: path.to_owned(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "a directory is in the way of a file",
+                ),
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(parent) = file.parent() {
+        create_dirs(worktree, parent)?;
+    }
+    if mode == EntryMode::Link && worktree.symlinks() {
+        use std::os::unix::ffi::OsStrExt;
+        std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(&data), &file)?;
+        return Ok(());
+    }
+    use std::io::Write;
+    if existed {
+        // In place: a rename would break a hard link the user has, and Git writes in place too.
+        let mut out = std::fs::File::create(&file)?;
+        out.write_all(&data)?;
+        out.sync_all()?;
+    } else {
+        // Temporary and rename, so a torn write cannot leave a half-file where a file the user
+        // never had is expected to appear.
+        let temp = file.with_file_name(format!(
+            ".rivet-tmp-{}-{}",
+            std::process::id(),
+            file.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        ));
+        {
+            let mut out = std::fs::File::create(&temp)?;
+            out.write_all(&data)?;
+            out.sync_all()?;
+        }
+        std::fs::rename(&temp, &file).inspect_err(|_| {
+            let _ = std::fs::remove_file(&temp);
+        })?;
+    }
+    apply_mode(worktree, path, mode)?;
+    Ok(())
 }
 
 /// Phase 4 — delete a path from the work tree.
@@ -534,7 +749,19 @@ pub fn write_blob(
 /// [`crate::error::Error::IoAtPath`] if the unlink fails for a reason other than absence, and
 /// [`crate::error::Error::InvalidPath`] for a path that escapes the work tree.
 pub fn remove_path(worktree: &Worktree, path: &bstr::BStr) -> Result<()> {
-    todo!()
+    let file = worktree.join(path)?;
+    match file.symlink_metadata() {
+        // A directory is not removed by a single-path delete; the plan only ever names files,
+        // and removing a directory here would take files the plan never mentioned.
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => {
+            std::fs::remove_file(&file)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+
 }
 
 /// Phase 4 — whether two paths in one tree would collide on a case-insensitive filesystem.
@@ -560,4 +787,262 @@ pub fn paths_collide(a: &bstr::BStr, b: &bstr::BStr, ignore_case: bool) -> bool 
             x != y
         }
     })
+}
+
+/// One directory's entries, copied out of a parsed tree so the parsed bytes can be dropped.
+struct OwnedTreeEntry {
+    name: BString,
+    mode: EntryMode,
+    oid: ObjectId,
+}
+
+fn read_tree_dir(odb: &Odb, format: ObjectFormat, oid: ObjectId) -> Result<Vec<OwnedTreeEntry>> {
+    let object = odb.read_typed(&oid, ObjectKind::Tree)?;
+    let tree = Tree::parse(format, object.data())?;
+    Ok(tree
+        .iter()
+        .map(|entry| OwnedTreeEntry {
+            name: entry.name.clone(),
+            mode: entry.mode,
+            oid: entry.oid,
+        })
+        .collect())
+}
+
+fn path_in_pathspec(path: &BStr, pathspec: &BStr) -> bool {
+    if pathspec.is_empty() {
+        return true;
+    }
+    // A pathspec naming a directory covers everything under it; one naming a file covers only
+    // that file. The trailing slash makes the intent explicit on the command line.
+    if pathspec.last() == Some(&b'/') {
+        return path.starts_with(&pathspec[..pathspec.len() - 1])
+            && (path.len() == pathspec.len() - 1
+                || path.get(pathspec.len() - 1) == Some(&b'/'));
+    }
+    path == pathspec
+        || (path.len() > pathspec.len()
+            && path.starts_with(&pathspec[..])
+            && path.get(pathspec.len()) == Some(&b'/'))
+}
+
+fn walk_plan(
+    format: ObjectFormat,
+    odb: &Odb,
+    from: Option<ObjectId>,
+    to: Option<ObjectId>,
+    prefix: &mut Vec<u8>,
+    options: &CheckoutOptions,
+    out: &mut Vec<CheckoutEntry>,
+) -> Result<()> {
+    let from_entries = match from {
+        Some(oid) => read_tree_dir(odb, format, oid)?,
+        None => Vec::new(),
+    };
+    let to_entries = match to {
+        Some(oid) => read_tree_dir(odb, format, oid)?,
+        None => Vec::new(),
+    };
+    let mut names: BTreeSet<&BString> = BTreeSet::new();
+    names.extend(from_entries.iter().map(|e| &e.name));
+    names.extend(to_entries.iter().map(|e| &e.name));
+    let names: Vec<BString> = names.into_iter().cloned().collect();
+
+    for name in names {
+        let old = from_entries.iter().find(|e| e.name == name);
+        let new = to_entries.iter().find(|e| e.name == name);
+        let start = prefix.len();
+        if !prefix.is_empty() {
+            prefix.push(b'/');
+        }
+        prefix.extend_from_slice(&name);
+        match (old, new) {
+            (Some(old), None) => {
+                // A subtree that disappears takes every path under it with it.
+                if old.mode == EntryMode::Tree {
+                    walk_plan(format, odb, Some(old.oid), None, prefix, options, out)?;
+                } else {
+                    push_planned(out, prefix, CheckoutAction::Remove, None, None, options);
+                }
+            }
+            (None, Some(new)) => {
+                if new.mode == EntryMode::Tree {
+                    walk_plan(format, odb, None, Some(new.oid), prefix, options, out)?;
+                } else if new.mode == EntryMode::Commit {
+                    // A gitlink is planned so the entry is not lost, but it can never be
+                    // written: its content belongs to another repository.
+                    push_planned(
+                        out,
+                        prefix,
+                        CheckoutAction::Keep,
+                        Some(new.oid),
+                        Some(new.mode),
+                        options,
+                    );
+                } else {
+                    push_planned(
+                        out,
+                        prefix,
+                        CheckoutAction::Create,
+                        Some(new.oid),
+                        Some(new.mode),
+                        options,
+                    );
+                }
+            }
+            (Some(old), Some(new)) => {
+                match (old.mode, new.mode) {
+                    // Identical subtrees are not descended into: the id is the whole answer,
+                    // and descending would walk the tree on every one-file checkout.
+                    (EntryMode::Tree, EntryMode::Tree) => {
+                        if old.oid != new.oid {
+                            walk_plan(format, odb, Some(old.oid), Some(new.oid), prefix, options, out)?;
+                        }
+                    }
+                    (EntryMode::Tree, _) => {
+                        walk_plan(format, odb, Some(old.oid), None, prefix, options, out)?;
+                        push_planned(
+                            out,
+                            prefix,
+                            CheckoutAction::Create,
+                            Some(new.oid),
+                            Some(new.mode),
+                            options,
+                        );
+                    }
+                    (_, EntryMode::Tree) => {
+                        push_planned(out, prefix, CheckoutAction::Remove, None, None, options);
+                        walk_plan(format, odb, None, Some(new.oid), prefix, options, out)?;
+                    }
+                    (_, EntryMode::Commit) | (EntryMode::Commit, _) => {
+                        // Never read, never written, never removed: the entry is preserved as a
+                        // keep so that checkout does not corrupt a repository with submodules.
+                        push_planned(
+                            out,
+                            prefix,
+                            CheckoutAction::Keep,
+                            Some(new.oid),
+                            Some(new.mode),
+                            options,
+                        );
+                    }
+                    _ => {
+                        if old.oid == new.oid {
+                            // Equal id, possibly different mode: a chmod, planned as a keep.
+                            push_planned(
+                                out,
+                                prefix,
+                                CheckoutAction::Keep,
+                                Some(new.oid),
+                                Some(new.mode),
+                                options,
+                            );
+                        } else {
+                            push_planned(
+                                out,
+                                prefix,
+                                CheckoutAction::Update,
+                                Some(new.oid),
+                                Some(new.mode),
+                                options,
+                            );
+                        }
+                    }
+                }
+            }
+            (None, None) => unreachable!("a name came from one of the two directories"),
+        }
+        prefix.truncate(start);
+    }
+    Ok(())
+}
+
+fn push_planned(
+    out: &mut Vec<CheckoutEntry>,
+    path: &[u8],
+    action: CheckoutAction,
+    oid: Option<ObjectId>,
+    mode: Option<EntryMode>,
+    options: &CheckoutOptions,
+) {
+    // Pruning happens after the entry is produced, which is what makes `checkout <rev> -- dir`
+    // leave every other path — including deletions — alone.
+    if !path_in_pathspec(BStr::new(path), BStr::new(&options.pathspec[..])) {
+        return;
+    }
+    out.push(CheckoutEntry {
+        path: BString::from(path),
+        action,
+        oid,
+        mode,
+    });
+}
+
+fn lookup_tree_entry(
+    odb: &Odb,
+    format: ObjectFormat,
+    root: ObjectId,
+    path: &BStr,
+) -> Result<Option<(EntryMode, ObjectId)>> {
+    let mut current = root;
+    let mut components = path.split(|byte| *byte == b'/').peekable();
+    while let Some(component) = components.next() {
+        let entries = read_tree_dir(odb, format, current)?;
+        let Some(entry) = entries.into_iter().find(|e| e.name == component) else {
+            return Ok(None);
+        };
+        if components.peek().is_none() {
+            return Ok(Some((entry.mode, entry.oid)));
+        }
+        if entry.mode != EntryMode::Tree {
+            return Ok(None);
+        }
+        current = entry.oid;
+    }
+    Ok(None)
+}
+
+fn create_dirs(worktree: &Worktree, dir: &std::path::Path) -> Result<()> {
+    let root = worktree.require_root("create a directory")?;
+    let relative = dir.strip_prefix(root).unwrap_or(dir);
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        match current.symlink_metadata() {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => {
+                return Err(Error::IoAtPath {
+                    path: BString::from(current.as_os_str().as_encoded_bytes()),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "a file is in the way of a directory",
+                    ),
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&current)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn apply_mode(worktree: &Worktree, path: &BStr, mode: EntryMode) -> Result<()> {
+    // Only regular files carry the executable bit; a link's or a tree's permissions belong to
+    // the filesystem, not the repository.
+    let bits = match mode {
+        EntryMode::BlobExecutable => 0o755,
+        EntryMode::Blob => 0o644,
+        _ => return Ok(()),
+    };
+    // With `core.filemode = false` the filesystem cannot express the bit, so setting it would
+    // be lost on the next status and is not worth an extra syscall per file.
+    if !worktree.filemode() {
+        return Ok(());
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let file = worktree.join(path)?;
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(bits))?;
+    Ok(())
 }

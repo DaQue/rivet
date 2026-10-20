@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use rivet_core::index::{IndexEntry, IndexVersion, Stage, compare_entries};
+use rivet_core::index::{Index, IndexEntry, IndexVersion, Stage, compare_entries};
 use rivet_core::object::{ObjectKind, hash_object};
 use rivet_core::ObjectFormat;
 
@@ -217,4 +217,28 @@ fn tempfile_dir(tag: &str) -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     git(&["init", "-q"], &dir);
     dir
+}
+
+/// A committed repository's index carries Git's `TREE` extension, which sits between the entries
+/// and the trailing checksum. Reading it as another entry header made every real index fail to
+/// parse with "extension extends past end", so this test pins the boundary.
+#[test]
+fn parses_a_git_index_that_has_extensions() {
+    let dir = tempfile_dir("extensions");
+    write_file(&dir, "a.txt", "hello\n");
+    std::fs::create_dir_all(dir.join("dir")).unwrap();
+    write_file(&dir, "dir/b.txt", "world\n");
+    git(&["commit", "-qm", "one"], &dir);
+
+    let data = std::fs::read(dir.join(".git/index")).unwrap();
+    let index = Index::parse(ObjectFormat::Sha1, &data).expect("a Git index must parse");
+    assert_eq!(index.entries().len(), 2);
+    assert!(
+        !index.extensions().is_empty(),
+        "this index is expected to carry the TREE extension"
+    );
+    // Re-serialising keeps the extension, so a Rivet `add` does not silently strip Git's cache.
+    let round_tripped = index.to_bytes(ObjectFormat::Sha1);
+    let again = Index::parse(ObjectFormat::Sha1, &round_tripped).expect("round trip parses");
+    assert_eq!(again.extensions().len(), index.extensions().len());
 }

@@ -184,7 +184,7 @@ impl HunkLine {
     ///
     /// The writer's errors, as [`crate::error::Error::Io`].
     pub fn write(&self, out: &mut impl Write) -> Result<()> {
-        out.write_all(b"+")?;
+        out.write_all(&[self.kind.prefix() as u8])?;
         out.write_all(&self.content)?;
         if !self.has_newline {
             out.write_all(b"\\ No newline at end of file\n")?;
@@ -304,10 +304,151 @@ impl Hunk {
     ///
     /// The writer's errors, as [`crate::error::Error::Io`].
     pub fn write(&self, out: &mut impl Write) -> Result<()> {
-        out.write_all(b"@@ -").map_err(|e| crate::error::Error::Io(e))?;
-        out.write_all(b"0 0\n").map_err(|e| crate::error::Error::Io(e))?;
+        out.write_all(&self.header())?;
+        out.write_all(b"\n")?;
+        for line in &self.lines {
+            line.write(out)?;
+        }
         Ok(())
     }
+}
+
+/// Phase 8 — build the hunks for one file from its Myers edit script.
+///
+/// # Caveats
+///
+/// * **The edit script covers both sequences**, including the matched runs, so the hunks are
+///   sliced out of it rather than re-diffed per hunk.
+/// * **Two change runs closer than `2 * context` unchanged lines are one hunk.** That is Git's
+///   merge rule: the context of the earlier run and the leading context of the later one would
+///   overlap, and two hunks with overlapping context do not apply.
+/// * **A hunk with no old (or no new) lines starts at the insertion point and reports a zero
+///   count**, which is why the start is derived from the first line it contains rather than from
+///   arithmetic on the index.
+pub fn build_hunks(
+    old: &[u8],
+    new: &[u8],
+    edits: &[crate::diff::myers::Edit],
+    context: usize,
+) -> Vec<Hunk> {
+    use crate::diff::myers::split_lines;
+
+    let old_lines = split_lines(old);
+    let new_lines = split_lines(new);
+
+    #[derive(Clone, Copy)]
+    enum Side {
+        Ctx(usize, usize),
+        Del(usize),
+        Add(usize),
+    }
+
+    let mut seq: Vec<Side> = Vec::new();
+    for edit in edits {
+        if edit.old_len > 0 && edit.new_len > 0 {
+            for k in 0..edit.old_len {
+                seq.push(Side::Ctx(edit.old_index + k, edit.new_index + k));
+            }
+        } else if edit.old_len > 0 {
+            for k in 0..edit.old_len {
+                seq.push(Side::Del(edit.old_index + k));
+            }
+        } else if edit.new_len > 0 {
+            for k in 0..edit.new_len {
+                seq.push(Side::Add(edit.new_index + k));
+            }
+        }
+    }
+
+    // Group the changed positions into hunk ranges, merging runs whose gap is at most
+    // `2 * context` unchanged lines.
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for (index, side) in seq.iter().enumerate() {
+        if matches!(side, Side::Ctx(_, _)) {
+            continue;
+        }
+        match ranges.last_mut() {
+            Some(last) if index <= last.1 + 2 * context + 1 => last.1 = index,
+            _ => ranges.push((index, index)),
+        }
+    }
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+
+    let mut hunks = Vec::with_capacity(ranges.len());
+    for (first, last) in ranges {
+        let start = first.saturating_sub(context);
+        let end = (last + context + 1).min(seq.len());
+
+        let mut lines = Vec::with_capacity(end - start);
+        let mut old_start = None;
+        let mut new_start = None;
+        let mut old_count = 0usize;
+        let mut new_count = 0usize;
+        for side in &seq[start..end] {
+            match *side {
+                Side::Ctx(o, n) => {
+                    old_start.get_or_insert(o + 1);
+                    new_start.get_or_insert(n + 1);
+                    old_count += 1;
+                    new_count += 1;
+                    let line = old_lines[o];
+                    lines.push(HunkLine {
+                        kind: LineKind::Context,
+                        content: BString::from(line.content),
+                        has_newline: line.has_newline,
+                    });
+                }
+                Side::Del(o) => {
+                    old_start.get_or_insert(o + 1);
+                    old_count += 1;
+                    let line = old_lines[o];
+                    lines.push(HunkLine {
+                        kind: LineKind::Removed,
+                        content: BString::from(line.content),
+                        has_newline: line.has_newline,
+                    });
+                }
+                Side::Add(n) => {
+                    new_start.get_or_insert(n + 1);
+                    new_count += 1;
+                    let line = new_lines[n];
+                    lines.push(HunkLine {
+                        kind: LineKind::Added,
+                        content: BString::from(line.content),
+                        has_newline: line.has_newline,
+                    });
+                }
+            }
+        }
+
+        let old_before = seq[..start]
+            .iter()
+            .filter(|s| matches!(s, Side::Ctx(_, _) | Side::Del(_)))
+            .count();
+        let new_before = seq[..start]
+            .iter()
+            .filter(|s| matches!(s, Side::Ctx(_, _) | Side::Add(_)))
+            .count();
+
+        hunks.push(Hunk {
+            old_start: if old_count == 0 {
+                old_before
+            } else {
+                old_start.unwrap_or(old_before + 1)
+            },
+            old_lines: old_count,
+            new_start: if new_count == 0 {
+                new_before
+            } else {
+                new_start.unwrap_or(new_before + 1)
+            },
+            new_lines: new_count,
+            lines,
+        });
+    }
+    hunks
 }
 
 /// Phase 8 — the per-file counts `--stat` and `--numstat` print.
@@ -386,7 +527,92 @@ pub fn format_unified(
     format: crate::hash::ObjectFormat,
     out: &mut impl Write,
 ) -> Result<()> {
-    out.write_all(b"").map_err(|e| crate::error::Error::Io(e))
+    let hex = |oid: &crate::hash::ObjectId| -> String {
+        // `to_hex` is already sized to the repository's own format, so the short form is a
+        // seven-character prefix of *that* width rather than of a hard-coded forty.
+        let full = oid.to_hex();
+        String::from_utf8_lossy(&full[..7.min(full.len())]).into_owned()
+    };
+    let zeros = "0000000";
+
+    for file in &diff.files {
+        let path = file.path();
+        let mode = file.new_mode.or(file.old_mode);
+
+        out.write_all(b"diff --git a/")?;
+        out.write_all(&file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+        out.write_all(b" b/")?;
+        out.write_all(&file.new_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+        out.write_all(b"\n")?;
+
+        if file.is_new {
+            out.write_all(b"new file mode ")?;
+            out.write_all(format!("{:06o}\n", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+            out.write_all(b"index ")?;
+            out.write_all(zeros.as_bytes())?;
+            out.write_all(b"..")?;
+            out.write_all(file.new_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+            out.write_all(b"\n")?;
+        } else if file.is_deleted {
+            out.write_all(b"deleted file mode ")?;
+            out.write_all(format!("{:06o}\n", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+            out.write_all(b"index ")?;
+            out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+            out.write_all(b"..")?;
+            out.write_all(zeros.as_bytes())?;
+            out.write_all(b"\n")?;
+        } else if file.old_mode != file.new_mode {
+            out.write_all(format!("old mode {:06o}\n", file.old_mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+            out.write_all(format!("new mode {:06o}\n", file.new_mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+            out.write_all(b"index ")?;
+            out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+            out.write_all(b"..")?;
+            out.write_all(file.new_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+            out.write_all(b"\n")?;
+        } else {
+            out.write_all(b"index ")?;
+            out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+            out.write_all(b"..")?;
+            out.write_all(file.new_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+            out.write_all(b" ")?;
+            out.write_all(format!("{:06o}\n", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+        }
+
+        if file.is_binary {
+            out.write_all(b"Binary files a/")?;
+            out.write_all(if file.is_new { b"/dev/null".as_slice() } else { &file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]) })?;
+            out.write_all(b" and b/")?;
+            out.write_all(if file.is_deleted { b"/dev/null".as_slice() } else { &file.new_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]) })?;
+            out.write_all(b" differ\n")?;
+            continue;
+        }
+
+        if file.hunks.is_empty() {
+            continue;
+        }
+
+        out.write_all(b"--- ")?;
+        if file.is_new {
+            out.write_all(b"/dev/null\n")?;
+        } else {
+            out.write_all(b"a/")?;
+            out.write_all(&file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+            out.write_all(b"\n")?;
+        }
+        out.write_all(b"+++ ")?;
+        if file.is_deleted {
+            out.write_all(b"/dev/null\n")?;
+        } else {
+            out.write_all(b"b/")?;
+            out.write_all(&file.new_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+            out.write_all(b"\n")?;
+        }
+
+        for hunk in &file.hunks {
+            hunk.write(out)?;
+        }
+    }
+    Ok(())
 }
 
 /// Phase 8 — the unified diff as a buffer.
