@@ -152,10 +152,8 @@ s_log_show_diff() {
     v log
     v log --oneline
     v log -n 1 --stat
-    v log --format=%H 2>/dev/null
     v show
     v show HEAD~1
-    v show --stat HEAD~1
     v diff HEAD~2 HEAD
     v diff --stat HEAD~2 HEAD
     v diff --name-only HEAD~2

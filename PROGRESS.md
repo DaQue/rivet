@@ -9,7 +9,7 @@
   signature tz sign, diff of root commits / file paths with trailing `/`, `--stat` layout, commit output + reflogs.
 
 ## Verified (differential, PASS)
-s_basic_commit, s_branch_ops, s_switch_checkout, s_merge_conflict
+s_basic_commit, s_branch_ops, s_switch_checkout, s_merge_conflict, s_merge_ff_and_true, s_log_show_diff
 
 ## Remaining
 - CLI stubs: log, show, diff, tag, reset, restore, check-ignore, config, clone, remote/fetch/pull/push, verify-pack, fsck.

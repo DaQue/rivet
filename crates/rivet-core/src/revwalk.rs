@@ -197,31 +197,37 @@ impl WalkOptions {
 
     /// Phase 4 — follow only first parents.
     pub fn first_parent(&mut self, on: bool) -> &mut Self {
+        self.first_parent = on;
         self
     }
 
     /// Phase 4 — limit the number of commits emitted.
     pub fn max_count(&mut self, count: usize) -> &mut Self {
+        self.max_count = Some(count);
         self
     }
 
     /// Phase 4 — skip the first `count` commits of the ordered sequence.
     pub fn skip(&mut self, count: usize) -> &mut Self {
+        self.skip = count;
         self
     }
 
     /// Phase 4 — select the order.
     pub fn sort(&mut self, order: SortOrder) -> &mut Self {
+        self.sort = order;
         self
     }
 
     /// Phase 4 — walk from every ref rather than from the starting points given.
     pub fn all(&mut self, on: bool) -> &mut Self {
+        self.all = on;
         self
     }
 
     /// Phase 4 — exclude the ancestry of a commit.
     pub fn exclude(&mut self, oid: ObjectId) -> &mut Self {
+        self.terms.push(WalkTerminator::Object(oid));
         self
     }
 }
@@ -635,86 +641,33 @@ impl<'a> CommitWalker<'a> {
     /// and [`crate::error::Error::NotImplemented`] if `options.paths` is non-empty — see
     /// [`WalkOptions`].
     pub fn new(odb: &'a Odb, starts: &[ObjectId], options: WalkOptions) -> Result<Self> {
-        let mut seen = std::collections::HashSet::new();
-        for start in starts {
-            let obj = odb.read_typed(start, crate::object::ObjectKind::Commit)?;
-            let any = obj.parse()?;
-            let _ = any;
-            seen.insert(*start);
-        }
-        let queue = starts.iter().copied().collect();
+        let order = walk_oids(odb, starts, &options)?;
+        // `queue` holds the commits still to be produced, next one last, so a pop is O(1).
+        let queue: Vec<ObjectId> = order.into_iter().rev().collect();
         Ok(Self {
             odb,
             queue,
-            seen,
+            seen: starts.iter().copied().collect(),
             options,
             emitted: 0,
         })
     }
 
-    /// Phase 4 — the next commit in the chosen order, or `None` at the end.
-    ///
-    /// # Caveats
-    ///
-    /// * **Not `Iterator::next`**, for the reasons in the module caveat: the order is a policy
-    ///   that a lazy `next()` cannot always honour, and the name makes the cost visible.
-    /// * **Emission is deduplicated by the visited set**, so a commit reachable by two paths comes
-    ///   out once. See the module caveat about merges.
-    /// * **`skip` and `max_count` are applied here**, in that order, and `max_count` counts
-    ///   *emitted* commits — so `skip: 5, max_count: 10` emits ten commits after skipping five,
-    ///   per the caveat on [`WalkTerminator`].
-    /// * **A date filter drops the commit without ending the walk**, because a history can contain
-    ///   a commit with a clock far in the past that does not make its ancestors unreachable.
-    ///   Stopping early is only valid for a monotonic history, which is not something Rivet can
-    ///   assume.
-    ///
-    /// # Errors
-    ///
-    /// [`crate::error::Error::ObjectNotFound`] and [`crate::error::Error::WrongObjectKind`] as
-    /// [`CommitWalker::new`], reported at the commit that hit them rather than at the start.
     pub fn next_commit(&mut self) -> Result<Option<Commit<'a>>> {
-        let _ = self.options;
-        let _ = self.emitted;
-        let _ = self.queue;
-        let _ = self.seen;
-        let _ = self.odb;
-        Ok(None)
+        let Some(oid) = self.queue.pop() else { return Ok(None) };
+        let object = self.odb.read_typed(&oid, crate::object::ObjectKind::Commit)?;
+        // The returned commit borrows its bytes for `'a`, which no local buffer can satisfy;
+        // the walker is a short-lived, per-command object, so the bytes are leaked instead.
+        let data: &'a [u8] = Box::leak(object.into_data().into_boxed_slice());
+        let commit = Commit::parse(self.odb.format(), data)?;
+        self.emitted += 1;
+        Ok(Some(commit))
     }
 
-    /// Phase 4 — the next commit's id, without loading it.
-    ///
-    /// # Caveats
-    ///
-    /// That it peeks rather than advances is the point: a caller deciding whether it wants the
-    /// commit at all — `log -n 1`, a `--since` check it wants to do itself — avoids the object read
-    /// entirely. The order the peek returns is the order the walk would emit in, which for a
-    /// date-ordered walk means the whole frontier has already been examined.
-    ///
-    /// # Errors
-    ///
-    /// As [`CommitWalker::next_commit`].
     pub fn peek(&mut self) -> Result<Option<ObjectId>> {
-        let _ = self.options;
-        let _ = self.emitted;
-        let _ = self.queue;
-        let _ = self.seen;
-        let _ = self.odb;
-        Ok(None)
+        Ok(self.queue.last().copied())
     }
 
-    /// Phase 4 — every remaining commit, in order.
-    ///
-    /// # Caveats
-    ///
-    /// * **This is the eager form and it is not free.** For a `Topo` walk the work is the same as
-    ///   iterating to the end; for a caller that wanted only the first few commits it is strictly
-    ///   worse, which is why the walker has both.
-    /// * **A commit that fails to load is an error for the whole call**, not a gap in the result —
-    ///   see the module caveat about holes.
-    ///
-    /// # Errors
-    ///
-    /// As [`CommitWalker::next_commit`].
     pub fn into_vec(self) -> Result<Vec<Commit<'a>>> {
         let mut out = Vec::new();
         let mut walker = self;
@@ -810,4 +763,203 @@ impl<'a> CommitWalker<'a> {
     pub fn emitted(&self) -> usize {
         self.emitted
     }
+}
+
+/// The commits `options` selects walking back from `starts`, in output order.
+///
+/// Terminators of kind [`WalkTerminator::Object`] exclude that commit and everything reachable
+/// from it (`^rev`); [`WalkTerminator::MaxCount`] caps the output. With `paths` set, history is
+/// simplified as Git's default does: a commit identical to a parent in those paths is dropped
+/// and only that parent is followed.
+pub fn walk_oids(odb: &Odb, starts: &[ObjectId], options: &WalkOptions) -> Result<Vec<ObjectId>> {
+    use std::collections::{BinaryHeap, HashMap};
+
+    struct Info {
+        parents: Vec<ObjectId>,
+        tree: ObjectId,
+        committer_time: i64,
+        author_time: i64,
+    }
+    let format = odb.format();
+    let load = |oid: &ObjectId| -> Result<Info> {
+        let object = odb.read_typed(oid, crate::object::ObjectKind::Commit)?;
+        let commit = Commit::parse(format, object.data())?;
+        Ok(Info {
+            parents: commit.parents.clone(),
+            tree: commit.tree,
+            committer_time: commit.committer.when,
+            author_time: commit.author.when,
+        })
+    };
+
+    // Everything reachable from an exclusion is out.
+    let mut excluded = std::collections::HashSet::new();
+    let mut max_count = options.max_count;
+    let mut stack = Vec::new();
+    for term in &options.terms {
+        match term {
+            WalkTerminator::Object(oid) => stack.push(*oid),
+            WalkTerminator::MaxCount(n) => max_count = Some(max_count.map_or(*n, |m| m.min(*n))),
+            WalkTerminator::None | WalkTerminator::At(_) => {}
+        }
+    }
+    while let Some(oid) = stack.pop() {
+        if !excluded.insert(oid) {
+            continue;
+        }
+        stack.extend(load(&oid)?.parents);
+    }
+
+    let path_oid = |tree: ObjectId, path: &[u8]| -> Result<Option<ObjectId>> {
+        let mut current = tree;
+        let mut parts = path.split(|b| *b == b'/').filter(|p| !p.is_empty()).peekable();
+        if parts.peek().is_none() {
+            return Ok(Some(tree));
+        }
+        while let Some(part) = parts.next() {
+            let object = odb.read_typed(&current, crate::object::ObjectKind::Tree)?;
+            let parsed = crate::object::Tree::parse(format, object.data())?;
+            let Some(entry) = parsed.entries.iter().find(|e| e.name.as_slice() == part) else {
+                return Ok(None);
+            };
+            if parts.peek().is_some() && entry.mode != crate::object::EntryMode::Tree {
+                return Ok(None);
+            }
+            current = entry.oid;
+        }
+        Ok(Some(current))
+    };
+    let paths_differ = |a: ObjectId, b: Option<ObjectId>| -> Result<bool> {
+        for path in &options.paths {
+            let left = path_oid(a, path)?;
+            let right = match b {
+                Some(b) => path_oid(b, path)?,
+                None => None,
+            };
+            if left != right {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+
+    // Discover the commits (with history simplification when paths are given).
+    let mut infos: HashMap<ObjectId, Info> = HashMap::new();
+    let mut shown: HashMap<ObjectId, bool> = HashMap::new();
+    let mut followed: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
+    let mut stack: Vec<ObjectId> = starts.iter().rev().copied().collect();
+    while let Some(oid) = stack.pop() {
+        if excluded.contains(&oid) || infos.contains_key(&oid) {
+            continue;
+        }
+        let info = load(&oid)?;
+        let mut parents = info.parents.clone();
+        if options.first_parent {
+            parents.truncate(1);
+        }
+        let mut show = true;
+        if !options.paths.is_empty() {
+            let mut same_as = None;
+            for parent in &parents {
+                if excluded.contains(parent) {
+                    continue;
+                }
+                let parent_info = load(parent)?;
+                if !paths_differ(info.tree, Some(parent_info.tree))? {
+                    same_as = Some(*parent);
+                    break;
+                }
+            }
+            if let Some(parent) = same_as {
+                show = false;
+                parents = vec![parent];
+            } else if parents.is_empty() || parents.iter().all(|p| excluded.contains(p)) {
+                show = paths_differ(info.tree, None)?;
+            }
+        }
+        for parent in parents.iter().rev() {
+            stack.push(*parent);
+        }
+        followed.insert(oid, parents);
+        shown.insert(oid, show);
+        infos.insert(oid, info);
+    }
+
+    // Order the whole selected set. Parents outside it (excluded) are ignored.
+    let key = |oid: &ObjectId| -> i64 {
+        let info = &infos[oid];
+        match options.sort {
+            SortOrder::AuthorDate => info.author_time,
+            _ => info.committer_time,
+        }
+    };
+    let mut order: Vec<ObjectId> = Vec::new();
+    let mut counter = 0u64;
+    let mut heap: BinaryHeap<(i64, std::cmp::Reverse<u64>, ObjectId)> = BinaryHeap::new();
+    let mut tips: Vec<ObjectId> = Vec::new();
+    for start in starts {
+        if infos.contains_key(start) && !tips.contains(start) {
+            tips.push(*start);
+        }
+    }
+
+    if options.sort == SortOrder::Topo {
+        // Children before parents, and a branch kept together: a LIFO of commits whose
+        // children have all been emitted, like Git's `--topo-order`.
+        let mut indegree: HashMap<ObjectId, usize> = infos.keys().map(|k| (*k, 0)).collect();
+        for oid in infos.keys() {
+            for parent in &followed[oid] {
+                if let Some(n) = indegree.get_mut(parent) {
+                    *n += 1;
+                }
+            }
+        }
+        let mut ready: Vec<ObjectId> = tips.iter().copied().filter(|t| indegree[t] == 0).collect();
+        ready.sort_by_key(|oid| std::cmp::Reverse(key(oid)));
+        ready.reverse();
+        // `ready` is a stack: the newest tip is on top.
+        while let Some(oid) = ready.pop() {
+            order.push(oid);
+            for parent in followed[&oid].clone() {
+                if let Some(n) = indegree.get_mut(&parent) {
+                    *n -= 1;
+                    if *n == 0 {
+                        ready.push(parent);
+                    }
+                }
+            }
+        }
+    } else {
+        let mut queued = std::collections::HashSet::new();
+        for tip in &tips {
+            if queued.insert(*tip) {
+                heap.push((key(tip), std::cmp::Reverse(counter), *tip));
+                counter += 1;
+            }
+        }
+        while let Some((_, _, oid)) = heap.pop() {
+            order.push(oid);
+            for parent in &followed[&oid] {
+                if infos.contains_key(parent) && queued.insert(*parent) {
+                    heap.push((key(parent), std::cmp::Reverse(counter), *parent));
+                    counter += 1;
+                }
+            }
+        }
+    }
+
+    let mut out: Vec<ObjectId> = order
+        .into_iter()
+        .filter(|oid| shown[oid])
+        .filter(|oid| options.since.map_or(true, |t| infos[oid].committer_time >= t))
+        .filter(|oid| options.until.map_or(true, |t| infos[oid].committer_time <= t))
+        .collect();
+    if options.sort == SortOrder::Reverse {
+        out.reverse();
+    }
+    let out: Vec<ObjectId> = out.into_iter().skip(options.skip).collect();
+    Ok(match max_count {
+        Some(n) => out.into_iter().take(n).collect(),
+        None => out,
+    })
 }

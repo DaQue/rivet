@@ -758,3 +758,34 @@ pub enum HeadTarget<'a> {
     /// Detach `HEAD` at a commit.
     Detached(ObjectId),
 }
+
+/// Format a signature's time the way `git log` prints it by default:
+/// `Tue Nov 14 23:13:20 2023 +0100`, in the signature's own zone.
+pub fn format_git_date(when: i64, tz_offset_minutes: i32) -> String {
+    let offset = jiff::tz::Offset::from_seconds(tz_offset_minutes * 60)
+        .unwrap_or(jiff::tz::Offset::UTC);
+    let stamp = jiff::Timestamp::from_second(when).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+    let zoned = stamp.to_zoned(jiff::tz::TimeZone::fixed(offset));
+    let abs = tz_offset_minutes.abs();
+    format!(
+        "{} {}{:02}{:02}",
+        zoned.strftime("%a %b %-d %H:%M:%S %Y"),
+        if tz_offset_minutes < 0 { '-' } else { '+' },
+        abs / 60,
+        abs % 60
+    )
+}
+
+/// Parse a `--since`/`--until` style date (`@epoch`, `epoch`, ISO date or datetime) to seconds.
+pub fn parse_approxidate(text: &str) -> Option<i64> {
+    let text = text.trim();
+    if let Some(rest) = text.strip_prefix('@') {
+        return rest.split_whitespace().next()?.parse().ok();
+    }
+    if let Ok(n) = text.parse::<i64>() {
+        if text.len() >= 9 {
+            return Some(n);
+        }
+    }
+    crate::object::commit::parse_git_date(BStr::new(text.as_bytes())).map(|(when, _)| when)
+}

@@ -223,6 +223,9 @@ pub struct Hunk {
     pub new_lines: usize,
     /// The lines, in file order.
     pub lines: Vec<HunkLine>,
+    /// Git's "function context": the nearest line before the hunk that starts a letter, `_` or
+    /// `$`, cut to 80 bytes. Empty when there is none; shown after the closing `@@`.
+    pub section: BString,
 }
 
 impl Hunk {
@@ -234,6 +237,7 @@ impl Hunk {
             new_start: new_start,
             new_lines: new_lines,
             lines: Vec::new(),
+            section: BString::default(),
         }
     }
 
@@ -247,10 +251,9 @@ impl Hunk {
     /// * **A zero count keeps both the comma and the zero**: `@@ -0,0 +1,3 @@`. That is how a new
     ///   file is spelled, and printing `@@ -0 +1,3 @@` produces a patch that applies to the wrong
     ///   place.
-    /// * **The header carries no function context.** Git appends the nearest preceding line
-    ///   matching a hunk-header pattern (`@@ ... @@ fn foo()`), and Rivet does not implement
-    ///   `diff.<driver>.xfuncname`; a caller comparing against `git diff` output on a C file will
-    ///   see the difference, and matching it is a later phase.
+    /// * **The header carries Git's default function context** (see [`Hunk::section`]): the
+    ///   nearest preceding line that starts with a letter, `_` or `$`. Rivet does not implement
+    ///   `diff.<driver>.xfuncname`, so a file with a custom driver will differ.
     pub fn header(&self) -> BString {
         let mut buf = BString::from("@@ -");
         if self.old_lines == 1 {
@@ -270,6 +273,10 @@ impl Hunk {
             buf.extend_from_slice(self.new_lines.to_string().as_bytes());
         }
         buf.extend_from_slice(b" @@");
+        if !self.section.is_empty() {
+            buf.push(b' ');
+            buf.extend_from_slice(&self.section);
+        }
         buf
     }
 
@@ -446,6 +453,24 @@ pub fn build_hunks(
             },
             new_lines: new_count,
             lines,
+            section: {
+                // The line before the hunk's first old line, searching upwards.
+                let first = if old_count == 0 { old_before } else { old_start.unwrap_or(old_before + 1) - 1 };
+                let mut found = BString::default();
+                for index in (0..first.min(old_lines.len())).rev() {
+                    let content = old_lines[index].content;
+                    if content.first().is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_' || *b == b'$') {
+                        let mut text: Vec<u8> = content.to_vec();
+                        while text.last().is_some_and(|b| b.is_ascii_whitespace()) {
+                            text.pop();
+                        }
+                        text.truncate(80);
+                        found = BString::from(text);
+                        break;
+                    }
+                }
+                found
+            },
         });
     }
     hunks
