@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rivet_core::hash::ObjectFormat;
-use rivet_core::index::Index;
 use rivet_core::merge::{
     merge_trees, update_index_after_merge, write_conflict_stages, write_merged_worktree, MergeOptions,
 };

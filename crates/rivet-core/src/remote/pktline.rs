@@ -319,9 +319,13 @@ impl PktLine {
         // Control packets carry no payload. Their length is 0, 1 or 2, so the payload length must
         // not be computed by subtraction before they are recognised: `0 - 4` underflows.
         if len < 4 {
+            // A control packet's length field counts itself, so these three are exactly four bytes
+            // long on the wire. Reporting them as empty `Data` instead of as control packets makes
+            // protocol v2 section delimiters look like empty payloads.
             let pkt = match len {
                 0 => PktLine::Flush,
-                _ => PktLine::Data(vec![]),
+                1 => PktLine::Delim,
+                _ => PktLine::ResponseEnd,
             };
             return Ok((pkt, 4));
         }
@@ -364,10 +368,35 @@ impl PktLine {
     /// protocol needs, because "the peer sent nonsense" and "the connection broke" are different
     /// reports for the user.
     pub fn read_from<R: Read>(reader: &mut R) -> Result<Self> {
+        match Self::read_from_opt(reader)? {
+            Some(pkt) => Ok(pkt),
+            None => Err(Error::Protocol("truncated frame".to_string())),
+        }
+    }
+
+    /// Phase 11 — read one packet, treating a clean end of stream as `Ok(None)`.
+    ///
+    /// # Caveats
+    ///
+    /// **Only a stream that ends *between* packets yields `Ok(None)`.** A stream that stops part
+    /// way through a header or a payload is still a [`crate::error::Error::Protocol`]: the peer was
+    /// cut off mid-frame and lost data, and reporting that as "the response ended" would hand a
+    /// truncated pack to the caller as if it were complete. [`PktLine::read_from`] is this function
+    /// with the `None` case turned back into an error, for the negotiation paths where the protocol
+    /// requires an explicit flush.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Error::Protocol`] for a frame cut short mid-header or mid-payload and for a
+    /// malformed header, and [`crate::error::Error::Transport`] for an underlying read failure.
+    pub fn read_from_opt<R: Read>(reader: &mut R) -> Result<Option<Self>> {
         let mut header = [0u8; 4];
         let mut n = 0;
         while n < 4 {
             match reader.read(&mut header[n..]) {
+                // Nothing at all before the header: the stream ended at a packet boundary, which
+                // is how a server that closes the connection instead of flushing ends a response.
+                Ok(0) if n == 0 => return Ok(None),
                 Ok(0) => return Err(Error::Protocol("truncated frame".to_string())),
                 Ok(k) => n += k,
                 Err(e) => return Err(Error::Transport(e.to_string())),
@@ -392,9 +421,12 @@ impl PktLine {
                 1 => PktLine::Delim,
                 _ => PktLine::ResponseEnd,
             };
-            return Ok(pkt);
+            return Ok(Some(pkt));
         }
         let payload_len = len as usize - 4;
+        if payload_len > MAX_PKT_DATA {
+            return Err(Error::Protocol("pkt-line exceeds max length".to_string()));
+        }
         let mut payload = vec![0u8; payload_len];
         let mut n = 0;
         while n < payload_len {
@@ -404,16 +436,7 @@ impl PktLine {
                 Err(e) => return Err(Error::Transport(e.to_string())),
             }
         }
-        let pkt = if len == 0 {
-            PktLine::Flush
-        } else if len == 1 {
-            PktLine::Data(vec![])
-        } else if len == 2 {
-            PktLine::Data(vec![])
-        } else {
-            PktLine::Data(payload)
-        };
-        Ok(pkt)
+        Ok(Some(PktLine::Data(payload)))
     }
 
     /// Phase 11 — write this packet to a stream.
@@ -500,12 +523,14 @@ impl SidebandKind {
     ///
     /// [`crate::error::Error::Protocol`] for anything other than 1, 2 or 3, including 0 — see the
     /// type's caveat.
-    pub const fn from_channel(byte: u8) -> Result<Self> {
+    pub fn from_channel(byte: u8) -> Result<Self> {
         match byte {
             1 => Ok(Self::Pack),
             2 => Ok(Self::Progress),
             3 => Ok(Self::Error),
-            _ => Err(Error::Protocol(String::new())),
+            _ => Err(Error::Protocol(format!(
+                "unknown sideband channel {byte}"
+            ))),
         }
     }
 }
@@ -599,24 +624,39 @@ impl<R: Read> SidebandReader<R> {
     /// [`crate::error::Error::Transport`] if the underlying read fails. A stream that ends without a
     /// flush is reported the same way, because a peer that closed mid-response is not a clean end.
     pub fn next_packet(&mut self) -> Result<Option<SidebandPacket>> {
-        let line = PktLine::read_from(&mut self.inner)?;
-        if line.is_flush() {
-            return Ok(None);
+        loop {
+            let Some(line) = PktLine::read_from_opt(&mut self.inner)? else {
+                return Ok(None);
+            };
+            match line {
+                // A delimiter separates two sections of a protocol v2 response; it is not the end
+                // of the stream and carries nothing a pack reader can use.
+                PktLine::Delim => continue,
+                // A flush ends the section and a response-end ends the whole response. Neither
+                // can be followed by more of this exchange.
+                PktLine::Flush | PktLine::ResponseEnd => return Ok(None),
+                PktLine::Data(data) => {
+                    // An empty payload is legal and carries no channel byte. Treating it as a frame
+                    // with a channel would index past the end of the slice.
+                    if data.is_empty() {
+                        continue;
+                    }
+                    let (channel, payload) = if self.enabled {
+                        let ch = SidebandKind::from_channel(data[0])?;
+                        (ch, &data[1..])
+                    } else {
+                        (SidebandKind::Pack, &data[..])
+                    };
+                    if channel == SidebandKind::Error {
+                        self.error_seen = true;
+                    }
+                    return Ok(Some(SidebandPacket {
+                        channel,
+                        data: payload.to_vec(),
+                    }));
+                }
+            }
         }
-        let data = line.data();
-        let (channel, payload) = if self.enabled {
-            let ch = SidebandKind::from_channel(data[0])?;
-            (ch, &data[1..])
-        } else {
-            (SidebandKind::Pack, data)
-        };
-        if channel == SidebandKind::Error {
-            self.error_seen = true;
-        }
-        Ok(Some(SidebandPacket {
-            channel,
-            data: payload.to_vec(),
-        }))
     }
 
     /// Phase 11 — whether a channel-3 error packet has been seen.

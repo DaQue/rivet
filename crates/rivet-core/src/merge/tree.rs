@@ -412,7 +412,6 @@ pub fn merge_trees(
                     }
                 }
             }
-            (None, None, None) => {}
         }
     }
 

@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rivet_core::merge::abort_merge;
-use rivet_core::repo::Repository;
 
 fn git(dir: &Path, args: &[&str]) -> (bool, String) {
     let output = Command::new("git")

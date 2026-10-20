@@ -132,71 +132,77 @@ impl Default for SidebandOptions {
 ///
 /// [`crate::error::Error::Protocol`] for an unknown channel, a channel 3 abort or a stream that ends
 /// without its terminator; and whatever `reader` raises.
+
 pub fn demultiplex<R: Read>(
     reader: &mut R,
     options: &SidebandOptions,
     progress: Option<&mut dyn FnMut(&[u8])>,
 ) -> Result<Vec<u8>> {
-    todo!()
+    let mut pack = Vec::new();
+    stream_pack(reader, options, &mut pack, progress)?;
+    Ok(pack)
 }
 
-/// Phase 11 — read a sideband-framed stream, writing the pack bytes straight into `out`.
-///
-/// # Caveats
-///
-/// * **The pack is never held whole**, which is the point: this is the path a clone should take, and
-///   the pack is handed to whatever the caller passed — a file, a hasher, a fixer. The caller is
-///   responsible for the fact that nothing can be validated until it has been written, so a channel 3
-///   abort leaves a partial file for the caller to remove, and this function's error says so by being
-///   an error rather than a returned length.
-/// * **The progress sink has the same contract as [`demultiplex`]'s**, including that it is called on
-///   this thread and must not block indefinitely: the server is blocked while it runs.
-/// * **`out` is written in channel-1 payload chunks**, which are not aligned to any pack structure.
-///   A caller that needs object boundaries uses [`store_pack`], which goes through the pack writer.
-/// * **A flush ends the stream only on channel 0**, and the packets before it are the entire pack. A
-///   reader that treated a flush inside the pack as a terminator would stop at the first one, which
-///   for a compressed pack body is a coincidence that happens within the first few kilobytes.
-///
-/// # Errors
-///
-/// As [`demultiplex`], plus whatever `out` raises.
 pub fn stream_pack<R: Read, W: Write>(
     reader: &mut R,
     options: &SidebandOptions,
     out: &mut W,
     progress: Option<&mut dyn FnMut(&[u8])>,
 ) -> Result<usize> {
-    todo!()
+    let mut progress = progress;
+
+    if !options.enabled {
+        // No sideband negotiated: the stream is the pack, with no channel bytes to strip and no
+        // progress to forward. Read it in chunks rather than with read_to_end so that the caller's
+        // writer sees the bytes as they arrive.
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut total = 0usize;
+        loop {
+            let n = reader.read(&mut buf).map_err(crate::error::Error::Io)?;
+            if n == 0 {
+                break;
+            }
+            out.write_all(&buf[..n]).map_err(crate::error::Error::Io)?;
+            total += n;
+        }
+        return Ok(total);
+    }
+
+    let mut sideband = crate::remote::pktline::SidebandReader::new(reader, true);
+    let mut total = 0usize;
+    // Channel 3 does not end the stream: the server sends the message and then closes, and the
+    // remaining packets have to be consumed or the connection is left half-read. The text is kept
+    // until the stream ends and reported then.
+    let mut error_text: Vec<u8> = Vec::new();
+    loop {
+        match sideband.next_packet()? {
+            None => break,
+            Some(packet) => match packet.channel {
+                SidebandKind::Pack => {
+                    out.write_all(&packet.data).map_err(crate::error::Error::Io)?;
+                    total += packet.data.len();
+                }
+                SidebandKind::Progress => {
+                    // `None` means "read and discard", not "stop reading": the server blocks on a
+                    // full pipe if its progress is never consumed.
+                    if options.want_progress {
+                        if let Some(callback) = progress.as_mut() {
+                            (**callback)(&packet.data);
+                        }
+                    }
+                }
+                SidebandKind::Error => error_text.extend_from_slice(&packet.data),
+            },
+        }
+    }
+    if !error_text.is_empty() {
+        return Err(crate::error::Error::Protocol(
+            String::from_utf8_lossy(&error_text).into_owned(),
+        ));
+    }
+    Ok(total)
 }
 
-/// Phase 11 — demultiplex a fetch response and store the pack in the object database.
-///
-/// # Caveats
-///
-/// * **The thin-pack fix happens before the index**, and a pack that needs it is detected from the
-///   index attempt rather than from the capability. A server is allowed to send a thin pack whenever
-///   it believes the client has the bases, even if `thin-pack` was the caller's idea, so the client
-///   cannot assume a non-thin pack and a client that did gets
-///   [`crate::error::Error::ThinPack`] from the index rather than corrupt objects.
-/// * **Nothing is added to the odb on a checksum failure.** The pack's own trailing checksum and the
-///   index's are both verified by [`crate::pack::index_pack`], and a mismatch means the transfer was
-///   corrupted — writing it anyway would put objects in the database that can never be read back
-///   correctly, which is worse than losing the fetch.
-/// * **The index is stored alongside the pack**, which is what makes the objects readable without
-///   rebuilding it. A caller that stored the pack alone has objects that only a full repository
-///   reindex would find, and the difference is invisible until someone runs `fsck`.
-/// * **The return is the index result rather than the pack**, because the caller wants the object
-///   count and the checksum for its report and does not want a second copy of the bytes. It is
-///   [`IndexPackResult`] as the pack layer defines it, unchanged — this function adds no vocabulary of
-///   its own, deliberately, so that a caller holding a pack from anywhere handles it the same way.
-/// * **A `side-band`-less server is handled by the same call**, with [`SidebandOptions::enabled`]
-///   false, so the caller does not branch on the capability. The branch is in the reader, once.
-///
-/// # Errors
-///
-/// [`crate::error::Error::Protocol`] for the framing, [`crate::error::Error::ThinPack`] if a thin pack
-/// cannot be completed against the local odb, [`crate::error::Error::CorruptPack`] for a corrupt pack, and
-/// [`crate::error::Error::Io`] if the result cannot be written.
 pub fn store_pack<R: Read>(
     reader: &mut R,
     options: &SidebandOptions,
@@ -204,10 +210,35 @@ pub fn store_pack<R: Read>(
     format: ObjectFormat,
     progress: Option<&mut dyn FnMut(&[u8])>,
 ) -> Result<IndexPackResult> {
-    let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).map_err(crate::error::Error::Io)?;
-    let result = store_pack(&mut buf.as_slice(), options, odb, format, progress)?;
+    let mut pack = Vec::new();
+    stream_pack(reader, options, &mut pack, progress)?;
+
+    // A server may send a thin pack whether or not `thin-pack` was requested, so the fix is
+    // decided by the index attempt rather than by what was negotiated. `fix_thin_pack` returns the
+    // input unchanged when there is nothing to complete.
+    let pack = crate::pack::fix_thin_pack(&pack, format, odb)?;
+    let result = crate::pack::index_pack(&pack, format, Some(odb))?;
+
+    // Pack first, index second: an `.idx` that points into a pack which is not there is a
+    // repository that cannot read its objects at all, while a pack without an index is merely one
+    // `index-pack` away from being usable.
+    let pack_dir = odb.objects_dir().join("pack");
+    std::fs::create_dir_all(&pack_dir).map_err(crate::error::Error::Io)?;
+    let name = format!("pack-{}", result.pack_checksum.to_hex());
+    write_file_atomic(&pack_dir.join(format!("{name}.pack")), &pack)?;
+    write_file_atomic(
+        &pack_dir.join(format!("{name}.idx")),
+        &result.index.as_index().write(),
+    )?;
+
     Ok(result)
+}
+
+fn write_file_atomic(path: &std::path::Path, data: &[u8]) -> Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, data).map_err(crate::error::Error::Io)?;
+    std::fs::rename(&tmp, path).map_err(crate::error::Error::Io)?;
+    Ok(())
 }
 
 /// Phase 11 — read a sideband-framed exchange that carries no pack, as a push's status does.
@@ -232,22 +263,45 @@ pub fn store_pack<R: Read>(
 /// # Errors
 ///
 /// As [`demultiplex`], minus the pack-specific cases.
+
 pub fn read_status_stream<R: Read>(
     reader: &mut R,
     options: &SidebandOptions,
     progress: Option<&mut dyn FnMut(&[u8])>,
 ) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).map_err(crate::error::Error::Io)?;
+    let mut progress = progress;
+
+    if !options.enabled {
+        let mut buf = Vec::new();
+        reader
+            .read_to_end(&mut buf)
+            .map_err(crate::error::Error::Io)?;
+        return Ok(buf);
+    }
+
+    let mut sideband = crate::remote::pktline::SidebandReader::new(reader, true);
     let mut status = Vec::new();
-    let mut i = 0usize;
-    while i < buf.len() {
-        let line_end = buf[i..].iter().position(|&b| b == b'\n').map_or(buf.len(), |p| i + p + 1);
-        let line = &buf[i..line_end];
-        if line.len() >= 2 && line[0] == b'1' && line[1] == b' ' {
-            status.extend_from_slice(&line[2..]);
+    let mut error_text: Vec<u8> = Vec::new();
+    loop {
+        match sideband.next_packet()? {
+            None => break,
+            Some(packet) => match packet.channel {
+                SidebandKind::Pack => status.extend_from_slice(&packet.data),
+                SidebandKind::Progress => {
+                    if options.want_progress {
+                        if let Some(callback) = progress.as_mut() {
+                            (**callback)(&packet.data);
+                        }
+                    }
+                }
+                SidebandKind::Error => error_text.extend_from_slice(&packet.data),
+            },
         }
-        i = line_end;
+    }
+    if !error_text.is_empty() {
+        return Err(crate::error::Error::Protocol(
+            String::from_utf8_lossy(&error_text).into_owned(),
+        ));
     }
     Ok(status)
 }
@@ -272,19 +326,23 @@ pub fn read_status_stream<R: Read>(
 /// [`crate::error::Error::Protocol`] if `max_payload` exceeds the pkt-line maximum, which is a caller
 /// bug that would otherwise produce a frame no peer can parse.
 pub fn frame(params: ChannelWrite, payload: &[u8]) -> Result<Vec<u8>> {
-    let max_payload = params.max_payload;
-    if max_payload == 0 {
+    if params.max_payload == 0 {
         return Ok(Vec::new());
     }
+    if params.max_payload > crate::remote::pktline::MAX_SIDEBAND_DATA {
+        return Err(crate::error::Error::Protocol(format!(
+            "sideband payload limit {} exceeds the pkt-line maximum {}",
+            params.max_payload,
+            crate::remote::pktline::MAX_SIDEBAND_DATA
+        )));
+    }
     let mut out = Vec::new();
-    let mut remaining = payload;
-    while !remaining.is_empty() {
-        let chunk_len = remaining.len().min(max_payload as usize);
-        let chunk = &remaining[..chunk_len];
-        let len_bytes = (chunk_len as u32).to_be_bytes();
-        out.extend_from_slice(&len_bytes);
+    for chunk in payload.chunks(params.max_payload) {
+        // The channel byte is part of the packet's payload, so the length includes it: a frame
+        // written as `4 + chunk.len()` is one byte short and every following packet is misread.
+        out.extend_from_slice(format!("{:04x}", chunk.len() + 5).as_bytes());
+        out.push(params.channel.channel());
         out.extend_from_slice(chunk);
-        remaining = &remaining[chunk_len..];
     }
     Ok(out)
 }
@@ -322,15 +380,21 @@ pub fn write_framed<R: Read, W: Write>(
     out: &mut W,
     params: ChannelWrite,
 ) -> Result<u64> {
+    if params.max_payload == 0 || params.max_payload > crate::remote::pktline::MAX_SIDEBAND_DATA {
+        return Err(crate::error::Error::Protocol(format!(
+            "invalid sideband payload limit {}",
+            params.max_payload
+        )));
+    }
     let mut buf = vec![0u8; params.max_payload];
     let mut total: u64 = 0;
     loop {
-        let n = input.read(&mut buf)?;
+        let n = input.read(&mut buf).map_err(crate::error::Error::Io)?;
         if n == 0 {
             break;
         }
         let packet = frame(params, &buf[..n])?;
-        out.write_all(&packet)?;
+        out.write_all(&packet).map_err(crate::error::Error::Io)?;
         total += n as u64;
     }
     Ok(total)
