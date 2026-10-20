@@ -197,13 +197,28 @@ s_check_ignore() {
 
 s_fsck_verify_pack() {
     g init -q repo; cd repo
-    echo a >a; g add a; g commit -q -m one; tick; echo b >>a; g commit -qam two
-    g repack -adq
-    v fsck
-    v fsck --strict
+    seq 1 400 >big; g add big; g commit -q -m one
+    tick; seq 1 400 | sed 's/^200$/changed/' >big; echo extra >small; g add .; g commit -qm two
+    tick; seq 1 400 | sed 's/^100$/other/;s/^200$/changed/' >big; g commit -qam three
+    g repack -adq --depth=10 --window=10
+    vs fsck
+    vs fsck --strict
     v verify-pack .git/objects/pack/*.idx
-    v verify-pack -v .git/objects/pack/*.idx
+    v verify-pack --verbose .git/objects/pack/*.idx
     v verify-pack -s .git/objects/pack/*.idx
+    echo orphan | g hash-object -w --stdin >/dev/null
+    g commit-tree -m orphan HEAD^{tree} >/dev/null
+    vs fsck
+    vs fsck --unreachable --no-reflogs
+    vs fsck --root
+    vs fsck --no-dangling
+}
+
+s_fsck_missing() {
+    g init -q repo; cd repo
+    echo a >a; mkdir d; echo b >d/b; g add .; g commit -qm one
+    blob=$(g rev-parse HEAD:d/b); rm .git/objects/${blob:0:2}/${blob:2}
+    vs fsck
 }
 
 s_cross_read() {

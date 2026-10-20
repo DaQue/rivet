@@ -34,6 +34,7 @@ v() {
         "$RIVET" "$@" >"$TMPOUT" 2>"$TMPERR"; rc=$?
     fi
     # Normalise the implementation's own name and the per-run root out of the text.
+    if [ "${SORT_OUT:-0}" = 1 ]; then sort -o "$TMPOUT" "$TMPOUT"; fi
     sed -e "s#$ROOT#<ROOT>#g" "$TMPOUT" >>"$TRANSCRIPT"
     if [ -s "$TMPERR" ]; then
         echo "--- stderr" >>"$TRANSCRIPT"
@@ -44,6 +45,9 @@ v() {
 }
 
 g() { "$GIT" "$@"; }
+
+# Like v, but with the output lines sorted (for commands whose order is a hash-table accident).
+vs() { SORT_OUT=1 v "$@"; local rc=$?; SORT_OUT=0; return $rc; }
 
 # Repository state as real git sees it, for one repository directory.
 state_of() {

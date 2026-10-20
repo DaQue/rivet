@@ -42,6 +42,7 @@
 pub mod config;
 pub mod diff;
 pub mod error;
+pub mod fsck;
 pub mod hash;
 pub mod ignore;
 pub mod index;

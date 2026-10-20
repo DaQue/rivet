@@ -574,9 +574,10 @@ impl Odb {
     /// index-decode errors of the packs.
     pub fn oids(&self) -> Result<Vec<ObjectId>> {
         let mut ids = self.loose.oids()?;
+        let mut seen: std::collections::HashSet<ObjectId> = ids.iter().copied().collect();
         for pack in &self.packs {
             for id in pack.oids()? {
-                if !ids.contains(&id) {
+                if seen.insert(id) {
                     ids.push(id);
                 }
             }

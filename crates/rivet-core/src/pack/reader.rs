@@ -185,6 +185,11 @@ impl<'a> PackFile<'a> {
         self.version
     }
 
+    /// The pack's bytes, trailer included.
+    pub fn raw(&self) -> &'a [u8] {
+        self.data
+    }
+
     /// Phase 10 — the repository's id width, as it was passed to [`PackFile::open`].
     pub fn format(&self) -> ObjectFormat {
         self.format
@@ -532,7 +537,7 @@ impl<'a> PackFile<'a> {
     pub fn iter_entries(&self) -> PackReader<'_> {
         PackReader {
             pack: self.clone(),
-            next_offset: 0,
+            next_offset: 12,
             produced: 0,
         }
     }

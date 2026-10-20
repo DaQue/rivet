@@ -1356,7 +1356,67 @@ fn is_not_a_repository(error: &anyhow::Error) -> bool {
 /// * **`--stat-only` must not verify per-object**, per [`VerifyPackArgs`]; on a multi-gigabyte
 ///   pack the difference is minutes, and the flag exists for a script that wants the count.
 pub fn run_verify_pack(global: &GlobalArgs, args: &VerifyPackArgs) -> Result<i32> {
-    todo!()
+    let format = match args.object_format.as_deref() {
+        Some("sha256") => rivet_core::ObjectFormat::Sha256,
+        Some("sha1") | None => match super::open(global) {
+            Ok(repository) if args.object_format.is_none() => repository.format(),
+            _ => rivet_core::ObjectFormat::Sha1,
+        },
+        Some(other) => anyhow::bail!("unsupported object format '{other}'"),
+    };
+    let verbose = args.verbose || global.verbose;
+    let mut code = 0;
+    for index_path in &args.indexes {
+        // Git accepts the `.pack` name too and looks for its `.idx`.
+        let pack_path = index_path.with_extension("pack");
+        let owned = rivet_core::PackFile::open_path(&pack_path, format)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", index_path.display()))?;
+        let pack = owned.pack()?;
+        let objects = match rivet_core::pack::verify::verify_pack(&pack) {
+            Ok(objects) => objects,
+            Err(error) => {
+                eprintln!("error: {}: {error}", pack_path.display());
+                code = 1;
+                continue;
+            }
+        };
+        let mut out = String::new();
+        if verbose && !args.stat_only {
+            for object in &objects {
+                let kind = match object.kind {
+                    rivet_core::ObjectKind::Commit => "commit",
+                    rivet_core::ObjectKind::Tree => "tree",
+                    rivet_core::ObjectKind::Blob => "blob",
+                    rivet_core::ObjectKind::Tag => "tag",
+                };
+                out.push_str(&format!(
+                    "{} {:<6} {} {} {}",
+                    object.oid, kind, object.size, object.size_in_pack, object.offset
+                ));
+                if let Some(base) = object.base {
+                    out.push_str(&format!(" {} {}", object.depth, base));
+                }
+                out.push('\n');
+            }
+        }
+        if verbose || args.stat_only {
+            let non_delta = objects.iter().filter(|o| o.depth == 0).count();
+            let plural = |n: usize| if n == 1 { "" } else { "s" };
+            out.push_str(&format!("non delta: {non_delta} object{}\n", plural(non_delta)));
+            let max_depth = objects.iter().map(|o| o.depth).max().unwrap_or(0);
+            for depth in 1..=max_depth {
+                let count = objects.iter().filter(|o| o.depth == depth).count();
+                if count > 0 {
+                    out.push_str(&format!("chain length = {depth}: {count} object{}\n", plural(count)));
+                }
+            }
+        }
+        if verbose {
+            out.push_str(&format!("{}: ok\n", pack_path.display()));
+        }
+        print!("{out}");
+    }
+    Ok(code)
 }
 
 /// Phase 10 — verify the connectivity and validity of the repository's objects.
@@ -1400,5 +1460,53 @@ pub fn run_verify_pack(global: &GlobalArgs, args: &VerifyPackArgs) -> Result<i32
 ///   `lost-found` ref by default would make a read-only diagnosis change the repository it was
 ///   diagnosing.
 pub fn run_fsck(global: &GlobalArgs, args: &FsckArgs) -> Result<i32> {
-    todo!()
+    let repository = super::open(global)?;
+    let options = rivet_core::fsck::FsckOptions {
+        strict: args.strict,
+        connectivity_only: args.connectivity_only,
+        no_reflogs: args.no_reflogs,
+    };
+    let report = rivet_core::fsck::fsck(&repository, &options)?;
+    let name = |kind: rivet_core::ObjectKind| match kind {
+        rivet_core::ObjectKind::Commit => "commit",
+        rivet_core::ObjectKind::Tree => "tree",
+        rivet_core::ObjectKind::Blob => "blob",
+        rivet_core::ObjectKind::Tag => "tag",
+    };
+    for line in &report.problems {
+        eprintln!("{line}");
+    }
+    for line in &report.notices {
+        eprintln!("{line}");
+    }
+    for (kind, oid) in &report.missing {
+        println!("missing {} {oid}", name(*kind));
+    }
+    if args.root {
+        for oid in &report.roots {
+            println!("root {oid}");
+        }
+    }
+    if args.unreachable {
+        for (kind, oid) in &report.unreachable {
+            println!("unreachable {} {oid}", name(*kind));
+        }
+    } else if !args.no_dangling {
+        for (kind, oid) in &report.dangling {
+            println!("dangling {} {oid}", name(*kind));
+        }
+    }
+    if args.lost_found {
+        let base = repository.git_dir().join("lost-found");
+        for (kind, oid) in &report.dangling {
+            let (dir, contents) = if *kind == rivet_core::ObjectKind::Commit {
+                ("commit", format!("{oid}\n").into_bytes())
+            } else {
+                ("other", repository.odb().read(oid)?.into_data())
+            };
+            std::fs::create_dir_all(base.join(dir))?;
+            std::fs::write(base.join(dir).join(oid.to_string()), contents)?;
+        }
+    }
+    Ok(report.status as i32)
 }
