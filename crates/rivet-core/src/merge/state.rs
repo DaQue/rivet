@@ -196,7 +196,35 @@ impl Default for MergeState {
 /// [`crate::error::Error::IoAtPath`] for a file that cannot be written, and
 /// [`crate::error::Error::LockHeld`] if another process holds the lock.
 pub fn write_merge_state(git_dir: &Path, state: &MergeState) -> Result<()> {
-    todo!()
+    // ORIG_HEAD first: it is the way back, and a merge that is visible before it can be undone
+    // is worse than one that is not visible yet.
+    if let Some(orig) = state.orig_head {
+        write_orig_head(git_dir, orig)?;
+    }
+
+    let mut heads = Vec::new();
+    for oid in &state.merge_head {
+        heads.extend_from_slice(&oid.to_hex()[..]);
+        heads.push(b'\n');
+    }
+    write_locked(&git_dir.join(MERGE_HEAD), &heads)?;
+
+    let msg = if state.merge_msg.ends_with(b"\n") {
+        state.merge_msg.to_vec()
+    } else {
+        let mut msg = state.merge_msg.to_vec();
+        msg.push(b'\n');
+        msg
+    };
+    write_locked(&git_dir.join(MERGE_MSG), &msg)?;
+    Ok(())
+}
+
+/// Write a state file through a lock file, so a reader never sees a truncated id.
+fn write_locked(path: &Path, data: &[u8]) -> Result<()> {
+    let mut lock = crate::refs::RefLock::acquire_path(path)?;
+    lock.write_and_commit(data)?;
+    Ok(())
 }
 
 /// Phase 9 — read the merge state, if a merge is in progress.
@@ -308,7 +336,7 @@ pub fn merge_in_progress(git_dir: &Path) -> bool {
 pub fn write_orig_head(git_dir: &Path, oid: ObjectId) -> Result<()> {
     let path = git_dir.join("ORIG_HEAD");
     let mut buf = Vec::with_capacity(oid.format().hex_len() + 1);
-    oid.write_hex(&mut buf).expect("write hex");
+    buf.extend_from_slice(&oid.to_hex()[..]);
     buf.push(b'\n');
     std::fs::write(&path, &buf).map_err(|e| crate::error::Error::IoAtPath { path: BString::from(path.to_string_lossy().as_ref()), source: e })
 }
@@ -347,5 +375,101 @@ pub fn abort_merge(
     odb: &Odb,
     git_dir: &Path,
 ) -> Result<()> {
-    todo!()
+    use crate::object::{Commit, ObjectKind};
+
+    let state = match read_merge_state(git_dir, worktree.format())? {
+        Some(state) => state,
+        None => return Err(Error::NoMergeInProgress),
+    };
+    let orig = match state.orig_head {
+        Some(orig) => orig,
+        None => return Err(Error::NoMergeInProgress),
+    };
+    worktree.require_root("merge --abort")?;
+
+    let commit_tree = |oid: crate::hash::ObjectId| -> Result<crate::hash::ObjectId> {
+        let object = odb.read_typed(&oid, ObjectKind::Commit)?;
+        Ok(Commit::parse(worktree.format(), object.data())?.tree)
+    };
+    let target_tree = commit_tree(orig)?;
+    let target = crate::merge::tree::flatten_tree(odb, target_tree)?;
+
+    // There is no tree to plan a checkout from: the merge left the index conflicted, so the state
+    // being replaced is not any commit's tree. The victim rule is therefore applied directly —
+    // for every path this abort would overwrite or delete, the work tree must still match the
+    // index, or the user has edits the merge did not make and would lose them.
+    let mut dirty: Vec<BString> = Vec::new();
+    let mut removals: Vec<BString> = Vec::new();
+    for entry in index.entries() {
+        let path = entry.path.clone();
+        let path_ref = BStr::new(&path[..]);
+        let target_entry = target.get(&path);
+
+        if target_entry.is_none() {
+            if !removals.contains(&path) {
+                removals.push(path.clone());
+            }
+        }
+        // Only a stage-0 entry describes content the user could have edited; a conflicted path's
+        // work tree file is the merge's own marker file, and losing it loses nothing.
+        if entry.stage() != crate::index::Stage::Normal {
+            continue;
+        }
+        let unchanged = match target_entry {
+            Some((_, oid)) => *oid == entry.oid,
+            None => false,
+        };
+        if unchanged || dirty.contains(&path) {
+            continue;
+        }
+        match worktree.hash_file(path_ref) {
+            Ok(worktree_oid) if worktree_oid == entry.oid => {}
+            // A file that is already gone cannot be lost.
+            Err(Error::IoAtPath { .. }) => {}
+            _ => dirty.push(path),
+        }
+    }
+    if !dirty.is_empty() {
+        return Err(Error::DirtyWorktree { paths: dirty });
+    }
+
+    // Writes before removals: a path that moves keeps its content visible throughout.
+    for (path, (mode, oid)) in &target {
+        crate::worktree::checkout::write_blob(worktree, BStr::new(&path[..]), *oid, *mode, odb)?;
+    }
+    for path in &removals {
+        let path_ref = BStr::new(&path[..]);
+        if worktree.stat(path_ref)?.is_some() {
+            crate::worktree::checkout::remove_path(worktree, path_ref)?;
+        }
+    }
+
+    // The index becomes the target tree's. `--abort` means "as if the merge never started", so
+    // the pre-merge index is not the thing to restore — its entries can legitimately disagree
+    // with HEAD, and those disagreements are what the merge was about.
+    let mut restored = crate::index::Index::new();
+    for (path, (mode, oid)) in &target {
+        restored.insert(crate::index::IndexEntry {
+            ctime_seconds: 0,
+            ctime_nanos: 0,
+            mtime_seconds: 0,
+            mtime_nanos: 0,
+            dev: 0,
+            ino: 0,
+            mode: *mode,
+            uid: 0,
+            gid: 0,
+            size: 0,
+            oid: *oid,
+            flags: crate::index::IndexEntryFlags::with(crate::index::Stage::Normal, path.len()),
+            extended_flags: crate::index::IndexEntryExtendedFlags::empty().bits(),
+            path: path.clone(),
+        });
+    }
+    *index = restored;
+    index.write(&git_dir.join("index"), worktree.format())?;
+
+    // The state files go last: a failure above leaves the merge on disk and aborts can be retried.
+    clear_merge_state(git_dir)?;
+    Ok(())
 }

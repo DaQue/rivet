@@ -80,7 +80,8 @@ pub use state::{
     merge_in_progress, read_merge_state, write_merge_state, write_orig_head,
 };
 pub use tree::{
-    merge_path, merge_trees, merge_worktree_paths, write_conflict_stages, write_merged_worktree,
+    merge_path, merge_trees, merge_worktree_paths, update_index_after_merge,
+    write_conflict_stages, write_merged_worktree,
 };
 
 /// Phase 9 — which side of a merge a value came from.
@@ -326,6 +327,12 @@ pub struct MergeOptions {
     pub diff_algorithm: crate::diff::DiffAlgorithm,
     /// Create a merge commit even when a fast-forward would be possible.
     pub no_ff: bool,
+    /// The `<<<<<<<` and `>>>>>>>` labels: (ours, theirs).
+    ///
+    /// Git writes the names the user typed — `HEAD` and the branch being merged — into the
+    /// markers, so the file cannot be reproduced without them. The defaults are the neutral
+    /// spellings; a caller that knows the branch names should set them.
+    pub labels: (BString, BString),
 }
 
 impl MergeOptions {
@@ -337,6 +344,7 @@ impl MergeOptions {
             conflict_style: ConflictStyle::Merge,
             diff_algorithm: crate::diff::DiffAlgorithm::Myers,
             no_ff: false,
+            labels: (BString::from("ours"), BString::from("theirs")),
         }
     }
 
