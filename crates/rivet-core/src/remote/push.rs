@@ -552,7 +552,8 @@ pub fn push(
         .refs
         .iter()
         .map(|reference| reference.oid)
-        .filter(|oid| !oid.is_zero())
+        // The server may hold commits we never fetched; only what we have can shrink the pack.
+        .filter(|oid| !oid.is_zero() && odb.contains(oid))
         .collect();
     if !advertised.is_empty() {
         crate::remote::transport::collect_objects(

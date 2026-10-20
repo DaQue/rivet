@@ -149,6 +149,9 @@ impl RefChange {
 
     /// Render for `push`, which does not pad the source.
     pub fn push_line(&self) -> String {
+        if self.from.is_empty() {
+            return format!(" {} {:<17} {}{}", self.flag, self.summary, self.to, self.note);
+        }
         format!(" {} {:<17} {} -> {}{}", self.flag, self.summary, self.from, self.to, self.note)
     }
 }
@@ -209,6 +212,8 @@ struct Mapping {
     oid: ObjectId,
     force: bool,
     for_merge: bool,
+    /// Whether the ref gets a line in `FETCH_HEAD`.
+    listed: bool,
 }
 
 impl Repository {
@@ -351,6 +356,7 @@ impl Repository {
                                 && upstream.as_ref().is_some_and(|(rem, merge)| {
                                     rem == &label && merge.as_bytes() == r.name.as_slice()
                                 }),
+                            listed: true,
                         });
                     }
                 }
@@ -370,7 +376,26 @@ impl Repository {
                     oid: r.oid,
                     force: spec.force || request.force,
                     for_merge: true,
+                    listed: true,
                 });
+                // An explicit `fetch origin main` also refreshes the branch's tracking ref when
+                // the remote's own refspecs map it.
+                if spec.dst.is_empty() {
+                    for conf in &configured {
+                        if let Some(dst) = conf.map(&r.name) {
+                            if !dst.is_empty() {
+                                mappings.push(Mapping {
+                                    src: r.name.clone(),
+                                    dst: Some(dst),
+                                    oid: r.oid,
+                                    force: conf.force || request.force,
+                                    for_merge: false,
+                                    listed: false,
+                                });
+                            }
+                        }
+                    }
+                }
             } else {
                 return Err(Error::Message(format!("couldn't find remote ref {}", spec.src)));
             }
@@ -384,6 +409,7 @@ impl Repository {
                     oid: head.oid,
                     force: false,
                     for_merge: true,
+                    listed: true,
                 });
             }
         }
@@ -396,6 +422,7 @@ impl Repository {
                         oid: r.oid,
                         force: false,
                         for_merge: false,
+                        listed: true,
                     });
                 }
             }
@@ -439,6 +466,7 @@ impl Repository {
                     oid: r.oid,
                     force: false,
                     for_merge: false,
+                    listed: false,
                 });
             }
             if !tag_wants.is_empty() {
@@ -464,10 +492,53 @@ impl Repository {
         let mut rejected = 0;
         let mut fetch_head = Vec::new();
         let mut packed_new: Vec<(RefName, ObjectId)> = Vec::new();
+
+        if request.prune && !request.dry_run {
+            for spec in configured.iter().filter(|s| s.is_pattern() && !s.dst.is_empty()) {
+                let star = spec.dst.find_byte(b'*').unwrap_or(spec.dst.len());
+                let prefix = spec.dst[..star].to_vec();
+                for (name, _) in self.refs().list(&prefix)? {
+                    let still_there = advertised.iter().any(|r| spec.map(&r.name).as_ref().is_some_and(|d| d.as_slice() == name.as_bytes()));
+                    if !still_there && !name.as_bytes().ends_with(b"/HEAD") {
+                        let old = self.refs().resolve_oid(&name).ok();
+                        self.refs().delete(&name)?;
+                        let mut from = short_name(name.as_bytes());
+                        from = format!("{from}");
+                        let _ = old;
+                        changes.push(RefChange {
+                            flag: '-',
+                            summary: "[deleted]".to_string(),
+                            from: "(none)".to_string(),
+                            to: from,
+                            note: String::new(),
+                        });
+                    }
+                }
+            }
+        }
+
         for m in &mappings {
             let description = fetch_head_description(&m.src, &display_remote_url(&url_text));
-            fetch_head.push((m.oid, m.for_merge, description));
-            let Some(dst) = &m.dst else { continue };
+            if m.listed {
+                fetch_head.push((m.oid, m.for_merge, description));
+            }
+            let Some(dst) = &m.dst else {
+                let what = if m.src.starts_with(b"refs/tags/") {
+                    "tag"
+                } else if m.src.starts_with(b"refs/heads/") {
+                    "branch"
+                } else {
+                    "ref"
+                };
+                changes.push(RefChange {
+                    flag: '*',
+                    summary: what.to_string(),
+                    from: short_name(&m.src),
+                    to: "FETCH_HEAD".to_string(),
+                    note: String::new(),
+                });
+                continue;
+            };
             let name = RefName::from_bytes(dst)?;
             let old = self.refs().try_read(&name)?.and_then(|t| t.oid().ok());
             if old == Some(m.oid) {
@@ -549,31 +620,10 @@ impl Repository {
                     let head_ref = RefName::from_bytes(format!("refs/remotes/{label}/HEAD").as_bytes())?;
                     let target = RefName::from_bytes(format!("refs/remotes/{label}/{}", String::from_utf8_lossy(short)).as_bytes())?;
                     if !self.refs().exists(&head_ref) && self.refs().exists(&target) {
-                        self.refs().set_symbolic(&head_ref, &target, None)?;
-                    }
-                }
-            }
-        }
-
-        if request.prune && !request.dry_run {
-            for spec in configured.iter().filter(|s| s.is_pattern() && !s.dst.is_empty()) {
-                let star = spec.dst.find_byte(b'*').unwrap_or(spec.dst.len());
-                let prefix = spec.dst[..star].to_vec();
-                for (name, _) in self.refs().list(&prefix)? {
-                    let still_there = advertised.iter().any(|r| spec.map(&r.name).as_ref().is_some_and(|d| d.as_slice() == name.as_bytes()));
-                    if !still_there && !name.as_bytes().ends_with(b"/HEAD") {
-                        let old = self.refs().resolve_oid(&name).ok();
-                        self.refs().delete(&name)?;
-                        let mut from = short_name(name.as_bytes());
-                        from = format!("{from}");
-                        let _ = old;
-                        changes.push(RefChange {
-                            flag: '-',
-                            summary: "[deleted]".to_string(),
-                            from: "(none)".to_string(),
-                            to: from,
-                            note: String::new(),
-                        });
+                        let who = self.committer_signature()?;
+                        let message = crate::refs::ReflogMessage::new(&who, BStr::new("fetch"));
+                        let message = self.should_log_ref(&head_ref).then_some(message);
+                        self.refs().set_symbolic(&head_ref, &target, message)?;
                     }
                 }
             }
@@ -644,6 +694,8 @@ pub struct PushReport {
     pub rejected: usize,
     /// Whether any rejection was a non-fast-forward.
     pub non_fast_forward: bool,
+    /// Whether any rejection was because the remote has commits we have not fetched.
+    pub fetch_first: bool,
     /// The remote ref names that were updated, with the new value.
     pub pushed: Vec<(BString, ObjectId)>,
 }
@@ -725,6 +777,7 @@ impl Repository {
         let mut updates = Vec::new();
         let mut rejected = 0usize;
         let mut non_ff = false;
+        let mut fetch_first = false;
         let abbrev = |oid: &ObjectId| oid.to_string()[..7].to_string();
         for plan in &plans {
             let old = remote_value(&plan.dst);
@@ -734,14 +787,14 @@ impl Repository {
                     changes.push(RefChange {
                         flag: '=',
                         summary: "[up to date]".to_string(),
-                        from: plan.src.clone(),
+                        from: short_name(plan.src.as_bytes()),
                         to,
                         note: String::new(),
                     });
                 }
                 (None, Some(new)) => {
                     let what = if plan.dst.starts_with(b"refs/tags/") { "[new tag]" } else { "[new branch]" };
-                    changes.push(RefChange { flag: '*', summary: what.to_string(), from: plan.src.clone(), to, note: String::new() });
+                    changes.push(RefChange { flag: '*', summary: what.to_string(), from: short_name(plan.src.as_bytes()), to, note: String::new() });
                     updates.push(RefUpdate::create(plan.dst.clone(), new));
                 }
                 (Some(old), Some(new)) => {
@@ -751,7 +804,7 @@ impl Repository {
                         changes.push(RefChange {
                             flag: ' ',
                             summary: format!("{}..{}", abbrev(&old), abbrev(&new)),
-                            from: plan.src.clone(),
+                            from: short_name(plan.src.as_bytes()),
                             to,
                             note: String::new(),
                         });
@@ -762,7 +815,7 @@ impl Repository {
                         changes.push(RefChange {
                             flag: '+',
                             summary: format!("{}...{}", abbrev(&old), abbrev(&new)),
-                            from: plan.src.clone(),
+                            from: short_name(plan.src.as_bytes()),
                             to,
                             note: " (forced update)".to_string(),
                         });
@@ -772,11 +825,13 @@ impl Repository {
                     } else {
                         rejected += 1;
                         non_ff = true;
-                        let reason = if self.odb().contains(&old) { " (non-fast-forward)" } else { " (fetch first)" };
+                        let known = self.odb().contains(&old);
+                        fetch_first |= !known;
+                        let reason = if known { " (non-fast-forward)" } else { " (fetch first)" };
                         changes.push(RefChange {
                             flag: '!',
                             summary: "[rejected]".to_string(),
-                            from: plan.src.clone(),
+                            from: short_name(plan.src.as_bytes()),
                             to,
                             note: reason.to_string(),
                         });
@@ -786,7 +841,7 @@ impl Repository {
                     changes.push(RefChange {
                         flag: '-',
                         summary: "[deleted]".to_string(),
-                        from: "(none)".to_string(),
+                        from: String::new(),
                         to,
                         note: String::new(),
                     });
@@ -841,7 +896,7 @@ impl Repository {
             }
         }
 
-        Ok(PushReport { url: url_text, changes, rejected, non_fast_forward: non_ff, pushed })
+        Ok(PushReport { url: url_text, changes, rejected, non_fast_forward: non_ff, fetch_first, pushed })
     }
 }
 

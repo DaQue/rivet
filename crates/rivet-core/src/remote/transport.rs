@@ -1102,8 +1102,11 @@ impl Transport for LocalTransport {
         // Everything the receiver already has is pruned, closure included: a want that is an
         // ancestor of a have contributes nothing, and a `have` tip alone is not enough to prune the
         // objects below it.
+        // A `have` the sending side has never seen is simply not a common commit; the protocol
+        // ignores it rather than failing, and ours are mostly local work the remote lacks.
+        let haves: Vec<crate::hash::ObjectId> = haves.iter().copied().filter(|h| odb.contains(h)).collect();
         let mut already_have = std::collections::HashSet::new();
-        collect_objects(odb, haves, &std::collections::HashSet::new(), &mut already_have)?;
+        collect_objects(odb, &haves, &std::collections::HashSet::new(), &mut already_have)?;
 
         let mut to_send = std::collections::HashSet::new();
         collect_objects(odb, wants, &already_have, &mut to_send)?;
@@ -1196,6 +1199,10 @@ impl Transport for LocalTransport {
                             )));
                         }
                     }
+                }
+                if update.new.is_zero() {
+                    // A deletion removes the ref; writing the null id would leave a broken one.
+                    return repo.refs().delete(&name);
                 }
                 repo.refs().update(&name, update.new, expected, None)
             })();

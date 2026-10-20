@@ -1648,7 +1648,7 @@ pub fn merge_commit(
         if let Err(error) = repository.checkout_tree(new_tree, false) {
             return report_checkout_refusal(error, "merge");
         }
-        let reason = if action == "pull" { "pull: Fast-forward".to_string() } else { format!("{action} {label}: Fast-forward") };
+        let reason = if action.starts_with("pull") { format!("{action}: Fast-forward") } else { format!("{action} {label}: Fast-forward") };
         repository.move_head(theirs, BStr::new(reason.as_bytes()))?;
         println!("Fast-forward");
         if show_stat {
@@ -1751,8 +1751,8 @@ pub fn merge_commit(
     let mut body = BString::from(message);
     body.push(b'\n');
     let commit = repository.write_commit_object(tree, &[ours, theirs], BStr::new(&body))?;
-    let reason = if action == "pull" {
-        "pull: Merge made by the 'ort' strategy.".to_string()
+    let reason = if action.starts_with("pull") {
+        format!("{action}: Merge made by the 'ort' strategy.")
     } else {
         format!("{action} {label}: Merge made by the 'ort' strategy.")
     };

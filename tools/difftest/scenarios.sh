@@ -277,12 +277,70 @@ s_clone() {
     (cd repo && v status && v branch -a)
 }
 
+s_push_cases() {
+    g init -q --bare origin.git
+    v init -q repo; cd repo
+    v remote add origin file://$ROOT/origin.git
+    echo a >a; v add a; v commit -q -m one
+    v push origin main
+    v push -u origin main
+    v tag v1; v tag -a v2 -m two
+    v push origin --tags
+    v push origin v1
+    tick; echo b >b; v add b; v commit -q -m two
+    v push
+    v push origin main:feature
+    v push origin :feature
+    v push origin --delete v1
+    v branch topic; v push origin topic
+    # a second clone moves main so the next push is rejected
+    g clone -q ../origin.git ../other 2>/dev/null
+    (cd ../other && tick && echo x >x && g add x && g commit -qm other && g push -q origin HEAD:main 2>/dev/null)
+    tick; echo c >c; v add c; v commit -q -m three
+    v push
+    v push origin +main
+    v fetch origin
+    v status
+    v push --dry-run origin main
+}
+
+s_pull_merge() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && printf '1\n2\n3\n' >f && g add f && g commit -qm base && g push -q origin HEAD:main 2>/dev/null)
+    v init -q repo
+    (cd repo && v remote add origin ../origin.git && v fetch -q origin && v switch -q main)
+    (cd seed && tick && echo remote >r && g add r && g commit -qm remote-side && g push -q origin HEAD:main 2>/dev/null)
+    cd repo
+    tick; echo local >l; v add l; v commit -q -m local-side
+    v pull --no-rebase
+    v log --oneline
+    v status
+    v pull
+}
+
+s_fetch_prune_tags() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g tag v1 && g branch gone && g push -q origin --all 2>/dev/null && g push -q origin --tags 2>/dev/null)
+    v clone -q origin.git repo
+    (cd seed && g push -q origin :gone 2>/dev/null && tick && echo b >b && g add b && g commit -qm two && g tag v2 && g push -q origin HEAD:main --tags 2>/dev/null)
+    cd repo
+    v branch -a
+    v fetch --prune
+    v branch -a
+    v tag
+    v fetch --no-tags origin
+    v fetch origin main
+    cat .git/FETCH_HEAD
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
 for s in "$@"; do
     case $s in
-        s_remote_fetch_push|s_pull) run_scenario "$s" repo origin.git ;;
+        s_remote_fetch_push|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags) run_scenario "$s" repo origin.git ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         *) run_scenario "$s" ;;
     esac

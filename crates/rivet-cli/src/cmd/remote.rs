@@ -704,7 +704,7 @@ pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
             dry_run: args.dry_run,
             write_fetch_head: !args.no_write_fetch_head,
             pack_refs: false,
-            action: String::new(),
+            action: command_action("fetch"),
         };
         let report = repository.fetch_remote(&remote, &request)?;
         print_fetch_report(&report, global.quiet);
@@ -804,7 +804,7 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         dry_run: args.dry_run,
         write_fetch_head: true,
         pack_refs: false,
-        action: "pull".to_string(),
+        action: command_action("pull"),
     };
     let report = repository.fetch_remote(&remote, &request)?;
     print_fetch_report(&report, global.quiet);
@@ -848,7 +848,7 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         args.allow_unrelated_histories,
         &options,
         !global.quiet,
-        "pull",
+        &command_action("pull"),
     )
 }
 
@@ -1004,7 +1004,13 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
     }
     if report.rejected > 0 {
         eprintln!("error: failed to push some refs to '{}'", report.url);
-        if report.non_fast_forward {
+        if report.fetch_first {
+            eprintln!("hint: Updates were rejected because the remote contains work that you do not");
+            eprintln!("hint: have locally. This is usually caused by another repository pushing to");
+            eprintln!("hint: the same ref. If you want to integrate the remote changes, use");
+            eprintln!("hint: 'git pull' before pushing again.");
+            eprintln!("hint: See the 'Note about fast-forwards' in 'git push --help' for details.");
+        } else if report.non_fast_forward {
             let current = report.changes.iter().any(|c| c.flag == '!' && Some(c.from.as_str()) == branch.as_deref() && c.from == c.to);
             if current {
                 eprintln!("hint: Updates were rejected because the tip of your current branch is behind");
@@ -1082,5 +1088,29 @@ pub fn print_fetch_report(report: &rivet_core::remote_ops::FetchReport, quiet: b
     eprintln!("From {}", display_url(&report.url, true));
     for change in &report.changes {
         eprintln!("{}", change.fetch_line(report.width));
+    }
+}
+
+/// The text Git puts in reflog lines for a command: its name and arguments as typed
+/// (`pull --no-rebase`), without global options.
+fn command_action(command: &str) -> String {
+    let mut args = std::env::args().skip(1).peekable();
+    let mut rest = Vec::new();
+    let mut seen = false;
+    while let Some(arg) = args.next() {
+        if !seen {
+            if arg == "--repo" {
+                args.next();
+            } else if arg == command {
+                seen = true;
+            }
+            continue;
+        }
+        rest.push(arg);
+    }
+    if rest.is_empty() {
+        command.to_string()
+    } else {
+        format!("{command} {}", rest.join(" "))
     }
 }
