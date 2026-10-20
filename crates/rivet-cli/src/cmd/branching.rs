@@ -705,7 +705,7 @@ pub fn run_switch(global: &GlobalArgs, args: &SwitchArgs) -> Result<i32> {
         return switch_to(&mut repository, Destination::Branch(branch), &target, args.force, global.quiet, false);
     }
     if let Some(remote_ref) = guess_remote_branch(&repository, &target)? {
-        let start = String::from_utf8_lossy(&remote_ref.as_bytes()[b"refs/remotes/".len()..]).into_owned();
+        let start = String::from_utf8_lossy(remote_ref.as_bytes()).into_owned();
         return checkout_new_branch(&mut repository, &target, &start, false, args.force, true, global.quiet);
     }
     if super::resolve_commit(&repository, &target).is_ok() {
@@ -820,7 +820,7 @@ pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
                 // to create locally (`git checkout feature` with only `origin/feature`).
                 if args.paths.is_empty() {
                     if let Some(remote_ref) = guess_remote_branch(&repository, first)? {
-                        let start = String::from_utf8_lossy(&remote_ref.as_bytes()[b"refs/remotes/".len()..]).into_owned();
+                        let start = String::from_utf8_lossy(remote_ref.as_bytes()).into_owned();
                         return checkout_new_branch(&mut repository, first, &start, false, args.force, true, global.quiet);
                     }
                 }
@@ -1467,11 +1467,24 @@ fn checkout_new_branch(
         format!("branch: Created from {start}")
     };
     repository.set_ref_logged(&branch, start_oid, &who, BStr::new(reason.as_bytes()))?;
+    // Creating the branch `HEAD` already names is an update of `HEAD` itself, so its log
+    // records the creation too.
+    let unborn_same = matches!(&old_head, HeadState::Unborn { branch: b } if *b == branch);
+    if unborn_same && repository.should_log_ref(&RefName::head()) {
+        let entry = rivet_core::ReflogEntry::new(
+            ObjectId::zero(repository.format()),
+            start_oid,
+            who.clone(),
+            BString::from(reason.as_str()),
+        );
+        repository.refs().append_reflog(&RefName::head(), &entry)?;
+    }
     let mut tracking = None;
     if track {
         let upstream = RefName::from_bytes(format!("refs/remotes/{start}").as_bytes())
             .ok()
-            .filter(|r| repository.refs().exists(r));
+            .filter(|r| repository.refs().exists(r))
+            .or_else(|| RefName::from_bytes(start.as_bytes()).ok().filter(|r| r.is_remote() && repository.refs().exists(r)));
         if let Some(upstream) = upstream {
             tracking = Some(set_upstream(repository, &branch, &upstream)?);
         }
@@ -1485,7 +1498,9 @@ fn checkout_new_branch(
     }
     if !quiet {
         show_local_changes(repository)?;
-        if exists {
+        if unborn_same {
+            eprintln!("Already on '{name}'");
+        } else if exists {
             eprintln!("Switched to and reset branch '{name}'");
         } else {
             eprintln!("Switched to a new branch '{name}'");

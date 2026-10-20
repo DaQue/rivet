@@ -182,6 +182,8 @@ pub struct FetchRequest {
     pub write_fetch_head: bool,
     /// Record the new refs in `packed-refs` with no reflog, as `clone` does.
     pub pack_refs: bool,
+    /// The command named in reflog lines (`pull`); empty means `fetch <remote>`.
+    pub action: String,
 }
 
 /// What a fetch did.
@@ -463,7 +465,7 @@ impl Repository {
         let mut fetch_head = Vec::new();
         let mut packed_new: Vec<(RefName, ObjectId)> = Vec::new();
         for m in &mappings {
-            let description = fetch_head_description(&m.src, &url_text);
+            let description = fetch_head_description(&m.src, &display_remote_url(&url_text));
             fetch_head.push((m.oid, m.for_merge, description));
             let Some(dst) = &m.dst else { continue };
             let name = RefName::from_bytes(dst)?;
@@ -511,7 +513,11 @@ impl Repository {
             }
             if let (Some(reflog), false, false) = (reflog, request.dry_run, flag == '!') {
                 let who = who.clone().ok_or_else(|| Error::Message("cannot resolve committer identity".to_string()))?;
-                let reason = format!("fetch {label}: {reflog}");
+                let reason = if request.action.is_empty() {
+                    format!("fetch {label}: {reflog}")
+                } else {
+                    format!("{}: {reflog}", request.action)
+                };
                 self.set_ref_logged(&name, m.oid, &who, BStr::new(reason.as_bytes()))?;
             }
         }
@@ -533,6 +539,20 @@ impl Repository {
             }
             packed.sort();
             self.refs_mut().write_packed(packed)?;
+        }
+
+        // `remote.<name>.followRemoteHEAD` defaults to `create`: learn the remote's default branch
+        // the first time, without ever moving it afterwards.
+        if config.is_some() && !explicit && !request.pack_refs && !request.dry_run {
+            if let Some(default) = remote_head_branch(&advertisement) {
+                if let Some(short) = default.strip_prefix(b"refs/heads/") {
+                    let head_ref = RefName::from_bytes(format!("refs/remotes/{label}/HEAD").as_bytes())?;
+                    let target = RefName::from_bytes(format!("refs/remotes/{label}/{}", String::from_utf8_lossy(short)).as_bytes())?;
+                    if !self.refs().exists(&head_ref) && self.refs().exists(&target) {
+                        self.refs().set_symbolic(&head_ref, &target, None)?;
+                    }
+                }
+            }
         }
 
         if request.prune && !request.dry_run {
@@ -576,6 +596,12 @@ impl Repository {
 
         Ok(FetchReport { url: url_text, changes, width, rejected, advertisement, fetch_head })
     }
+}
+
+/// A remote URL as `From <url>` and `FETCH_HEAD` show it: no trailing slashes, no `.git`.
+pub fn display_remote_url(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    trimmed.strip_suffix(".git").unwrap_or(trimmed).to_string()
 }
 
 fn fetch_head_description(src: &[u8], url: &str) -> String {

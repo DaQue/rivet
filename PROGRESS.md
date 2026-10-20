@@ -1,16 +1,22 @@
 # PROGRESS
 
-## Done
-- `rivet-core::ops` (shared porcelain mechanics: identity, HEAD move + reflogs, checkout, reset, restore, merge).
-- CLI handlers: `branch`, `switch`, `checkout`, `merge`.
-- Differential harness: `tools/difftest/scenarios.sh [scenario...]` (real git vs rivet: transcripts + repo state).
-- Core fixes found by the harness: `init` layout/config, config serialisation and section editing
-  (`add/remove/remove_section/sections/keys` never matched), `merge_bases` (was a placeholder),
-  signature tz sign, diff of root commits / file paths with trailing `/`, `--stat` layout, commit output + reflogs.
+## Phase 1 — done
+All 19 CLI stubs are implemented (`grep -rn "todo!()" crates/` → stale doc comments only).
+Shared logic lives in `rivet-core`: `ops` (identity, HEAD moves + reflogs, checkout/reset/restore/merge),
+`remote_ops` (refspecs, remote config, fetch/push), `fsck`, `pack::verify`, real `CommitWalker`.
 
-## Verified (differential, PASS)
-s_basic_commit, s_branch_ops, s_switch_checkout, s_merge_*, s_log_show_diff, s_tags, s_reset, s_restore, s_config, s_check_ignore, s_fsck_*, s_cross_read
+## Phase 2 — differential harness (`tools/difftest/scenarios.sh`, `lastfail.sh`)
+17 scenarios, real git vs rivet, comparing stdout/stderr/exit codes and repo state (refs, index, worktree, reflogs, config, FETCH_HEAD, packed-refs, fsck):
+basic_commit, branch_ops, switch_checkout, merge_ff_and_true, merge_conflict, log_show_diff, tags, reset, restore,
+config, check_ignore, fsck_verify_pack, fsck_missing, cross_read, remote_fetch_push, pull, clone — all PASS.
 
-## Remaining
-- CLI stubs: log, show, diff, tag, reset, restore, check-ignore, config, clone, remote/fetch/pull/push, verify-pack, fsck.
-- Scenarios not yet passing: s_merge_ff_and_true (needs log), and all others in tools/difftest/scenarios.sh.
+## Phase 3 — bugs found and fixed by the tests
+init layout/config; config editing (add/remove/sections never matched); `merge_bases` placeholder;
+tz sign; root-commit diffs; `--stat`; hunk function context; `CommitWalker`/`WalkOptions` no-ops;
+pack `iter_entries` start offset; `RemoteUrl::parse` (absolute paths, scp-style); `push_is_fast_forward`/`check_updates`;
+`Config::get_all` order; `Odb::oids` O(n²).
+
+## Known gaps (documented, bail with a message)
+commit -S/-C/-c/--author/--dry-run; log --graph; merge --squash/octopus/-X; pull --rebase; switch/checkout --merge;
+reset --keep/--merge; push --mirror/--force-with-lease/--atomic; clone --mirror/--depth; fetch --depth.
+Frozen-grammar gaps: `log --format`, `show --stat`, `verify-pack -v` (use `--verbose`).

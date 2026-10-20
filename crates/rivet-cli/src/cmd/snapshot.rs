@@ -748,7 +748,21 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     if args.porcelain.is_some() || args.short {
         // Git prints the `## branch` header in these formats only when asked for it.
         if args.branch {
-            println!("{}", porcelain_header(&head));
+            let mut header = porcelain_header(&head);
+            match tracking_state(&repository, &head)? {
+                Tracking::None => {}
+                Tracking::Gone { upstream } => header.push_str(&format!("...{upstream} [gone]")),
+                Tracking::State { upstream, ahead, behind } => {
+                    header.push_str(&format!("...{upstream}"));
+                    match (ahead, behind) {
+                        (0, 0) => {}
+                        (a, 0) => header.push_str(&format!(" [ahead {a}]")),
+                        (0, b) => header.push_str(&format!(" [behind {b}]")),
+                        (a, b) => header.push_str(&format!(" [ahead {a}, behind {b}]")),
+                    }
+                }
+            }
+            println!("{header}");
         }
         for entry in &status.staged {
             println!("{}{} {}", entry.kind.code(), ' ', entry.path);
@@ -768,10 +782,8 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    if args.branch {
-        println!("## {}", branch_name(&head));
-    }
     println!("{}", head_line());
+    print_tracking(&tracking_state(&repository, &head)?);
     if matches!(head, HeadState::Unborn { .. }) {
         // Git separates the "No commits yet" paragraph from the branch line, and keeps a trailing
         // blank before the first section. When the branch has commits there is no blank at all:
@@ -873,7 +885,11 @@ fn section_label(kind: ChangeKind) -> String {
 
 /// The `## branch` line porcelain v1 and `--short --branch` print.
 fn porcelain_header(head: &HeadState) -> String {
-    format!("## {}", branch_name(head))
+    match head {
+        HeadState::Detached { .. } => "## HEAD (no branch)".to_string(),
+        HeadState::Unborn { branch } => format!("## No commits yet on {}", branch.short_name()),
+        other => format!("## {}", branch_name(other)),
+    }
 }
 
 fn branch_name(head: &HeadState) -> String {
@@ -1115,4 +1131,87 @@ fn print_unstaged(repository: &mut rivet_core::Repository) -> Result<()> {
         println!("{letter}\t{}", entry.path);
     }
     Ok(())
+}
+
+/// How the current branch relates to its configured upstream.
+enum Tracking {
+    None,
+    Gone { upstream: String },
+    State { upstream: String, ahead: usize, behind: usize },
+}
+
+fn tracking_state(repository: &rivet_core::Repository, head: &HeadState) -> Result<Tracking> {
+    let (Some(branch), Some(oid)) = (head.branch(), head.oid()) else { return Ok(Tracking::None) };
+    let Some((remote, merge)) = repository.branch_upstream(&branch.short_name().to_string())? else {
+        return Ok(Tracking::None);
+    };
+    let tracking_name = if remote == "." {
+        merge.clone()
+    } else {
+        // Map the remote branch through the remote's fetch refspecs, as Git does.
+        let mut mapped = None;
+        if let Some(config) = repository.remote_config(&remote)? {
+            for spec in &config.fetch {
+                if let Some(name) = spec.map(merge.as_bytes()) {
+                    mapped = Some(name.to_string());
+                    break;
+                }
+            }
+        }
+        match mapped {
+            Some(name) => name,
+            None => return Ok(Tracking::None),
+        }
+    };
+    let short = tracking_name
+        .strip_prefix("refs/remotes/")
+        .or_else(|| tracking_name.strip_prefix("refs/heads/"))
+        .unwrap_or(&tracking_name)
+        .to_string();
+    let Ok(name) = rivet_core::RefName::from_bytes(tracking_name.as_bytes()) else { return Ok(Tracking::None) };
+    let Ok(upstream_oid) = repository.refs().resolve_oid(&name) else {
+        return Ok(Tracking::Gone { upstream: short });
+    };
+    let count = |from: rivet_core::ObjectId, exclude: rivet_core::ObjectId| -> Result<usize> {
+        let mut options = rivet_core::revwalk::WalkOptions::new();
+        options.exclude(exclude);
+        Ok(rivet_core::revwalk::walk_oids(repository.odb(), &[from], &options)?.len())
+    };
+    Ok(Tracking::State {
+        upstream: short,
+        ahead: count(oid, upstream_oid)?,
+        behind: count(upstream_oid, oid)?,
+    })
+}
+
+fn print_tracking(tracking: &Tracking) {
+    let plural = |n: usize| if n == 1 { "commit" } else { "commits" };
+    match tracking {
+        Tracking::None => {}
+        Tracking::Gone { upstream } => {
+            println!("Your branch is based on '{upstream}', but the upstream is gone.");
+            println!("  (use \"git branch --unset-upstream\" to fixup)");
+            println!();
+        }
+        Tracking::State { upstream, ahead: 0, behind: 0 } => {
+            println!("Your branch is up to date with '{upstream}'.");
+            println!();
+        }
+        Tracking::State { upstream, ahead, behind: 0 } => {
+            println!("Your branch is ahead of '{upstream}' by {ahead} {}.", plural(*ahead));
+            println!("  (use \"git push\" to publish your local commits)");
+            println!();
+        }
+        Tracking::State { upstream, ahead: 0, behind } => {
+            println!("Your branch is behind '{upstream}' by {behind} {}, and can be fast-forwarded.", plural(*behind));
+            println!("  (use \"git pull\" to update your local branch)");
+            println!();
+        }
+        Tracking::State { upstream, ahead, behind } => {
+            println!("Your branch and '{upstream}' have diverged,");
+            println!("and have {ahead} and {behind} different commits each, respectively.");
+            println!("  (use \"git pull\" if you want to integrate the remote branch with yours)");
+            println!();
+        }
+    }
 }

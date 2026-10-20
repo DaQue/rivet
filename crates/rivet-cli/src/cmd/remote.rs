@@ -704,6 +704,7 @@ pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
             dry_run: args.dry_run,
             write_fetch_head: !args.no_write_fetch_head,
             pack_refs: false,
+            action: String::new(),
         };
         let report = repository.fetch_remote(&remote, &request)?;
         print_fetch_report(&report, global.quiet);
@@ -803,6 +804,7 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         dry_run: args.dry_run,
         write_fetch_head: true,
         pack_refs: false,
+        action: "pull".to_string(),
     };
     let report = repository.fetch_remote(&remote, &request)?;
     print_fetch_report(&report, global.quiet);

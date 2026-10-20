@@ -346,7 +346,66 @@ pub fn run_init(global: &GlobalArgs, args: &InitArgs) -> Result<i32> {
 ///   stored redacted, and `rivet_core::remote::redact_url` is applied before anything is
 ///   echoed — including in `--verbose` progress, where it is easiest to leak one.
 pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
-    todo!()
+    if args.mirror || args.depth.is_some() {
+        anyhow::bail!("clone: --mirror and --depth are not implemented");
+    }
+    let parsed = rivet_core::RemoteUrl::parse(BStr::new(args.repository.as_bytes()))
+        .map_err(|_| anyhow::anyhow!("repository '{}' does not exist", args.repository))?;
+    let name = match &args.directory {
+        Some(dir) => dir.clone(),
+        None => {
+            let guessed = rivet_core::remote::guess_remote_name(&parsed)
+                .ok_or_else(|| anyhow::anyhow!("could not guess a directory name from '{}'", args.repository))?;
+            let mut text = guessed.to_string();
+            if args.bare {
+                text.push_str(".git");
+            }
+            PathBuf::from(text)
+        }
+    };
+    let base = crate::cmd::base_dir(global)?;
+    let dest = if name.is_absolute() { name.clone() } else { base.join(&name) };
+    let pre_existing = dest.exists();
+    if pre_existing && std::fs::read_dir(&dest).map(|mut d| d.next().is_some()).unwrap_or(true) {
+        anyhow::bail!("destination path '{}' already exists and is not an empty directory.", name.display());
+    }
+    // A local source that is not a repository is reported before anything is created.
+    if parsed.scheme == rivet_core::remote::RemoteScheme::File
+        && rivet_core::Repository::discover(std::path::Path::new(&String::from_utf8_lossy(&parsed.path).into_owned())).is_err()
+    {
+        anyhow::bail!("repository '{}' does not exist", args.repository);
+    }
+    if !global.quiet {
+        if args.bare {
+            eprintln!("Cloning into bare repository '{}'...", name.display());
+        } else {
+            eprintln!("Cloning into '{}'...", name.display());
+        }
+    }
+
+    let result = clone_into(&dest, args);
+    match result {
+        Ok(()) => {
+            if !global.quiet {
+                eprintln!("done.");
+            }
+            Ok(0)
+        }
+        Err(error) => {
+            // Remove only what this command created.
+            if pre_existing {
+                if let Ok(entries) = std::fs::read_dir(&dest) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+                    }
+                }
+            } else {
+                let _ = std::fs::remove_dir_all(&dest);
+            }
+            Err(error)
+        }
+    }
 }
 
 /// Phase 3 — read and write repository configuration.
@@ -638,4 +697,110 @@ fn split_section(name: &str) -> (String, Option<String>) {
         Some((section, sub)) => (section.to_string(), Some(sub.to_string())),
         None => (name.to_string(), None),
     }
+}
+
+
+fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
+    use rivet_core::remote_ops::{FetchRequest, Refspec, TagMode};
+    use rivet_core::{HeadState, RefName};
+
+    let options = InitOptions {
+        bare: args.bare,
+        initial_branch: rivet_core::ops::default_branch_name()?,
+        format: args.object_format.map(ObjectFormat::from).unwrap_or(ObjectFormat::Sha1),
+        work_tree: None,
+    };
+    let mut repository = Repository::init(dest, &options)?;
+    let origin = args.origin.as_str();
+    let url = rivet_core::remote_ops::absolutize_url(&args.repository);
+
+    let config = repository.config_mut();
+    config.set(BStr::new(format!("remote.{origin}.url").as_bytes()), url.as_bytes())?;
+    if !args.bare {
+        config.set(
+            BStr::new(format!("remote.{origin}.fetch").as_bytes()),
+            format!("+refs/heads/*:refs/remotes/{origin}/*").as_bytes(),
+        )?;
+    }
+    repository.write_config()?;
+
+    let spec = if args.bare {
+        "+refs/heads/*:refs/heads/*".to_string()
+    } else {
+        format!("+refs/heads/*:refs/remotes/{origin}/*")
+    };
+    let request = FetchRequest {
+        refspecs: vec![Refspec::parse(BStr::new(spec.as_bytes()))?],
+        tags: if args.tags || true { TagMode::All } else { TagMode::None },
+        prune: false,
+        force: true,
+        dry_run: false,
+        write_fetch_head: false,
+        pack_refs: true,
+        action: String::new(),
+    };
+    let report = repository.fetch_remote(origin, &request)?;
+    let who = repository.committer_signature().ok();
+    let reason = format!("clone: from {url}");
+
+    let remote_default = rivet_core::remote_ops::remote_head_branch(&report.advertisement);
+    if report.advertisement.refs.iter().all(|r| r.name.as_slice() == b"HEAD") {
+        eprintln!("warning: You appear to have cloned an empty repository.");
+        return Ok(());
+    }
+    let wanted = match &args.branch {
+        Some(branch) => {
+            let full = format!("refs/heads/{branch}");
+            if !report.advertisement.refs.iter().any(|r| r.name.as_slice() == full.as_bytes()) {
+                anyhow::bail!("Remote branch {branch} not found in upstream {origin}");
+            }
+            Some(bstr::BString::from(full))
+        }
+        None => remote_default.clone(),
+    };
+    let Some(wanted) = wanted else {
+        return Ok(());
+    };
+    let branch_short = String::from_utf8_lossy(wanted.strip_prefix(b"refs/heads/").unwrap_or(&wanted)).into_owned();
+    let who = who.ok_or_else(|| anyhow::anyhow!("cannot resolve committer identity"))?;
+    let branch_ref = RefName::from_bytes(&wanted)?;
+
+    let tip = if args.bare {
+        repository.refs().resolve_oid(&branch_ref)?
+    } else {
+        let tracking = RefName::from_bytes(format!("refs/remotes/{origin}/{branch_short}").as_bytes())?;
+        let tip = repository.refs().resolve_oid(&tracking)?;
+        repository.set_ref_logged(&branch_ref, tip, &who, BStr::new(reason.as_bytes()))?;
+        tip
+    };
+    // `HEAD` follows the checked-out branch; the log line records where the clone came from.
+    repository.refs().set_head(&branch_ref, None)?;
+    let log_head = repository.should_log_ref(&RefName::head());
+    let entry = rivet_core::ReflogEntry::new(
+        rivet_core::ObjectId::zero(repository.format()),
+        tip,
+        who.clone(),
+        bstr::BString::from(reason.as_str()),
+    );
+    if log_head {
+        repository.refs().append_reflog(&RefName::head(), &entry)?;
+    }
+
+    if !args.bare {
+        if let Some(default) = &remote_default {
+            let default_short = String::from_utf8_lossy(default.strip_prefix(b"refs/heads/").unwrap_or(default)).into_owned();
+            let origin_head = RefName::from_bytes(format!("refs/remotes/{origin}/HEAD").as_bytes())?;
+            let target = RefName::from_bytes(format!("refs/remotes/{origin}/{default_short}").as_bytes())?;
+            let message = rivet_core::ReflogMessage::new(&who, BStr::new(reason.as_bytes()));
+            repository.refs().set_symbolic(&origin_head, &target, Some(message))?;
+        }
+        let config = repository.config_mut();
+        config.set(BStr::new(format!("branch.{branch_short}.remote").as_bytes()), origin.as_bytes())?;
+        config.set(BStr::new(format!("branch.{branch_short}.merge").as_bytes()), &wanted)?;
+        repository.write_config()?;
+        let tree = repository.commit_tree(tip)?;
+        repository.reset_hard_to_tree(tree)?;
+    }
+    let _ = HeadState::Unborn { branch: branch_ref };
+    Ok(())
 }
