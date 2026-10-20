@@ -922,7 +922,44 @@ fn short_oid(oid: &rivet_core::hash::ObjectId) -> String {
 /// * **`--force` skips the safety check and only the safety check.** It does not skip the
 ///   path-traversal validation, the symlink handling, or the work-tree containment check.
 pub fn run_restore(global: &GlobalArgs, args: &RestoreArgs) -> Result<i32> {
-    todo!()
+    if args.pathspec_from_file.is_some() {
+        anyhow::bail!("restore: --pathspec-from-file is not implemented");
+    }
+    let mut repository = super::open(global)?;
+    if args.paths.is_empty() {
+        anyhow::bail!("you must specify path(s) to restore");
+    }
+    let staged = args.staged;
+    // With neither flag the work tree is the destination.
+    let worktree = args.worktree || !args.staged;
+
+    let source = match &args.source {
+        Some(spec) => {
+            let oid = super::resolve_rev(&repository, spec)
+                .map_err(|_| anyhow::anyhow!("could not resolve {spec}"))?;
+            Some(repository.commit_tree(oid)?)
+        }
+        // Restoring the index defaults to HEAD; restoring only the work tree defaults to the index.
+        None if staged => match repository.head_tree_oid()? {
+            Some(tree) => Some(tree),
+            None => Some(super::empty_tree(&repository)?),
+        },
+        None => None,
+    };
+
+    let mut specs = Vec::with_capacity(args.paths.len());
+    for path in &args.paths {
+        specs.push(super::worktree_path(&repository, path, "restore")?);
+    }
+    match repository.restore_paths(source, &specs, staged, worktree, false) {
+        Ok(_) => Ok(0),
+        // Git reports this as `error:` with status 1, not as a fatal error.
+        Err(rivet_core::Error::PathNotFound(spec)) => {
+            eprintln!("error: pathspec '{spec}' did not match any file(s) known to git");
+            Ok(1)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Phase 4 — move a branch, and optionally the index and the work tree, to a commit.
@@ -960,5 +997,122 @@ pub fn run_restore(global: &GlobalArgs, args: &RestoreArgs) -> Result<i32> {
 /// * **`ORIG_HEAD` is written**, so `rivet reset --hard ORIG_HEAD` after a bad reset works and
 ///   so does a rescue from a lost merge.
 pub fn run_reset(global: &GlobalArgs, args: &ResetArgs) -> Result<i32> {
-    todo!()
+    if args.keep || args.merge {
+        anyhow::bail!("reset: --keep and --merge are not implemented");
+    }
+    let modes = [args.soft, args.mixed, args.hard].iter().filter(|m| **m).count();
+    if modes > 1 {
+        anyhow::bail!("options '--soft', '--mixed' and '--hard' cannot be used together");
+    }
+    let mut repository = super::open(global)?;
+
+    // `reset <x>` with no `--`: a revision if it resolves, otherwise a path.
+    let mut commit_spec = args.commit.clone();
+    let mut pathspecs: Vec<PathBuf> = args.paths.clone();
+    if pathspecs.is_empty() && super::resolve_rev(&repository, &commit_spec).is_err() {
+        let as_path = std::path::Path::new(&commit_spec);
+        let exists = super::worktree_path(&repository, as_path, "reset")
+            .ok()
+            .is_some_and(|p| {
+                repository.index().entry(bstr::BStr::new(&p[..])).is_some()
+                    || repository.worktree().ok().and_then(|w| w.stat(bstr::BStr::new(&p[..])).ok().flatten()).is_some()
+            });
+        if exists {
+            pathspecs.push(PathBuf::from(&commit_spec));
+            commit_spec = "HEAD".to_string();
+        } else {
+            anyhow::bail!(
+                "ambiguous argument '{commit_spec}': unknown revision or path not in the working tree.\n\
+                 Use '--' to separate paths from revisions, like this:\n\
+                 'git <command> [<revision>...] -- [<file>...]'"
+            );
+        }
+    }
+
+    // A pathspec makes this `restore --staged`: the branch does not move.
+    if !pathspecs.is_empty() {
+        if args.soft || args.hard {
+            anyhow::bail!(
+                "Cannot do {} reset with paths.",
+                if args.soft { "soft" } else { "hard" }
+            );
+        }
+        let target = match super::resolve_commit(&repository, &commit_spec) {
+            Ok(oid) => Some(repository.commit_tree(oid)?),
+            Err(_) if commit_spec == "HEAD" => None,
+            Err(error) => return Err(error),
+        };
+        let tree = match target {
+            Some(tree) => tree,
+            None => super::empty_tree(&repository)?,
+        };
+        let mut specs = Vec::new();
+        for path in &pathspecs {
+            specs.push(super::worktree_path(&repository, path, "reset")?);
+        }
+        repository.restore_paths(Some(tree), &specs, true, false, false)?;
+        if !global.quiet {
+            print_unstaged(&mut repository)?;
+        }
+        return Ok(0);
+    }
+
+    let target = super::resolve_commit(&repository, &commit_spec)?;
+    let git_dir = repository.git_dir().to_path_buf();
+    let old = repository.head()?.oid();
+
+    if args.soft && rivet_core::merge_in_progress(&git_dir) {
+        anyhow::bail!("Cannot do a soft reset in the middle of a merge.");
+    }
+
+    // ORIG_HEAD records where HEAD was before the move.
+    if let Some(old) = old {
+        rivet_core::write_orig_head(&git_dir, old)?;
+    }
+
+    let tree = repository.commit_tree(target)?;
+    if args.hard {
+        repository.reset_hard_to_tree(tree)?;
+    } else if !args.soft {
+        repository.reset_index_to_tree(Some(tree))?;
+    }
+    let reason = format!("reset: moving to {commit_spec}");
+    repository.move_head(target, bstr::BStr::new(reason.as_bytes()))?;
+    rivet_core::clear_merge_state(&git_dir)?;
+
+    if !global.quiet {
+        if args.hard {
+            println!(
+                "HEAD is now at {} {}",
+                super::short_oid(&target),
+                super::commit_subject(&repository, &target)?
+            );
+        } else if !args.soft {
+            print_unstaged(&mut repository)?;
+        }
+    }
+    Ok(0)
+}
+
+/// `Unstaged changes after reset:` and the `M\tpath` lines, as `git reset` prints after a
+/// mixed reset; nothing when the work tree matches the index.
+fn print_unstaged(repository: &mut rivet_core::Repository) -> Result<()> {
+    let mut options = StatusOptions::new();
+    options.untracked_files = UntrackedMode::No;
+    let status = repository.status(&options)?;
+    if status.unstaged.is_empty() {
+        return Ok(());
+    }
+    println!("Unstaged changes after reset:");
+    for entry in &status.unstaged {
+        let letter = match entry.kind {
+            ChangeKind::Deleted => 'D',
+            ChangeKind::Added => 'A',
+            ChangeKind::TypeChanged => 'T',
+            ChangeKind::Unmerged => 'U',
+            ChangeKind::Modified => 'M',
+        };
+        println!("{letter}\t{}", entry.path);
+    }
+    Ok(())
 }

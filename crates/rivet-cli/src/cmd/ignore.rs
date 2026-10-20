@@ -111,5 +111,135 @@ pub struct CheckIgnoreArgs {
 ///   a handler that stopped at the first match reports the opposite answer from the one the
 ///   command returns.
 pub fn run_check_ignore(global: &GlobalArgs, args: &CheckIgnoreArgs) -> Result<i32> {
-    todo!()
+    let repository = super::open(global)?;
+    repository.worktree()?.require_root("check-ignore")?;
+
+    let mut raw: Vec<Vec<u8>> = Vec::new();
+    if args.stdin {
+        use std::io::Read as _;
+        let mut input = Vec::new();
+        std::io::stdin().read_to_end(&mut input)?;
+        let sep = if args.null_terminated { 0u8 } else { b'\n' };
+        raw.extend(input.split(|b| *b == sep).filter(|p| !p.is_empty()).map(<[u8]>::to_vec));
+    } else {
+        if args.null_terminated {
+            anyhow::bail!("-z only makes sense with --stdin");
+        }
+        for path in &args.paths {
+            raw.push(super::path_arg(path)?);
+        }
+    }
+    if raw.is_empty() {
+        anyhow::bail!("no path specified");
+    }
+    if args.non_matching && !args.verbose {
+        anyhow::bail!("--non-matching is only valid with --verbose");
+    }
+
+    let mut matched = false;
+    let mut out = Vec::new();
+    for bytes in raw {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::path::Path::new(std::ffi::OsStr::from_bytes(&bytes));
+        let wants_dir = bytes.ends_with(b"/");
+        let relative = super::worktree_path(&repository, path, "check-ignore")?;
+        let relative_ref = BStr::new(&relative[..]);
+
+        let tracked = !args.no_index && repository.index().entry(relative_ref).is_some();
+        let full = repository.worktree()?.join(relative_ref)?;
+        let kind = if wants_dir || full.is_dir() { PathKind::Directory } else { PathKind::File };
+
+        let mut stack = repository.ignore()?.clone();
+        // Load every `.gitignore` between the root and the path, shallowest first.
+        stack.push_dir(BStr::new(""))?;
+        let mut prefix = BString::default();
+        let parts: Vec<&[u8]> = relative.split(|b| *b == b'/').collect();
+        for part in &parts[..parts.len().saturating_sub(1)] {
+            if !prefix.is_empty() {
+                prefix.push(b'/');
+            }
+            prefix.extend_from_slice(part);
+            stack.push_dir(BStr::new(&prefix[..]))?;
+        }
+
+        // A path under an ignored directory is ignored by that directory's rule.
+        let mut decision = rivet_core::IgnoreDecision::Unmatched;
+        if !tracked {
+            let mut ancestor = BString::default();
+            for part in &parts[..parts.len().saturating_sub(1)] {
+                if !ancestor.is_empty() {
+                    ancestor.push(b'/');
+                }
+                ancestor.extend_from_slice(part);
+                let found = stack.check(BStr::new(&ancestor[..]), PathKind::Directory)?;
+                if found.is_ignored() {
+                    decision = found;
+                    break;
+                }
+            }
+            if matches!(decision, rivet_core::IgnoreDecision::Unmatched) {
+                decision = stack.check(relative_ref, kind)?;
+            }
+        }
+
+        let pattern = decision.pattern().cloned();
+        let ignored = decision.is_ignored();
+        let reported = if args.verbose { pattern.is_some() } else { ignored };
+        if reported {
+            matched = true;
+        }
+        if reported || (args.verbose && args.non_matching) {
+            let shown_path = if args.null_terminated || !args.stdin { bytes.clone() } else { bytes.clone() };
+            if args.verbose {
+                let (source, line, text) = match &pattern {
+                    Some(p) => {
+                        let source = match &p.source {
+                            rivet_core::IgnoreSource::Gitignore(dir) if dir.is_empty() || dir.as_slice() == b"." => ".gitignore".to_string(),
+                            rivet_core::IgnoreSource::Gitignore(dir) => format!("{dir}/.gitignore"),
+                            rivet_core::IgnoreSource::InfoExclude => ".git/info/exclude".to_string(),
+                            rivet_core::IgnoreSource::CoreExcludesFile => repository
+                                .config()
+                                .get(BStr::new("core.excludesfile"))?
+                                .map(|v| v.to_string())
+                                .unwrap_or_default(),
+                            rivet_core::IgnoreSource::CommandLine => "command line".to_string(),
+                        };
+                        let mut text = String::new();
+                        if p.negated {
+                            text.push('!');
+                        }
+                        text.push_str(&p.text.to_string());
+                        // The stored text drops the trailing slash of a directory-only rule.
+                        if p.directory_only && !text.ends_with('/') {
+                            text.push('/');
+                        }
+                        (source, p.line.to_string(), text)
+                    }
+                    None => (String::new(), String::new(), String::new()),
+                };
+                if args.null_terminated {
+                    out.extend_from_slice(format!("{source}\0{line}\0{text}\0").as_bytes());
+                    out.extend_from_slice(&shown_path);
+                    out.push(0);
+                } else {
+                    if pattern.is_some() {
+                        out.extend_from_slice(format!("{source}:{line}:{text}\t").as_bytes());
+                    } else {
+                        out.extend_from_slice(b"::\t");
+                    }
+                    out.extend_from_slice(&shown_path);
+                    out.push(b'\n');
+                }
+            } else {
+                out.extend_from_slice(&shown_path);
+                out.push(if args.null_terminated { 0 } else { b'\n' });
+            }
+        }
+    }
+    use std::io::Write as _;
+    std::io::stdout().write_all(&out)?;
+    Ok(if matched { 0 } else { 1 })
 }
+
+use bstr::{BStr, BString};
+use rivet_core::PathKind;

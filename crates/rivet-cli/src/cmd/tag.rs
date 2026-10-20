@@ -173,5 +173,173 @@ pub struct TagArgs {
 ///   Tags are the refs most likely to have been packed by a `git gc`, so this is the common
 ///   case, not an edge one.
 pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
-    todo!()
+    if args.sign || args.local_user.is_some() || args.verify {
+        anyhow::bail!("tag: signing and verification are not implemented");
+    }
+    if args.column.is_some() || args.merged.is_some() || args.no_merged.is_some() || args.contains.is_some() {
+        anyhow::bail!("tag: --column, --merged, --no-merged and --contains are not implemented");
+    }
+    let mut repository = super::open(global)?;
+
+    if args.delete {
+        let mut code = 0;
+        let names: Vec<&String> = args.name.iter().chain(args.object.iter()).collect();
+        if names.is_empty() {
+            anyhow::bail!("tag name required");
+        }
+        for name in names {
+            let reference = RefName::tag(BStr::new(name.as_bytes()))
+                .map_err(|_| anyhow::anyhow!("'{name}' is not a valid tag name."))?;
+            match repository.refs().try_read(&reference)?.and_then(|t| t.oid().ok()) {
+                Some(oid) => {
+                    repository.refs().delete(&reference)?;
+                    println!("Deleted tag '{name}' (was {})", super::short_oid(&oid));
+                }
+                None => {
+                    eprintln!("error: tag '{name}' not found.");
+                    code = 1;
+                }
+            }
+        }
+        return Ok(code);
+    }
+
+    let listing = args.list.is_some() || (args.name.is_none() && !args.annotate && args.message.is_none() && args.file.is_none());
+    if listing {
+        let pattern: Option<String> = match &args.list {
+            Some(Some(p)) => Some(p.clone()),
+            _ => args.name.clone(),
+        };
+        let points_at = match &args.points_at {
+            Some(spec) => Some(repository.refs().peel_oid(super::resolve_rev(&repository, spec)?, repository.odb()).unwrap_or(super::resolve_rev(&repository, spec)?)),
+            None => None,
+        };
+        let mut rows: Vec<(String, ObjectId)> = repository
+            .refs()
+            .list_tags()?
+            .into_iter()
+            .map(|(name, oid)| (name.short_name().to_string(), oid))
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut printed = 0;
+        for (name, oid) in rows {
+            if let Some(pattern) = &pattern {
+                if !super::branching::glob_match(pattern.as_bytes(), name.as_bytes()) {
+                    continue;
+                }
+            }
+            if let Some(target) = points_at {
+                let peeled = repository.refs().peel_oid(oid, repository.odb()).unwrap_or(oid);
+                if oid != target && peeled != target {
+                    continue;
+                }
+            }
+            printed += 1;
+            match args.lines {
+                Some(lines) => {
+                    let lines = lines.unwrap_or(1);
+                    let text = tag_annotation(&repository, &oid, lines)?;
+                    println!("{name:<15} {text}");
+                }
+                None => println!("{name}"),
+            }
+        }
+        return Ok(if printed == 0 && pattern.is_some() { 1 } else { 0 });
+    }
+
+    let Some(name) = &args.name else {
+        anyhow::bail!("tag name required");
+    };
+    let reference = RefName::tag(BStr::new(name.as_bytes()))
+        .map_err(|_| anyhow::anyhow!("'{name}' is not a valid tag name."))?;
+    let existing = repository.refs().try_read(&reference)?.and_then(|t| t.oid().ok());
+    if existing.is_some() && !args.force {
+        anyhow::bail!("tag '{name}' already exists");
+    }
+    let target_spec = args.object.as_deref().unwrap_or("HEAD");
+    let target = super::resolve_rev(&repository, target_spec)
+        .map_err(|_| anyhow::anyhow!("Failed to resolve '{target_spec}' as a valid ref."))?;
+
+    let message: Option<Vec<u8>> = if let Some(message) = &args.message {
+        Some(message.clone().into_bytes())
+    } else if let Some(path) = &args.file {
+        Some(if path.as_os_str() == "-" {
+            use std::io::Read as _;
+            let mut buffer = Vec::new();
+            std::io::stdin().read_to_end(&mut buffer)?;
+            buffer
+        } else {
+            std::fs::read(path).map_err(|e| anyhow::anyhow!("could not open '{}': {e}", path.display()))?
+        })
+    } else {
+        None
+    };
+
+    let annotated = args.annotate || message.is_some();
+    let value = if annotated {
+        let Some(message) = message else {
+            anyhow::bail!("no tag message?");
+        };
+        let message = cleanup_tag_message(&message);
+        if message.is_empty() {
+            anyhow::bail!("no tag message?");
+        }
+        let kind = repository.odb().read_header(&target)?.0;
+        let tagger = repository.committer_signature()?;
+        let mut builder = rivet_core::object::tag::TagBuilder::new();
+        builder.object(target).kind(kind).name(name.as_bytes()).tagger(tagger).message(&message);
+        let body = builder.build(repository.format())?;
+        repository.odb().write_raw(rivet_core::ObjectKind::Tag, &body)?
+    } else {
+        target
+    };
+
+    // Tags are written without a reflog line, as Git does.
+    repository.refs().set_direct(&reference, value, None)?;
+    if let (Some(old), true) = (existing, args.force) {
+        println!("Updated tag '{name}' (was {})", super::short_oid(&old));
+    }
+    Ok(0)
+}
+
+use bstr::BStr;
+use rivet_core::{ObjectId, RefName, Repository};
+
+/// Git's tag message cleanup: strip trailing whitespace per line, collapse runs of blank lines,
+/// drop leading and trailing blank lines, and end with exactly one newline.
+fn cleanup_tag_message(message: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(message);
+    let mut lines: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() && lines.last().map_or(true, |l| l.is_empty()) {
+            continue;
+        }
+        lines.push(line);
+    }
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let mut out = lines.join("\n").into_bytes();
+    out.push(b'\n');
+    out
+}
+
+/// The first `lines` lines of a tag's message, or of the commit's for a lightweight tag.
+fn tag_annotation(repository: &Repository, oid: &ObjectId, lines: usize) -> Result<String> {
+    let object = repository.odb().read(oid)?;
+    let message: Vec<u8> = match object.parse()? {
+        rivet_core::AnyObject::Tag(tag) => tag.message.to_vec(),
+        rivet_core::AnyObject::Commit(commit) => commit.message.to_vec(),
+        _ => Vec::new(),
+    };
+    let text = String::from_utf8_lossy(&message);
+    let mut shown: Vec<String> = Vec::new();
+    for line in text.lines().skip_while(|l| l.trim().is_empty()).take(lines.max(1)) {
+        shown.push(line.trim_end().to_string());
+    }
+    Ok(shown.join("\n                 "))
 }

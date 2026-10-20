@@ -388,5 +388,254 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
 ///   refused with a message naming the file, because `/etc/gitconfig` is outside the user's own
 ///   and outside this repository's.
 pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
-    todo!()
+    use rivet_core::ops::{global_config_paths, system_config_path};
+    let scope_count = [args.global, args.local, args.system].iter().filter(|s| **s).count();
+    if scope_count > 1 {
+        anyhow::bail!("only one config file at a time");
+    }
+
+    // Which file a write goes to, and which files a read consults (lowest priority first).
+    let repository = match super::open(global) {
+        Ok(repository) => Some(repository),
+        Err(error) if args.global || args.system => {
+            let _ = error;
+            None
+        }
+        Err(error) => {
+            // Outside a repository only the user-level files can be read.
+            let _ = error;
+            None
+        }
+    };
+    let local_path = repository.as_ref().map(|r| r.git_dir().join("config"));
+    let global_path = {
+        let paths = global_config_paths();
+        paths
+            .iter()
+            .rev()
+            .find(|p| p.is_file())
+            .or_else(|| paths.last())
+            .cloned()
+    };
+    let write_path = |what: &str| -> Result<std::path::PathBuf> {
+        if args.system {
+            anyhow::bail!("could not lock config file {}: refusing to write the system config", system_config_path().map(|p| p.display().to_string()).unwrap_or_default());
+        }
+        if args.global {
+            return global_path.clone().ok_or_else(|| anyhow::anyhow!("$HOME not set"));
+        }
+        let _ = what;
+        local_path.clone().ok_or_else(|| anyhow::anyhow!("not in a git directory"))
+    };
+    let read_sources = || -> Result<Vec<(String, rivet_core::Config)>> {
+        let mut sources = Vec::new();
+        let want_system = args.system || scope_count == 0;
+        let want_global = args.global || scope_count == 0;
+        let want_local = args.local || scope_count == 0;
+        if want_system {
+            if let Some(path) = system_config_path().filter(|p| p.is_file()) {
+                sources.push(("system".to_string(), rivet_core::Config::load(&path)?));
+            }
+        }
+        if want_global {
+            for path in global_config_paths().into_iter().filter(|p| p.is_file()) {
+                sources.push(("global".to_string(), rivet_core::Config::load(&path)?));
+            }
+        }
+        if want_local {
+            if let Some(path) = local_path.as_ref().filter(|p| p.is_file()) {
+                sources.push(("local".to_string(), rivet_core::Config::load(path)?));
+            } else if args.local {
+                anyhow::bail!("--local can only be used inside a git repository");
+            }
+        }
+        Ok(sources)
+    };
+    let terminator: &[u8] = if args.null_terminated { b"\0" } else { b"\n" };
+    let display_key = |entry: &rivet_core::ConfigEntry| -> String {
+        let mut key = entry.section.to_string().to_ascii_lowercase();
+        if let Some(sub) = &entry.subsection {
+            key.push('.');
+            key.push_str(&sub.to_string());
+        }
+        key.push('.');
+        key.push_str(&entry.key.to_string().to_ascii_lowercase());
+        key
+    };
+    let render = |key: &str, value: &bstr::BStr| -> Result<Vec<u8>> {
+        match args.value_type {
+            None | Some(ConfigTypeArg::Str) => Ok(value.to_vec()),
+            Some(ConfigTypeArg::Bool) => match rivet_core::parse_bool(value) {
+                Ok(b) => Ok(b.to_string().into_bytes()),
+                Err(_) => anyhow::bail!("bad boolean config value '{value}' for '{key}'"),
+            },
+            Some(ConfigTypeArg::Int) => match rivet_core::parse_int(value) {
+                Ok(n) => Ok(n.to_string().into_bytes()),
+                Err(_) => anyhow::bail!("bad numeric config value '{value}' for '{key}'"),
+            },
+            Some(ConfigTypeArg::Path) => {
+                let text = value.to_string();
+                Ok(match text.strip_prefix("~/") {
+                    Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()).into_bytes(),
+                    None => text.into_bytes(),
+                })
+            }
+        }
+    };
+    use std::io::Write as _;
+    let mut out = Vec::new();
+
+    if args.list {
+        for (_, config) in read_sources()? {
+            for entry in config.entries() {
+                out.extend_from_slice(format!("{}={}", display_key(entry), entry.value).as_bytes());
+                out.extend_from_slice(terminator);
+            }
+        }
+        std::io::stdout().write_all(&out)?;
+        return Ok(0);
+    }
+
+    if let Some(pattern) = &args.get_regexp {
+        let needle = pattern.to_ascii_lowercase();
+        let mut found = false;
+        for (_, config) in read_sources()? {
+            for entry in config.entries() {
+                let key = display_key(entry);
+                if key.contains(&needle) {
+                    found = true;
+                    out.extend_from_slice(format!("{key} {}", entry.value).as_bytes());
+                    out.extend_from_slice(terminator);
+                }
+            }
+        }
+        std::io::stdout().write_all(&out)?;
+        return Ok(if found { 0 } else { 1 });
+    }
+
+    if let Some(section) = &args.remove_section {
+        let path = write_path("remove-section")?;
+        let mut config = rivet_core::Config::load(&path)?;
+        let (name, sub) = split_section(section);
+        if !config.remove_section(BStr::new(name.as_bytes()), sub.as_deref().map(|s| BStr::new(s.as_bytes()))) {
+            eprintln!("fatal: no such section: {section}");
+            return Ok(128);
+        }
+        config.write(&path)?;
+        return Ok(0);
+    }
+    if let (Some(old), Some(new)) = (&args.rename_section, &args.new_name) {
+        let path = write_path("rename-section")?;
+        let mut config = rivet_core::Config::load(&path)?;
+        let (old_name, old_sub) = split_section(old);
+        let (new_name, new_sub) = split_section(new);
+        let moved: Vec<rivet_core::ConfigEntry> = config
+            .entries()
+            .iter()
+            .filter(|e| e.in_section(old_name.as_bytes(), old_sub.as_deref().map(str::as_bytes)))
+            .cloned()
+            .collect();
+        if moved.is_empty() {
+            eprintln!("fatal: no such section: {old}");
+            return Ok(128);
+        }
+        config.remove_section(BStr::new(old_name.as_bytes()), old_sub.as_deref().map(|s| BStr::new(s.as_bytes())));
+        for entry in moved {
+            let mut flat = new_name.clone();
+            if let Some(sub) = &new_sub {
+                flat.push('.');
+                flat.push_str(sub);
+            }
+            flat.push('.');
+            flat.push_str(&entry.key.to_string());
+            config.add(BStr::new(flat.as_bytes()), &entry.value)?;
+        }
+        config.write(&path)?;
+        return Ok(0);
+    }
+
+    let Some(key) = &args.key else {
+        anyhow::bail!("no action specified");
+    };
+    if rivet_core::config::ConfigEntry::parse_key(BStr::new(key.as_bytes())).is_err() {
+        eprintln!("error: key does not contain a section: {key}");
+        return Ok(1);
+    }
+
+    if args.unset || args.unset_all {
+        let path = write_path("unset")?;
+        if !path.is_file() {
+            return Ok(5);
+        }
+        let mut config = rivet_core::Config::load(&path)?;
+        let count = config.get_all(BStr::new(key.as_bytes()))?.len();
+        if count == 0 {
+            return Ok(5);
+        }
+        if count > 1 && !args.unset_all {
+            eprintln!("warning: {key} has multiple values");
+            eprintln!("error: cannot unset '{key}': Invalid argument");
+            return Ok(5);
+        }
+        config.remove(BStr::new(key.as_bytes()))?;
+        config.write(&path)?;
+        return Ok(0);
+    }
+
+    // Writing: two positionals, or `--add`.
+    if let Some(value) = &args.value {
+        let path = write_path("set")?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut config = if path.is_file() { rivet_core::Config::load(&path)? } else { rivet_core::Config::new() };
+        let stored: Vec<u8> = match args.value_type {
+            Some(ConfigTypeArg::Bool) => match rivet_core::parse_bool(BStr::new(value.as_bytes())) {
+                Ok(b) => b.to_string().into_bytes(),
+                Err(_) => anyhow::bail!("bad boolean config value '{value}' for '{key}'"),
+            },
+            _ => value.as_bytes().to_vec(),
+        };
+        if args.add {
+            config.add(BStr::new(key.as_bytes()), &stored)?;
+        } else {
+            let existing = config.get_all(BStr::new(key.as_bytes()))?.len();
+            if existing > 1 {
+                eprintln!("warning: {key} has multiple values");
+                eprintln!("error: cannot overwrite multiple values with a single value");
+                eprintln!("       Use a regexp, --add or --replace-all to change {key}.");
+                return Ok(5);
+            }
+            config.set(BStr::new(key.as_bytes()), &stored)?;
+        }
+        config.write(&path)?;
+        return Ok(0);
+    }
+
+    // Reading: the last value wins across the consulted files.
+    let mut found: Option<bstr::BString> = None;
+    for (_, config) in read_sources()? {
+        if let Some(value) = config.get(BStr::new(key.as_bytes()))? {
+            found = Some(value.to_owned());
+        }
+    }
+    match found {
+        Some(value) => {
+            out.extend_from_slice(&render(key, BStr::new(&value[..]))?);
+            out.extend_from_slice(terminator);
+            std::io::stdout().write_all(&out)?;
+            Ok(0)
+        }
+        None => Ok(1),
+    }
+}
+
+use bstr::BStr;
+
+/// Split `section` or `section.subsection` as the section commands name them.
+fn split_section(name: &str) -> (String, Option<String>) {
+    match name.split_once('.') {
+        Some((section, sub)) => (section.to_string(), Some(sub.to_string())),
+        None => (name.to_string(), None),
+    }
 }

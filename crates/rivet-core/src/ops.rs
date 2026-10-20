@@ -268,8 +268,18 @@ impl Repository {
     /// reflogs get the entry, which is what Git writes for `commit`, `reset`, `merge` and `pull`.
     /// When `HEAD` is detached, `HEAD` itself moves.
     pub fn move_head(&self, new: ObjectId, reason: &BStr) -> Result<()> {
-        let who = self.committer_signature()?;
         let head = self.head()?;
+        let who = self.committer_signature()?;
+        // A move to where the branch already is leaves its own log alone, but `HEAD`'s log
+        // still records that the command ran.
+        if head.oid() == Some(new) {
+            let head_name = RefName::head();
+            if self.should_log_ref(&head_name) {
+                let entry = ReflogEntry::new(new, new, who, BString::from(reason));
+                self.refs().append_reflog(&head_name, &entry)?;
+            }
+            return Ok(());
+        }
         match &head {
             HeadState::Attached { branch, .. } | HeadState::Unborn { branch } => {
                 let old = head.oid().unwrap_or_else(|| ObjectId::zero(self.format()));
