@@ -915,11 +915,11 @@ fn list_tree(
         }
         // A leading `/` in the recorded path is how Git's `-r` shows a path nested in a subtree.
         if args.name_only {
-            out.write_all(&path)?;
+            out.write_all(&shown(&path, separator))?;
             write!(out, "{separator}")?;
         } else if args.name_status {
             write!(out, "A\t")?;
-            out.write_all(&path)?;
+            out.write_all(&shown(&path, separator))?;
             write!(out, "{separator}")?;
         } else {
             let id = entry.oid.to_hex();
@@ -942,12 +942,12 @@ fn list_tree(
                 write!(out, "{:06o} {} ", entry.mode.to_u32(), kind)?;
                 out.write_all(id)?;
                 write!(out, " {:>7}\t", size)?;
-                out.write_all(&path)?;
+                out.write_all(&shown(&path, separator))?;
             } else {
                 write!(out, "{:06o} {} ", entry.mode.to_u32(), kind)?;
                 out.write_all(id)?;
                 write!(out, "\t")?;
-                out.write_all(&path)?;
+                out.write_all(&shown(&path, separator))?;
             }
             write!(out, "{separator}")?;
         }
@@ -1053,7 +1053,7 @@ pub fn run_ls_files(global: &GlobalArgs, args: &LsFilesArgs) -> Result<i32> {
         };
         for path in entries {
             if matches(path) {
-                out.write_all(path)?;
+                out.write_all(&shown(path, separator))?;
                 write!(out, "{separator}")?;
             }
         }
@@ -1067,7 +1067,7 @@ pub fn run_ls_files(global: &GlobalArgs, args: &LsFilesArgs) -> Result<i32> {
             }
             let deleted = entry.kind == rivet_core::worktree::ChangeKind::Deleted;
             if (args.deleted && deleted) || (args.modified && !deleted) {
-                out.write_all(&entry.path)?;
+                out.write_all(&shown(&entry.path, separator))?;
                 write!(out, "{separator}")?;
             }
         }
@@ -1089,7 +1089,7 @@ fn write_index_entry(
     args: &LsFilesArgs,
     separator: char,
 ) -> Result<()> {
-    if args.stage {
+    if args.stage || args.unmerged {
         let stage = match entry.stage() {
             rivet_core::index::Stage::Normal => 0,
             rivet_core::index::Stage::Base => 1,
@@ -1107,7 +1107,7 @@ fn write_index_entry(
     } else if args.tag {
         write!(out, "H ")?;
     }
-    out.write_all(&entry.path)?;
+    out.write_all(&shown(&entry.path, separator))?;
     write!(out, "{separator}")?;
     Ok(())
 }
@@ -1515,4 +1515,13 @@ pub fn run_fsck(global: &GlobalArgs, args: &FsckArgs) -> Result<i32> {
         }
     }
     Ok(report.status as i32)
+}
+
+/// A path as the listing commands print it: C-quoted when newline-terminated, raw under `-z`.
+fn shown(path: &[u8], separator: char) -> Vec<u8> {
+    if separator == '\n' {
+        rivet_core::ops::quote_path(path, false).to_vec()
+    } else {
+        path.to_vec()
+    }
 }

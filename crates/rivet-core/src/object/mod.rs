@@ -236,11 +236,38 @@ impl Object {
     /// an object already in the database contains, which may differ from what the caller
     /// assumed.
     pub fn parse(&self) -> Result<AnyObject<'_>> {
+        // An `Object` does not record the repository's hash, so it is read off the bytes: the
+        // first header of a commit or tag carries a hex id of the object's width, and a tree of
+        // the wrong width does not parse. Callers that know the format use [`Object::parse_as`].
+        let header_width = |data: &[u8]| -> ObjectFormat {
+            let line = data.split(|b| *b == b'\n').next().unwrap_or(&[]);
+            let hex = line.iter().skip_while(|b| **b != b' ').skip(1).count();
+            if hex == ObjectFormat::Sha256.hex_len() {
+                ObjectFormat::Sha256
+            } else {
+                ObjectFormat::Sha1
+            }
+        };
         match self {
             Object::Blob(d) => Ok(AnyObject::Blob(blob::Blob { data: d })),
-            Object::Tree(d) => Ok(AnyObject::Tree(tree::Tree::parse(ObjectFormat::Sha1, d)?)),
-            Object::Commit(d) => Ok(AnyObject::Commit(commit::Commit::parse(ObjectFormat::Sha1, d)?)),
-            Object::Tag(d) => Ok(AnyObject::Tag(tag::Tag::parse(ObjectFormat::Sha1, d)?)),
+            Object::Tree(d) => match tree::Tree::parse(ObjectFormat::Sha1, d) {
+                Ok(tree) => Ok(AnyObject::Tree(tree)),
+                Err(first) => tree::Tree::parse(ObjectFormat::Sha256, d)
+                    .map(AnyObject::Tree)
+                    .map_err(|_| first),
+            },
+            Object::Commit(d) => Ok(AnyObject::Commit(commit::Commit::parse(header_width(d), d)?)),
+            Object::Tag(d) => Ok(AnyObject::Tag(tag::Tag::parse(header_width(d), d)?)),
+        }
+    }
+
+    /// Parse as an object of a known repository hash.
+    pub fn parse_as(&self, format: ObjectFormat) -> Result<AnyObject<'_>> {
+        match self {
+            Object::Blob(d) => Ok(AnyObject::Blob(blob::Blob { data: d })),
+            Object::Tree(d) => Ok(AnyObject::Tree(tree::Tree::parse(format, d)?)),
+            Object::Commit(d) => Ok(AnyObject::Commit(commit::Commit::parse(format, d)?)),
+            Object::Tag(d) => Ok(AnyObject::Tag(tag::Tag::parse(format, d)?)),
         }
     }
 }

@@ -415,6 +415,82 @@ s_plumbing() {
     v rev-parse nonexistent
 }
 
+s_sha256() {
+    v init -q --object-format sha256 repo 2>/dev/null || v init -q --object-format=sha256 repo
+    cd repo
+    echo hi >a; mkdir d; echo there >d/b
+    v add a d
+    v commit -q -m "sha256 commit"
+    tick; echo more >>a; v commit -q -a -m two
+    v log --oneline
+    v cat-file -p HEAD
+    v ls-tree -r HEAD
+    v branch side; v switch -q side; tick; echo s >s; v add s; v commit -q -m side
+    v switch -q main; v merge side
+    v fsck
+    v diff HEAD~1 HEAD --stat
+}
+
+s_odd_names() {
+    v init -q repo; cd repo
+    echo 1 >"with space"; echo 2 >"tab	name"; echo 3 >"uni-é-名前"; mkdir "dir with space"; echo 4 >"dir with space/f g"
+    echo 5 >'-dash'; echo 6 >'quote"d'
+    v add -A
+    v status -s
+    v ls-files
+    v commit -q -m names
+    v ls-tree -r HEAD
+    v diff --name-only HEAD~0 2>/dev/null
+    echo changed >>"with space"
+    v diff
+    v status -s
+    v log --stat --oneline 2>/dev/null | head -20
+}
+
+s_merge_edge() {
+    v init -q repo; cd repo
+    printf 'a\nb\nc\n' >both; echo keep >del; echo m >mod; mkdir dirpath; echo f >dirpath/x
+    v add -A; v commit -q -m base; v branch other
+    tick; v rm -q del; echo changed >mod; echo mainadd >add; printf 'a\nB\nc\n' >both; v add -A; v commit -q -m main
+    v switch -q other
+    tick; echo modified >del; echo otherchange >mod; echo otheradd >add; printf 'a\nb\nC\n' >both; v add -A; v commit -q -m other
+    v switch -q main
+    v merge other
+    v status -s
+    v ls-files -u
+    cat both; cat mod; cat add; cat del
+    v merge --abort
+    v status -s
+    v merge --no-ff -m "custom message" other
+    v log --oneline -n 2
+}
+
+s_corrupt() {
+    g init -q repo; cd repo
+    echo a >a; g add a; g commit -qm one; echo b >b; g add b; g commit -qm two
+    blob=$(g rev-parse HEAD:a)
+    chmod u+w .git/objects/${blob:0:2}/${blob:2}
+    echo garbage >.git/objects/${blob:0:2}/${blob:2}
+    vq fsck
+    vq cat-file -p HEAD
+    vq cat-file -p $blob
+    vq status
+    g gc -q 2>/dev/null; g repack -adq 2>/dev/null
+}
+
+s_corrupt_pack() {
+    g init -q repo; cd repo
+    seq 1 300 >big; g add big; g commit -qm one; seq 1 300 | sed 's/^5$/x/' >big; g commit -qam two
+    g repack -adq
+    pack=$(ls .git/objects/pack/*.pack)
+    vq verify-pack ${pack%.pack}.idx
+    vq fsck
+    # flip one byte in the middle of the pack
+    printf '\377' | dd of=$pack bs=1 seek=40 conv=notrunc 2>/dev/null
+    vq verify-pack ${pack%.pack}.idx
+    vq fsck
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

@@ -799,3 +799,33 @@ pub fn parse_approxidate(text: &str) -> Option<i64> {
     }
     crate::object::commit::parse_git_date(BStr::new(text.as_bytes())).map(|(when, _)| when)
 }
+
+/// Git's C-style path quoting (`core.quotePath` on): a path with a control character, `"`, `\`
+/// or a byte outside ASCII is wrapped in double quotes with C escapes and octal bytes; any other
+/// path is returned as is. With `quote_space` a path containing a space is quoted too, which is
+/// how `status --short` shows it.
+pub fn quote_path(path: &[u8], quote_space: bool) -> BString {
+    let needs = path.iter().any(|b| *b < 0x20 || *b == b'"' || *b == b'\\' || *b >= 0x7f)
+        || (quote_space && path.contains(&b' '));
+    if !needs {
+        return BString::from(path);
+    }
+    let mut out = BString::from("\"");
+    for &b in path {
+        match b {
+            7 => out.extend_from_slice(b"\\a"),
+            8 => out.extend_from_slice(b"\\b"),
+            9 => out.extend_from_slice(b"\\t"),
+            10 => out.extend_from_slice(b"\\n"),
+            11 => out.extend_from_slice(b"\\v"),
+            12 => out.extend_from_slice(b"\\f"),
+            13 => out.extend_from_slice(b"\\r"),
+            b'"' => out.extend_from_slice(b"\\\""),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            b if b < 0x20 || b >= 0x7f => out.extend_from_slice(format!("\\{b:03o}").as_bytes()),
+            b => out.push(b),
+        }
+    }
+    out.push(b'"');
+    out
+}

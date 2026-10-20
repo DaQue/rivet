@@ -40,9 +40,10 @@
 //!   file has not changed, so the entry is reported neither as modified nor as deleted, even
 //!   when it is one. `skip-worktree` entries are likewise absent from the work tree and are not
 //!   reported as deleted.
-//! * **Mode changes are their own kind.** `100644` to `100755` is [`ChangeKind::TypeChanged`],
-//!   not [`ChangeKind::Modified`] — the content is identical and the blob id is the same, so a
-//!   comparison that only looked at ids would see no change at all.
+//! * **A mode-only change is a modification.** `100644` to `100755` is [`ChangeKind::Modified`]
+//!   with the same blob id on both sides, exactly as `git status` reports it, so a comparison
+//!   that only looked at ids would see no change at all. [`ChangeKind::TypeChanged`] is for a
+//!   change of file type (regular file, symlink, gitlink).
 //! * **An untracked directory is reported as one entry, not per file.** Git prints
 //!   `?? dir/` and stops, because a build directory with 100 000 files is not a useful listing;
 //!   `--untracked-files=all` is the form that descends, and it is a caller-side choice.
@@ -70,9 +71,8 @@ use crate::worktree::Worktree;
 /// * **The variant order is the order the CLI sorts by, not a severity.** `git status` prints
 ///   additions, then modifications, then deletions, then renames and type changes, and the
 ///   differential tests compare that ordering.
-/// * **`TypeChanged` covers a mode change and a file/symlink/symlink/gitlink change**, which
-///   Git spells with different letters in different porcelain versions (`T` for both here).
-///   Distinguishing them would need the two modes, which is what [`StatusEntry`] carries.
+/// * **`TypeChanged` is a change of file type** — regular file, symlink or gitlink — and
+///   not a mode-only change such as `100644` to `100755`, which Git reports as a modification.
 /// * **There is no `Renamed` variant.** Rename detection is a similarity guess, not a fact about
 ///   the repository, and it is explicitly a later phase (plan §4 Phase 8). A rename appears as a
 ///   deletion and an addition, which is exactly what `git status --no-renames` prints.
@@ -125,8 +125,8 @@ impl ChangeKind {
 ///   addition the old side is absent, for a deletion the new side is, and neither is ever the
 ///   null id — a zero id means "the ref was created" in the wire protocol and reusing it here
 ///   would make an addition indistinguishable from a file emptied to nothing.
-/// * **The ids may be the same and the modes still differ** — that is [`ChangeKind::TypeChanged`]
-///   — so a caller rendering a change must not derive the kind from the ids alone.
+/// * **The ids may be the same and the modes still differ** (a `chmod`), so a caller rendering a
+///   change must not derive the kind from the ids alone.
 /// * **`path` is the work-tree-relative path as bytes.** It is the bytes of the index entry or
 ///   the tree entry, never a re-render, because a path that is not UTF-8 has no faithful
 ///   `String` form.

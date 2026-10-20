@@ -293,16 +293,8 @@ fn staged_and_unstaged_classifications_match_git() {
     unstaged.sort();
 
     assert_eq!(staged, expected_staged, "porcelain: {porcelain}");
-    // Git reports a mode-only change as a modification; `ChangeKind` deliberately reports it as
-    // a type change, which the module documents as the one deviation from `git status`.
-    assert_eq!(
-        unstaged,
-        vec![
-            ('D', "tracked_b.txt".to_string()),
-            ('M', "tracked.txt".to_string()),
-            ('T', "exec.txt".to_string()),
-        ],
-        "porcelain: {porcelain}"
-    );
+    // Git reports a mode-only change as a modification, and so does `ChangeKind`; `T` is for a
+    // change of file type (file to symlink), which this fixture does not contain.
+    assert_eq!(unstaged, expected_unstaged, "porcelain: {porcelain}");
 }
 

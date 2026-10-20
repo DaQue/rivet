@@ -590,6 +590,19 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
         diff.stats.retain(|_| { index += 1; keep[index - 1] });
     }
 
+    // Conflicted paths need Git's combined diff (`diff --cc`), which is not implemented; naming
+    // them keeps the omission visible instead of silent.
+    let unmerged_paths: Vec<bstr::BString> = if revisions.is_empty() && !args.cached {
+        repository
+            .index()
+            .entries()
+            .iter()
+            .filter(|e| e.stage() == rivet_core::index::Stage::Ours || (e.is_unmerged() && e.stage() == rivet_core::index::Stage::Base))
+            .map(|e| e.path.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let changed = !diff.is_empty();
     if global.quiet {
         return Ok(if changed { 1 } else { 0 });
@@ -597,7 +610,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
     let mut out = Vec::new();
     if args.name_only {
         for file in &diff.files {
-            out.extend_from_slice(file.path());
+            out.extend_from_slice(&rivet_core::ops::quote_path(&file.path()[..], false));
             out.push(b'\n');
         }
     } else if args.name_status {
@@ -606,6 +619,14 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
         rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
     } else {
         rivet_core::format_unified(&diff, format, &mut out)?;
+    }
+    if !args.name_only && !args.name_status && !args.stat {
+        let mut seen = std::collections::BTreeSet::new();
+        for path in &unmerged_paths {
+            if seen.insert(path.clone()) {
+                out.extend_from_slice(format!("* Unmerged path {path}\n").as_bytes());
+            }
+        }
     }
     if let Some(path) = &args.output {
         std::fs::write(path, &out)?;

@@ -36,7 +36,7 @@ v() {
     # Normalise the implementation's own name and the per-run root out of the text.
     if [ "${SORT_OUT:-0}" = 1 ]; then sort -o "$TMPOUT" "$TMPOUT"; fi
     sed -e "s#$ROOT#<ROOT>#g" "$TMPOUT" >>"$TRANSCRIPT"
-    if [ -s "$TMPERR" ]; then
+    if [ -s "$TMPERR" ] && [ "${NO_ERR:-0}" != 1 ]; then
         echo "--- stderr" >>"$TRANSCRIPT"
         sed -e "s#$ROOT#<ROOT>#g" "$TMPERR" >>"$TRANSCRIPT"
     fi
@@ -47,6 +47,10 @@ v() {
 g() { "$GIT" "$@"; }
 
 # Like v, but with the output lines sorted (for commands whose order is a hash-table accident).
+# Like v, but the stderr text is not compared (only stdout and the exit code), for commands whose
+# diagnostics are free-form.
+vq() { NO_ERR=1 v "$@"; local rc=$?; NO_ERR=0; return $rc; }
+
 vs() { SORT_OUT=1 v "$@"; local rc=$?; SORT_OUT=0; return $rc; }
 
 # Repository state as real git sees it, for one repository directory.

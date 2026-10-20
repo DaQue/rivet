@@ -565,10 +565,17 @@ pub fn format_unified(
         let path = file.path();
         let mode = file.new_mode.or(file.old_mode);
 
-        out.write_all(b"diff --git a/")?;
-        out.write_all(&file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
-        out.write_all(b" b/")?;
-        out.write_all(&file.new_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+        let old_name = file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]);
+        let new_name = file.new_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]);
+        let side = |prefix: &str, name: &[u8]| -> Vec<u8> {
+            let mut full = prefix.as_bytes().to_vec();
+            full.extend_from_slice(name);
+            crate::ops::quote_path(&full, false).to_vec()
+        };
+        out.write_all(b"diff --git ")?;
+        out.write_all(&side("a/", old_name))?;
+        out.write_all(b" ")?;
+        out.write_all(&side("b/", new_name))?;
         out.write_all(b"\n")?;
 
         if file.is_new {
@@ -612,15 +619,13 @@ pub fn format_unified(
             if file.is_new {
                 out.write_all(b"/dev/null")?;
             } else {
-                out.write_all(b"a/")?;
-                out.write_all(&file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+                out.write_all(&side("a/", old_name))?;
             }
             out.write_all(b" and ")?;
             if file.is_deleted {
                 out.write_all(b"/dev/null")?;
             } else {
-                out.write_all(b"b/")?;
-                out.write_all(&file.new_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+                out.write_all(&side("b/", new_name))?;
             }
             out.write_all(b" differ\n")?;
             continue;
@@ -630,20 +635,22 @@ pub fn format_unified(
             continue;
         }
 
+        // Git ends a name containing a space with a tab so a patch reader can find its end.
+        let tab = |name: &[u8]| -> &'static [u8] { if name.contains(&b' ') { b"\t" } else { b"" } };
         out.write_all(b"--- ")?;
         if file.is_new {
             out.write_all(b"/dev/null\n")?;
         } else {
-            out.write_all(b"a/")?;
-            out.write_all(&file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+            out.write_all(&side("a/", old_name))?;
+            out.write_all(tab(old_name))?;
             out.write_all(b"\n")?;
         }
         out.write_all(b"+++ ")?;
         if file.is_deleted {
             out.write_all(b"/dev/null\n")?;
         } else {
-            out.write_all(b"b/")?;
-            out.write_all(&file.new_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+            out.write_all(&side("b/", new_name))?;
+            out.write_all(tab(new_name))?;
             out.write_all(b"\n")?;
         }
 
@@ -720,7 +727,7 @@ pub fn format_stat_sized(
     let mut name_width = 0usize;
     let mut number_width = 0usize;
     for (stat, file) in diff.stats.iter().zip(diff.files.iter()) {
-        name_width = name_width.max(stat.path.len());
+        name_width = name_width.max(crate::ops::quote_path(&stat.path[..], false).len());
         if stat.is_binary {
             // "Bin" occupies the number column.
             number_width = number_width.max(3);
@@ -750,7 +757,7 @@ pub fn format_stat_sized(
     let mut total_added = 0usize;
     let mut total_deleted = 0usize;
     for (stat, file) in diff.stats.iter().zip(diff.files.iter()) {
-        let mut name = stat.path.to_string();
+        let mut name = String::from_utf8_lossy(&crate::ops::quote_path(&stat.path[..], false)).into_owned();
         if name.len() > name_width {
             // Git keeps the tail of a long name behind "...".
             let keep = name_width.saturating_sub(3);
@@ -827,7 +834,7 @@ pub fn format_name_status(diff: &crate::diff::TreeDiff, out: &mut impl Write) ->
         let letter = change_letter(file.is_new, file.is_deleted, file.is_type_change());
         out.write_all(letter.to_string().as_bytes())?;
         out.write_all(b"\t")?;
-        out.write_all(&file.path()[..])?;
+        out.write_all(&crate::ops::quote_path(&file.path()[..], false))?;
         out.write_all(b"\n")?;
     }
     Ok(())

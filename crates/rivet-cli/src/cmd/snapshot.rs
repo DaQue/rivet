@@ -477,8 +477,10 @@ pub fn run_rm(global: &GlobalArgs, args: &RmArgs) -> Result<i32> {
 
     // Git prints one `rm '<path>'` line per removal, dry run included (`--dry-run` still says
     // `rm 'x'`), so the same loop serves both modes.
-    for path in &outcome.paths {
-        println!("rm '{}'", path);
+    if !global.quiet {
+        for path in &outcome.paths {
+            println!("rm '{}'", path);
+        }
     }
 
     Ok(0)
@@ -771,19 +773,19 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             println!("{header}");
         }
         for entry in &status.staged {
-            println!("{}{} {}", entry.kind.code(), ' ', entry.path);
+            println!("{}{} {}", entry.kind.code(), ' ', q(&entry.path, true));
         }
         for entry in &status.unstaged {
-            println!(" {} {}", entry.kind.code(), entry.path);
+            println!(" {} {}", entry.kind.code(), q(&entry.path, true));
         }
         for (path, code, _) in &unmerged {
             println!("{code} {path}");
         }
         for path in &status.untracked {
-            println!("?? {}", path);
+            println!("?? {}", q(path, true));
         }
         for path in &status.ignored {
-            println!("!! {}", path);
+            println!("!! {}", q(path, true));
         }
         return Ok(0);
     }
@@ -810,7 +812,7 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         println!("Changes to be committed:");
         println!("  (use \"git restore --staged <file>...\" to unstage)");
         for entry in &status.staged {
-            println!("\t{:<12}{}", section_label(entry.kind), entry.path);
+            println!("\t{:<12}{}", section_label(entry.kind), q(&entry.path, false));
         }
         wrote_section = true;
     }
@@ -838,7 +840,7 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         }
         println!("  (use \"git restore <file>...\" to discard changes in working directory)");
         for entry in &status.unstaged {
-            println!("\t{:<12}{}", section_label(entry.kind), entry.path);
+            println!("\t{:<12}{}", section_label(entry.kind), q(&entry.path, false));
         }
         wrote_section = true;
     }
@@ -849,7 +851,7 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         println!("Untracked files:");
         println!("  (use \"git add <file>...\" to include in what will be committed)");
         for path in &status.untracked {
-            println!("\t{}", path);
+            println!("\t{}", q(path, false));
         }
         wrote_section = true;
     }
@@ -860,7 +862,7 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         println!("Ignored files:");
         println!("  (use \"git add -f <file>...\" to include in what will be committed)");
         for path in &status.ignored {
-            println!("\t{}", path);
+            println!("\t{}", q(path, false));
         }
         wrote_section = true;
     }
@@ -1295,4 +1297,9 @@ fn check_rm_safety(repository: &rivet_core::Repository, specs: &[BString]) -> Re
         refused = true;
     }
     Ok(refused.then_some(1))
+}
+
+/// A path as `status` prints it.
+fn q(path: &[u8], quote_space: bool) -> String {
+    String::from_utf8_lossy(&rivet_core::ops::quote_path(path, quote_space)).into_owned()
 }

@@ -701,6 +701,15 @@ impl Repository {
             ObjectFormat::Sha1 => b"0",
             ObjectFormat::Sha256 => b"1",
         };
+        // Git only writes `extensions.objectformat` for SHA-256. Emitting it for SHA-1 makes
+        // stock git reject the repository outright: an extension is a v1-only feature, and a
+        // `repositoryformatversion=0` repository containing one is "not a git repository".
+        if options.format != ObjectFormat::Sha1 {
+            config.set(
+                BStr::new(b"extensions.objectformat"),
+                options.format.as_str().as_bytes(),
+            )?;
+        }
         // The keys and their order are the ones `git init` writes, so a fresh rivet config is
         // byte-identical to a fresh git one.
         config.set(BStr::new(b"core.repositoryformatversion"), version)?;
@@ -720,15 +729,6 @@ impl Repository {
                 use std::os::unix::ffi::OsStrExt;
                 config.set(BStr::new(b"core.worktree"), wt.as_os_str().as_bytes())?;
             }
-        }
-        // Git only writes `extensions.objectFormat` for SHA-256. Emitting it for SHA-1 makes
-        // stock git reject the repository outright: an extension is a v1-only feature, and a
-        // `repositoryformatversion=0` repository containing one is "not a git repository".
-        if options.format != ObjectFormat::Sha1 {
-            config.set(
-                BStr::new(b"extensions.objectFormat"),
-                options.format.as_str().as_bytes(),
-            )?;
         }
         config.write(&config_path)?;
 

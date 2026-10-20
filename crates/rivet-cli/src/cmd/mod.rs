@@ -354,7 +354,7 @@ pub fn print_diffstat(
 /// Git's `--summary` lines: creations, deletions and mode changes.
 pub fn print_summary(diff: &rivet_core::TreeDiff, out: &mut Vec<u8>) {
     for file in &diff.files {
-        let path = file.path();
+        let path = String::from_utf8_lossy(&rivet_core::ops::quote_path(&file.path()[..], false)).into_owned();
         if file.is_new {
             let mode = file.new_mode.map(|m| m.to_u32()).unwrap_or(0);
             out.extend_from_slice(format!(" create mode {mode:06o} {path}\n").as_bytes());
