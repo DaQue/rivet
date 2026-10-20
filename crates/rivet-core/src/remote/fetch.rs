@@ -393,7 +393,7 @@ pub fn fetch(
     advertisement: &RefAdvertisement,
     spec: &FetchSpec,
     options: &FetchOptions,
-    odb: &Odb,
+    odb: &mut Odb,
     refs: &RefStore,
 ) -> Result<FetchOutcome> {
     let negotiation = negotiate(advertisement, spec, &options.capabilities, odb, refs, options.format)?;

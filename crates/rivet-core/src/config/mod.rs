@@ -358,29 +358,55 @@ impl Config {
             let t = &logical[..];
             if t[0] == b'[' {
                 let close = t.iter().position(|b| *b == b']').ok_or_else(|| Error::ConfigSyntax { line: line_no, reason: "unterminated section" })?;
-                let inner = &t[1..close];
-                let mut sp = 0usize;
-                while sp < inner.len() && inner[sp] == b' ' {
-                    sp += 1;
+                let raw = &t[1..close];
+                let ws = |b: &u8| *b == b' ' || *b == b'\t';
+                let start = raw.iter().position(|b| !ws(b)).unwrap_or(raw.len());
+                let end = raw.iter().rposition(|b| !ws(b)).map(|p| p + 1).unwrap_or(start);
+                let inner = &raw[start..end];
+                // Two header shapes: `[section "subsection"]` (the modern one) and the legacy
+                // `[section.subsection]`, where git lowercases everything. A header with neither a
+                // quote nor a dot is a bare section. The subsection keeps its case either way;
+                // only the legacy form folds it.
+                let (name_bytes, sub): (&[u8], Option<BString>) =
+                    if let Some(q) = inner.iter().position(|b| *b == b'"') {
+                        let name_end = inner[..q].iter().rposition(|b| !ws(b)).map(|p| p + 1).unwrap_or(0);
+                        let mut out: Vec<u8> = Vec::new();
+                        let mut i = q + 1;
+                        let mut closed = false;
+                        while i < inner.len() {
+                            let b = inner[i];
+                            if b == b'"' {
+                                closed = true;
+                                i += 1;
+                                break;
+                            }
+                            // Inside a quoted subsection only `\"` and `\\` are escapes; any
+                            // other backslash is a literal backslash, as in git.
+                            if b == b'\\' && i + 1 < inner.len() && (inner[i + 1] == b'"' || inner[i + 1] == b'\\') {
+                                out.push(inner[i + 1]);
+                                i += 2;
+                                continue;
+                            }
+                            out.push(b);
+                            i += 1;
+                        }
+                        if !closed {
+                            return Err(Error::ConfigSyntax { line: line_no, reason: "unterminated subsection" });
+                        }
+                        if inner[i..].iter().any(|b| !ws(b)) {
+                            return Err(Error::ConfigSyntax { line: line_no, reason: "trailing characters after subsection" });
+                        }
+                        (&inner[..name_end], Some(BString::from(out)))
+                    } else if let Some(dot) = inner.iter().position(|b| *b == b'.') {
+                        (&inner[..dot], Some(BString::from(String::from_utf8_lossy(&inner[dot + 1..]).to_ascii_lowercase())))
+                    } else {
+                        (inner, None)
+                    };
+                if name_bytes.is_empty() || !name_bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_') {
+                    return Err(Error::ConfigSyntax { line: line_no, reason: "invalid section name" });
                 }
-                let mut ep = inner.len();
-                while ep > sp && inner[ep - 1] == b' ' {
-                    ep -= 1;
-                }
-                let name = &inner[sp..ep];
-                let name_str = String::from_utf8(name.to_vec()).map_err(|_| Error::InvalidUtf8 { what: "section name" })?;
-                let name_folded = BString::from(name_str.to_ascii_lowercase());
-                let sub: Option<BString> = if ep < inner.len() {
-                    let rest = &inner[ep..];
-                    let rs = rest.iter().position(|b| *b == b' ').map(|p| &rest[p..]).unwrap_or(&[]);
-                    let rs_trim = rs.iter().position(|b| *b != b' ' && *b != b'\t').map(|p| &rs[p..]).unwrap_or(&[]);
-                    let rs_str = String::from_utf8(rs_trim.to_vec()).map_err(|_| Error::InvalidUtf8 { what: "subsection name" })?;
-                    Some(BString::from(rs_str))
-                } else {
-                    None
-                };
-                let _ = name_folded;
-                section = Some((BString::from(name_str), sub));
+                let name_str = String::from_utf8(name_bytes.to_vec()).map_err(|_| Error::InvalidUtf8 { what: "section name" })?;
+                section = Some((BString::from(name_str.to_ascii_lowercase()), sub));
                 continue;
             }
             let sec = section.as_ref().ok_or_else(|| Error::ConfigSyntax { line: line_no, reason: "key before section" })?;
@@ -624,10 +650,10 @@ impl Config {
     /// As [`Config::get`].
     pub fn get_all(&self, key: &BStr) -> Result<Vec<&BStr>> {
         let entry = Self::parse_lookup_key(key)?;
+        // File order: `remote.origin.fetch` lists its refspecs in the order they were written.
         Ok(self
             .entries
             .iter()
-            .rev()
             .filter(|e| e.matches(&entry.0, entry.1.as_ref().map(|v| v.as_slice()), &entry.2))
             .map(|e| e.value.as_ref())
             .collect())

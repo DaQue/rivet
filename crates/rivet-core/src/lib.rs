@@ -52,6 +52,7 @@ pub mod odb;
 pub mod ops;
 pub mod pack;
 pub mod refs;
+pub mod remote_ops;
 pub mod remote;
 pub mod repo;
 pub mod revparse;

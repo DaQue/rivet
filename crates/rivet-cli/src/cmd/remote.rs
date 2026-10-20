@@ -451,7 +451,190 @@ pub struct PushArgs {
 ///   URL only, push URL only, both — cannot be expressed with one `Option<String>` and the
 ///   grammar above spells them as two booleans for that reason.
 pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
-    todo!()
+    let mut repository = super::open(global)?;
+    let verbose = global.verbose && !global.quiet;
+    let Some(subcommand) = args.subcommand.as_deref() else {
+        let mut names = repository.remote_names();
+        names.sort();
+        for name in names {
+            if verbose {
+                let config = repository.remote_config(&name.to_string())?.expect("listed remote exists");
+                let fetch = config.urls.first().map(|u| u.to_string()).unwrap_or_default();
+                let push = config.push_urls.first().map(|u| u.to_string()).unwrap_or_else(|| fetch.clone());
+                println!("{name}\t{fetch} (fetch)");
+                println!("{name}\t{push} (push)");
+            } else {
+                println!("{name}");
+            }
+        }
+        return Ok(0);
+    };
+    let exists = |repository: &Repository, name: &str| repository.remote_config(name).ok().flatten().is_some();
+    match subcommand {
+        "add" => {
+            let (Some(name), Some(url)) = (&args.name, &args.url) else {
+                eprintln!("usage: git remote add [<options>] <name> <url>");
+                return Ok(129);
+            };
+            if name.is_empty() || name.contains(' ') || name.contains('/') && false {
+                anyhow::bail!("'{name}' is not a valid remote name");
+            }
+            if exists(&repository, name) {
+                eprintln!("error: remote {name} already exists.");
+                return Ok(3);
+            }
+            let config = repository.config_mut();
+            config.set(BStr::new(format!("remote.{name}.url").as_bytes()), url.as_bytes())?;
+            if args.track.is_empty() {
+                config.set(
+                    BStr::new(format!("remote.{name}.fetch").as_bytes()),
+                    format!("+refs/heads/*:refs/remotes/{name}/*").as_bytes(),
+                )?;
+            } else {
+                for branch in &args.track {
+                    config.add(
+                        BStr::new(format!("remote.{name}.fetch").as_bytes()),
+                        format!("+refs/heads/{branch}:refs/remotes/{name}/{branch}").as_bytes(),
+                    )?;
+                }
+            }
+            if args.tags {
+                config.set(BStr::new(format!("remote.{name}.tagopt").as_bytes()), b"--tags")?;
+            } else if args.no_tags {
+                config.set(BStr::new(format!("remote.{name}.tagopt").as_bytes()), b"--no-tags")?;
+            }
+            repository.write_config()?;
+            if args.fetch_after_add() {
+                let request = FetchRequest { write_fetch_head: true, ..Default::default() };
+                let report = repository.fetch_remote(name, &request)?;
+                print_fetch_report(&report, global.quiet);
+            }
+            Ok(0)
+        }
+        "remove" | "rm" => {
+            let Some(name) = &args.name else {
+                eprintln!("usage: git remote remove <name>");
+                return Ok(129);
+            };
+            if !exists(&repository, name) {
+                eprintln!("error: No such remote: '{name}'");
+                return Ok(2);
+            }
+            // Its remote-tracking refs go with it, as do the branch settings that named it.
+            let prefix = format!("refs/remotes/{name}/");
+            for (reference, _) in repository.refs().list(prefix.as_bytes())? {
+                repository.refs().delete(&reference)?;
+            }
+            let branches: Vec<String> = repository
+                .config()
+                .entries()
+                .iter()
+                .filter(|e| {
+                    e.section.eq_ignore_ascii_case(b"branch")
+                        && e.key.eq_ignore_ascii_case(b"remote")
+                        && e.value.as_slice() == name.as_bytes()
+                })
+                .filter_map(|e| e.subsection.as_ref().map(|s| s.to_string()))
+                .collect();
+            let config = repository.config_mut();
+            config.remove_section(BStr::new("remote"), Some(BStr::new(name.as_bytes())));
+            for branch in branches {
+                let _ = config.remove(BStr::new(format!("branch.{branch}.remote").as_bytes()));
+                let _ = config.remove(BStr::new(format!("branch.{branch}.merge").as_bytes()));
+            }
+            repository.write_config()?;
+            Ok(0)
+        }
+        "rename" => {
+            let (Some(old), Some(new)) = (&args.name, &args.url) else {
+                eprintln!("usage: git remote rename <old> <new>");
+                return Ok(129);
+            };
+            if !exists(&repository, old) {
+                eprintln!("error: No such remote: '{old}'");
+                return Ok(2);
+            }
+            if exists(&repository, new) {
+                eprintln!("error: remote {new} already exists.");
+                return Ok(3);
+            }
+            let moved: Vec<(String, String)> = repository
+                .config()
+                .entries()
+                .iter()
+                .filter(|e| e.section.eq_ignore_ascii_case(b"remote") && e.subsection.as_ref().is_some_and(|s| s.as_slice() == old.as_bytes()))
+                .map(|e| (e.key.to_string(), e.value.to_string()))
+                .collect();
+            let branches: Vec<String> = repository
+                .config()
+                .entries()
+                .iter()
+                .filter(|e| {
+                    e.section.eq_ignore_ascii_case(b"branch")
+                        && e.key.eq_ignore_ascii_case(b"remote")
+                        && e.value.as_slice() == old.as_bytes()
+                })
+                .filter_map(|e| e.subsection.as_ref().map(|s| s.to_string()))
+                .collect();
+            let config = repository.config_mut();
+            config.remove_section(BStr::new("remote"), Some(BStr::new(old.as_bytes())));
+            for (key, value) in moved {
+                let value = value.replace(&format!("refs/remotes/{old}/"), &format!("refs/remotes/{new}/"));
+                config.add(BStr::new(format!("remote.{new}.{key}").as_bytes()), value.as_bytes())?;
+            }
+            for branch in branches {
+                config.set(BStr::new(format!("branch.{branch}.remote").as_bytes()), new.as_bytes())?;
+            }
+            repository.write_config()?;
+            // Move the tracking refs and their reflogs.
+            let from = format!("refs/remotes/{old}/");
+            for (reference, _) in repository.refs().list(from.as_bytes())? {
+                let tail = &reference.as_bytes()[from.len()..];
+                let target = RefName::from_bytes(format!("refs/remotes/{new}/{}", String::from_utf8_lossy(tail)).as_bytes())?;
+                if reference.as_bytes().ends_with(b"/HEAD") {
+                    // The symbolic HEAD must follow, pointing into the new namespace.
+                    if let Some(rivet_core::RefTarget::Symbolic(to)) = repository.refs().try_read(&reference)? {
+                        let new_to = RefName::from_bytes(
+                            String::from_utf8_lossy(to.as_bytes()).replace(&from, &format!("refs/remotes/{new}/")).as_bytes(),
+                        )?;
+                        repository.refs().set_symbolic(&target, &new_to, None)?;
+                        repository.refs().delete(&reference)?;
+                    }
+                } else {
+                    repository.refs().rename(&reference, &target)?;
+                }
+            }
+            Ok(0)
+        }
+        "get-url" => {
+            let Some(name) = &args.name else {
+                eprintln!("usage: git remote get-url [--push] [--all] <name>");
+                return Ok(129);
+            };
+            let Some(config) = repository.remote_config(name)? else {
+                eprintln!("error: No such remote '{name}'");
+                return Ok(2);
+            };
+            let url = if args.push { config.push_urls.first().or(config.urls.first()) } else { config.urls.first() };
+            println!("{}", url.map(|u| u.to_string()).unwrap_or_default());
+            Ok(0)
+        }
+        "set-url" => {
+            let (Some(name), Some(url)) = (&args.name, &args.url) else {
+                eprintln!("usage: git remote set-url [--push] <name> <newurl> [<oldurl>]");
+                return Ok(129);
+            };
+            if !exists(&repository, name) {
+                eprintln!("error: No such remote '{name}'");
+                return Ok(2);
+            }
+            let key = if args.push { "pushurl" } else { "url" };
+            repository.config_mut().set(BStr::new(format!("remote.{name}.{key}").as_bytes()), url.as_bytes())?;
+            repository.write_config()?;
+            Ok(0)
+        }
+        other => anyhow::bail!("remote: subcommand '{other}' is not implemented"),
+    }
 }
 
 /// Phase 11 — download objects and refs from another repository.
@@ -497,7 +680,39 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
 /// * **A fetch into a bare repository is normal and needs no work tree**, so the handler must
 ///   not call `require_worktree` for any part of it except the `pull` that may follow.
 pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
-    todo!()
+    reject_unsupported_fetch(args.depth.is_some() || args.deepen.is_some() || args.unshallow, "--depth/--deepen/--unshallow")?;
+    if args.atomic || args.keep || args.set_upstream || args.multiple {
+        anyhow::bail!("fetch: --atomic, --keep, --set-upstream and --multiple are not implemented");
+    }
+    let mut repository = super::open(global)?;
+    let remotes: Vec<String> = if args.all {
+        repository.remote_names().iter().map(|n| n.to_string()).collect()
+    } else {
+        vec![default_remote(&repository, args.remote.as_deref())?]
+    };
+    let mut refspecs = Vec::new();
+    for spec in &args.refspecs {
+        refspecs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(spec.as_bytes()))?);
+    }
+    let mut code = 0;
+    for remote in remotes {
+        let request = FetchRequest {
+            refspecs: refspecs.clone(),
+            tags: if args.tags { TagMode::All } else if args.no_tags { TagMode::None } else { TagMode::Auto },
+            prune: args.prune,
+            force: args.force,
+            dry_run: args.dry_run,
+            write_fetch_head: !args.no_write_fetch_head,
+            pack_refs: false,
+        };
+        let report = repository.fetch_remote(&remote, &request)?;
+        print_fetch_report(&report, global.quiet);
+        if report.rejected > 0 {
+            eprintln!("error: some local refs could not be updated; try running\n 'git remote prune {remote}' to remove any old, conflicting branches");
+            code = 1;
+        }
+    }
+    Ok(code)
 }
 
 /// Phase 11 — fetch from a remote and merge into the current branch.
@@ -539,7 +754,100 @@ pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
 ///   current branch point at one, and a handler that found "the newest tag" and merged it would
 ///   be inventing an upstream.
 pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
-    todo!()
+    if args.rebase || args.autostash || args.interactive || args.squash || args.gpg_sign.is_some() {
+        anyhow::bail!("pull: --rebase, --autostash, --interactive, --squash and --gpg-sign are not implemented");
+    }
+    let mut repository = super::open(global)?;
+    let head = repository.head()?;
+    let branch = head.branch().map(|b| b.short_name().to_string());
+    let upstream = match &branch {
+        Some(b) => repository.branch_upstream(b)?,
+        None => None,
+    };
+    let remote = match (&args.remote, &upstream) {
+        (Some(remote), _) => remote.clone(),
+        (None, Some((remote, _))) => remote.clone(),
+        (None, None) => {
+            if branch.is_none() {
+                eprintln!("You are not currently on a branch.");
+                eprintln!("Please specify which branch you want to merge with.");
+                eprintln!("See git-pull(1) for details.");
+                eprintln!();
+                eprintln!("    git pull <remote> <branch>");
+                eprintln!();
+            } else {
+                let b = branch.as_deref().unwrap_or_default();
+                eprintln!("There is no tracking information for the current branch.");
+                eprintln!("Please specify which branch you want to merge with.");
+                eprintln!("See git-pull(1) for details.");
+                eprintln!();
+                eprintln!("    git pull <remote> <branch>");
+                eprintln!();
+                eprintln!("If you wish to set tracking information for this branch you can do so with:");
+                eprintln!();
+                eprintln!("    git branch --set-upstream-to=origin/<branch> {b}");
+                eprintln!();
+            }
+            return Ok(1);
+        }
+    };
+    let mut refspecs = Vec::new();
+    for spec in &args.refspecs {
+        refspecs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(spec.as_bytes()))?);
+    }
+    let request = FetchRequest {
+        refspecs,
+        tags: if args.tags { TagMode::All } else if args.no_tags { TagMode::None } else { TagMode::Auto },
+        prune: args.prune,
+        force: false,
+        dry_run: args.dry_run,
+        write_fetch_head: true,
+        pack_refs: false,
+    };
+    let report = repository.fetch_remote(&remote, &request)?;
+    print_fetch_report(&report, global.quiet);
+    if args.dry_run {
+        return Ok(0);
+    }
+
+    // The branch to merge: the ones fetch flagged, which are the upstream branch or the ones
+    // named on the command line.
+    let merge_heads: Vec<(rivet_core::ObjectId, String)> = report
+        .fetch_head
+        .iter()
+        .filter(|(_, for_merge, _)| *for_merge)
+        .map(|(oid, _, description)| (*oid, description.clone()))
+        .collect();
+    let Some((theirs, description)) = merge_heads.first().cloned() else {
+        eprintln!("You asked to pull from the remote '{remote}', but did not specify");
+        eprintln!("a branch. Because this is not the default configured remote");
+        eprintln!("for your current branch, you must specify a branch on the command line.");
+        return Ok(1);
+    };
+    if merge_heads.len() > 1 {
+        anyhow::bail!("pull: merging more than one branch is not implemented");
+    }
+    let ff = if args.ff_only {
+        super::branching::FastForward::Only
+    } else if args.no_ff {
+        super::branching::FastForward::Never
+    } else {
+        super::branching::FastForward::Allow
+    };
+    let message = format!("Merge {description}");
+    let options = rivet_core::MergeOptions::new();
+    super::branching::merge_commit(
+        &mut repository,
+        theirs,
+        &description,
+        &message,
+        ff,
+        false,
+        args.allow_unrelated_histories,
+        &options,
+        !global.quiet,
+        "pull",
+    )
 }
 
 /// Phase 11 — update remote refs along with the objects they need.
@@ -589,5 +897,188 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
 ///   must not be `128`, or a script that pushes on every build reports a failure whenever
 ///   nothing changed.
 pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
-    todo!()
+    if args.mirror || args.follow_tags || args.signed.is_some() || args.atomic || args.force_with_lease.is_some()
+        || args.force_if_includes || args.porcelain || args.receive_pack.is_some() || args.exec.is_some()
+    {
+        anyhow::bail!("push: --mirror, --follow-tags, --signed, --atomic, --force-with-lease, --force-if-includes, --porcelain and --receive-pack are not implemented");
+    }
+    let mut repository = super::open(global)?;
+    let head = repository.head()?;
+    let branch = head.branch().map(|b| b.short_name().to_string());
+    let upstream = match &branch {
+        Some(b) => repository.branch_upstream(b)?,
+        None => None,
+    };
+    let remote = match (&args.remote, &upstream) {
+        (Some(remote), _) => remote.clone(),
+        (None, Some((remote, _))) if remote != "." => remote.clone(),
+        _ => "origin".to_string(),
+    };
+    if repository.remote_config(&remote)?.is_none() && !remote.contains('/') && !remote.contains(':') && !remote.contains('.') {
+        eprintln!("fatal: '{remote}' does not appear to be a git repository");
+        eprintln!("fatal: Could not read from remote repository.");
+        eprintln!();
+        eprintln!("Please make sure you have the correct access rights");
+        eprintln!("and the repository exists.");
+        return Ok(128);
+    }
+
+    let mut specs = Vec::new();
+    for spec in &args.refspecs {
+        let mut parsed = rivet_core::remote_ops::Refspec::parse(BStr::new(spec.as_bytes()))?;
+        if args.delete {
+            parsed.dst = parsed.src.clone();
+            parsed.src = bstr::BString::default();
+        }
+        specs.push(parsed);
+    }
+    let mut set_upstream_to: Option<(String, String)> = None;
+    if specs.is_empty() && !args.all && !args.tags {
+        // push.default = simple: the current branch, to its upstream of the same name.
+        let Some(branch) = branch.clone() else {
+            anyhow::bail!("You are not currently on a branch.\nTo push the history leading to the current (detached HEAD)\nstate now, use\n\n    git push {remote} HEAD:<name-of-remote-branch>");
+        };
+        match &upstream {
+            Some((_, merge)) if merge.strip_prefix("refs/heads/") == Some(branch.as_str()) => {
+                specs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(branch.as_bytes()))?);
+            }
+            Some((_, merge)) => {
+                eprintln!("fatal: The upstream branch of your current branch does not match");
+                eprintln!("the name of your current branch.  To push to the upstream branch");
+                eprintln!("on the remote, use");
+                eprintln!();
+                eprintln!("    git push {remote} HEAD:{merge}");
+                eprintln!();
+                eprintln!("To push to the branch of the same name on the remote, use");
+                eprintln!();
+                eprintln!("    git push {remote} HEAD");
+                return Ok(128);
+            }
+            None if args.set_upstream => {
+                specs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(branch.as_bytes()))?);
+            }
+            None => {
+                eprintln!("fatal: The current branch {branch} has no upstream branch.");
+                eprintln!("To push the current branch and set the remote as upstream, use");
+                eprintln!();
+                eprintln!("    git push --set-upstream {remote} {branch}");
+                eprintln!();
+                eprintln!("To have this happen automatically for branches without a tracking");
+                eprintln!("upstream, see 'push.autoSetupRemote' in 'git help config'.");
+                eprintln!();
+                return Ok(128);
+            }
+        }
+    }
+    if args.set_upstream {
+        if let Some(spec) = specs.first() {
+            let local = if spec.src.is_empty() { branch.clone().unwrap_or_default() } else { spec.src.to_string() };
+            let local = if local == "HEAD" { branch.clone().unwrap_or_default() } else { local };
+            let dst = if spec.dst.is_empty() { local.clone() } else { spec.dst.to_string() };
+            set_upstream_to = Some((local, dst));
+        }
+    }
+
+    let request = PushRequest {
+        refspecs: specs,
+        all: args.all,
+        tags: args.tags,
+        force: args.force,
+        delete: args.delete,
+        dry_run: args.dry_run,
+    };
+    let report = repository.push_remote(&remote, &request)?;
+
+    let everything_current = report.changes.iter().all(|c| c.flag == '=');
+    if !global.quiet {
+        if everything_current {
+            eprintln!("Everything up-to-date");
+        } else {
+            eprintln!("To {}", display_url(&report.url, false));
+            for change in &report.changes {
+                eprintln!("{}", change.push_line());
+            }
+        }
+    }
+    if report.rejected > 0 {
+        eprintln!("error: failed to push some refs to '{}'", report.url);
+        if report.non_fast_forward {
+            let current = report.changes.iter().any(|c| c.flag == '!' && Some(c.from.as_str()) == branch.as_deref() && c.from == c.to);
+            if current {
+                eprintln!("hint: Updates were rejected because the tip of your current branch is behind");
+                eprintln!("hint: its remote counterpart. If you want to integrate the remote changes,");
+                eprintln!("hint: use 'git pull' before pushing again.");
+            } else {
+                eprintln!("hint: Updates were rejected because a pushed branch tip is behind its remote");
+                eprintln!("hint: counterpart. If you want to integrate the remote changes, use 'git pull'");
+                eprintln!("hint: before pushing again.");
+            }
+            eprintln!("hint: See the 'Note about fast-forwards' in 'git push --help' for details.");
+        }
+        return Ok(1);
+    }
+    if let (Some((local, dst)), false) = (set_upstream_to, args.dry_run) {
+        let local_ref = RefName::branch(BStr::new(local.as_bytes()))?;
+        let tracking = RefName::from_bytes(format!("refs/remotes/{remote}/{dst}").as_bytes())?;
+        if repository.refs().exists(&local_ref) && repository.refs().exists(&tracking) {
+            let message = super::branching::set_upstream(&mut repository, &local_ref, &tracking)?;
+            println!("{message}");
+        }
+    }
+    Ok(0)
+}
+
+use bstr::BStr;
+use rivet_core::remote_ops::{FetchRequest, PushRequest, TagMode};
+use rivet_core::{RefName, Repository};
+
+impl RemoteArgs {
+    /// `remote add -f` is not in the grammar; the flag set has `--force`, which Git spells `-f`.
+    fn fetch_after_add(&self) -> bool {
+        self.force
+    }
+}
+
+fn reject_unsupported_fetch(condition: bool, what: &str) -> Result<()> {
+    if condition {
+        anyhow::bail!("fetch: {what} is not implemented");
+    }
+    Ok(())
+}
+
+/// The remote a fetch uses when none is named: the current branch's, else `origin`.
+fn default_remote(repository: &Repository, named: Option<&str>) -> Result<String> {
+    if let Some(name) = named {
+        return Ok(name.to_string());
+    }
+    if let Some(branch) = repository.head()?.branch() {
+        if let Some((remote, _)) = repository.branch_upstream(&branch.short_name().to_string())? {
+            if remote != "." {
+                return Ok(remote);
+            }
+        }
+    }
+    Ok("origin".to_string())
+}
+
+/// Git shows a remote URL without a trailing slash or `.git` in `From <url>`.
+pub fn display_url(url: &str, strip_git: bool) -> String {
+    let mut shown = url.trim_end_matches('/').to_string();
+    if strip_git {
+        if let Some(stripped) = shown.strip_suffix(".git") {
+            shown = stripped.to_string();
+        }
+    }
+    shown
+}
+
+/// Print `From <url>` and the per-ref lines of a fetch, nothing when nothing changed.
+pub fn print_fetch_report(report: &rivet_core::remote_ops::FetchReport, quiet: bool) {
+    if quiet || report.changes.is_empty() {
+        return;
+    }
+    eprintln!("From {}", display_url(&report.url, true));
+    for change in &report.changes {
+        eprintln!("{}", change.fetch_line(report.width));
+    }
 }

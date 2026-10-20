@@ -231,13 +231,13 @@ fn stores_a_fetched_pack_that_git_can_read() {
     let dest = tmp.join("dest");
     init_repo(&dest);
     let dest_git = git_dir_of(&dest);
-    let odb = Odb::open(&dest_git, ObjectFormat::Sha1).expect("odb");
+    let mut odb = Odb::open(&dest_git, ObjectFormat::Sha1).expect("odb");
 
     let mut cursor = std::io::Cursor::new(&stream[..]);
     let stored = store_pack(
         &mut cursor,
         &options(),
-        &odb,
+        &mut odb,
         ObjectFormat::Sha1,
         None,
     )

@@ -1097,7 +1097,7 @@ fn resolve_upstream(repository: &Repository, spec: &str) -> Result<RefName> {
 }
 
 /// Record `upstream` as `branch`'s upstream in the config, returning Git's confirmation line.
-fn set_upstream(repository: &mut Repository, branch: &RefName, upstream: &RefName) -> Result<String> {
+pub fn set_upstream(repository: &mut Repository, branch: &RefName, upstream: &RefName) -> Result<String> {
     let (remote, merge, shown) = if upstream.is_remote() {
         let short = &upstream.as_bytes()[b"refs/remotes/".len()..];
         let slash = short.find_byte(b'/').unwrap_or(short.len());
@@ -1633,7 +1633,7 @@ pub fn merge_commit(
         if let Err(error) = repository.checkout_tree(new_tree, false) {
             return report_checkout_refusal(error, "merge");
         }
-        let reason = format!("{action} {label}: Fast-forward");
+        let reason = if action == "pull" { "pull: Fast-forward".to_string() } else { format!("{action} {label}: Fast-forward") };
         repository.move_head(theirs, BStr::new(reason.as_bytes()))?;
         println!("Fast-forward");
         if show_stat {
@@ -1736,7 +1736,11 @@ pub fn merge_commit(
     let mut body = BString::from(message);
     body.push(b'\n');
     let commit = repository.write_commit_object(tree, &[ours, theirs], BStr::new(&body))?;
-    let reason = format!("{action} {label}: Merge made by the 'ort' strategy.");
+    let reason = if action == "pull" {
+        "pull: Merge made by the 'ort' strategy.".to_string()
+    } else {
+        format!("{action} {label}: Merge made by the 'ort' strategy.")
+    };
     repository.move_head(commit, BStr::new(reason.as_bytes()))?;
     println!("Merge made by the 'ort' strategy.");
     if show_stat {

@@ -260,6 +260,30 @@ impl RemoteUrl {
         } else {
             None
         };
+        // `host:path` and `user@host:path` are Git's scp-like spelling of an SSH URL. A colon
+        // that is not followed by `//` and whose prefix is not a scheme name is that form.
+        if let Some(c) = scheme_end {
+            let after = &bytes[c + 1..];
+            let prefix = &bytes[..c];
+            let is_scheme = RemoteScheme::parse(BStr::new(prefix)).is_ok();
+            if !after.starts_with(b"//") && !is_scheme && !prefix.is_empty() {
+                let (user, host) = match prefix.iter().position(|&b| b == b'@') {
+                    Some(at) => (Some(BString::from(&prefix[..at])), &prefix[at + 1..]),
+                    None => (None, prefix),
+                };
+                if host.is_empty() || after.is_empty() {
+                    return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "no host" });
+                }
+                return Ok(Self {
+                    scheme: RemoteScheme::Ssh,
+                    user,
+                    password: None,
+                    host: Some(BString::from(host)),
+                    port: None,
+                    path: BString::from(after),
+                });
+            }
+        }
         let scheme = if let Some(end) = scheme_end {
             let s = &bytes[..end];
             if s.is_empty() {
@@ -273,9 +297,7 @@ impl RemoteUrl {
             if bytes.is_empty() {
                 return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "no scheme, no colon, no path" });
             }
-            if bytes[0] == b'/' {
-                return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "protocol-relative URL" });
-            }
+            // A bare path, absolute or relative, names a repository on this machine.
             RemoteScheme::File
         };
         let rest = if let Some(end) = scheme_end { &bytes[end + 1..] } else { bytes };

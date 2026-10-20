@@ -370,37 +370,22 @@ impl PushOutcome {
 /// collides, or a lease that does not hold; [`crate::error::Error::InvalidRefName`] for a ref that
 /// cannot be read; and [`crate::error::Error::ObjectNotFound`] for a reachability walk that fails.
 pub fn check_updates(updates: &[RefUpdate], odb: &Odb, refs: &RefStore) -> Result<()> {
+    let _ = refs;
     for update in updates {
-        let name = &update.name;
-        let old = update.old;
-        let new = update.new;
+        let (old, new) = (update.old, update.new);
         if new.is_zero() {
             continue;
         }
-        let old_exists = if old.is_zero() {
-            false
-        } else {
-            odb.contains(&old)
-        };
-        if old_exists {
-            if !push_is_fast_forward(odb, old, new).unwrap_or(false) {
-                return Err(Error::NonFastForward {
-                    name: name.clone(),
-                    old,
-                    new,
-                });
-            }
-        } else {
-            if odb.contains(&new) {
-                return Err(Error::NonFastForward {
-                    name: name.clone(),
-                    old,
-                    new,
-                });
-            }
-        }
         if !odb.contains(&new) {
             return Err(Error::ObjectNotFound { oid: new });
+        }
+        if old.is_zero() || update.force {
+            continue;
+        }
+        // The remote's current value must be an ancestor of what is being pushed. When we do not
+        // even have it, the remote has history we have not fetched: Git's "fetch first".
+        if !odb.contains(&old) || !push_is_fast_forward(odb, old, new)? {
+            return Err(Error::NonFastForward { name: update.name.clone(), old, new });
         }
     }
     Ok(())
@@ -720,9 +705,23 @@ pub fn push_is_fast_forward(odb: &Odb, old: ObjectId, new: ObjectId) -> Result<b
     if old.is_zero() || new.is_zero() {
         return Ok(true);
     }
-    let old_oids = odb.oids().expect("object database unavailable");
-    let reachable = old_oids.iter().any(|oid| oid == &new);
-    Ok(reachable)
+    // `old` must be reachable from `new` by parent links. Anything that is not a commit on
+    // either side (a tag object, a blob) can only be replaced, never fast-forwarded.
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![new];
+    while let Some(oid) = stack.pop() {
+        if oid == old {
+            return Ok(true);
+        }
+        if !seen.insert(oid) {
+            continue;
+        }
+        let object = odb.read(&oid)?;
+        if let crate::object::AnyObject::Commit(commit) = object.parse()? {
+            stack.extend(commit.parents.iter().copied());
+        }
+    }
+    Ok(false)
 }
 
 /// Phase 11 — the `+` prefix that marks a forced update in a command line, if it applies.

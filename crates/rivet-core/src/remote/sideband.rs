@@ -206,7 +206,7 @@ pub fn stream_pack<R: Read, W: Write>(
 pub fn store_pack<R: Read>(
     reader: &mut R,
     options: &SidebandOptions,
-    odb: &Odb,
+    odb: &mut Odb,
     format: ObjectFormat,
     progress: Option<&mut dyn FnMut(&[u8])>,
 ) -> Result<IndexPackResult> {
@@ -219,7 +219,12 @@ pub fn store_pack<R: Read>(
 ///
 /// The bytes may be a thin pack; the fix is decided by the index attempt rather than by what was
 /// negotiated, because a server may send one whether or not `thin-pack` was requested.
-pub fn store_pack_bytes(pack: &[u8], odb: &Odb, format: ObjectFormat) -> Result<IndexPackResult> {
+///
+/// The object database is re-scanned before returning: its pack list is read once at open, so
+/// without the refresh the objects just installed are invisible to every later read in this
+/// process — a push reports `object not found` for the very pack it wrote, and a fetch drops the
+/// tags whose commits it just downloaded.
+pub fn store_pack_bytes(pack: &[u8], odb: &mut Odb, format: ObjectFormat) -> Result<IndexPackResult> {
     let pack = crate::pack::fix_thin_pack(pack, format, odb)?;
     let result = crate::pack::index_pack(&pack, format, Some(odb))?;
 
@@ -234,6 +239,8 @@ pub fn store_pack_bytes(pack: &[u8], odb: &Odb, format: ObjectFormat) -> Result<
         &pack_dir.join(format!("{name}.idx")),
         &result.index.as_index().write(),
     )?;
+
+    odb.refresh()?;
 
     Ok(result)
 }

@@ -1150,13 +1150,14 @@ impl Transport for LocalTransport {
         updates: &[RefUpdate],
         pack: &[u8],
     ) -> Result<Vec<crate::remote::PushStatus>> {
-        let repo = crate::repo::Repository::discover(&self.path)?;
+        let mut repo = crate::repo::Repository::discover(&self.path)?;
 
         // The pack is undeltified and already carries its header and trailer, but adopting it still
         // means indexing it into the target's object database. Doing that before any ref moves keeps
         // the target from naming objects it does not have if an update is refused.
         if !pack.is_empty() {
-            crate::remote::sideband::store_pack_bytes(pack, repo.odb(), repo.format())?;
+            let format = repo.format();
+            crate::remote::sideband::store_pack_bytes(pack, repo.odb_mut(), format)?;
         }
         let mut statuses = Vec::new();
         for update in updates {
