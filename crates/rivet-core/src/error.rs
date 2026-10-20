@@ -673,7 +673,7 @@ pub enum Error {
     UntrackedOverwrite(BString),
 
     /// A path was named that does not exist in the relevant tree, index or work tree.
-    #[error("no such path: {0}")]
+    #[error("pathspec '{0}' did not match any files")]
     PathNotFound(BString),
 
     // ── diff and merge ────────────────────────────────────────────────────────────────────

@@ -157,10 +157,10 @@ impl Worktree {
     /// `core.ignorecase` or `core.protectNTFS` that is present and not a boolean.
     pub fn new(root: Option<&Path>, format: ObjectFormat, config: &Config) -> Result<Self> {
         let root = root.map(PathBuf::from);
-        let filemode = config.get_bool(BStr::new(b"core.filemode")).expect("config read").unwrap_or(true);
-        let symlinks = config.get_bool(BStr::new(b"core.symlinks")).expect("config read").unwrap_or(true);
-        let ignore_case = config.get_bool(BStr::new(b"core.ignorecase")).expect("config read").unwrap_or(false);
-        let protect_ntfs = config.get_bool(BStr::new(b"core.protectNTFS")).expect("config read").unwrap_or(cfg!(windows));
+        let filemode = config.get_bool(BStr::new(b"core.filemode"))?.unwrap_or(true);
+        let symlinks = config.get_bool(BStr::new(b"core.symlinks"))?.unwrap_or(true);
+        let ignore_case = config.get_bool(BStr::new(b"core.ignorecase"))?.unwrap_or(false);
+        let protect_ntfs = config.get_bool(BStr::new(b"core.protectNTFS"))?.unwrap_or(cfg!(windows));
         Ok(Self {
             root,
             format,

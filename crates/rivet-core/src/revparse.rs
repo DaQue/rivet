@@ -292,16 +292,27 @@ fn apply(
             Ok(current)
         }
         Op::Peel(kind) => {
-            let object = peel_tags(format, odb, oid)?;
+            // `^{tag}` and `^{object}` look at the object as written; everything else peels first.
+            if matches!(kind, Some(PeelKind::Tag)) {
+                let object = odb.read(&oid)?;
+                if object.kind() == crate::object::ObjectKind::Tag {
+                    return Ok(oid);
+                }
+                return Err(invalid(spec, "peeled object is not the requested kind"));
+            }
+            if matches!(kind, Some(PeelKind::Object)) {
+                return Ok(oid);
+            }
+            let (peeled_id, object) = peel_tags_with_id(format, odb, oid)?;
             let wanted = match kind {
-                None | Some(PeelKind::Object) => return Ok(oid),
+                None => return Ok(peeled_id),
                 Some(PeelKind::Commit) => crate::object::ObjectKind::Commit,
                 Some(PeelKind::Tree) => crate::object::ObjectKind::Tree,
                 Some(PeelKind::Blob) => crate::object::ObjectKind::Blob,
-                Some(PeelKind::Tag) => crate::object::ObjectKind::Tag,
+                Some(PeelKind::Tag) | Some(PeelKind::Object) => unreachable!("handled above"),
             };
             if object.kind() == wanted {
-                return Ok(oid);
+                return Ok(peeled_id);
             }
             // A commit is a tree-ish: `REV^{tree}` names the commit's tree, not the commit.
             if wanted == crate::object::ObjectKind::Tree
@@ -312,6 +323,19 @@ fn apply(
             Err(invalid(spec, "peeled object is not the requested kind"))
         }
     }
+}
+
+/// Like [`peel_tags`], but also returns the id of the object it ended on.
+fn peel_tags_with_id(format: ObjectFormat, odb: &Odb, oid: ObjectId) -> Result<(ObjectId, Object)> {
+    let mut current = oid;
+    for _ in 0..64 {
+        let object = odb.read(&current)?;
+        if object.kind() != crate::object::ObjectKind::Tag {
+            return Ok((current, object));
+        }
+        current = Tag::parse(format, object.data())?.object;
+    }
+    Err(Error::TagCycle { oid: current })
 }
 
 /// Follows `tag` objects until something that is not a tag, returning the object read there.

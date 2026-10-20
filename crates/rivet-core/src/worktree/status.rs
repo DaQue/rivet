@@ -406,7 +406,7 @@ pub fn staged_changes(
                 }
                 // A change of object type, or a mode-only change with the same blob id, is a
                 // type change: the content is identical and an id-only comparison would miss it.
-                let kind = if file_type(mode) != file_type(entry.mode) || oid == entry.oid {
+                let kind = if file_type(mode) != file_type(entry.mode) {
                     ChangeKind::TypeChanged
                 } else {
                     ChangeKind::Modified
@@ -573,7 +573,7 @@ pub fn unstaged_changes(
         }
         // The repository's own convention: a mode change is a type change even when the blob id
         // is unchanged, because an id-only comparison cannot see it at all.
-        let kind = if mode != entry.mode && (new_oid == entry.oid || file_type(mode) != file_type(entry.mode)) {
+        let kind = if file_type(mode) != file_type(entry.mode) {
             ChangeKind::TypeChanged
         } else {
             ChangeKind::Modified

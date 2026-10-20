@@ -1045,9 +1045,9 @@ impl RefStore {
         if from_log.exists() {
             let to_log = to.reflog_path(git_dir);
             if let Some(parent) = to_log.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                std::fs::create_dir_all(parent).map_err(|e| io_at(parent, e))?;
             }
-            let _ = std::fs::rename(&from_log, &to_log);
+            std::fs::rename(&from_log, &to_log).map_err(|e| io_at(&from_log, e))?;
         }
         if self.packed.get(from).is_some() {
             let mut packed = self.packed.clone();

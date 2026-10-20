@@ -335,6 +335,86 @@ s_fetch_prune_tags() {
     cat .git/FETCH_HEAD
 }
 
+s_packed_refs() {
+    g init -q repo; cd repo
+    echo a >a; g add a; g commit -qm one; g branch keep; g branch gone; g branch mv
+    tick; echo b >b; g add b; g commit -qm two; g tag t1; g tag -a t2 -m two
+    g pack-refs --all
+    v branch
+    v branch -m mv moved
+    v branch -d gone
+    v tag -d t1
+    v tag
+    v tag -l
+    v log --oneline keep..main
+    v switch keep
+    tick; echo c >c; v add c; v commit -q -m three
+    v branch -f gone keep
+    v branch -a
+    v rev-parse t2 'main^{commit}' t2^{}
+}
+
+s_status_variants() {
+    v init -q repo; cd repo
+    printf '*.log\nbuild/\n' >.gitignore
+    echo a >a; echo b >b; mkdir -p d/e; echo c >d/e/c; echo x >x.log; mkdir build; echo y >build/y
+    ln -s a link; printf '\0bin' >bin.dat; echo '#!/bin/sh' >run.sh; chmod +x run.sh
+    v status
+    v status --short
+    v status -sb
+    v status --porcelain --ignored
+    v add -A
+    v status -s
+    v commit -q -m one
+    echo more >>a; rm b; chmod +x d/e/c; echo new >n; rm link; ln -s b link
+    v status
+    v status -s
+    v status --porcelain -uno
+    v diff
+    v diff --stat
+    v add -u
+    v status -s
+    v rm --cached a
+    v rm -f n 2>&1
+    v rm d/e/c
+    v status -s
+    v add nonexistent
+    v add -n .
+    v add -f x.log
+    v status -s
+    v commit -q -m two
+    v diff --cached --exit-code
+    v ls-files -s
+    v ls-files -o --exclude-standard 2>/dev/null
+}
+
+s_plumbing() {
+    v init -q repo; cd repo
+    printf 'hello\n' >f; mkdir d; echo i >d/i
+    v hash-object f
+    v hash-object -w f
+    v hash-object -t blob --stdin <f
+    v add f d
+    v write-tree
+    v commit -q -m one
+    v cat-file -t HEAD
+    v cat-file -s HEAD
+    v cat-file -p HEAD
+    v cat-file -p 'HEAD^{tree}'
+    v cat-file -e HEAD
+    v cat-file -e 0000000000000000000000000000000000000001
+    v ls-tree HEAD
+    v ls-tree -r HEAD
+    v ls-tree -r -l HEAD
+    v ls-tree --name-only HEAD -- d
+    v ls-files
+    v ls-files -s
+    v ls-files -c d
+    v rev-parse HEAD HEAD^{tree} HEAD:f main
+    v rev-parse --short=7 HEAD
+    v rev-parse nonexistent
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

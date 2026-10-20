@@ -627,17 +627,20 @@ pub fn wants_for_tracking(advertisement: &RefAdvertisement) -> Vec<ObjectId> {
 ///   a filesystem-level restore and would otherwise make the server's reply reference an object the
 ///   client cannot read.
 pub fn local_haves(odb: &Odb, refs: &RefStore) -> Result<Vec<ObjectId>> {
+    // Ref tips, peeled to commits, are enough: the sender prunes everything below a have it
+    // recognises, and offering every commit we own is O(history) for no extra pruning.
     let mut haves = Vec::new();
-    for oid in odb.oids().expect("reading local oids") {
+    for (_, target) in refs.list(b"refs/")? {
+        let Ok(oid) = target.oid() else { continue };
         if !odb.contains(&oid) {
             continue;
         }
-        let (kind, _) = odb.read_header(&oid).expect("reading object header");
-        if kind == ObjectKind::Commit {
-            haves.push(oid);
+        if let Ok(commit) = refs.peel_oid(oid, odb) {
+            if !haves.contains(&commit) {
+                haves.push(commit);
+            }
         }
     }
-    haves.reverse();
     Ok(haves)
 }
 

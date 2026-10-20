@@ -1177,7 +1177,7 @@ pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
         println!("{}", cwd.starts_with(repository.git_dir()));
     }
 
-    let mut status = 0;
+    let status = 0;
 
     for spec in &args.args {
         let spec_bytes = bstr::BStr::new(spec);
@@ -1201,18 +1201,24 @@ pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
                 }
             }
             Err(error) => {
-                // `--quiet` suppresses the message but not the failure: scripts branch on the
-                // exit code, and a silent zero here would claim a revision resolved.
-                if !args.quiet {
-                    eprintln!("fatal: {}", error);
-                }
-                if !args.verify {
-                    // Git continues with the remaining arguments unless `--verify` was asked for,
-                    // which is what lets `rev-parse --git-dir HEAD` print both.
-                    status = 128;
-                } else {
+                let _ = error;
+                if args.verify {
+                    // `--verify` wants exactly one resolvable revision and says so tersely.
+                    if !args.quiet {
+                        eprintln!("fatal: Needed a single revision");
+                    }
                     return Ok(128);
                 }
+                // Without `--verify`, Git echoes the word it could not resolve and then stops.
+                println!("{spec}");
+                if !args.quiet {
+                    eprintln!(
+                        "fatal: ambiguous argument '{spec}': unknown revision or path not in the working tree.\n\
+                         Use '--' to separate paths from revisions, like this:\n\
+                         'git <command> [<revision>...] -- [<file>...]'"
+                    );
+                }
+                return Ok(128);
             }
         }
     }

@@ -187,7 +187,8 @@ impl HunkLine {
         out.write_all(&[self.kind.prefix() as u8])?;
         out.write_all(&self.content)?;
         if !self.has_newline {
-            out.write_all(b"\\ No newline at end of file\n")?;
+            // The content has no terminator of its own, so the marker needs its line started.
+            out.write_all(b"\n\\ No newline at end of file\n")?;
         }
         Ok(())
     }
@@ -589,11 +590,14 @@ pub fn format_unified(
         } else if file.old_mode != file.new_mode {
             out.write_all(format!("old mode {:06o}\n", file.old_mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
             out.write_all(format!("new mode {:06o}\n", file.new_mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
-            out.write_all(b"index ")?;
-            out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
-            out.write_all(b"..")?;
-            out.write_all(file.new_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
-            out.write_all(b"\n")?;
+            // A pure mode change keeps the blob, and Git prints no `index` line for it.
+            if file.old_oid != file.new_oid {
+                out.write_all(b"index ")?;
+                out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+                out.write_all(b"..")?;
+                out.write_all(file.new_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+                out.write_all(b"\n")?;
+            }
         } else {
             out.write_all(b"index ")?;
             out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
@@ -604,10 +608,20 @@ pub fn format_unified(
         }
 
         if file.is_binary {
-            out.write_all(b"Binary files a/")?;
-            out.write_all(if file.is_new { b"/dev/null".as_slice() } else { &file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]) })?;
-            out.write_all(b" and b/")?;
-            out.write_all(if file.is_deleted { b"/dev/null".as_slice() } else { &file.new_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]) })?;
+            out.write_all(b"Binary files ")?;
+            if file.is_new {
+                out.write_all(b"/dev/null")?;
+            } else {
+                out.write_all(b"a/")?;
+                out.write_all(&file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+            }
+            out.write_all(b" and ")?;
+            if file.is_deleted {
+                out.write_all(b"/dev/null")?;
+            } else {
+                out.write_all(b"b/")?;
+                out.write_all(&file.new_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]))?;
+            }
             out.write_all(b" differ\n")?;
             continue;
         }

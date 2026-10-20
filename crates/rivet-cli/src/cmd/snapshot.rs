@@ -460,6 +460,12 @@ pub fn run_rm(global: &GlobalArgs, args: &RmArgs) -> Result<i32> {
         paths.push(super::worktree_path(&repository, path, "rm")?);
     }
 
+    if !args.force && !args.cached && !args.dry_run {
+        if let Some(code) = check_rm_safety(&repository, &paths)? {
+            return Ok(code);
+        }
+    }
+
     let options = RmOptions {
         cached: args.cached,
         recursive: args.recursive,
@@ -824,7 +830,12 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             println!();
         }
         println!("Changes not staged for commit:");
-        println!("  (use \"git add <file>...\" to update what will be committed)");
+        // Git offers `add/rm` as soon as one of the unstaged changes is a deletion.
+        if status.unstaged.iter().any(|e| e.kind == ChangeKind::Deleted) {
+            println!("  (use \"git add/rm <file>...\" to update what will be committed)");
+        } else {
+            println!("  (use \"git add <file>...\" to update what will be committed)");
+        }
         println!("  (use \"git restore <file>...\" to discard changes in working directory)");
         for entry in &status.unstaged {
             println!("\t{:<12}{}", section_label(entry.kind), entry.path);
@@ -1214,4 +1225,74 @@ fn print_tracking(tracking: &Tracking) {
             println!();
         }
     }
+}
+
+/// Git's refusal to `rm` a file whose content is not safely recorded elsewhere: staged changes,
+/// local modifications, or both. Prints Git's message and returns its exit status.
+fn check_rm_safety(repository: &rivet_core::Repository, specs: &[BString]) -> Result<Option<i32>> {
+    use bstr::BStr;
+    let head = match repository.head_tree_oid()? {
+        Some(tree) => rivet_core::ops::flatten_tree(repository.odb(), tree)?,
+        None => Default::default(),
+    };
+    let (mut staged, mut local, mut both) = (Vec::new(), Vec::new(), Vec::new());
+    for entry in repository.index().entries() {
+        if entry.stage() != rivet_core::index::Stage::Normal {
+            continue;
+        }
+        let selected = specs.iter().any(|spec| rivet_core::ops::pathspec_matches(BStr::new(&entry.path[..]), BStr::new(&spec[..])));
+        if !selected || entry.mode == rivet_core::EntryMode::Commit {
+            continue;
+        }
+        let in_head = head.get(&entry.path).copied();
+        let staged_change = in_head != Some((entry.mode, entry.oid));
+        let path = BStr::new(&entry.path[..]);
+        let local_change = match repository.worktree()?.stat(path)? {
+            Some(_) => repository.worktree()?.hash_file(path)? != entry.oid,
+            None => false,
+        };
+        match (staged_change, local_change) {
+            (true, true) => both.push(entry.path.clone()),
+            (true, false) => staged.push(entry.path.clone()),
+            (false, true) => local.push(entry.path.clone()),
+            (false, false) => {}
+        }
+    }
+    let report = |paths: &[BString], singular: &str, plural: &str, hint: &str| {
+        let which = if paths.len() == 1 { singular } else { plural };
+        eprintln!("error: the following {which}");
+        for path in paths {
+            eprintln!("    {path}");
+        }
+        eprintln!("{hint}");
+    };
+    let mut refused = false;
+    if !both.is_empty() {
+        report(
+            &both,
+            "file has staged content different from both the\nfile and the HEAD:",
+            "files have staged content different from both the\nfile and the HEAD:",
+            "(use -f to force removal)",
+        );
+        refused = true;
+    }
+    if !staged.is_empty() {
+        report(
+            &staged,
+            "file has changes staged in the index:",
+            "files have changes staged in the index:",
+            "(use --cached to keep the file, or -f to force removal)",
+        );
+        refused = true;
+    }
+    if !local.is_empty() {
+        report(
+            &local,
+            "file has local modifications:",
+            "files have local modifications:",
+            "(use --cached to keep the file, or -f to force removal)",
+        );
+        refused = true;
+    }
+    Ok(refused.then_some(1))
 }
