@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # The differential scenarios. Run all: tools/difftest/scenarios.sh; run some: ... name1 name2
+FAKESSH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fakessh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 s_basic_commit() {
@@ -491,12 +492,29 @@ s_corrupt_pack() {
     vq fsck
 }
 
+s_ssh() {
+    export GIT_SSH="$FAKESSH"
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g tag v1 && g push -q origin HEAD:main --tags 2>/dev/null)
+    v clone -q ssh://localhost$ROOT/origin.git repo
+    (cd seed && tick && echo b >b && g add b && g commit -qm two && g push -q origin HEAD:main 2>/dev/null)
+    cd repo
+    v fetch
+    v pull
+    v log --oneline
+    tick; echo c >c; v add c; v commit -q -m three
+    v push
+    v push origin HEAD:refs/heads/side
+    v status
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
 for s in "$@"; do
     case $s in
-        s_remote_fetch_push|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags) run_scenario "$s" repo origin.git ;;
+        s_remote_fetch_push|s_ssh|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags) run_scenario "$s" repo origin.git ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         *) run_scenario "$s" ;;
     esac

@@ -29,9 +29,9 @@ v() {
     local out rc
     echo "\$ v $*" | sed -e "s#$ROOT#<ROOT>#g" >>"$TRANSCRIPT"
     if [ "$IMPL" = git ]; then
-        "$GIT" "$@" >"$TMPOUT" 2>"$TMPERR"; rc=$?
+        timeout 60 "$GIT" "$@" >"$TMPOUT" 2>"$TMPERR"; rc=$?
     else
-        "$RIVET" "$@" >"$TMPOUT" 2>"$TMPERR"; rc=$?
+        timeout 60 "$RIVET" "$@" >"$TMPOUT" 2>"$TMPERR"; rc=$?
     fi
     # Normalise the implementation's own name and the per-run root out of the text.
     if [ "${SORT_OUT:-0}" = 1 ]; then sort -o "$TMPOUT" "$TMPOUT"; fi

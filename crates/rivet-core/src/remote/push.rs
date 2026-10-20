@@ -458,6 +458,35 @@ pub fn push_request(
 /// [`crate::error::Error::Protocol`] for a line that is not `ok`/`ng`, a missing `unpack` line, or
 /// framing that does not end in a flush.
 pub fn parse_report_status(input: &[u8], v2: bool) -> Result<PushOutcome> {
+    // The report is pkt-line framed on the wire; accept that form as well as plain text lines.
+    let unframed;
+    let input = if looks_framed(input) {
+        let mut text = Vec::new();
+        let mut at = 0usize;
+        while at + 4 <= input.len() {
+            let len = std::str::from_utf8(&input[at..at + 4])
+                .ok()
+                .and_then(|h| usize::from_str_radix(h, 16).ok())
+                .ok_or_else(|| Error::Protocol("bad pkt-line in report-status".into()))?;
+            if len == 0 {
+                at += 4;
+                continue;
+            }
+            if len < 4 || at + len > input.len() {
+                return Err(Error::Protocol("truncated pkt-line in report-status".into()));
+            }
+            let payload = &input[at + 4..at + len];
+            text.extend_from_slice(payload);
+            if !payload.ends_with(b"\n") {
+                text.push(b'\n');
+            }
+            at += len;
+        }
+        unframed = text;
+        &unframed[..]
+    } else {
+        input
+    };
     let mut pos = 0usize;
     let mut statuses = Vec::new();
     let mut unpack_ok = false;
@@ -481,12 +510,10 @@ pub fn parse_report_status(input: &[u8], v2: bool) -> Result<PushOutcome> {
         let sp = line.iter().position(|&b| b == b' ').ok_or_else(|| Error::Protocol("bad status line".into()))?;
         let status = &line[..sp];
         let rest = &line[sp + 1..];
-        let (name, message) = if v2 {
-            let sp2 = rest.iter().position(|&b| b == b' ').unwrap_or(rest.len());
-            (rest[..sp2].as_ref(), rest[sp2..].as_ref())
-        } else {
-            (rest, &[][..])
-        };
+        // `ok <ref>` or `ng <ref> <reason>`; v2 adds option lines that this parser skips over.
+        let _ = v2;
+        let sp2 = rest.iter().position(|&b| b == b' ').unwrap_or(rest.len());
+        let (name, message) = (&rest[..sp2], rest.get(sp2 + 1..).unwrap_or(&[]));
         let name = BString::from(name);
         let message = BString::from(message);
         let ok = status == b"ok";
@@ -587,6 +614,12 @@ pub fn push(
         pack = bytes;
     }
 
+    // `receive-pack` expects a pack after the commands unless every one is a deletion — even
+    // when the remote already has all the objects, in which case it is an empty pack.
+    if pack.is_empty() && updates.iter().any(|update| !update.is_delete()) {
+        let (bytes, _summary) = crate::pack::PackWriter::new(odb.format()).finish()?;
+        pack = bytes;
+    }
     let statuses = transport.push(updates, &pack)?;
 
     let offered = advertisement.capabilities.contains(b"report-status")
@@ -740,4 +773,11 @@ pub fn force_prefix(update: &RefUpdate) -> &'static BStr {
     } else {
         BStr::new(b"")
     }
+}
+
+/// Whether a report starts with a pkt-line header for its `unpack` line.
+fn looks_framed(input: &[u8]) -> bool {
+    input.len() > 12
+        && input[..4].iter().all(u8::is_ascii_hexdigit)
+        && input[4..].starts_with(b"unpack ")
 }

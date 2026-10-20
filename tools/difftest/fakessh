@@ -1,0 +1,11 @@
+#!/bin/sh
+# A stand-in for ssh: drop the options and the host, run the remote command locally.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -p|-i|-o|-l) shift 2 ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+shift   # the host
+exec sh -c "$*"

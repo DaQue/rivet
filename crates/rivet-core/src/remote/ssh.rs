@@ -656,6 +656,10 @@ impl Transport for SshTransport {
         if self.capabilities().contains(b"ofs-delta") {
             requested.push("ofs-delta");
         }
+        let multi_ack = self.capabilities().contains(b"multi_ack_detailed");
+        if multi_ack {
+            requested.push("multi_ack_detailed");
+        }
         requested.push("agent=Rivet");
         let format = self.advertisement.as_ref().map(|ad| ad.format).unwrap_or(ObjectFormat::Sha1);
 
@@ -669,8 +673,10 @@ impl Transport for SshTransport {
             for (index, want) in wants.iter().enumerate() {
                 let mut line = format!("want {}\n", want.to_hex()).into_bytes();
                 if index == 0 {
+                    // In a `want` line the capabilities follow a space; the NUL separator belongs
+                    // to the advertisement and to receive-pack commands.
                     line.truncate(line.len() - 1);
-                    line.push(0);
+                    line.push(b' ');
                     line.extend_from_slice(requested.join(" ").as_bytes());
                     line.push(b'\n');
                 }
@@ -686,7 +692,6 @@ impl Transport for SshTransport {
             // `done` closes the negotiation: without it a v0 server keeps asking for more haves
             // and never starts the pack.
             crate::remote::pktline::PktLine::new_data(b"done\n").write_to(stdin)?;
-            stdin.write_all(crate::remote::pktline::FLUSH_PACKET)?;
             stdin.flush()?;
         }
 
@@ -714,10 +719,19 @@ impl Transport for SshTransport {
             if data.is_empty() {
                 continue;
             }
-            match crate::remote::transport::parse_ack(data, format)? {
-                crate::remote::transport::Ack::Nak
-                | crate::remote::transport::Ack::Ready(_) => break,
-                _ => {}
+            // Everything before the pack is acknowledgements: `ACK <id> common|ready` lines while
+            // the server finds common history, then `NAK` or a final plain `ACK <id>`.
+            let text = String::from_utf8_lossy(data);
+            let text = text.trim_end();
+            if text == "NAK" {
+                break;
+            }
+            match text.strip_prefix("ACK ") {
+                Some(rest) if rest.ends_with(" common") || rest.ends_with(" ready") => continue,
+                Some(_) => break,
+                None => {
+                    return Err(Error::Protocol(format!("unrecognised negotiation line: {text:?}")));
+                }
             }
         }
         let mut writer = into;
@@ -911,6 +925,12 @@ impl Transport for SshTransport {
     /// [`crate::error::Error::Transport`] if the child cannot be terminated or reaped.
     fn disconnect(&mut self) -> Result<()> {
         if let Some(mut child) = self.child.take() {
+            // A flush tells an idle `upload-pack` that the client wants nothing, so it exits
+            // quietly instead of complaining that the connection dropped.
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(crate::remote::pktline::FLUSH_PACKET);
+                let _ = stdin.flush();
+            }
             drop(child.stdin.take());
             child.wait().map_err(|error| {
                 Error::Transport(format!("waiting for `{}` failed: {}", self.remote_command, error))
