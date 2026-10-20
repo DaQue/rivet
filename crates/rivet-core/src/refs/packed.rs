@@ -332,7 +332,10 @@ impl PackedRefs {
     /// `None` does not mean "not a tag"; see [`PackedRef::peeled`]. The `fully-peeled` trait is what
     /// makes `None` decisive.
     pub fn peeled(&self, name: &RefName) -> Option<ObjectId> {
-        self.get(name)
+        self.entries
+            .iter()
+            .find(|entry| entry.name == *name)
+            .and_then(|entry| entry.peeled)
     }
 
     /// Phase 2 — whether this file's entries are sorted by name.
@@ -343,7 +346,9 @@ impl PackedRefs {
     /// is not sorted is corrupt in a way Rivet does not detect, because checking would cost a scan
     /// of every ref on every open — and Git does not check either.
     pub fn is_sorted(&self) -> bool {
-        true
+        self.traits
+            .iter()
+            .any(|t| t.as_slice() == traits::SORTED)
     }
 
     /// Phase 2 — whether every peelable tag in this file has a peel line.
@@ -354,7 +359,12 @@ impl PackedRefs {
     /// entry with no `^` line may be either a lightweight tag or an annotated one whose peel the
     /// writer chose not to record — and the only way to tell is to read the tag object.
     pub fn is_fully_peeled(&self) -> bool {
-        self.entries.iter().all(|e| e.peeled.is_some())
+        // A claim about what the writer recorded, not a fact about the entries: a lightweight tag
+        // legitimately has no `^` line, so scanning for missing peels would call every honest file
+        // with a lightweight tag unpeeled.
+        self.traits
+            .iter()
+            .any(|t| t.as_slice() == traits::FULLY_PEELED)
     }
 
     /// Phase 2 — the header trait strings, in file order.

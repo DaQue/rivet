@@ -133,7 +133,7 @@ impl Edit {
     /// `false`: it is an artefact a diff implementation may emit at the ends of an alignment, and
     /// a renderer that printed it would produce an empty hunk.
     pub fn is_change(&self) -> bool {
-        self.old_len != 0 || self.new_len != 0
+        self.old_len != self.new_len
     }
 
     /// Phase 8 — the number of old lines the run covers, as an `usize`.
@@ -207,44 +207,117 @@ pub fn split_lines(data: &[u8]) -> Vec<DiffLine<'_>> {
 ///   [`crate::diff::DiffAlgorithm::Histogram`] is a dispatch decision made one layer up; see
 ///   [`histogram_diff`].
 pub fn myers_diff<T: PartialEq>(old: &[T], new: &[T]) -> Vec<Edit> {
-    let (n, m) = (old.len(), new.len());
+    let n = old.len();
+    let m = new.len();
     if n == 0 && m == 0 {
         return Vec::new();
     }
-    let d = n + m;
-    let mut v = vec![0usize; d + 1];
-    let mut trace = Vec::new();
-    for delta in 0..=d {
-        let k = delta as i64;
-        let mut x = if delta >= n { v[delta - 1] } else { v[delta + 1] };
-        let mut y = if delta >= n { x - (delta - n) } else { x + (delta - n) };
-        while x < n && y < m && old[x] == new[y] {
-            x += 1;
-            y += 1;
+    // `v[k]` holds the furthest x reached on diagonal `k = x - y`; `offset` shifts the signed
+    // diagonal into the vector. The trace keeps a copy of `v` per edit distance so the path can
+    // be walked back without storing the whole grid.
+    let max = n + m;
+    let offset = max as isize + 1;
+    let mut v = vec![0isize; 2 * max + 3];
+    let mut trace: Vec<Vec<isize>> = Vec::new();
+    'search: for d in 0..=max as isize {
+        trace.push(v.clone());
+        let mut k = -d;
+        while k <= d {
+            let mut x = if k == -d
+                || (k != d && v[(offset + k - 1) as usize] < v[(offset + k + 1) as usize])
+            {
+                v[(offset + k + 1) as usize]
+            } else {
+                v[(offset + k - 1) as usize] + 1
+            };
+            let mut y = x - k;
+            while x < n as isize && y < m as isize && old[x as usize] == new[y as usize] {
+                x += 1;
+                y += 1;
+            }
+            v[(offset + k) as usize] = x;
+            if x >= n as isize && y >= m as isize {
+                break 'search;
+            }
+            k += 2;
         }
-        v[delta] = x;
-        if x == n && y == m {
-            break;
-        }
-        trace.push((x, y));
     }
-    let mut edits = Vec::new();
-    let mut ox = n;
-    let mut oy = m;
-    for &(x, y) in trace.iter().rev() {
-        if ox > x {
-            edits.push(Edit::delete(x, ox - x));
+
+    // Walk the trace backwards. The list is built in reverse order and flipped at the end.
+    let mut reversed: Vec<Edit> = Vec::new();
+    let mut x = n as isize;
+    let mut y = m as isize;
+    for d in (0..trace.len()).rev() {
+        let v = &trace[d];
+        let k = x - y;
+        let prev_k = if k == -(d as isize)
+            || (k != d as isize && v[(offset + k - 1) as usize] < v[(offset + k + 1) as usize])
+        {
+            k + 1
+        } else {
+            k - 1
+        };
+        let prev_x = v[(offset + prev_k) as usize];
+        let prev_y = prev_x - prev_k;
+        let mut diagonal = 0usize;
+        while x > prev_x && y > prev_y {
+            x -= 1;
+            y -= 1;
+            diagonal += 1;
         }
-        if oy > y {
-            edits.push(Edit::insert(y, oy - y));
+        if diagonal > 0 {
+            // The run starts where the walk stopped, which is the position just after the edit
+            // that precedes it — not `prev_x`, which is where that edit started.
+            reversed.push(Edit::equal(x as usize, y as usize, diagonal));
         }
-        if x > 0 && y > 0 {
-            edits.push(Edit::equal(x, y, ox - x));
+        if d > 0 {
+            if x == prev_x {
+                reversed.push(Edit {
+                    old_index: x as usize,
+                    old_len: 0,
+                    new_index: (y - 1) as usize,
+                    new_len: 1,
+                });
+            } else {
+                reversed.push(Edit {
+                    old_index: (x - 1) as usize,
+                    old_len: 1,
+                    new_index: y as usize,
+                    new_len: 0,
+                });
+            }
         }
-        ox = x;
-        oy = y;
+        x = prev_x;
+        y = prev_y;
     }
-    edits.reverse();
+    // Whatever is left is the common prefix both files started with.
+    if x > 0 && y > 0 {
+        reversed.push(Edit::equal(0, 0, x.min(y) as usize));
+    }
+    reversed.reverse();
+
+    // Collapse the single-line runs into the contiguous runs the renderer expects.
+    let mut edits: Vec<Edit> = Vec::with_capacity(reversed.len());
+    for edit in reversed {
+        if let Some(last) = edits.last_mut() {
+            let contiguous_delete = last.old_len > 0
+                && last.new_len == 0
+                && edit.old_len > 0
+                && edit.new_len == 0
+                && last.old_index + last.old_len == edit.old_index;
+            let contiguous_insert = last.new_len > 0
+                && last.old_len == 0
+                && edit.new_len > 0
+                && edit.old_len == 0
+                && last.new_index + last.new_len == edit.new_index;
+            if contiguous_delete || contiguous_insert {
+                last.old_len += edit.old_len;
+                last.new_len += edit.new_len;
+                continue;
+            }
+        }
+        edits.push(edit);
+    }
     edits
 }
 

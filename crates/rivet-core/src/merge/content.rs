@@ -119,68 +119,397 @@ pub fn merge_content(
         return Err(crate::error::Error::NotImplemented { what: "histogram merge" });
     }
     let base_bytes: &[u8] = base.unwrap_or(&[]);
-    let mut opts = crate::diff::DiffOptions::new();
-    opts.context(crate::diff::DEFAULT_CONTEXT);
-    opts.algorithm(algorithm);
-    let mut hunks: Vec<ConflictHunk> = Vec::new();
+    let base_lines = lines_keeping_newline(base_bytes);
+    let our_lines = lines_keeping_newline(ours);
+    let their_lines = lines_keeping_newline(theirs);
+
+    // Change regions in base coordinates, one list per side. A region is a run of base lines the
+    // side rewrote; an insertion is a zero-length region at a boundary.
+    let our_changes = change_regions(&base_lines, &our_lines);
+    let their_changes = change_regions(&base_lines, &their_lines);
+    let our_boundary = boundary_map(&base_lines, &our_lines);
+    let their_boundary = boundary_map(&base_lines, &their_lines);
+
+    let mut all: Vec<(Side, Region)> = Vec::with_capacity(our_changes.len() + their_changes.len());
+    all.extend(our_changes.iter().map(|r| (Side::Ours, *r)));
+    all.extend(their_changes.iter().map(|r| (Side::Theirs, *r)));
+    all.sort_by_key(|(_, r)| (r.base_start, r.base_end));
+
+    let clusters = cluster_regions(&all);
+
     let mut out: Vec<u8> = Vec::new();
-    let ours_lines: Vec<&[u8]> = ours.split(|b| *b == b'\n').collect();
-    let theirs_lines: Vec<&[u8]> = theirs.split(|b| *b == b'\n').collect();
-    let base_lines: Vec<&[u8]> = base_bytes.split(|b| *b == b'\n').collect();
-    let mut oi = 0usize;
-    let mut ti = 0usize;
-    let mut bi = 0usize;
-    while oi < ours_lines.len() && ti < theirs_lines.len() {
-        if ours_lines[oi] == theirs_lines[ti] {
-            out.extend_from_slice(ours_lines[oi]);
-            if oi < ours_lines.len() - 1 { out.push(b'\n'); }
-            oi += 1; ti += 1; bi += 1;
-        } else {
-            let mut oe = oi;
-            let mut te = ti;
-            let mut be = bi;
-            while oe < ours_lines.len() && te < theirs_lines.len() && ours_lines[oe] != theirs_lines[te] {
-                oe += 1; te += 1; be += 1;
-            }
-            out.extend_from_slice(b"<<<<<<< ");
-            out.extend_from_slice(labels.0.as_bytes());
-            out.extend_from_slice(b"\n");
-            for l in &ours_lines[oi..oe] { out.extend_from_slice(l); out.push(b'\n'); }
-            out.extend_from_slice(b"||||||| base\n");
-            for l in &base_lines[bi..be] { out.extend_from_slice(l); out.push(b'\n'); }
-            out.extend_from_slice(b">>>>>>> ");
-            out.extend_from_slice(labels.1.as_bytes());
-            out.extend_from_slice(b"\n");
-            for l in &theirs_lines[ti..te] { out.extend_from_slice(l); out.push(b'\n'); }
-            out.extend_from_slice(b"=======\n");
-            for l in &theirs_lines[ti..te] { out.extend_from_slice(l); out.push(b'\n'); }
-            out.extend_from_slice(b">>>>>>> ");
-            out.extend_from_slice(labels.1.as_bytes());
-            out.extend_from_slice(b"\n");
-            hunks.push(ConflictHunk {
-                ours_start: oi,
-                ours_len: oe - oi,
-                theirs_start: ti,
-                theirs_len: te - ti,
-                base_start: bi,
-                base_len: be - bi,
-            });
-            oi = oe; ti = te; bi = be;
+    let mut hunks: Vec<ConflictHunk> = Vec::new();
+    let mut cursor = 0usize;
+    for cluster in &clusters {
+        for line in &base_lines[cursor..cluster.base_start] {
+            out.extend_from_slice(line);
         }
+        // A cluster's sides span the whole cluster, not just the rewritten part: when a change
+        // touches an insertion at its edge, Git's conflict block shows the neighbouring unchanged
+        // lines too, and a section that stopped at the change would leave them out.
+        let our_start = our_boundary[cluster.base_start]
+            .min(cluster.ours.map(|r| r.side_start).unwrap_or(usize::MAX));
+        let our_end = our_boundary[cluster.base_end]
+            .max(cluster.ours.map(|r| r.side_end).unwrap_or(0));
+        let their_start = their_boundary[cluster.base_start]
+            .min(cluster.theirs.map(|r| r.side_start).unwrap_or(usize::MAX));
+        let their_end = their_boundary[cluster.base_end]
+            .max(cluster.theirs.map(|r| r.side_end).unwrap_or(0));
+
+        let our_slice = &our_lines[our_start..our_end];
+        let their_slice = &their_lines[their_start..their_end];
+        let base_slice = &base_lines[cluster.base_start..cluster.base_end];
+
+        if lines_equal(our_slice, their_slice) {
+            // Both sides produced the same text — the `B X X` row of the merge table.
+            for line in our_slice {
+                out.extend_from_slice(line);
+            }
+        } else if cluster.ours.is_none() {
+            for line in their_slice {
+                out.extend_from_slice(line);
+            }
+        } else if cluster.theirs.is_none() {
+            for line in our_slice {
+                out.extend_from_slice(line);
+            }
+        } else {
+            emit_conflict(
+                &mut out,
+                base_slice,
+                our_slice,
+                their_slice,
+                labels,
+                style,
+            );
+            hunks.push(ConflictHunk {
+                ours_start: our_start,
+                ours_len: our_end - our_start,
+                theirs_start: their_start,
+                theirs_len: their_end - their_start,
+                base_start: cluster.base_start,
+                base_len: cluster.base_end - cluster.base_start,
+            });
+        }
+        cursor = cluster.base_end;
     }
-    while oi < ours_lines.len() {
-        out.extend_from_slice(ours_lines[oi]);
-        if oi < ours_lines.len() - 1 { out.push(b'\n'); }
-        oi += 1;
+    for line in &base_lines[cursor..] {
+        out.extend_from_slice(line);
     }
-    while ti < theirs_lines.len() {
-        out.extend_from_slice(theirs_lines[ti]);
-        if ti < theirs_lines.len() - 1 { out.push(b'\n'); }
-        ti += 1;
-    }
+
     Ok(ContentMerge {
         data: BString::from(out),
         conflict: !hunks.is_empty(),
         hunks,
     })
+}
+
+/// Which side a change region came from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Ours,
+    Theirs,
+}
+
+/// One side's rewrite of a base region, in base and side coordinates.
+#[derive(Clone, Copy)]
+struct Region {
+    base_start: usize,
+    base_end: usize,
+    side_start: usize,
+    side_end: usize,
+}
+
+/// A group of overlapping regions from either side: one decision point.
+struct Cluster {
+    base_start: usize,
+    base_end: usize,
+    ours: Option<Region>,
+    theirs: Option<Region>,
+}
+
+/// Split a buffer into lines, each retaining its newline.
+///
+/// `b"a\nb"` is `["a\n", "b"]` and `b"a\n"` is `["a\n"]` — an empty input has no lines, and a
+/// trailing newline does not invent an empty one. Concatenating the result reproduces the input
+/// exactly, which is what lets the merge emit whole lines without tracking terminators separately.
+fn lines_keeping_newline(data: &[u8]) -> Vec<&[u8]> {
+    if data.is_empty() {
+        return Vec::new();
+    }
+    data.split_inclusive(|b| *b == b'\n').collect()
+}
+
+fn lines_equal(a: &[&[u8]], b: &[&[u8]]) -> bool {
+    a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x == y)
+}
+
+/// The runs of base lines `side` rewrote, as half-open ranges in both files.
+///
+/// A replacement arrives from the line diff as a deletion followed by an insertion at the same
+/// point, and the two must become one region: split apart, the deletion would look like it ends
+/// before the insertion begins and the pair would be judged as two independent clean edits
+/// instead of the one disagreement it is.
+fn change_regions(base: &[&[u8]], side: &[&[u8]]) -> Vec<Region> {
+    let mut regions = Vec::new();
+    let mut pending_delete: Option<crate::diff::Edit> = None;
+    let mut pending_insert: Option<crate::diff::Edit> = None;
+    let mut flush = |del: &mut Option<crate::diff::Edit>, ins: &mut Option<crate::diff::Edit>, out: &mut Vec<Region>| {
+        if del.is_none() && ins.is_none() {
+            return;
+        }
+        let base_start = del
+            .map(|d| d.old_index)
+            .or_else(|| ins.map(|i| i.old_index))
+            .unwrap_or(0);
+        let base_end = del.map(|d| d.old_index + d.old_len).unwrap_or(base_start);
+        let side_start = ins
+            .map(|i| i.new_index)
+            .or_else(|| del.map(|d| d.new_index))
+            .unwrap_or(0);
+        let side_end = ins.map(|i| i.new_index + i.new_len).unwrap_or(side_start);
+        out.push(Region {
+            base_start,
+            base_end,
+            side_start,
+            side_end,
+        });
+        *del = None;
+        *ins = None;
+    };
+    for edit in crate::diff::myers_diff(base, side) {
+        if !edit.is_change() {
+            flush(&mut pending_delete, &mut pending_insert, &mut regions);
+            continue;
+        }
+        if edit.old_len > 0 {
+            flush(&mut pending_delete, &mut pending_insert, &mut regions);
+            pending_delete = Some(edit);
+        } else {
+            pending_insert = Some(edit);
+        }
+    }
+    flush(&mut pending_delete, &mut pending_insert, &mut regions);
+    regions
+}
+
+/// Map every base boundary to the side boundary it sits at.
+///
+/// `result[i]` is the side line index that base line `i` starts at, and `result[base.len()]` is
+/// the side's line count. Inside an unchanged run the mapping is one-to-one; at the edges of a
+/// rewritten region it is the region's own side coordinates.
+fn boundary_map(base: &[&[u8]], side: &[&[u8]]) -> Vec<usize> {
+    let mut map: Vec<Option<usize>> = vec![None; base.len() + 1];
+    for edit in crate::diff::myers_diff(base, side) {
+        if edit.old_len > 0 && edit.new_len > 0 {
+            for k in 0..=edit.old_len {
+                map[edit.old_index + k] = Some(edit.new_index + k);
+            }
+        }
+    }
+    for region in change_regions(base, side) {
+        if map[region.base_start].is_none() {
+            map[region.base_start] = Some(region.side_start);
+        }
+        if map[region.base_end].is_none() {
+            map[region.base_end] = Some(region.side_end);
+        }
+    }
+    map[base.len()] = Some(side.len());
+    let mut last = 0usize;
+    for slot in &mut map {
+        match slot {
+            Some(value) => last = *value,
+            None => *slot = Some(last),
+        }
+    }
+    map.into_iter().map(|v| v.unwrap()).collect()
+}
+
+/// Whether two regions describe the same base lines badly enough to be decided together.
+///
+/// Rewrites overlap when their base ranges intersect. An insertion (a zero-length region) sits
+/// *between* lines and therefore only conflicts with a rewrite that covers it strictly, or with
+/// another insertion at the same boundary — which is what lets one side edit a line while the
+/// other adds a line above it and still merge the two cleanly.
+fn regions_overlap(lo: usize, hi: usize, region: &Region) -> bool {
+    // Closed intervals: a change that ends where the next one starts is one disagreement, not two
+    // independent edits. Git needs an unchanged line between two changes to merge them
+    // independently, and an insertion exactly at the edge of a rewritten line touches it.
+    let other_lo = region.base_start;
+    let other_hi = region.base_end;
+    lo.max(other_lo) <= hi.min(other_hi)
+}
+
+/// Group regions into the clusters a single merge decision covers.
+fn cluster_regions(regions: &[(Side, Region)]) -> Vec<Cluster> {
+    let mut clusters: Vec<Cluster> = Vec::new();
+    for (side, region) in regions {
+        let mut merged = false;
+        if let Some(last) = clusters.last_mut() {
+            if regions_overlap(last.base_start, last.base_end, region) {
+                last.base_start = last.base_start.min(region.base_start);
+                last.base_end = last.base_end.max(region.base_end);
+                match side {
+                    Side::Ours => {
+                        let r = last.ours.get_or_insert(*region);
+                        r.base_start = r.base_start.min(region.base_start);
+                        r.base_end = r.base_end.max(region.base_end);
+                        r.side_start = r.side_start.min(region.side_start);
+                        r.side_end = r.side_end.max(region.side_end);
+                    }
+                    Side::Theirs => {
+                        let r = last.theirs.get_or_insert(*region);
+                        r.base_start = r.base_start.min(region.base_start);
+                        r.base_end = r.base_end.max(region.base_end);
+                        r.side_start = r.side_start.min(region.side_start);
+                        r.side_end = r.side_end.max(region.side_end);
+                    }
+                }
+                merged = true;
+            }
+        }
+        if !merged {
+            let mut cluster = Cluster {
+                base_start: region.base_start,
+                base_end: region.base_end,
+                ours: None,
+                theirs: None,
+            };
+            match side {
+                Side::Ours => cluster.ours = Some(*region),
+                Side::Theirs => cluster.theirs = Some(*region),
+            }
+            clusters.push(cluster);
+        }
+    }
+    clusters
+}
+
+/// Write one conflict, markers and all.
+fn emit_conflict(
+    out: &mut Vec<u8>,
+    base: &[&[u8]],
+    ours: &[&[u8]],
+    theirs: &[&[u8]],
+    labels: (&str, &str),
+    style: ConflictStyle,
+) {
+    if !out.is_empty() && !out.ends_with(b"\n") {
+        out.push(b'\n');
+    }
+    let mut our_start = 0usize;
+    let mut our_end = ours.len();
+    let mut their_start = 0usize;
+    let mut their_end = theirs.len();
+    let mut base_start = 0usize;
+    let mut base_end = base.len();
+
+    // Git pulls lines the two sides agree on out of the conflict block in `merge` and `zdiff3`
+    // style (and not in `diff3`, which shows the whole region so the base section lines up).
+    // Without this, an add/add of files that share a header conflicts on the header too.
+    if style != ConflictStyle::Diff3 {
+        let mut prefix = 0usize;
+        while prefix < our_end - our_start
+            && prefix < their_end - their_start
+            && ours[our_start + prefix] == theirs[their_start + prefix]
+        {
+            prefix += 1;
+        }
+        if prefix > 0 {
+            for line in &ours[our_start..our_start + prefix] {
+                out.extend_from_slice(line);
+            }
+            our_start += prefix;
+            their_start += prefix;
+            // The base section follows as far as it has the same lines; a base that is shorter
+            // than the shared prefix (the add/add case, where it is empty) simply contributes
+            // nothing, which is what Git prints.
+            let mut base_prefix = 0usize;
+            while base_prefix < prefix
+                && base_start + base_prefix < base_end
+                && base[base_start + base_prefix] == ours[our_start - prefix + base_prefix]
+            {
+                base_prefix += 1;
+            }
+            base_start += base_prefix;
+        }
+
+        let mut suffix = 0usize;
+        while suffix < our_end - our_start
+            && suffix < their_end - their_start
+            && ours[our_end - 1 - suffix] == theirs[their_end - 1 - suffix]
+        {
+            suffix += 1;
+        }
+        if suffix > 0 {
+            let mut base_suffix = 0usize;
+            while base_suffix < suffix
+                && base_end - base_suffix > base_start
+                && base[base_end - 1 - base_suffix] == ours[our_end - 1 - base_suffix]
+            {
+                base_suffix += 1;
+            }
+            our_end -= suffix;
+            their_end -= suffix;
+            base_end -= base_suffix;
+            write_marker_block(
+                out,
+                &base[base_start..base_end],
+                &ours[our_start..our_end],
+                &theirs[their_start..their_end],
+                labels,
+                style,
+            );
+            for line in &ours[our_end..our_end + suffix] {
+                out.extend_from_slice(line);
+            }
+            if !out.ends_with(b"\n") {
+                out.push(b'\n');
+            }
+            return;
+        }
+    }
+
+    write_marker_block(
+        out,
+        &base[base_start..base_end],
+        &ours[our_start..our_end],
+        &theirs[their_start..their_end],
+        labels,
+        style,
+    );
+}
+
+fn write_marker_block(
+    out: &mut Vec<u8>,
+    base: &[&[u8]],
+    ours: &[&[u8]],
+    theirs: &[&[u8]],
+    labels: (&str, &str),
+    style: ConflictStyle,
+) {
+    out.extend_from_slice(b"<<<<<<< ");
+    out.extend_from_slice(labels.0.as_bytes());
+    out.push(b'\n');
+    write_section(out, ours);
+    if style != ConflictStyle::Merge {
+        out.extend_from_slice(b"||||||| base\n");
+        write_section(out, base);
+    }
+    out.extend_from_slice(b"=======\n");
+    write_section(out, theirs);
+    out.extend_from_slice(b">>>>>>> ");
+    out.extend_from_slice(labels.1.as_bytes());
+    out.push(b'\n');
+}
+
+/// Write a section of a conflict, guaranteeing the next marker starts on its own line.
+fn write_section(out: &mut Vec<u8>, lines: &[&[u8]]) {
+    for line in lines {
+        out.extend_from_slice(line);
+    }
+    if !out.ends_with(b"\n") {
+        out.extend_from_slice(b"\n");
+    }
 }
