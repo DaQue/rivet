@@ -146,6 +146,10 @@ pub enum ConflictKind {
     Binary,
     /// Both sides moved the gitlink to a different commit.
     Submodule,
+    /// One side renamed the file and the other deleted it.
+    RenameDelete,
+    /// Both sides renamed the file, to different paths.
+    RenameRename,
 }
 
 /// Phase 9 — how conflict markers should be written.

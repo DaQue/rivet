@@ -97,18 +97,20 @@ pub fn merge_trees(
     theirs: ObjectId,
     options: &MergeOptions,
 ) -> Result<crate::merge::TreeMerge> {
-    if options.find_renames {
-        return Err(crate::error::Error::NotImplemented {
-            what: "rename detection".into(),
-        });
-    }
-
-    let base_entries = match base {
+    let mut base_entries = match base {
         Some(oid) => flatten_tree(odb, oid)?,
         None => BTreeMap::new(),
     };
-    let our_entries = flatten_tree(odb, ours)?;
-    let their_entries = flatten_tree(odb, theirs)?;
+    let mut our_entries = flatten_tree(odb, ours)?;
+    let mut their_entries = flatten_tree(odb, theirs)?;
+
+    // Renames first: a file moved on one side and edited on the other has to be merged under its
+    // new name, and the cases that cannot be merged become explicit conflicts.
+    let (rename_conflicts, rename_removals) = if options.find_renames {
+        apply_renames(odb, &mut base_entries, &mut our_entries, &mut their_entries, options)?
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     let mut paths: Vec<BString> = Vec::new();
     paths.extend(base_entries.keys().cloned());
@@ -126,6 +128,14 @@ pub fn merge_trees(
     // The entries of the tree this merge would produce, kept aside until the walk is done: a
     // conflicted merge writes no tree, so building it under the walking loop would be wasted.
     let mut tree_entries: Vec<(BString, EntryMode, ObjectId)> = Vec::new();
+    for (conflict, path_merge) in rename_conflicts {
+        result.paths.push(path_merge);
+        result.conflicts.push(conflict);
+    }
+    // A moved file's old name is gone from the result, wherever the move happened.
+    for path in rename_removals {
+        result.paths.push(PathMerge { path, result: None, kind: None });
+    }
 
     for path in paths {
         let path_str = BStr::new(&path[..]);
@@ -798,6 +808,12 @@ pub fn write_merged_worktree(
                     crate::worktree::checkout::write_blob(worktree, path, oid, mode, odb)?;
                 }
             }
+            ConflictKind::RenameDelete | ConflictKind::RenameRename => {
+                // The renamed file is written under its new name with the renaming side's content.
+                if let Some(oid) = conflict.ours.or(conflict.theirs) {
+                    crate::worktree::checkout::write_blob(worktree, path, oid, mode, odb)?;
+                }
+            }
             ConflictKind::DeleteModify => {
                 // Our side deleted the path; the file the other side kept is written so the user
                 // can see what they are being asked to resolve.
@@ -896,4 +912,165 @@ pub fn merge_worktree_paths(
         }
     }
     Ok(paths)
+}
+
+type EntryMap = BTreeMap<BString, (EntryMode, ObjectId)>;
+
+/// Pair the files `side` removed from `base` with the files it added.
+fn renames_on_side(odb: &Odb, base: &EntryMap, side: &EntryMap) -> Result<BTreeMap<BString, BString>> {
+    use crate::diff::rename::{RenameSide, pair_renames};
+    let sources: Vec<RenameSide> = base
+        .iter()
+        .filter(|(path, _)| !side.contains_key(*path))
+        .map(|(path, (mode, oid))| RenameSide { path: path.clone(), oid: *oid, mode: *mode })
+        .collect();
+    let destinations: Vec<RenameSide> = side
+        .iter()
+        .filter(|(path, _)| !base.contains_key(*path))
+        .map(|(path, (mode, oid))| RenameSide { path: path.clone(), oid: *oid, mode: *mode })
+        .collect();
+    let mut out = BTreeMap::new();
+    for pair in pair_renames(&sources, &destinations, odb)? {
+        out.insert(sources[pair.source].path.clone(), destinations[pair.destination].path.clone());
+    }
+    Ok(out)
+}
+
+/// Rewrite the three trees so a rename on one side lines up with the other side's version of the
+/// file, and return the conflicts that renames cannot resolve (`rename/delete`, `rename/rename`).
+fn apply_renames(
+    odb: &Odb,
+    base: &mut EntryMap,
+    ours: &mut EntryMap,
+    theirs: &mut EntryMap,
+    options: &MergeOptions,
+) -> Result<(Vec<(Conflict, PathMerge)>, Vec<BString>)> {
+    use crate::merge::ConflictKind;
+    let mut removals: Vec<BString> = Vec::new();
+    let our_renames = renames_on_side(odb, base, ours)?;
+    let their_renames = renames_on_side(odb, base, theirs)?;
+    let mut conflicts: Vec<(Conflict, PathMerge)> = Vec::new();
+    let label = |bytes: &BString| String::from_utf8_lossy(bytes).into_owned();
+    let (our_label, their_label) = (label(&options.labels.0), label(&options.labels.1));
+
+    let mut sources: Vec<BString> = our_renames.keys().chain(their_renames.keys()).cloned().collect();
+    sources.sort();
+    sources.dedup();
+
+    for from in sources {
+        let Some(base_entry) = base.get(&from).copied() else { continue };
+        match (our_renames.get(&from), their_renames.get(&from)) {
+            (Some(to_ours), Some(to_theirs)) if to_ours == to_theirs => {
+                // Both moved it to the same place: merge the contents there.
+                base.remove(&from);
+                base.insert(to_ours.clone(), base_entry);
+                removals.push(from.clone());
+            }
+            (Some(to_ours), Some(to_theirs)) => {
+                // Moved to two different places: neither wins. The base stays at stage 1, each
+                // side's file at its own path.
+                base.remove(&from);
+                let our_entry = ours.remove(to_ours);
+                let their_entry = theirs.remove(to_theirs);
+                let message = format!(
+                    "CONFLICT (rename/rename): {from} renamed to {to_ours} in {our_label} and to {to_theirs} in {their_label}."
+                );
+                conflicts.push((
+                    Conflict {
+                        path: from.clone(),
+                        kind: ConflictKind::RenameRename,
+                        base: Some(base_entry.1),
+                        ours: None,
+                        theirs: None,
+                        hunks: Vec::new(),
+                        message: Some(BString::from(message)),
+                    },
+                    PathMerge { path: from.clone(), result: None, kind: Some(ConflictKind::RenameRename) },
+                ));
+                for (path, entry, is_ours) in [(to_ours, our_entry, true), (to_theirs, their_entry, false)] {
+                    let Some((_, oid)) = entry else { continue };
+                    conflicts.push((
+                        Conflict {
+                            path: path.clone(),
+                            kind: ConflictKind::RenameRename,
+                            base: None,
+                            ours: is_ours.then_some(oid),
+                            theirs: (!is_ours).then_some(oid),
+                            hunks: Vec::new(),
+                            message: None,
+                        },
+                        PathMerge { path: path.clone(), result: Some(oid), kind: Some(ConflictKind::RenameRename) },
+                    ));
+                }
+            }
+            (Some(to_ours), None) => {
+                one_sided_rename(
+                    &from, to_ours, base_entry, base, ours, theirs, true, &our_label, &their_label, &mut conflicts,
+                    &mut removals,
+                );
+            }
+            (None, Some(to_theirs)) => {
+                one_sided_rename(
+                    &from, to_theirs, base_entry, base, theirs, ours, false, &our_label, &their_label, &mut conflicts,
+                    &mut removals,
+                );
+            }
+            (None, None) => {}
+        }
+    }
+    removals.sort();
+    removals.dedup();
+    Ok((conflicts, removals))
+}
+
+/// `side` renamed `from` to `to`; `other` did not rename it.
+#[allow(clippy::too_many_arguments)]
+fn one_sided_rename(
+    from: &BString,
+    to: &BString,
+    base_entry: (EntryMode, ObjectId),
+    base: &mut EntryMap,
+    side: &mut EntryMap,
+    other: &mut EntryMap,
+    side_is_ours: bool,
+    our_label: &str,
+    their_label: &str,
+    conflicts: &mut Vec<(Conflict, PathMerge)>,
+    removals: &mut Vec<BString>,
+) {
+    use crate::merge::ConflictKind;
+    match other.get(from).copied() {
+        Some(other_entry) => {
+            if other.contains_key(to) {
+                // The other side already has something at the destination: leave both alone.
+                return;
+            }
+            base.remove(from);
+            base.insert(to.clone(), base_entry);
+            other.remove(from);
+            other.insert(to.clone(), other_entry);
+            removals.push(from.clone());
+        }
+        None => {
+            // The other side deleted the file the side renamed.
+            let Some((_, oid)) = side.remove(to) else { return };
+            base.remove(from);
+            let (renamed_in, deleted_in) = if side_is_ours { (our_label, their_label) } else { (their_label, our_label) };
+            let message = format!(
+                "CONFLICT (rename/delete): {from} renamed to {to} in {renamed_in}, but deleted in {deleted_in}."
+            );
+            conflicts.push((
+                Conflict {
+                    path: to.clone(),
+                    kind: ConflictKind::RenameDelete,
+                    base: Some(base_entry.1),
+                    ours: side_is_ours.then_some(oid),
+                    theirs: (!side_is_ours).then_some(oid),
+                    hunks: Vec::new(),
+                    message: Some(BString::from(message)),
+                },
+                PathMerge { path: to.clone(), result: Some(oid), kind: Some(ConflictKind::RenameDelete) },
+            ));
+        }
+    }
 }

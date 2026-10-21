@@ -985,6 +985,7 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
     };
     let message = args.message.clone().unwrap_or_else(|| merge_message(&repository, &spec));
     let mut options = rivet_core::MergeOptions::new();
+    options.find_renames = super::renames_enabled(&repository, "merge.renames");
     if let Some(style) = args.conflict {
         options.conflict_style = style.into();
     }
@@ -1742,6 +1743,12 @@ pub fn merge_commit(
                 conflict.path, conflict.path
             ),
             ConflictKind::Submodule => println!("CONFLICT (submodule): Merge conflict in {}", conflict.path),
+            ConflictKind::RenameDelete | ConflictKind::RenameRename => {
+                // Only the entry that carries the message is announced.
+                if let Some(message) = &conflict.message {
+                    println!("{message}");
+                }
+            }
         }
         conflicted.push(conflict.path.clone());
     }

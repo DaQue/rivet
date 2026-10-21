@@ -643,6 +643,43 @@ s_rename_config() {
     v log --name-status --oneline -n 1
 }
 
+merge_rename_case() {
+    local name=$1
+    v init -q "$name"; cd "$name"
+    seq 1 40 >f; seq 100 130 >other; echo keep >k; v add -A; v commit -q -m base; v branch side
+    case $name in
+    modify_vs_rename)
+        mv f g; v add -A; tick; v commit -q -m "main renames"
+        v switch -q side; seq 1 40 | sed 's/^20$/twenty/' >f; tick; v commit -q -a -m "side edits"; v switch -q main ;;
+    delete_vs_rename)
+        mv f g; v add -A; tick; v commit -q -m "main renames"
+        v switch -q side; v rm -q f; tick; v commit -q -m "side deletes"; v switch -q main ;;
+    same_rename)
+        mv f g; v add -A; tick; v commit -q -m "main renames"
+        v switch -q side; mv f g; echo extra >>g; v add -A; tick; v commit -q -m "side renames too"; v switch -q main ;;
+    split_rename)
+        mv f g; v add -A; tick; v commit -q -m "main renames"
+        v switch -q side; mv f h; v add -A; tick; v commit -q -m "side renames elsewhere"; v switch -q main ;;
+    rename_over_add)
+        mv f g; v add -A; tick; v commit -q -m "main renames"
+        v switch -q side; echo different >g; v add -A; tick; v commit -q -m "side adds g"; v switch -q main ;;
+    theirs_renames)
+        echo mainedit >>f; v add -A; tick; v commit -q -m "main edits"
+        v switch -q side; mv f g; v add -A; tick; v commit -q -m "side renames"; v switch -q main ;;
+    esac
+    v merge side
+    v status -s
+    v ls-files -s
+    v log --oneline --all
+    cat * 2>/dev/null | head -50
+}
+s_merge_rename_modify() { merge_rename_case modify_vs_rename; }
+s_merge_rename_delete() { merge_rename_case delete_vs_rename; }
+s_merge_rename_same() { merge_rename_case same_rename; }
+s_merge_rename_split() { merge_rename_case split_rename; }
+s_merge_rename_over_add() { merge_rename_case rename_over_add; }
+s_merge_rename_theirs() { merge_rename_case theirs_renames; }
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

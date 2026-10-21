@@ -837,7 +837,8 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         super::branching::FastForward::Allow
     };
     let message = format!("Merge {description}");
-    let options = rivet_core::MergeOptions::new();
+    let mut options = rivet_core::MergeOptions::new();
+    options.find_renames = super::renames_enabled(&repository, "merge.renames");
     super::branching::merge_commit(
         &mut repository,
         theirs,
