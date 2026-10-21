@@ -115,11 +115,6 @@ pub fn merge_content(
     style: ConflictStyle,
     algorithm: crate::diff::DiffAlgorithm,
 ) -> Result<ContentMerge> {
-    if algorithm == crate::diff::DiffAlgorithm::Histogram {
-        return Err(crate::error::Error::NotImplemented {
-            what: "histogram merge",
-        });
-    }
     let base_bytes: &[u8] = base.unwrap_or(&[]);
     let base_lines = lines_keeping_newline(base_bytes);
     let our_lines = lines_keeping_newline(ours);
@@ -127,10 +122,10 @@ pub fn merge_content(
 
     // Change regions in base coordinates, one list per side. A region is a run of base lines the
     // side rewrote; an insertion is a zero-length region at a boundary.
-    let our_changes = change_regions(&base_lines, &our_lines);
-    let their_changes = change_regions(&base_lines, &their_lines);
-    let our_boundary = boundary_map(&base_lines, &our_lines);
-    let their_boundary = boundary_map(&base_lines, &their_lines);
+    let our_changes = change_regions(&base_lines, &our_lines, algorithm);
+    let their_changes = change_regions(&base_lines, &their_lines, algorithm);
+    let our_boundary = boundary_map(&base_lines, &our_lines, algorithm);
+    let their_boundary = boundary_map(&base_lines, &their_lines, algorithm);
 
     let mut all: Vec<(Side, Region)> = Vec::with_capacity(our_changes.len() + their_changes.len());
     all.extend(our_changes.iter().map(|r| (Side::Ours, *r)));
@@ -245,7 +240,11 @@ fn lines_equal(a: &[&[u8]], b: &[&[u8]]) -> bool {
 /// point, and the two must become one region: split apart, the deletion would look like it ends
 /// before the insertion begins and the pair would be judged as two independent clean edits
 /// instead of the one disagreement it is.
-fn change_regions(base: &[&[u8]], side: &[&[u8]]) -> Vec<Region> {
+fn change_regions(
+    base: &[&[u8]],
+    side: &[&[u8]],
+    algorithm: crate::diff::DiffAlgorithm,
+) -> Vec<Region> {
     let mut regions = Vec::new();
     let mut pending_delete: Option<crate::diff::Edit> = None;
     let mut pending_insert: Option<crate::diff::Edit> = None;
@@ -274,7 +273,7 @@ fn change_regions(base: &[&[u8]], side: &[&[u8]]) -> Vec<Region> {
         *del = None;
         *ins = None;
     };
-    for edit in crate::diff::myers_diff(base, side) {
+    for edit in side_edits(base, side, algorithm) {
         if !edit.is_change() {
             flush(&mut pending_delete, &mut pending_insert, &mut regions);
             continue;
@@ -290,21 +289,39 @@ fn change_regions(base: &[&[u8]], side: &[&[u8]]) -> Vec<Region> {
     regions
 }
 
+/// Edit script between `base` and `side` with the selected algorithm, as git computes it.
+fn side_edits(
+    base: &[&[u8]],
+    side: &[&[u8]],
+    algorithm: crate::diff::DiffAlgorithm,
+) -> Vec<crate::diff::Edit> {
+    match algorithm {
+        crate::diff::DiffAlgorithm::Histogram => {
+            crate::diff::myers::histogram_diff(base, side).unwrap_or_default()
+        }
+        crate::diff::DiffAlgorithm::Myers => crate::diff::myers::git_diff(base, side),
+    }
+}
+
 /// Map every base boundary to the side boundary it sits at.
 ///
 /// `result[i]` is the side line index that base line `i` starts at, and `result[base.len()]` is
 /// the side's line count. Inside an unchanged run the mapping is one-to-one; at the edges of a
 /// rewritten region it is the region's own side coordinates.
-fn boundary_map(base: &[&[u8]], side: &[&[u8]]) -> Vec<usize> {
+fn boundary_map(
+    base: &[&[u8]],
+    side: &[&[u8]],
+    algorithm: crate::diff::DiffAlgorithm,
+) -> Vec<usize> {
     let mut map: Vec<Option<usize>> = vec![None; base.len() + 1];
-    for edit in crate::diff::myers_diff(base, side) {
+    for edit in side_edits(base, side, algorithm) {
         if edit.old_len > 0 && edit.new_len > 0 {
             for k in 0..=edit.old_len {
                 map[edit.old_index + k] = Some(edit.new_index + k);
             }
         }
     }
-    for region in change_regions(base, side) {
+    for region in change_regions(base, side, algorithm) {
         if map[region.base_start].is_none() {
             map[region.base_start] = Some(region.side_start);
         }
