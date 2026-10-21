@@ -148,14 +148,16 @@ clone_timed() { # <src> <dst> -> sets CLONE_SECS / CLONE_CPU / CLONE_RC
 run_variant() {
     label=$1
     src=$2
-    git clone -q "$src" "$BASE/$label-git" 2>"$BASE/g.err" || fail "$label: git clone failed: $(cat "$BASE/g.err")"
+    local TIMEFORMAT_TMP='%R'
+    git_time=$( { TIMEFORMAT=$TIMEFORMAT_TMP; time git clone -q "$src" "$BASE/$label-git"; } 2>&1 | tail -1 )
+    [ -d "$BASE/$label-git/.git" ] || fail "$label: git clone failed: $git_time"
     clone_timed "$src" "$BASE/$label-rivet"
     if [ "$CLONE_RC" -ne 0 ]; then
         fail "$label: rivet clone exited $CLONE_RC after ${CLONE_SECS}s"
         sed -n '1,5p' "$BASE/clone.out" | sed 's/^/    /'
         return
     fi
-    pass "$label: rivet clone exited 0 (${CLONE_SECS}s wall, cpu ${CLONE_CPU})"
+    pass "$label: rivet clone exited 0 (${CLONE_SECS}s wall, cpu ${CLONE_CPU}; git ${git_time}s)"
     # Debug builds legitimately spend more CPU than wall on some steps, but a
     # spin shows up as CPU far above wall; guard against the pathological case.
     wall=$(printf '%s' "$CLONE_CPU" | awk '{print $1}')
