@@ -439,17 +439,38 @@ impl RemoteUrl {
     ///   transports use, and re-parsing the redacted string would lose the credential silently. A
     ///   caller must not "clean" a URL by overwriting config with this.
     pub fn redacted(&self) -> BString {
+        self.render(false)
+    }
+
+    /// Render the URL, with the password (`true`) or a `***` mask in its place.
+    fn render(&self, with_password: bool) -> BString {
         let mut out = BString::from(self.scheme.as_str());
         out.extend_from_slice(b"://");
         if let Some(user) = &self.user {
             out.extend_from_slice(&user[..]);
             if let Some(password) = &self.password {
-                out.extend_from_slice(&password[..]);
+                out.push(b':');
+                if with_password {
+                    out.extend_from_slice(&password[..]);
+                } else {
+                    out.extend_from_slice(b"***");
+                }
             }
+            out.push(b'@');
+        } else if let Some(password) = &self.password {
+            // A password with no user is `:password@`.
+            out.push(b':');
+            out.extend_from_slice(if with_password { &password[..] } else { b"***" });
             out.push(b'@');
         }
         if let Some(host) = &self.host {
-            out.extend_from_slice(&host[..]);
+            if host.contains(&b':') {
+                out.push(b'[');
+                out.extend_from_slice(&host[..]);
+                out.push(b']');
+            } else {
+                out.extend_from_slice(&host[..]);
+            }
             if let Some(port) = self.port {
                 out.push(b':');
                 out.extend_from_slice(port.to_string().as_bytes());
@@ -472,7 +493,7 @@ impl RemoteUrl {
     /// because the two are not equivalent for a remote whose path is relative to the login
     /// directory, and normalising would silently change which directory is addressed.
     pub fn to_config_string(&self) -> BString {
-        self.redacted().clone()
+        self.render(true)
     }
 
     /// Phase 11 — whether this URL names the same repository as another, ignoring credentials.
@@ -550,18 +571,7 @@ impl std::fmt::Display for RemoteUrl {
     /// therefore making a visible choice. This is the one place in the crate where `Display` is not
     /// the identity of the value, and it is worth knowing that before "fixing" it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = self.to_string();
-        let b = BStr::new(s.as_bytes());
-        let span = credential_span(b);
-        let mut out = String::new();
-        if let Some(r) = span {
-            out.push_str(&s[..r.start]);
-            out.push_str("****");
-            out.push_str(&s[r.end..]);
-        } else {
-            out.push_str(&s);
-        }
-        write!(f, "{}", out)
+        write!(f, "{}", self.redacted())
     }
 }
 

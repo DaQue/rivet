@@ -1217,15 +1217,13 @@ pub fn parse_int(value: &BStr) -> Result<i64> {
             });
         }
     }
-    let result = if neg { -n * mult } else { n * mult };
-    if result < i64::MIN || result > i64::MAX {
-        return Err(Error::ConfigInvalidValue {
-            key: BString::from(""),
-            value: BString::from(value),
-            expected: "an integer",
-        });
-    }
-    Ok(result)
+    // `n` fits an `i64` and the suffix multiplies it, so the product can overflow.
+    let signed = if neg { -n } else { n };
+    signed.checked_mul(mult).ok_or_else(|| Error::ConfigInvalidValue {
+        key: BString::from(""),
+        value: BString::from(value),
+        expected: "an integer",
+    })
 }
 
 /// Phase 2 — the environment variable that relocates a config file, if set.
