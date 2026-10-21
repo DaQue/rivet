@@ -30,9 +30,9 @@ v() {
     if [ -n "${STOP_ON:-}" ] && [ "$IMPL" = rivet ]; then rm -rf "$base_stop.prev"; cp -a "$PWD" "$base_stop.prev"; fi
     echo "\$ v $*" | sed -e "s#$ROOT#<ROOT>#g" >>"$TRANSCRIPT"
     if [ "$IMPL" = git ]; then
-        timeout 60 "$GIT" "$@" >"$TMPOUT" 2>"$TMPERR"; rc=$?
+        timeout 60 "$GIT" "$@" <"${STDIN_FILE:-/dev/null}" >"$TMPOUT" 2>"$TMPERR"; rc=$?
     else
-        timeout 60 "$RIVET" "$@" >"$TMPOUT" 2>"$TMPERR"; rc=$?
+        timeout 60 "$RIVET" "$@" <"${STDIN_FILE:-/dev/null}" >"$TMPOUT" 2>"$TMPERR"; rc=$?
     fi
     # Normalise the implementation's own name and the per-run root out of the text.
     if [ "${SORT_OUT:-0}" = 1 ]; then sort -o "$TMPOUT" "$TMPOUT"; fi
@@ -55,6 +55,9 @@ g() { "$GIT" "$@"; }
 # Like v, but the stderr text is not compared (only stdout and the exit code), for commands whose
 # diagnostics are free-form.
 vq() { NO_ERR=1 v "$@"; local rc=$?; NO_ERR=0; return $rc; }
+
+# Like v, with the given text on standard input.
+vin() { local text=$1; shift; STDIN_FILE=$(mktemp "${TMPDIR:-/tmp}/stdin.XXXXXX"); printf '%s' "$text" >"$STDIN_FILE"; v "$@"; local rc=$?; rm -f "$STDIN_FILE"; STDIN_FILE=; return $rc; }
 
 vs() { SORT_OUT=1 v "$@"; local rc=$?; SORT_OUT=0; return $rc; }
 

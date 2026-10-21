@@ -680,6 +680,77 @@ s_merge_rename_split() { merge_rename_case split_rename; }
 s_merge_rename_over_add() { merge_rename_case rename_over_add; }
 s_merge_rename_theirs() { merge_rename_case theirs_renames; }
 
+s_log_paths() {
+    v init -q repo; cd repo
+    mkdir -p src docs; echo 1 >src/a; echo 1 >docs/d; echo 1 >top
+    v add -A; tick; v commit -q -m "c1 base"
+    v branch feat
+    echo 2 >>src/a; v add -A; tick; v commit -q -m "c2 src a"
+    echo 2 >>docs/d; v add -A; tick; v commit -q -m "c3 docs"
+    v switch -q feat
+    echo 2 >>top; v add -A; tick; v commit -q -m "f1 top"
+    echo 3 >>src/a; v add -A; tick; v commit -q -m "f2 src a (feat)"
+    echo x >src/b; v add -A; tick; v commit -q -m "f3 src b"
+    v switch -q main
+    tick; v merge -q -m "merge feat" feat 2>/dev/null; v status -s
+    echo 4 >>docs/d; v add -A; tick; v commit -q -m "c4 docs"
+    v log --oneline
+    v log --oneline -- src
+    v log --oneline -- src/a
+    v log --oneline -- docs top
+    v log --oneline -- nothing
+    v log --oneline --first-parent
+    v log --oneline --reverse
+    v log --oneline --topo-order
+    v log --oneline --date-order
+    v log --oneline -n 2 --skip 1
+    v log --oneline feat..main
+    v log --oneline main..feat
+    v log --oneline main...feat
+    v log --oneline --all
+    v log --oneline HEAD~2
+    v log --oneline --since=@1700000100
+    v log --oneline --until=@1700000100
+    v log -p -- src/b
+    v log --stat -- docs
+    v log --name-status --oneline -- src
+    v show HEAD~1 -- docs
+    v log --oneline -n 1 -- src/a
+}
+
+s_cat_file_batch() {
+    v init -q repo; cd repo
+    printf 'hello\n' >f; mkdir d; printf 'inner\n' >d/i; seq 1 800 >big
+    v add -A; v commit -q -m one; v tag -a t -m tagmsg
+    local c t b
+    c=$(g rev-parse HEAD); t=$(g rev-parse 'HEAD^{tree}'); b=$(g rev-parse HEAD:f)
+    vin "$c
+$t
+$b
+HEAD
+HEAD:f
+HEAD:d/i
+nonexistent
+t
+${c:0:8}
+" cat-file --batch
+    vin "$c
+$t
+$b
+HEAD:d
+missing
+" cat-file --batch-check
+    vin "$b
+HEAD
+" cat-file --batch-check='%(objectname) %(objecttype) %(objectsize)'
+    vin "$b
+" cat-file --batch='%(objecttype) %(objectsize) %(rest)'
+    vs cat-file --batch-all-objects --batch-check
+    v cat-file -p t
+    v cat-file -t t
+    v cat-file -s HEAD:big
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

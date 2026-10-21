@@ -722,15 +722,13 @@ pub fn run_hash_object(global: &GlobalArgs, args: &HashObjectArgs) -> Result<i32
 ///   and nothing may be appended to it.
 /// * **`-s` reports the size after any delta resolution**, not the size of the delta. On a packed
 ///   repository the two differ by an order of magnitude and only one of them matches `git`.
-/// * **`--batch` and `--batch-check` are a separate interface and are not implemented in v1.**
-///   They must be refused rather than silently falling back to the single-object form, because a
-///   script reads them line by line and a pretty-printed object would be parsed as many
-///   malformed lines rather than as one error.
+/// * **`--batch` and `--batch-check` are a separate interface**, handled by `cat_file_batch`:
+///   one request per input line, one answer per request, nothing else on stdout.
 pub fn run_cat_file(global: &GlobalArgs, args: &CatFileArgs) -> Result<i32> {
     use std::io::Write;
 
     if args.batch.is_some() || args.batch_check.is_some() || args.batch_all_objects {
-        anyhow::bail!("cat-file: batch mode is not implemented yet");
+        return cat_file_batch(global, args);
     }
 
     let repository = super::open(global)?;
@@ -1524,4 +1522,87 @@ fn shown(path: &[u8], separator: char) -> Vec<u8> {
     } else {
         path.to_vec()
     }
+}
+
+/// `cat-file --batch`, `--batch-check` and `--batch-all-objects`: read object names from standard
+/// input (or take every object) and answer one line per name, followed by the contents for
+/// `--batch`.
+fn cat_file_batch(global: &GlobalArgs, args: &CatFileArgs) -> Result<i32> {
+    use std::io::{BufRead, Write};
+
+    let repository = super::open(global)?;
+    let format = repository.format();
+    let (with_contents, template) = match (&args.batch, &args.batch_check) {
+        (Some(template), _) => (true, template.clone()),
+        (None, Some(template)) => (false, template.clone()),
+        // `--batch-all-objects` alone behaves as `--batch-check`.
+        (None, None) => (false, None),
+    };
+    let template = template.unwrap_or_else(|| "%(objectname) %(objecttype) %(objectsize)".to_string());
+
+    let kind_name = |kind: rivet_core::ObjectKind| match kind {
+        rivet_core::ObjectKind::Blob => "blob",
+        rivet_core::ObjectKind::Tree => "tree",
+        rivet_core::ObjectKind::Commit => "commit",
+        rivet_core::ObjectKind::Tag => "tag",
+    };
+    let render = |oid: &rivet_core::ObjectId, kind: rivet_core::ObjectKind, size: u64, rest: &str| -> String {
+        template
+            .replace("%(objectname)", &oid.to_string())
+            .replace("%(objecttype)", kind_name(kind))
+            .replace("%(objectsize:disk)", &size.to_string())
+            .replace("%(objectsize)", &size.to_string())
+            .replace("%(deltabase)", &rivet_core::ObjectId::zero(format).to_string())
+            .replace("%(rest)", rest)
+            .replace("%%", "%")
+    };
+
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+    let mut answer = |out: &mut dyn Write, oid: rivet_core::ObjectId, rest: &str| -> Result<()> {
+        let object = repository.odb().read(&oid)?;
+        let line = render(&oid, object.kind(), object.data().len() as u64, rest);
+        writeln!(out, "{line}")?;
+        if with_contents {
+            out.write_all(object.data())?;
+            out.write_all(b"\n")?;
+        }
+        Ok(())
+    };
+
+    if args.batch_all_objects {
+        let mut ids = repository.odb().oids()?;
+        ids.sort();
+        for oid in ids {
+            answer(&mut out, oid, "")?;
+        }
+    } else {
+        let stdin = std::io::stdin();
+        for line in stdin.lock().split(b'\n') {
+            let line = line?;
+            let text = String::from_utf8_lossy(&line).into_owned();
+            // With a format that mentions `%(rest)`, the name is the first word and the rest of the
+            // line is passed through; otherwise the whole line is the name.
+            let (name, rest) = if template.contains("%(rest)") {
+                match text.split_once(char::is_whitespace) {
+                    Some((name, rest)) => (name.to_string(), rest.to_string()),
+                    None => (text.clone(), String::new()),
+                }
+            } else {
+                (text.clone(), String::new())
+            };
+            let resolved = rivet_core::revparse::resolve_path(
+                format,
+                repository.refs(),
+                repository.odb(),
+                bstr::BStr::new(name.as_bytes()),
+            );
+            match resolved {
+                Ok(oid) if repository.odb().contains(&oid) => answer(&mut out, oid, &rest)?,
+                _ => writeln!(out, "{name} missing")?,
+            }
+        }
+    }
+    out.flush()?;
+    Ok(0)
 }
