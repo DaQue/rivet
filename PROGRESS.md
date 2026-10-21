@@ -27,12 +27,15 @@ reset --keep/--merge; push --mirror/--force-with-lease/--atomic; clone --mirror/
 Frozen-grammar gaps (the scaffold's flag set differs from git's): `log --format`, `show --stat`, `verify-pack -v` (use `--verbose`), several `rev-parse`/`ls-tree`/`cat-file` flags.
 Old note: `log --format`, `show --stat`, `verify-pack -v` (use `--verbose`).
 
-## Current failing at HEAD (11:35 after the 11:04 session-limit stop)
+## Status (2026-10-21)
 
-`cargo test -p rivet-cli --test difftest` → 2 of the randomized scenarios fail; every named scenario passes.
+`cargo test --workspace`: 178 passed, 0 failed. `tools/difftest/scenarios.sh`: every scenario passes, named and randomized
+(random_1..8), including ssh and http transports (fake ssh, `git http-backend`), sha256, delta-heavy packs, cat-file batch,
+rename-aware merges, log path limiting.
 
-- `s_random_7`: `switch -q br2` aborts with "Your local changes to the following files would be overwritten by checkout: c.txt" where real git switches fine and carries the change. Everything after that cascades onto the wrong branch. Also `restore b.txt` / `restore --staged b.txt` on a path absent from HEAD exit 0, while git errors with `pathspec 'b.txt' did not match`.
-- `s_random_8`: `switch -q br0` → `fatal: No such file or directory (os error 2)`, exit 128 — a checkout read of a missing path. Same `restore` pathspec divergence follows.
+Fixed in this block: switch/merge refusal rules (staged deletes, combined dirty+untracked report), `Keep` entries in checkout plans,
+`cat-file --batch/--batch-check/--batch-all-objects`, `diff.renames`/`status.renames`/`merge.renames`, rename/delete and
+rename/rename merges, ssh thin-pack, http redirects (follow the new location for the whole session).
 
-Both are in the switch/checkout path (`crate::worktree::checkout`), i.e. exactly what was mid-flight when the run was cut off. Retained repro dirs with full transcripts and `state.diff`:
-`/home/davidq/.hermes/cache/scratch/difftest.MTsMun` (scenario 7) and `difftest.nJJkPw` (scenario 8).
+Notes against .claude/PRIORITIES.md: real git (2.56) *does* detect renames in plain `diff`/`status`/`log` by default and honours
+`diff.renames=false`; the harness (`s_renames`, `s_rename_config`) proves rivet matches that.

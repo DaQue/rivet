@@ -656,6 +656,11 @@ impl Transport for SshTransport {
         if self.capabilities().contains(b"ofs-delta") {
             requested.push("ofs-delta");
         }
+        // A thin pack deltifies against objects the client already has, which is what makes an
+        // incremental fetch of a large file small; `store_pack_bytes` completes it afterwards.
+        if self.capabilities().contains(b"thin-pack") {
+            requested.push("thin-pack");
+        }
         let multi_ack = self.capabilities().contains(b"multi_ack_detailed");
         if multi_ack {
             requested.push("multi_ack_detailed");

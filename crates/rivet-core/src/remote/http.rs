@@ -131,6 +131,9 @@ pub struct HttpTransport {
     version: ProtocolVersion,
     /// The peer's object format, established at `connect` and used to parse ids afterwards.
     format: ObjectFormat,
+    /// Where the advertisement was actually served from, after any redirect: later requests go
+    /// there, as Git's do.
+    redirected_base: Option<BString>,
 }
 
 impl HttpTransport {
@@ -197,6 +200,7 @@ impl HttpTransport {
         };
         Ok(Self {
             url,
+            redirected_base: None,
             agent,
             credentials,
             capabilities: CapabilitySet::default(),
@@ -272,6 +276,9 @@ impl HttpTransport {
     /// request line, which is the only way credentials reach the wire without being written into
     /// [`HttpRequest::headers`] — a value a caller may log or a test may snapshot.
     fn base_url(&self, url: &RemoteUrl, credentials: bool) -> BString {
+        if let Some(base) = &self.redirected_base {
+            return base.clone();
+        }
         let mut out = BString::from(url.scheme.as_str());
         out.extend_from_slice(b"://");
         if credentials {
@@ -572,6 +579,8 @@ pub fn send(
         return Err(Error::HttpStatus { url: safe, status });
     }
 
+    use ureq::ResponseExt as _;
+    let final_url = Some(BString::from(response.get_uri().to_string()));
     let content_type = header_string(&response, "content-type").map(|text| media_type(BStr::new(&text)));
     let encoding = header_string(&response, "content-encoding");
     let body = response.body_mut().read_to_vec().map_err(|err| {
@@ -588,7 +597,7 @@ pub fn send(
             )));
         }
     }
-    Ok(HttpResponse { status, content_type, body })
+    Ok(HttpResponse { status, content_type, body, final_url })
 }
 
 /// The header as text, or `None` when it is absent or not printable ASCII.
@@ -786,6 +795,17 @@ impl HttpTransport {
         let request = advertise_request(url, service, ProtocolVersion::V0)?;
         let base = self.base_url(url, true);
         let response = send(&self.agent, &request, BStr::new(&base))?;
+
+        // A redirect moves the repository: the rest of the session talks to the new location.
+        if let Some(final_url) = &response.final_url {
+            let suffix = format!("/info/refs?service={}", service.as_str());
+            if let Some(prefix) = final_url.strip_suffix(suffix.as_bytes()) {
+                let original = self.base_url(url, false);
+                if prefix != &original[..] {
+                    self.redirected_base = Some(BString::from(prefix));
+                }
+            }
+        }
 
         let mut cursor = &response.body[..];
         let first = PktLine::read_from(&mut cursor)?;

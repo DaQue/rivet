@@ -708,6 +708,9 @@ pub struct HttpResponse {
     pub content_type: Option<BString>,
     /// The body, with `Content-Encoding` already undone.
     pub body: Vec<u8>,
+    /// The URL the response actually came from, which differs from the request's after a
+    /// redirect.
+    pub final_url: Option<BString>,
 }
 
 /// Phase 11 — the seam that makes one fetch and one push cover every transport.

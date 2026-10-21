@@ -751,12 +751,55 @@ HEAD
     v cat-file -s HEAD:big
 }
 
+s_pack_deltas() {
+    export GIT_SSH="$FAKESSH"
+    g init -q origin; cd origin
+    seq 1 2000 >big; echo a >small; mkdir d; seq 1 300 >d/other
+    g add -A; g commit -qm c0
+    for i in 1 2 3 4 5 6 7 8; do
+        tick; seq 1 2000 | sed "s/^$((i * 100))$/edited $i/" >big; echo "$i" >>small; seq 1 300 | sed "s/^$((i * 10))$/e$i/" >d/other
+        g add -A; g commit -qm "c$i"
+    done
+    g tag -a v1 -m annotated
+    g repack -adfq --depth=20 --window=50
+    cd ..
+    v clone -q ssh://localhost$ROOT/origin cl
+    v clone -q origin cl2
+    cd origin
+    vq verify-pack --verbose .git/objects/pack/*.idx
+    vq fsck
+    vs cat-file --batch-all-objects --batch
+    v log --oneline -p -- big
+    v log --stat --oneline
+    v diff v1~7 v1 --stat
+    v show v1
+    cd ../cl
+    vq fsck
+    v log --oneline -n 3
+    cd ../cl2
+    vq fsck
+    v status
+    cd ../origin
+    for i in 11 12 13; do tick; seq 1 2000 | sed "s/^$((i * 50))$/late $i/" >big; g add -A; g commit -qm "late$i"; done
+    cd ../cl
+    v fetch
+    v pull
+    vq fsck
+    v log --oneline -n 4
+    v diff HEAD~3 HEAD --stat
+    cd ../cl2
+    v fetch
+    v pull
+    vq fsck
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
 for s in "$@"; do
     case $s in
         s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags) run_scenario "$s" repo origin.git ;;
+        s_pack_deltas) run_scenario "$s" origin cl cl2 ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         *) run_scenario "$s" ;;
     esac
