@@ -1,14 +1,21 @@
 //! The `rivet` binary.
 //!
-//! A thin shell around [`cmd::dispatch`]: parse the command line, route it to a handler, and
+//! A thin shell around `cmd::dispatch`: parse the command line, route it to a handler, and
 //! turn whatever comes back into an exit code and a message on stderr. Everything that knows
-//! about repositories, objects or refs lives in `rivet-core`, and everything that knows about
-//! this program's grammar lives in [`cli`].
+//! about repositories, objects or refs lives in [`rivet_core`]; everything that knows about
+//! this program's grammar lives in `cli`.
 //!
-//! # Scaffold stage
+//! # Layout
 //!
-//! Every function in this binary is a doc comment and a `todo!()` body — the signatures and the
-//! documentation are the design. See `docs/SCAFFOLD-BRIEF.md`.
+//! * `cli` — the clap types: one `Args` struct per subcommand plus the global options
+//!   (`--git-dir`, `--work-tree`, `-C`) that every handler receives.
+//! * `cmd` — the handlers, one `run_*` function per subcommand, grouped by topic (`setup`,
+//!   `snapshot`, `branching`, `history`, `remote`, `tag`, `ignore`, `plumbing`). Shared
+//!   helpers — opening the repository, resolving a revision, printing a diffstat — live in
+//!   `cmd` itself.
+//!
+//! No module here is part of a public API: the binary is the product, and `rivet-core` is
+//! where reusable functionality is exposed.
 //!
 //! # The two error types
 //!
@@ -19,7 +26,7 @@
 //!
 //! # Exit codes
 //!
-//! `main` returns the code the handler chose; the constants are in [`cmd`]. The convention,
+//! `main` returns the code the handler chose; the constants are in `cmd`. The convention,
 //! which every handler's doc comment states individually, is Git's:
 //!
 //! * `0` — success.

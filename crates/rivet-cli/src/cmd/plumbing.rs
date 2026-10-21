@@ -110,8 +110,8 @@ pub struct HashObjectArgs {
 ///   the object, and it must not treat a prefix as an id without `--batch`-style resolution
 ///   rules.
 /// * **`abbrev` and `long_abbrev` change id formatting in the batch modes**, not in the single
-///   modes. The batch modes are a separate, line-oriented interface that this scaffold accepts
-///   but does not implement in v1; they must fail loudly rather than falling back to the single
+///   modes. The batch modes are a separate, line-oriented interface that this implementation accepts
+///   but does not support in v1; they must fail loudly rather than falling back to the single
 ///   form, because a script reading `--batch-check` output expects one line per object and would
 ///   silently misparse a pretty-printed dump.
 #[derive(Debug, clap::Args)]
@@ -345,7 +345,7 @@ pub struct LsFilesArgs {
 /// * **The command has three unrelated jobs and this grammar exposes only the first two**: turn a
 ///   revision into an id, and report a property of the repository (`--git-dir`,
 ///   `--show-toplevel`, `--is-bare-repository`). Upstream's third job — parsing options for other
-///   commands (`--parseopt`, `--sq`) — is a shell-scripting aid this scaffold does not carry.
+///   commands (`--parseopt`, `--sq`) — is a shell-scripting aid this tool does not carry.
 /// * **`verify` changes the command from "resolve or explain" to "resolve or fail cleanly"**,
 ///   and the difference is the *output on failure*: without it an unresolvable revision prints a
 ///   message on stderr and exits `128`, and with it nothing is printed and the exit code is the

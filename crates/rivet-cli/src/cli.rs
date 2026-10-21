@@ -81,7 +81,7 @@ pub struct Cli {
 /// * **`verbose` and `quiet` are not mutually exclusive here.** Git lets the last one win;
 ///   enforcing that needs `overrides_with`, and a subcommand that redeclares either flag would
 ///   then break. The handlers read `quiet` first and treat `verbose` as the fallback, so
-///   `--quiet --verbose` is quiet. The precedence is a decision this scaffold makes explicitly.
+///   `--quiet --verbose` is quiet. The precedence is deliberately explicit.
 /// * **`no_pager` is currently the only pager-related flag, and there is no pager yet.** Output
 ///   is written straight to stdout; the flag exists so that a script written against this
 ///   grammar keeps working once `rivet_core::Repository` grows one.

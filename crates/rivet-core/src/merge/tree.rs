@@ -565,7 +565,7 @@ fn merge_blob_contents(
 /// [`crate::error::Error::ObjectNotFound`] for a blob the database lacks,
 /// [`crate::error::Error::WrongObjectKind`] for an id that is not a blob, and
 /// [`crate::error::Error::NotImplemented`] for a histogram diff.
-#[allow(clippy::too_many_arguments)] // signature fixed by the scaffold
+#[allow(clippy::too_many_arguments)] // signature kept for the callers below
 pub fn merge_path(
     odb: &Odb,
     path: &bstr::BStr,
@@ -718,6 +718,16 @@ pub fn write_conflict_stages(index: &mut Index, conflicts: &[Conflict]) -> Resul
     Ok(())
 }
 
+/// Materialise a finished merge into the worktree and index.
+///
+/// Clean paths are written as merged content; conflicted paths get Git's conflict markers in the
+/// worktree and stage entries in the index, so `git status` shows `UU`/`AA`/`DU` exactly as it
+/// would after a `git merge`.
+///
+/// # Errors
+///
+/// Whatever reading blobs, writing worktree files or rewriting `.git/index` raises. The writes
+/// are not atomic: a failure part-way leaves the files already written in place.
 pub fn write_merged_worktree(
     worktree: &Worktree,
     index: &Index,
@@ -888,6 +898,17 @@ pub fn update_index_after_merge(
     Ok(())
 }
 
+/// The tracked paths one merge result touches.
+///
+/// Walks `index` and returns the paths that appear in `result.paths`, skipping unmerged entries —
+/// that is, the files a caller still has to bring in line with the merge. Paths the merge adds are
+/// not included, because they are not yet in the index.
+///
+/// `odb` is accepted but currently unused.
+///
+/// # Errors
+///
+/// None today; the `Result` matches the other merge entry points.
 pub fn merge_worktree_paths(
     _odb: &Odb,
     index: &Index,

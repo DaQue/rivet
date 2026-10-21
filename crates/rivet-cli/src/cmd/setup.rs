@@ -3,8 +3,8 @@
 //! These are the three commands that must work *without* an existing repository. `init` creates
 //! one, `clone` creates one and fills it from a remote, and `config --global` reads and writes a
 //! file that belongs to no repository at all. The dispatcher therefore never opens a repository
-//! for them; each handler decides what it needs, and [`crate::cmd::open_or_init`] is the shared
-//! decision.
+//! for them; each handler decides what it needs, and `init` and `clone` create the repository
+//! before handing back to the shared path.
 //!
 //! *Phase 2 for `init`, Phase 11 for `clone`, Phase 3 for `config`.*
 
@@ -245,7 +245,7 @@ pub struct ConfigArgs {
 ///   reinterpret a work tree that exists. `--force` overrides this and is the only thing
 ///   `--force` does here.
 /// * **`--shared` is accepted and not implemented**: it changes the permissions of the files
-///   Rivet creates, which is a filesystem concern this scaffold has no opinion about. It must
+///   Rivet creates, which is a filesystem concern the CLI has no opinion about. It must
 ///   not be silently ignored in the output — a user who asked for a shared repository needs to
 ///   know they did not get one.
 pub fn run_init(global: &GlobalArgs, args: &InitArgs) -> Result<i32> {

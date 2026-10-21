@@ -3,9 +3,8 @@
 //!
 //! # The shape of a command
 //!
-//! Every subcommand has a **handler** — a `pub fn run_*` in one of these modules — with a body
-//! that is `todo!()` at scaffold time and a doc comment stating three things the implementer
-//! needs before writing a line of it:
+//! Every subcommand has a **handler** — a `pub fn run_*` in one of these modules — with a doc
+//! comment stating three things:
 //!
 //! 1. **Purpose** — what the command does, in the user's terms.
 //! 2. **Exit codes** — which is load-bearing, because Git's exit codes are part of its
@@ -26,10 +25,10 @@
 //!
 //! # Opening a repository
 //!
-//! [`open`] and [`open_or_init`] are the two entry points a handler uses, and they exist so
-//! that the `--repo` decision is written once. A handler must not call
-//! `rivet_core::Repository::open` directly: that reads the current directory, which is wrong
-//! whenever `--repo` was given.
+//! [`open`] is the entry point a handler uses, so that the `--repo` decision is written once.
+//! A handler must not call `rivet_core::Repository::open` directly: that reads the current
+//! directory, which is wrong whenever `--repo` was given. `init` and `clone` are the exceptions —
+//! they have no repository to open yet and create one instead.
 
 pub mod branching;
 pub mod history;

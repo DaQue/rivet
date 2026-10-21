@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Core library for Rivet, a Git-compatible version control system."
+repository = "https://github.com/DaQue/rivet"
+readme = "README.md"
+keywords = ["git", "vcs", "version-control", "packfile"]
+categories = ["development-tools", "filesystem"]
 
 [dependencies]
 thiserror.workspace = true
@@ -19,3 +23,7 @@ ureq.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 proptest.workspace = true
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--generate-link-to-definition"]

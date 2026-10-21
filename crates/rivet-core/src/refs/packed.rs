@@ -503,10 +503,10 @@ impl PackedRefs {
 ///
 /// # Caveats
 ///
-/// * **This is a named iterator because a scaffold cannot return `impl Iterator`.** Every function
-///   body in this crate is `todo!()`, and a `todo!()` body leaves the compiler unable to write the
-///   hidden type that an `impl Trait` return would describe. A struct is a type, so the signature
-///   holds. The implementation is a thin wrapper over `slice::Iter` plus a field projection.
+/// * **This is a named iterator rather than `impl Iterator`** because it projects a field out of
+///   each entry (`&entry.name`) instead of handing back the entry itself; a named type keeps that
+///   signature stable and allows the `Debug` derive. The implementation is a thin wrapper over
+///   `slice::get` plus a position counter.
 /// * **Borrowed from the set**, so the names are valid only while it is; use [`packed_names`] for an
 ///   owned vector.
 /// * **The order is the file's**, not sorted — see [`PackedRefs::iter`].
@@ -523,11 +523,8 @@ impl<'a> Iterator for PackedRefNames<'a> {
 
     /// Phase 2 — the next name, or `None` at the end.
     ///
-    /// # Panics
-    ///
-    /// Scaffold stage: this body is `todo!()`. The implementation must read
-    /// `self.inner.entries.get(self.position)` and advance `self.position`, and must not index
-    /// directly — an index past the end would panic on a `packed-refs` that shrank mid-iteration.
+    /// Reads through `entries.get`, so an index past the end (or a set that shrank) yields `None`
+    /// rather than panicking the way direct indexing would.
     fn next(&mut self) -> Option<Self::Item> {
         let entry = self.inner.entries.get(self.position)?;
         self.position += 1;
@@ -536,9 +533,7 @@ impl<'a> Iterator for PackedRefNames<'a> {
 
     /// Phase 2 — how many names are left.
     ///
-    /// # Panics
-    ///
-    /// Scaffold stage: this body is `todo!()`.
+    /// Computed from the remaining slice length, saturating at zero.
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.inner.entries.len().saturating_sub(self.position);
         (remaining, Some(remaining))
@@ -547,11 +542,6 @@ impl<'a> Iterator for PackedRefNames<'a> {
 
 impl Default for PackedRefs {
     /// Phase 2 — an empty set; identical to [`PackedRefs::new`].
-    ///
-    /// # Panics
-    ///
-    /// Scaffold stage: this body is `todo!()`. The implementation must simply return
-    /// [`PackedRefs::new`]'s value.
     fn default() -> Self {
         Self::new()
     }

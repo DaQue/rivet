@@ -544,7 +544,7 @@ impl<'a> PackFile<'a> {
 
     /// Phase 10 — the byte range one entry occupies in the pack, compressed.
     ///
-    /// The range an `.idx`'s CRC covers, and nothing else — see [`crate::pack::crc32`] for why
+    /// The range an `.idx`'s CRC covers, and nothing else — see `crc32` in the pack writer for why
     /// that range and not the inflated payload. This needs the entry's inflated length to find the
     /// end, so it is not free.
     ///

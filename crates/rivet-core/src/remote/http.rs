@@ -53,7 +53,7 @@
 //!   credentials are on the wire in a `Basic` header — base64, not encryption — and the pack is
 //!   readable by anyone on the path. Git warns and proceeds for a `http.sslVerify=false`-style
 //!   reason; Rivet proceeds for `http://` because the user typed it, and the transport records the
-//!   scheme so that a caller can warn. See [`RemoteScheme::is_networked`](crate::remote::RemoteScheme::is_networked).
+//!   scheme so that a caller can warn. See [`RemoteScheme::is_networked`].
 //!
 //! # Connection reuse
 //!
@@ -141,7 +141,7 @@ impl HttpTransport {
     ///
     /// # Caveats
     ///
-    /// * **The scheme must be [`RemoteScheme::Http`](crate::remote::RemoteScheme::Http) or [`RemoteScheme::Https`](crate::remote::RemoteScheme::Https)**, and anything else
+    /// * **The scheme must be [`RemoteScheme::Http`] or [`RemoteScheme::Https`]**, and anything else
     ///   is refused here rather than producing a request to a nonsensical URL.
     /// * **No request is made and no name is resolved.** Construction is cheap and offline, so a
     ///   caller can build a transport and decide later whether to use it; anything that could block
@@ -232,7 +232,7 @@ impl HttpTransport {
     ///
     /// # Caveats
     ///
-    /// True only for [`RemoteScheme::Http`](crate::remote::RemoteScheme::Http). The CLI uses it to print the warning Git prints before
+    /// True only for [`RemoteScheme::Http`]. The CLI uses it to print the warning Git prints before
     /// sending a credential in the clear; the transport itself does not refuse, because refusing
     /// would break the localhost case that every `git http-backend` test relies on.
     pub fn is_insecure(&self) -> bool {
@@ -432,7 +432,7 @@ pub(crate) fn split_ref_line(line: &[u8]) -> Result<(BString, BString, Option<Ve
 ///
 /// * **The `service` query parameter is not optional** — see the module caveat — and it must be
 ///   percent-encoded as written (`git-upload-pack` needs none, but the rule is not "it needs none").
-/// * **`Git-Protocol: version=2` is sent only when `version` is [`ProtocolVersion::V2`](crate::remote::ProtocolVersion::V2).** Sending it
+/// * **`Git-Protocol: version=2` is sent only when `version` is [`ProtocolVersion::V2`].** Sending it
 ///   to a v0-only server is harmless in Git's implementation and is not guaranteed to be here, and
 ///   more importantly a request that asks for v2 must be prepared for a v0 answer — the generation
 ///   comes from the response either way.

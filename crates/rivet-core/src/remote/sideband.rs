@@ -107,6 +107,12 @@ impl Default for SidebandOptions {
     }
 }
 
+/// An optional sink for side-band channel 2 (progress) text.
+///
+/// The callback is called as packets arrive and with no line alignment: a line such as
+/// `Counting objects: 47%` may be split across two packets, and joining them is the sink's job.
+pub type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&[u8])>;
+
 /// Phase 11 — read a sideband-framed stream, forwarding progress and returning the pack bytes.
 ///
 /// # Caveats
@@ -132,9 +138,6 @@ impl Default for SidebandOptions {
 ///
 /// [`crate::error::Error::Protocol`] for an unknown channel, a channel 3 abort or a stream that ends
 /// without its terminator; and whatever `reader` raises.
-/// An optional callback that receives side-band progress text.
-pub type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&[u8])>;
-
 pub fn demultiplex<R: Read>(
     reader: &mut R,
     options: &SidebandOptions,
@@ -145,6 +148,20 @@ pub fn demultiplex<R: Read>(
     Ok(pack)
 }
 
+/// Stream a side-band framed pack into `out`, forwarding progress as it arrives.
+///
+/// Returns the number of pack bytes written. Unlike [`demultiplex`] this never holds the pack in
+/// memory, which is what a clone of a large repository needs.
+///
+/// With [`SidebandOptions::enabled`] false the stream is copied through unchanged; with it true the
+/// channel bytes are stripped, channel 2 goes to `progress` (only when
+/// [`SidebandOptions::want_progress`] is set, though the packets are still drained), and a channel
+/// 3 abort is reported after the stream ends, carrying the server's text.
+///
+/// # Errors
+///
+/// [`crate::error::Error::Protocol`] for an unknown channel, a channel 3 abort or a stream that ends
+/// without its terminator; [`crate::error::Error::Io`] from either side of the copy.
 pub fn stream_pack<R: Read, W: Write>(
     reader: &mut R,
     options: &SidebandOptions,
@@ -204,6 +221,14 @@ pub fn stream_pack<R: Read, W: Write>(
     Ok(total)
 }
 
+/// Read a side-band framed pack and install it in `odb`.
+///
+/// The pack is buffered, thin-pack fixed, indexed and written to `objects/pack` with its `.idx`;
+/// see [`store_pack_bytes`] for the ordering and the refresh requirement.
+///
+/// # Errors
+///
+/// Whatever [`stream_pack`] raises, plus indexing or I/O failures from [`store_pack_bytes`].
 pub fn store_pack<R: Read>(
     reader: &mut R,
     options: &SidebandOptions,

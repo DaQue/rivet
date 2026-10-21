@@ -25,8 +25,11 @@ use std::cmp::Ordering;
 /// A single entry in a tree: a child's mode, name, and object id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeEntry {
+    /// The entry's mode — a file, a directory (subtree), or a symlink.
     pub mode: EntryMode,
+    /// The entry's name, raw bytes: tree names are not required to be UTF-8.
     pub name: BString,
+    /// The id of the object the name points at.
     pub oid: ObjectId,
 }
 
@@ -34,8 +37,11 @@ pub struct TreeEntry {
 /// entry out of the tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TreeEntryRef<'a> {
+    /// The entry's mode — a file, a directory (subtree), or a symlink.
     pub mode: EntryMode,
+    /// The entry's name, borrowed from the tree's payload.
     pub name: &'a BString,
+    /// The id of the object the name points at.
     pub oid: ObjectId,
 }
 
@@ -186,7 +192,7 @@ impl<'a> Tree<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidObjectId`] if the hash cannot be produced (should not
+    /// [`crate::error::Error`] if the payload cannot be hashed (should not
     /// happen for a valid payload).
     pub fn id(&self, format: ObjectFormat) -> Result<ObjectId> {
         match hash_object(format, ObjectKind::Tree, self.data) {

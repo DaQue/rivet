@@ -728,8 +728,8 @@ pub struct HttpResponse {
 ///   is object-safe; there is no generic method and no `Self`-returning method, both of which would
 ///   break it. That is a constraint on any addition here, not an accident.
 /// * **Implementations must not panic on peer input** (plan §5). A malformed advertisement, a
-///   truncated frame and a closed pipe are all [`crate::error::Error`]; a `todo!()` in an
-///   implementation is a scaffold marker, and `unreachable!()` on a wire-protocol branch never is.
+///   truncated frame and a closed pipe are all [`crate::error::Error`]; an `unreachable!()` on a
+///   wire-protocol branch is never one.
 pub trait Transport: fmt::Debug {
     /// Phase 11 — connect, and read the peer's ref advertisement.
     ///

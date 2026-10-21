@@ -161,11 +161,12 @@ pub enum WalkTerminator {
 ///   `i64` with a `±hhmm` offset that does not determine a zone, and converting both sides through
 ///   a zoned time type introduces a normalisation that can move a commit across the boundary. See
 ///   [`crate::object::Signature`].
-/// * **`sort` and `reverse` are both present even though [`SortOrder::Reverse`] exists.** The two
-///   encode the same thing and the redundant spelling is the scaffold's; when an implementation
-///   lands, one of them must be chosen as authoritative and the other honoured as a synonym, and
-///   the choice must be documented. Do not implement them as independent flags, or
-///   `sort: Topo, reverse: false` and `sort: Reverse` will disagree.
+/// * **`--reverse` has no flag of its own.** It is [`SortOrder::Reverse`], applied as a
+///   post-processing step on whichever order the walk produced — see that variant's caveat — and
+///   the walk applies it last, before `skip` and `max_count`. The consequence is that "reverse
+///   topological order" is not expressible: `sort` holds one variant, so `Topo` and `Reverse`
+///   cannot both be set. Git allows the combination; this type does not, and supporting it needs a
+///   separate boolean rather than another variant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WalkOptions {
     /// The order to emit commits in.
@@ -649,6 +650,12 @@ impl<'a> CommitWalker<'a> {
         })
     }
 
+    /// The next commit in the walk, or `None` when the walk is exhausted.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Error`] if the commit cannot be read or parsed — a missing object or a
+    /// corrupt header ends the walk instead of being skipped.
     pub fn next_commit(&mut self) -> Result<Option<Commit<'a>>> {
         let Some(oid) = self.queue.pop() else { return Ok(None) };
         let object = self.odb.read_typed(&oid, crate::object::ObjectKind::Commit)?;
@@ -660,10 +667,19 @@ impl<'a> CommitWalker<'a> {
         Ok(Some(commit))
     }
 
+    /// The id of the commit `next_commit` would return next, without consuming it.
+    ///
+    /// `None` once the walk is exhausted. This does not read the object, so it cannot fail on a
+    /// corrupt commit the way `next_commit` can.
     pub fn peek(&mut self) -> Result<Option<ObjectId>> {
         Ok(self.queue.last().copied())
     }
 
+    /// Drain the walk into a `Vec`, in order.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `next_commit` raises; the commits collected so far are dropped.
     pub fn into_vec(self) -> Result<Vec<Commit<'a>>> {
         let mut out = Vec::new();
         let mut walker = self;

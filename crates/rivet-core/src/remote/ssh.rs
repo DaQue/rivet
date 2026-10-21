@@ -166,7 +166,7 @@ impl SshTransport {
     ///   command line, so that a caller can build a transport and learn about a bad URL at a point
     ///   where the error is still a configuration error rather than a spawn failure. The spawn is in
     ///   [`SshTransport::spawn`].
-    /// * **The scheme must be [`RemoteScheme::Ssh`](crate::remote::RemoteScheme::Ssh)**, which covers both `ssh://` and the scp-like
+    /// * **The scheme must be [`RemoteScheme::Ssh`]**, which covers both `ssh://` and the scp-like
     ///   form; a `git://` or `https://` URL is [`crate::error::Error::InvalidRemoteUrl`] rather than
     ///   being attempted over SSH.
     /// * **A missing host is refused**, and so is an empty path: `ssh://host` names no repository and

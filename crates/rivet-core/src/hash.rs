@@ -113,7 +113,7 @@ impl ObjectFormat {
     ///
     /// # Errors
     ///
-    /// [`Error::UnknownObjectFormat`] for anything other than `sha1` or `sha256` — including
+    /// [`crate::error::Error::UnknownObjectFormat`] for anything other than `sha1` or `sha256` — including
     /// forward-compatible values a newer Git might write. Guessing would produce a repository
     /// Rivet cannot read, so this refuses.
     pub fn from_config_value(value: &BStr) -> Result<Self> {
@@ -200,7 +200,7 @@ impl ObjectId {
     /// # Caveats
     ///
     /// For protocol code that needs a `new`/`old` placeholder when a ref does not yet exist.
-    /// Passing the result to the object database will produce [`Error::ObjectNotFound`].
+    /// Passing the result to the object database will produce [`crate::error::Error::ObjectNotFound`].
     pub const fn zero(format: ObjectFormat) -> Self {
         match format {
             ObjectFormat::Sha1 => ObjectId::Sha1([0u8; 20]),
@@ -212,7 +212,7 @@ impl ObjectId {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidHash`] if `bytes.len()` does not equal `format.len()`. Note that a
+    /// [`crate::error::Error::InvalidHash`] if `bytes.len()` does not equal `format.len()`. Note that a
     /// wrong-length slice is an error, never a truncation or a zero-extension: both would
     /// produce an id that silently addresses the wrong object.
     pub fn from_bytes(format: ObjectFormat, bytes: &[u8]) -> Result<Self> {
@@ -236,14 +236,14 @@ impl ObjectId {
     /// Accepts both cases and no separators; Git writes lowercase, so that is what serialisation
     /// must produce. This parses a complete id only — for an abbreviation use
     /// [`ObjectId::from_hex_prefix`] or, more usually, let the object database resolve it with
-    /// [`ObjectId::disambiguate`].
+    /// [`crate::odb::Odb::resolve_prefix`].
     ///
     /// There is no way to know the format from the string alone in general, so the caller
     /// supplies it.
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidHex`] if the length is not `format.hex_len()`, or if any character is
+    /// [`crate::error::Error::InvalidHex`] if the length is not `format.hex_len()`, or if any character is
     /// not a hex digit.
     pub fn from_hex(format: ObjectFormat, hex: &BStr) -> Result<Self> {
         let expected = format.hex_len();
@@ -271,7 +271,7 @@ impl ObjectId {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidHex`] if the string is empty, longer than `format.hex_len()`, or
+    /// [`crate::error::Error::InvalidHex`] if the string is empty, longer than `format.hex_len()`, or
     /// contains a non-hex character.
     pub fn from_hex_prefix(format: ObjectFormat, hex: &BStr) -> Result<Self> {
         let expected = format.hex_len();
@@ -298,7 +298,7 @@ impl ObjectId {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidHex`] if `out.len()` is not `self.format().hex_len()`.
+    /// [`crate::error::Error::InvalidHex`] if `out.len()` is not `self.format().hex_len()`.
     pub fn write_hex(&self, out: &mut [u8]) -> Result<()> {
         let expected = self.format().hex_len();
         if out.len() != expected {
@@ -349,7 +349,7 @@ impl ObjectId {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidHash`] if fewer than `format.len()` bytes remain.
+    /// [`crate::error::Error::InvalidHash`] if fewer than `format.len()` bytes remain.
     pub fn read(format: ObjectFormat, data: &[u8]) -> Result<Self> {
         if data.len() < format.len() {
             return Err(crate::error::Error::InvalidHash {

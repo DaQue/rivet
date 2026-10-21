@@ -56,7 +56,7 @@
 //!   *content*, not against another zlib stream; nothing here chains decompression state.
 //! * **Zlib is not raw deflate.** Loose objects and pack entries both use zlib framing (an RFC
 //!   1950 header and an Adler-32 trailer). Raw deflate streams read as corruption, and `flate2`
-//!   can produce either, so the choice is explicit in [`inflate_at`] and [`deflate`].
+//!   can produce either, so the choice is explicit in `inflate_at` and `deflate`.
 //! * **A pack is not self-describing about the hash width.** Neither the `.pack` header nor the
 //!   `.idx` records whether ids are 20 or 32 bytes; it comes from
 //!   `extensions.objectFormat`, exactly as it does for trees and the index. This is why every

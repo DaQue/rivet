@@ -831,7 +831,10 @@ pub enum Error {
     #[error("{0}")]
     Message(String),
 
-    /// A path in the scaffold that has no implementation yet.
+    /// An operation this version does not implement.
+    ///
+    /// Returned instead of silently doing nothing, so a caller can tell "not supported yet" from
+    /// "worked"; the CLI turns it into a non-zero exit with `what` in the message.
     #[error("{what} is not implemented yet")]
     NotImplemented {
         /// The unimplemented operation.

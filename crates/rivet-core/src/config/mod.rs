@@ -157,6 +157,11 @@ impl ConfigEntry {
         self.in_section(section, subsection) && self.key.eq_ignore_ascii_case(key)
     }
 
+    /// The entry as Git's flat `section.subsection.key` name, in the casing it was read with.
+    ///
+    /// This is the key `git config --list --name-only` prints and the one a caller uses to look
+    /// the entry up again. Subsection case is preserved; section and key are compared
+    /// case-insensitively elsewhere, but the spelling here is whatever the file contained.
     pub fn flat_key(&self) -> BString {
         let mut out = self.section.clone();
         if let Some(sub) = &self.subsection {

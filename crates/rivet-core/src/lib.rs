@@ -10,6 +10,36 @@
 //! it: `crates/rivet-core/tests/*_git_differential.rs` and `tools/difftest/` run the same
 //! operation through both tools and compare the repositories and the output.
 //!
+//! # Example
+//!
+//! ```no_run
+//! use rivet_core::Repository;
+//!
+//! let repo = Repository::open()?;
+//! if let Some(head) = repo.head_commit()? {
+//!     println!("{head}");
+//! }
+//! # Ok::<(), rivet_core::Error>(())
+//! ```
+//!
+//! `Repository::init` and `Repository::open` are the two entry points; everything else hangs off
+//! the returned `Repository` or off free functions in the modules below.
+//!
+//! # Layout
+//!
+//! * [`object`] — blob, tree, commit and tag: parsing, serialising, hashing.
+//! * [`odb`] — the object database, loose and packed.
+//! * [`pack`] — `.pack` / `.idx` files, delta resolution, the pack writer.
+//! * [`index`] — the staged snapshot in `.git/index`.
+//! * [`refs`] — branches, tags, `HEAD`, reflogs, `packed-refs`.
+//! * [`repo`] — repository discovery, `init`, configuration lookup.
+//! * [`worktree`] — the checkout side: status, add, rm, checkout plans.
+//! * [`revwalk`] / [`revparse`] — commit traversal and revision-syntax resolution.
+//! * [`diff`] / [`merge`] — content and tree comparison, three-way merges.
+//! * [`remote`] / [`remote_ops`] — transports, the wire protocol, fetch and push.
+//! * [`ignore`], [`config`], [`fsck`], [`ops`] — pathspec matching, configuration, integrity
+//!   checking, and the porcelain operations built on the layers above.
+//!
 //! # Byte strings, not strings
 //!
 //! Everything that comes off disk — paths, ref names, object payloads, config values — is

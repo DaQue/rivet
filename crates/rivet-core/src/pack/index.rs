@@ -33,7 +33,7 @@
 //!   2 is [`crate::error::Error::UnsupportedPackIndexVersion`], refused rather than guessed at,
 //!   because both other formats start with bytes that v2 would misread as a plausible fanout.
 //! * **The ids are sorted, the offsets are not.** Nothing about the offset table's order is
-//!   meaningful, and code that assumes "offset[i] is the i-th object in the pack" produces a
+//!   meaningful, and code that assumes "the offset at row `i` is the `i`-th object in the pack" produces a
 //!   `.idx` that Git accepts and that sends every lookup to the wrong place.
 //! * **The 32-bit offset table is not purely offsets.** The high bit of each `u32` is a flag: when
 //!   it is set the low 31 bits are an *index into the 64-bit table*, not an offset. Reading it as
@@ -64,7 +64,7 @@ use crate::error::Error;
 /// # Caveats
 ///
 /// The CRC is over the **compressed** entry bytes, from the entry header through the end of its
-/// zlib stream — not over the object content. See [`crate::pack::crc32`].
+/// zlib stream — not over the object content. See `crc32` in the pack writer.
 ///
 /// `offset` is absolute from the start of the `.pack` file. It is 64-bit here regardless of how
 /// the index stored it, because the `.idx` may have kept it in the 32-bit table or pushed it into

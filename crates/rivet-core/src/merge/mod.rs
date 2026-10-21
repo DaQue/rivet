@@ -427,7 +427,7 @@ pub struct TreeMerge {
     pub tree: Option<ObjectId>,
 }
 
-/// Phase 9 — the outcome of a merge, under the name the scaffold's shared vocabulary uses.
+/// Phase 9 — the outcome of a merge, under the shared vocabulary every merge entry point uses.
 ///
 /// # Caveats
 ///

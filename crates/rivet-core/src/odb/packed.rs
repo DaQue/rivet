@@ -1,7 +1,7 @@
 //! Phase 10 — the packed half of the object database: one `.pack` and its `.idx`.
 //!
-//! This is the store that makes a `git gc`'d repository readable. It pairs a [`PackFile`] with the
-//! [`PackIndex`] beside it so that an object id can be turned into an offset, and it keeps the
+//! This is the store that makes a `git gc`'d repository readable. It pairs a [`crate::pack::PackFile`] with the
+//! [`crate::pack::PackIndex`] beside it so that an object id can be turned into an offset, and it keeps the
 //! resolved delta bases that make a chain of deltas affordable to walk.
 //!
 //! # Caveats that bite
