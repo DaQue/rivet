@@ -355,7 +355,7 @@ impl Config {
             logical = trimmed.to_vec();
             let t = &logical[..];
             if t[0] == b'[' {
-                let close = t.iter().position(|b| *b == b']').ok_or_else(|| Error::ConfigSyntax { line: line_no, reason: "unterminated section" })?;
+                let close = t.iter().position(|b| *b == b']').ok_or(Error::ConfigSyntax { line: line_no, reason: "unterminated section" })?;
                 let raw = &t[1..close];
                 let ws = |b: &u8| *b == b' ' || *b == b'\t';
                 let start = raw.iter().position(|b| !ws(b)).unwrap_or(raw.len());
@@ -407,7 +407,7 @@ impl Config {
                 section = Some((BString::from(name_str.to_ascii_lowercase()), sub));
                 continue;
             }
-            let sec = section.as_ref().ok_or_else(|| Error::ConfigSyntax { line: line_no, reason: "key before section" })?;
+            let sec = section.as_ref().ok_or(Error::ConfigSyntax { line: line_no, reason: "key before section" })?;
             let eq = t.iter().position(|b| *b == b'=');
             let (key_bytes, value_bytes): (&[u8], &[u8]) = if let Some(eq) = eq {
                 let key = &t[..eq];
@@ -583,15 +583,17 @@ impl Config {
         }
         let tmp = path.with_extension("tmp");
         let data = self.to_bytes();
-        let res = std::fs::write(&tmp, &data);
-        if res.is_err() {
+        let at_path = |source: std::io::Error| Error::IoAtPath {
+            path: path.to_string_lossy().into_owned().into(),
+            source,
+        };
+        if let Err(source) = std::fs::write(&tmp, &data) {
             let _ = std::fs::remove_file(&tmp);
-            return Err(Error::IoAtPath { path: path.to_string_lossy().into_owned().into(), source: res.unwrap_err() });
+            return Err(at_path(source));
         }
-        let res = std::fs::rename(&tmp, path);
-        if res.is_err() {
+        if let Err(source) = std::fs::rename(&tmp, path) {
             let _ = std::fs::remove_file(&tmp);
-            return Err(Error::IoAtPath { path: path.to_string_lossy().into_owned().into(), source: res.unwrap_err() });
+            return Err(at_path(source));
         }
         Ok(())
     }
@@ -699,10 +701,10 @@ impl Config {
         match value {
             None => Ok(None),
             Some(v) => {
-                let b = parse_bool(&v).map_err(|_| Error::ConfigInvalidValue {
+                let b = parse_bool(v).map_err(|_| Error::ConfigInvalidValue {
                     key: key.to_owned(),
                     value: v.to_owned(),
-                    expected: "boolean".into(),
+                    expected: "boolean",
                 })?;
                 Ok(Some(b))
             }
@@ -732,10 +734,10 @@ impl Config {
         match value {
             None => Ok(None),
             Some(v) => {
-                let b = parse_int(&v).map_err(|_| Error::ConfigInvalidValue {
+                let b = parse_int(v).map_err(|_| Error::ConfigInvalidValue {
                     key: key.to_owned(),
                     value: v.to_owned(),
-                    expected: "integer".into(),
+                    expected: "integer",
                 })?;
                 Ok(Some(b))
             }
@@ -958,7 +960,7 @@ impl Config {
                 let n = self.get_int(key)?;
                 match n {
                     Some(n) => {
-                        if n < 0 || n > 1 {
+                        if !(0..=1).contains(&n) {
                             return Err(Error::UnsupportedRepositoryFormatVersion { version: n as u32 });
                         }
                         Ok(n as u32)
@@ -1064,7 +1066,7 @@ impl Config {
             return Ok(&v[..] == b"*" || v == path);
         }
         for value in self.get_all(BStr::new(b"safe.directory"))? {
-            if &value[..] == b"*" || value == path {
+            if value == b"*" || value == path {
                 return Ok(true);
             }
         }
@@ -1099,7 +1101,7 @@ impl Default for Config {
 ///
 /// [`crate::error::Error::ConfigInvalidValue`] with `expected` set to `"a boolean"`.
 pub fn parse_bool(value: &BStr) -> Result<bool> {
-    let v = &value[..];
+    let v = value;
     if v.is_empty() {
         return Ok(false);
     }
@@ -1123,7 +1125,7 @@ pub fn parse_bool(value: &BStr) -> Result<bool> {
 /// Only `~` and `~/…` are expanded; `~user/…` is left alone because Git does not expand it. A
 /// missing `$HOME` leaves the value untouched rather than turning it into a rooted `/…`.
 fn expand_tilde(value: &BStr) -> BString {
-    let bytes = &value[..];
+    let bytes = value;
     if bytes.first() != Some(&b'~') {
         return value.to_owned();
     }
@@ -1152,7 +1154,7 @@ fn expand_tilde(value: &BStr) -> BString {
 /// [`crate::error::Error::ConfigInvalidValue`] with `expected` set to `"an integer"` for anything
 /// that does not parse, overflows an [`i64`], or has a malformed suffix.
 pub fn parse_int(value: &BStr) -> Result<i64> {
-    let bytes = &value[..];
+    let bytes = value;
     let mut i = 0;
     let mut neg = false;
     if i < bytes.len() && bytes[i] == b'-' {
@@ -1170,7 +1172,7 @@ pub fn parse_int(value: &BStr) -> Result<i64> {
     let mut has_digit = false;
     while i < bytes.len() {
         let c = bytes[i];
-        if c >= b'0' && c <= b'9' {
+        if c.is_ascii_digit() {
             has_digit = true;
             let d = (c - b'0') as i64;
             if n > (i64::MAX - d) / 10 {

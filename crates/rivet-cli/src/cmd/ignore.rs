@@ -189,7 +189,7 @@ pub fn run_check_ignore(global: &GlobalArgs, args: &CheckIgnoreArgs) -> Result<i
             matched = true;
         }
         if reported || (args.verbose && args.non_matching) {
-            let shown_path = if args.null_terminated || !args.stdin { bytes.clone() } else { bytes.clone() };
+            let shown_path = bytes.clone();
             if args.verbose {
                 let (source, line, text) = match &pattern {
                     Some(p) => {

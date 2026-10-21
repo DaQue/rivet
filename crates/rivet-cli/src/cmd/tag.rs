@@ -223,11 +223,10 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
         rows.sort_by(|a, b| a.0.cmp(&b.0));
         let mut printed = 0;
         for (name, oid) in rows {
-            if let Some(pattern) = &pattern {
-                if !super::branching::glob_match(pattern.as_bytes(), name.as_bytes()) {
+            if let Some(pattern) = &pattern
+                && !super::branching::glob_match(pattern.as_bytes(), name.as_bytes()) {
                     continue;
                 }
-            }
             if let Some(target) = points_at {
                 let peeled = repository.refs().peel_oid(oid, repository.odb()).unwrap_or(oid);
                 if oid != target && peeled != target {
@@ -312,7 +311,7 @@ fn cleanup_tag_message(message: &[u8]) -> Vec<u8> {
     let mut lines: Vec<&str> = Vec::new();
     for line in text.lines() {
         let line = line.trim_end();
-        if line.is_empty() && lines.last().map_or(true, |l| l.is_empty()) {
+        if line.is_empty() && lines.last().is_none_or(|l| l.is_empty()) {
             continue;
         }
         lines.push(line);

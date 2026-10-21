@@ -294,17 +294,19 @@ impl Pattern {
     /// not a comment.
     pub fn parse_file(data: &[u8], source: IgnoreSource, base: &BStr) -> Result<Vec<Self>> {
         let mut out = Vec::new();
-        let mut line_number = 1usize;
-        for line in data.split(|b| *b == b'\n') {
-            let trimmed = line.strip_suffix(b"\r").unwrap_or(line);
-            let trimmed = trimmed.trim_ascii();
+        for (index, line) in data.split(|b| *b == b'\n').enumerate() {
+            let line_number = index + 1;
+            let mut trimmed = line.strip_suffix(b"\r").unwrap_or(line);
+            // Git strips trailing spaces unless escaped with a backslash; leading ones count.
+            while trimmed.ends_with(b" ") && !trimmed.ends_with(b"\\ ") {
+                trimmed = &trimmed[..trimmed.len() - 1];
+            }
             if !trimmed.is_empty() && !trimmed.starts_with(b"#") {
                 let pattern = Pattern::parse(BStr::new(trimmed), source.clone(), line_number, base)?;
                 if let Some(p) = pattern {
                     out.push(p);
                 }
             }
-            line_number += 1;
         }
         Ok(out)
     }

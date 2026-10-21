@@ -109,11 +109,10 @@ pub fn open_transport(url: &RemoteUrl) -> Result<Box<dyn Transport>> {
 /// Turn a path given on the command line into the absolute form Git stores for a local remote.
 pub fn absolutize_url(url: &str) -> String {
     let looks_local = !url.contains("://") && !url.contains(':') || url.starts_with("file:");
-    if looks_local && !url.starts_with("file:") && !Path::new(url).is_absolute() {
-        if let Ok(abs) = std::fs::canonicalize(url) {
+    if looks_local && !url.starts_with("file:") && !Path::new(url).is_absolute()
+        && let Ok(abs) = std::fs::canonicalize(url) {
             return abs.to_string_lossy().into_owned();
         }
-    }
     url.to_string()
 }
 
@@ -221,13 +220,11 @@ impl Repository {
     pub fn remote_names(&self) -> Vec<BString> {
         let mut names: Vec<BString> = Vec::new();
         for entry in self.config().entries() {
-            if entry.section.eq_ignore_ascii_case(b"remote") {
-                if let Some(sub) = &entry.subsection {
-                    if !names.contains(sub) {
+            if entry.section.eq_ignore_ascii_case(b"remote")
+                && let Some(sub) = &entry.subsection
+                    && !names.contains(sub) {
                         names.push(sub.clone());
                     }
-                }
-            }
         }
         names
     }
@@ -277,18 +274,16 @@ impl Repository {
         let mut tips = Vec::new();
         if let Ok(all) = self.refs().list(b"refs/") {
             for (_, target) in all {
-                if let Ok(oid) = target.oid() {
-                    if self.odb().contains(&oid) && !tips.contains(&oid) {
+                if let Ok(oid) = target.oid()
+                    && self.odb().contains(&oid) && !tips.contains(&oid) {
                         tips.push(oid);
                     }
-                }
             }
         }
-        if let Ok(Some(head)) = self.head().map(|h| h.oid()) {
-            if !tips.contains(&head) {
+        if let Ok(Some(head)) = self.head().map(|h| h.oid())
+            && !tips.contains(&head) {
                 tips.push(head);
             }
-        }
         tips
     }
 
@@ -382,8 +377,8 @@ impl Repository {
                 // the remote's own refspecs map it.
                 if spec.dst.is_empty() {
                     for conf in &configured {
-                        if let Some(dst) = conf.map(&r.name) {
-                            if !dst.is_empty() {
+                        if let Some(dst) = conf.map(&r.name)
+                            && !dst.is_empty() {
                                 mappings.push(Mapping {
                                     src: r.name.clone(),
                                     dst: Some(dst),
@@ -393,7 +388,6 @@ impl Repository {
                                     listed: false,
                                 });
                             }
-                        }
                     }
                 }
             } else {
@@ -503,7 +497,7 @@ impl Repository {
                         let old = self.refs().resolve_oid(&name).ok();
                         self.refs().delete(&name)?;
                         let mut from = short_name(name.as_bytes());
-                        from = format!("{from}");
+                        from = from.to_string();
                         let _ = old;
                         changes.push(RefChange {
                             flag: '-',
@@ -614,9 +608,9 @@ impl Repository {
 
         // `remote.<name>.followRemoteHEAD` defaults to `create`: learn the remote's default branch
         // the first time, without ever moving it afterwards.
-        if config.is_some() && !explicit && !request.pack_refs && !request.dry_run {
-            if let Some(default) = remote_head_branch(&advertisement) {
-                if let Some(short) = default.strip_prefix(b"refs/heads/") {
+        if config.is_some() && !explicit && !request.pack_refs && !request.dry_run
+            && let Some(default) = remote_head_branch(&advertisement)
+                && let Some(short) = default.strip_prefix(b"refs/heads/") {
                     let head_ref = RefName::from_bytes(format!("refs/remotes/{label}/HEAD").as_bytes())?;
                     let target = RefName::from_bytes(format!("refs/remotes/{label}/{}", String::from_utf8_lossy(short)).as_bytes())?;
                     if !self.refs().exists(&head_ref) && self.refs().exists(&target) {
@@ -626,8 +620,6 @@ impl Repository {
                         self.refs().set_symbolic(&head_ref, &target, message)?;
                     }
                 }
-            }
-        }
 
         if request.write_fetch_head && !request.dry_run {
             let mut ordered: Vec<&(ObjectId, bool, String)> = fetch_head.iter().filter(|e| e.1).collect();

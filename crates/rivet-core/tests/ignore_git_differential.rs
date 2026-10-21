@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use bstr::{BStr, BString};
+use bstr::BStr;
 use rivet_core::ignore::{IgnoreStack, PathKind};
 
 fn git(dir: &Path, args: &[&str]) -> Vec<u8> {
@@ -121,7 +121,7 @@ fn ignore_decisions_match_git_check_ignore() {
                 .check(BStr::new(path), *kind)
                 .unwrap()
                 .pattern()
-                .map(|p| BString::from(p.source.describe()));
+                .map(|p| p.source.describe());
             mismatches.push(format!(
                 "{path}: git={expected} ours={ours} decision={:?}",
                 detail

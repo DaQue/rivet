@@ -180,7 +180,7 @@ fn extended_word_survives_round_trip() {
     assert_eq!(e.flags.bits(), 0x4005);
     assert_eq!(e.extended_flags & 0x2000, 0x2000);
     let (empty_blob, _) = hash_object(ObjectFormat::Sha1, ObjectKind::Blob, b"").unwrap();
-    let zero = format!("{}", "0".repeat(40));
+    let zero = "0".repeat(40).to_string();
     assert!(
         e.oid == empty_blob || e.oid.to_string() == zero,
         "unexpected intent-to-add oid {}",

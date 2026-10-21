@@ -594,7 +594,7 @@ impl IndexEntry {
         if data.len() < FIXED {
             return Err(Error::CorruptIndex {
                 offset: data.len(),
-                reason: "entry shorter than the fixed part".into(),
+                reason: "entry shorter than the fixed part",
             });
         }
         let take = |i: usize| u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
@@ -613,7 +613,7 @@ impl IndexEntry {
         if data.len() < id_end {
             return Err(Error::CorruptIndex {
                 offset: id_end,
-                reason: "truncated object id".into(),
+                reason: "truncated object id",
             });
         }
         let oid = ObjectId::from_bytes(format, &data[FIXED..id_end])?;
@@ -624,20 +624,20 @@ impl IndexEntry {
         if data.len() < id_end + 2 {
             return Err(Error::CorruptIndex {
                 offset: id_end + 2,
-                reason: "truncated flags word".into(),
+                reason: "truncated flags word",
             });
         }
         let extended_flags = if flags.is_extended() {
             if !version.has_extended_flags() {
                 return Err(Error::CorruptIndex {
                     offset: id_end + 2,
-                    reason: "extended flags word in a version that does not carry one".into(),
+                    reason: "extended flags word in a version that does not carry one",
                 });
             }
             if data.len() < id_end + 4 {
                 return Err(Error::CorruptIndex {
                     offset: id_end + 4,
-                    reason: "truncated extended flags word".into(),
+                    reason: "truncated extended flags word",
                 });
             }
             u16::from_be_bytes([data[id_end + 2], data[id_end + 3]])
@@ -656,14 +656,14 @@ impl IndexEntry {
         let Some(rel) = nul else {
             return Err(Error::CorruptIndex {
                 offset: data.len(),
-                reason: "path not NUL-terminated".into(),
+                reason: "path not NUL-terminated",
             });
         };
         let len = rel as u16;
         if hint < IndexEntryFlags::NAME_LENGTH_MAX && hint != len {
             return Err(Error::CorruptIndex {
                 offset: path_start + len as usize,
-                reason: "stored name length disagrees with the path".into(),
+                reason: "stored name length disagrees with the path",
             });
         }
         if rel > INDEX_PATH_MAX {
@@ -685,11 +685,11 @@ impl IndexEntry {
 
         let fixed = FIXED + id_len + 2 + if flags.is_extended() { 2 } else { 0 };
         let total = fixed + len as usize + 1;
-        let consumed = (total + 7) / 8 * 8;
+        let consumed = total.div_ceil(8) * 8;
         if data.len() < consumed {
             return Err(Error::CorruptIndex {
                 offset: consumed,
-                reason: "entry runs past the end of the data".into(),
+                reason: "entry runs past the end of the data",
             });
         }
 
@@ -737,7 +737,7 @@ impl IndexEntry {
         if self.path.contains(&0) {
             return Err(Error::CorruptIndex {
                 offset: 0,
-                reason: "path contains a NUL".into(),
+                reason: "path contains a NUL",
             });
         }
         if self.path.len() > INDEX_PATH_MAX {
@@ -749,7 +749,7 @@ impl IndexEntry {
         if ext_word && !version.has_extended_flags() {
             return Err(Error::CorruptIndex {
                 offset: 0,
-                reason: "extended flags word in a version that does not carry one".into(),
+                reason: "extended flags word in a version that does not carry one",
             });
         }
         let mut out = Vec::with_capacity(
@@ -776,7 +776,7 @@ impl IndexEntry {
         }
         out.extend_from_slice(&self.path);
         out.push(0);
-        let target = (out.len() + 7) / 8 * 8;
+        let target = out.len().div_ceil(8) * 8;
         out.resize(target, 0);
         Ok(out)
     }
@@ -1089,7 +1089,7 @@ impl Index {
         hasher.update(&data[..body_end]);
         let actual_checksum = hasher.finish().map_err(|_| Error::CorruptIndex {
             offset: 0,
-            reason: "checksum computation failed".into(),
+            reason: "checksum computation failed",
         })?;
         if expected_checksum != actual_checksum {
             return Err(Error::BadIndexChecksum {
@@ -1317,7 +1317,7 @@ impl Index {
     ///   [`IndexExt::is_unmerged`], because treating a conflict as untracked makes `status` report a
     ///   file that is very much tracked as new.
     pub fn entry(&self, path: &BStr) -> Option<&IndexEntry> {
-        self.entries.iter().find(|e| &e.path == path && e.stage() == Stage::Normal)
+        self.entries.iter().find(|e| e.path == path && e.stage() == Stage::Normal)
     }
 
     /// Phase 3 — find a specific stage of a path.
@@ -1347,7 +1347,7 @@ impl Index {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let e = &self.entries[mid];
-            let ord = match e.path.as_slice().cmp(&path[..]) {
+            let ord = match e.path.as_slice().cmp(path) {
                 Ordering::Equal => e.stage().as_bits().cmp(&bits),
                 ord => ord,
             };
@@ -1585,14 +1585,14 @@ impl IndexExt for Index {
     fn stages(&self, path: &BStr) -> Vec<&IndexEntry> {
         self.entries
             .iter()
-            .filter(|e| &*e.path == path)
+            .filter(|e| *e.path == path)
             .collect()
     }
 
     fn is_unmerged(&self, path: &BStr) -> bool {
         self.entries
             .iter()
-            .any(|e| &*e.path == path && e.stage() != Stage::Normal)
+            .any(|e| *e.path == path && e.stage() != Stage::Normal)
     }
 
     fn conflicts(&self) -> Vec<BString> {
@@ -1614,7 +1614,7 @@ impl IndexExt for Index {
         let mut removed = Vec::new();
         let mut kept = Vec::with_capacity(self.entries.len());
         for entry in std::mem::take(&mut self.entries) {
-            if &*entry.path == path {
+            if *entry.path == path {
                 removed.push(entry);
             } else {
                 kept.push(entry);
@@ -1625,7 +1625,7 @@ impl IndexExt for Index {
     }
 
     fn resolve(&mut self, path: &BStr, entry: IndexEntry) -> Result<()> {
-        if &*entry.path != path {
+        if *entry.path != path {
             return Err(Error::Message(format!(
                 "cannot resolve '{path}': entry is for '{}'",
                 entry.path
@@ -1661,7 +1661,7 @@ impl IndexExt for Index {
         with_slash.push(b'/');
         self.entries
             .iter()
-            .filter(|e| &*e.path == prefix || e.path.starts_with(&with_slash))
+            .filter(|e| *e.path == prefix || e.path.starts_with(&with_slash))
             .collect()
     }
 }
@@ -1791,7 +1791,7 @@ mod tests {
         assert_eq!(e.path.len(), 4095);
         assert_eq!(e.path.as_slice(), b"x".repeat(4095));
         let expected = 40 + 20 + 2 + 4095 + 1;
-        assert_eq!(consumed, (expected + 7) / 8 * 8);
+        assert_eq!(consumed, usize::div_ceil(expected, 8) * 8);
     }
 
     #[test]

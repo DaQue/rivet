@@ -66,16 +66,11 @@ pub fn resolve(format: ObjectFormat, refs: &RefStore, odb: &Odb, spec: &BStr) ->
     // before the peel even though the peel is written last.
     let mut ops = Vec::new();
     let mut base = spec;
-    loop {
-        match split_suffix(base)? {
-            Some((rest, op)) => {
-                ops.push(op);
-                base = rest;
-                if base.is_empty() {
-                    return Err(invalid(spec, "suffix has no revision"));
-                }
-            }
-            None => break,
+    while let Some((rest, op)) = split_suffix(base)? {
+        ops.push(op);
+        base = rest;
+        if base.is_empty() {
+            return Err(invalid(spec, "suffix has no revision"));
         }
     }
 
@@ -166,7 +161,7 @@ fn resolve_base(
     if is_hex(base) {
         let hex_len = format.hex_len();
         if base.len() == hex_len {
-            return Ok(ObjectId::from_hex(format, base)?);
+            return ObjectId::from_hex(format, base);
         }
         if base.len() >= 4 {
             let prefix = ObjectId::from_hex_prefix(format, base)?;

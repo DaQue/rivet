@@ -105,6 +105,6 @@ fn handles_a_long_common_prefix() {
     let a_refs: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
     let b_refs: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
     check(&a_refs, &b_refs);
-    a.truncate(0);
+    a.clear();
     let _ = a;
 }

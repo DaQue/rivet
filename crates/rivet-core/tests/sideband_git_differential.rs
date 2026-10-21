@@ -147,7 +147,7 @@ fn upload_pack_stream(repo: &Path, want: &str) -> Vec<u8> {
     };
     match &line {
         PktLine::Data(data) => assert_eq!(
-            String::from_utf8_lossy(&data).trim(),
+            String::from_utf8_lossy(data).trim(),
             "NAK",
             "server sends NAK before the pack"
         ),

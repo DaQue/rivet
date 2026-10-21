@@ -139,7 +139,7 @@ impl HunkLine {
     /// Phase 8 — a context line.
     pub fn context(content: impl Into<BString>) -> Self {
         let content = content.into();
-        let has_newline = content.ends_with(&[b'\n']);
+        let has_newline = content.ends_with(b"\n");
         Self {
             kind: LineKind::Context,
             content,
@@ -150,7 +150,7 @@ impl HunkLine {
     /// Phase 8 — a removed line.
     pub fn removed(content: impl Into<BString>) -> Self {
         let content = content.into();
-        let has_newline = content.ends_with(&[b'\n']);
+        let has_newline = content.ends_with(b"\n");
         Self {
             kind: LineKind::Removed,
             content,
@@ -161,7 +161,7 @@ impl HunkLine {
     /// Phase 8 — an added line.
     pub fn added(content: impl Into<BString>) -> Self {
         let content = content.into();
-        let has_newline = content.ends_with(&[b'\n']);
+        let has_newline = content.ends_with(b"\n");
         Self {
             kind: LineKind::Added,
             content,
@@ -233,10 +233,10 @@ impl Hunk {
     /// Phase 8 — an empty hunk with no lines.
     pub fn new(old_start: usize, old_lines: usize, new_start: usize, new_lines: usize) -> Self {
         Self {
-            old_start: old_start,
-            old_lines: old_lines,
-            new_start: new_start,
-            new_lines: new_lines,
+            old_start,
+            old_lines,
+            new_start,
+            new_lines,
             lines: Vec::new(),
             section: BString::default(),
         }
@@ -565,8 +565,8 @@ pub fn format_unified(
         let path = file.path();
         let mode = file.new_mode.or(file.old_mode);
 
-        let old_name = file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]);
-        let new_name = file.new_path.as_ref().map(|p| &p[..]).unwrap_or(&path[..]);
+        let old_name = file.old_path.as_ref().map(|p| &p[..]).unwrap_or(path);
+        let new_name = file.new_path.as_ref().map(|p| &p[..]).unwrap_or(path);
         let side = |prefix: &str, name: &[u8]| -> Vec<u8> {
             let mut full = prefix.as_bytes().to_vec();
             full.extend_from_slice(name);
@@ -860,14 +860,14 @@ pub fn format_name_status(diff: &crate::diff::TreeDiff, out: &mut impl Write) ->
             out.write_all(format!("R{:03}\t", file.similarity.unwrap_or(100)).as_bytes())?;
             out.write_all(&crate::ops::quote_path(file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&b""[..]), false))?;
             out.write_all(b"\t")?;
-            out.write_all(&crate::ops::quote_path(&file.path()[..], false))?;
+            out.write_all(&crate::ops::quote_path(file.path(), false))?;
             out.write_all(b"\n")?;
             continue;
         }
         let letter = change_letter(file.is_new, file.is_deleted, file.is_type_change());
         out.write_all(letter.to_string().as_bytes())?;
         out.write_all(b"\t")?;
-        out.write_all(&crate::ops::quote_path(&file.path()[..], false))?;
+        out.write_all(&crate::ops::quote_path(file.path(), false))?;
         out.write_all(b"\n")?;
     }
     Ok(())
@@ -911,14 +911,14 @@ fn stat_name(stat: &DiffStat, file: &crate::diff::FileDiff) -> Vec<u8> {
     if file.is_rename() {
         let old = file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&b""[..]);
         let new = file.path();
-        let (qo, qn) = (crate::ops::quote_path(old, false), crate::ops::quote_path(&new[..], false));
-        if qo.as_slice() != old || qn.as_slice() != &new[..] {
+        let (qo, qn) = (crate::ops::quote_path(old, false), crate::ops::quote_path(new, false));
+        if qo.as_slice() != old || qn.as_slice() != new {
             let mut out = qo.to_vec();
             out.extend_from_slice(b" => ");
             out.extend_from_slice(&qn);
             return out;
         }
-        return crate::diff::rename::pprint_rename(old, &new[..]).to_vec();
+        return crate::diff::rename::pprint_rename(old, new).to_vec();
     }
     crate::ops::quote_path(&stat.path[..], false).to_vec()
 }

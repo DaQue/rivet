@@ -281,14 +281,13 @@ impl HttpTransport {
         }
         let mut out = BString::from(url.scheme.as_str());
         out.extend_from_slice(b"://");
-        if credentials {
-            if let Some((user, password)) = &self.credentials {
+        if credentials
+            && let Some((user, password)) = &self.credentials {
                 out.extend_from_slice(&user[..]);
                 out.push(b':');
                 out.extend_from_slice(&password[..]);
                 out.push(b'@');
             }
-        }
         if let Some(host) = url.host_port() {
             out.extend_from_slice(&host[..]);
         }
@@ -588,15 +587,14 @@ pub fn send(
     })?;
     let body = decode_body(encoding.as_ref().map(|enc| BStr::new(&enc[..])), body)?;
 
-    if let Some(content_type) = &content_type {
-        if !is_git_content_type(BStr::new(content_type)) {
+    if let Some(content_type) = &content_type
+        && !is_git_content_type(BStr::new(content_type)) {
             return Err(Error::Protocol(format!(
                 "unexpected content type {}: {}",
                 content_type,
                 body_preview(&body)
             )));
         }
-    }
     Ok(HttpResponse { status, content_type, body, final_url })
 }
 
@@ -606,7 +604,7 @@ fn header_string(response: &ureq::http::Response<ureq::Body>, name: &str) -> Opt
         .headers()
         .get(name)
         .and_then(|value| value.to_str().ok())
-        .map(|text| BString::from(text))
+        .map(BString::from)
 }
 
 /// Whether a media type is one of the smart-HTTP ones.
@@ -684,8 +682,8 @@ pub fn send_streaming<T>(
         return Err(Error::HttpStatus { url: safe, status });
     }
 
-    if let Some(content_type) = header_string(&response, "content-type") {
-        if !is_git_content_type(BStr::new(&content_type)) {
+    if let Some(content_type) = header_string(&response, "content-type")
+        && !is_git_content_type(BStr::new(&content_type)) {
             // The body is the server's explanation, and this is the only chance to read it: the
             // caller's callback expects protocol bytes and would report a framing error instead.
             let body = response.body_mut().read_to_vec().unwrap_or_default();
@@ -695,7 +693,6 @@ pub fn send_streaming<T>(
                 body_preview(&body)
             )));
         }
-    }
 
     let body = response.body_mut();
     let mut reader = body.as_reader();
@@ -846,7 +843,7 @@ impl HttpTransport {
             if peer != format {
                 return Err(Error::ObjectFormatMismatch { expected: format, found: peer });
             }
-            let agent = capabilities.value(b"agent").map(|value| BString::from(&value[..]));
+            let agent = capabilities.value(b"agent").map(BString::from);
             self.capabilities = capabilities.clone();
             self.version = ProtocolVersion::V2;
             self.format = peer;
@@ -917,7 +914,7 @@ impl HttpTransport {
         }
         refs.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let agent = capabilities.value(b"agent").map(|value| BString::from(&value[..]));
+        let agent = capabilities.value(b"agent").map(BString::from);
         self.capabilities = capabilities.clone();
         self.version = ProtocolVersion::V0;
         self.format = peer;
@@ -1032,7 +1029,7 @@ impl Transport for HttpTransport {
 
         send_streaming(&self.agent, &request, BStr::new(&base), &mut |reader| {
             let mut reader = std::io::BufReader::new(reader);
-            let mut packfile = v2 == false;
+            let mut packfile = !v2;
 
             loop {
                 match read_frame(&mut reader)? {

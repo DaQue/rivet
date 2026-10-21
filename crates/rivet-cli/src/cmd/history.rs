@@ -323,17 +323,15 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     let resolve = |text: &str| super::resolve_commit(&repository, text);
     if args.all {
         for (_, oid) in repository.refs().list_all(repository.odb())? {
-            if let Ok(commit) = repository.refs().peel_oid(oid, repository.odb()) {
-                if !starts.contains(&commit) {
+            if let Ok(commit) = repository.refs().peel_oid(oid, repository.odb())
+                && !starts.contains(&commit) {
                     starts.push(commit);
                 }
-            }
         }
-        if let Some(head) = repository.head()?.oid() {
-            if !starts.contains(&head) {
+        if let Some(head) = repository.head()?.oid()
+            && !starts.contains(&head) {
                 starts.insert(0, head);
             }
-        }
     } else if let Some(negated) = spec.strip_prefix('^') {
         options.exclude(resolve(negated)?);
         starts.push(resolve("HEAD")?);
@@ -611,7 +609,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
     let mut out = Vec::new();
     if args.name_only {
         for file in &diff.files {
-            out.extend_from_slice(&rivet_core::ops::quote_path(&file.path()[..], false));
+            out.extend_from_slice(&rivet_core::ops::quote_path(file.path(), false));
             out.push(b'\n');
         }
     } else if args.name_status {
@@ -776,7 +774,7 @@ fn show_object(repository: &mut Repository, oid: &ObjectId, args: &ShowArgs, out
             out.extend_from_slice(format!("tag {}\n", tag.name).as_bytes());
             out.extend_from_slice(format!("Tagger: {} <{}>\n", tag.tagger.name, tag.tagger.email).as_bytes());
             out.extend_from_slice(format!("Date:   {}\n\n", rivet_core::ops::format_git_date(tag.tagger.when, tag.tagger.tz_offset_minutes)).as_bytes());
-            out.extend_from_slice(&tag.message);
+            out.extend_from_slice(tag.message);
             if !tag.message.ends_with(b"\n") { out.push(b'\n'); }
             out.push(b'\n');
             let target = tag.object;

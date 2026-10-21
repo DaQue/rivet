@@ -272,11 +272,10 @@ fn index_entries_match_the_tree_git_checked_out() {
             rivet_core::worktree::checkout::CheckoutAction::Keep
             | rivet_core::worktree::checkout::CheckoutAction::Create
             | rivet_core::worktree::checkout::CheckoutAction::Update => {
-                if let (Some(oid), Some(mode)) = (entry.oid, entry.mode) {
-                    if mode != rivet_core::object::EntryMode::Commit {
+                if let (Some(oid), Some(mode)) = (entry.oid, entry.mode)
+                    && mode != rivet_core::object::EntryMode::Commit {
                         ours.insert(entry.path.to_string(), (mode.to_u32(), oid));
                     }
-                }
             }
         }
     }

@@ -52,7 +52,6 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use bstr::BString;
 
 use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
@@ -210,7 +209,7 @@ impl Odb {
                 continue;
             }
             let data = fs::read(&pack_path)?;
-            let index = fs::read(&entry.path())?;
+            let index = fs::read(entry.path())?;
             let pack = packed::PackedObjectStore::open(data, index, format)?;
             packs.push(pack);
         }
@@ -297,7 +296,7 @@ impl Odb {
                 continue;
             }
             let data = fs::read(&pack_path)?;
-            let index = fs::read(&entry.path())?;
+            let index = fs::read(entry.path())?;
             let pack = packed::PackedObjectStore::open(data, index, self.format)?;
             // Already seen: a pack that vanished is a race, and we only add, not rescan.
             // Identity is the pack's own checksum, which is stable and unique per pack.
@@ -507,9 +506,9 @@ impl Odb {
     ///   different failures, because "you typed it wrong" and "you need to type more" are different
     ///   problems for the user.
     /// * **The method is linear in the packs' id tables** and allocates a candidate list per pack.
-    /// For a full-length id it should short-circuit to [`Odb::read`]; for the four-character
-    /// abbreviations users actually type, the fanout table is what keeps it from scanning
-    /// everything.
+    ///   For a full-length id it should short-circuit to [`Odb::read`]; for the four-character
+    ///   abbreviations users actually type, the fanout table is what keeps it from scanning
+    ///   everything.
     ///
     /// # Errors
     ///
@@ -543,7 +542,7 @@ impl Odb {
             0 => Err(Error::ObjectNotFound { oid: *prefix }),
             1 => Ok(candidates.pop().unwrap()),
             n => Err(Error::AmbiguousPrefix {
-                prefix: BString::from(prefix.to_hex()),
+                prefix: prefix.to_hex(),
                 candidates: n,
             }),
         }

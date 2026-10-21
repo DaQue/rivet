@@ -140,7 +140,7 @@ impl LooseObjectStore {
     ///   exist, so the answer is `false` — indistinguishable from "not present", which is the best
     ///   that can be done without checking the format at every call.
     pub fn contains(&self, oid: &ObjectId) -> bool {
-        fs::metadata(&self.path_for(oid)).is_ok()
+        fs::metadata(self.path_for(oid)).is_ok()
     }
 
     /// Phase 10 — read and verify one loose object.
@@ -285,7 +285,7 @@ impl LooseObjectStore {
                 match chunk.iter().position(|&b| b == 0) {
                     Some(i) => {
                         header.extend_from_slice(&chunk[..=i]);
-                        remaining = u64::from(n as u64 - (i + 1) as u64);
+                        remaining = n as u64 - (i + 1) as u64;
                         nul_seen = true;
                     }
                     None => {
@@ -367,7 +367,7 @@ impl LooseObjectStore {
 
         let dir = path.parent().unwrap();
         let dir_str = dir.to_string_lossy();
-        fs::create_dir_all(&dir).map_err(|e| Error::IoAtPath {
+        fs::create_dir_all(dir).map_err(|e| Error::IoAtPath {
             path: BString::from(dir_str.as_ref()),
             source: e,
         })?;

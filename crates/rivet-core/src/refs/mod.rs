@@ -38,28 +38,28 @@
 //! # Caveats that bite
 //!
 //! * **`HEAD` is a ref, not a special case.** It can be symbolic or direct (detached), it has a
-//!    reflog at `logs/HEAD`, and it is locked and updated like any other. It is one of the
-//!    one-component pseudo-refs, so [`RefName::parse`] accepts `HEAD` while rejecting a bare
-//!    `main`.
+//!   reflog at `logs/HEAD`, and it is locked and updated like any other. It is one of the
+//!   one-component pseudo-refs, so [`RefName::parse`] accepts `HEAD` while rejecting a bare
+//!   `main`.
 //! * **A ref does not have to point at a commit.** `refs/tags/v1.0` may name an annotated tag
-//!    object, and a tag points at whatever it was tagged. Resolving a ref to a commit means peeling
-//!    tags first, which is revision parsing (Phase 4) and needs the object database; this module
-//!    deliberately stops at "what does the ref file say". [`RefStore::head_commit`] is the one
-//!    helper that takes the extra step, because everything the CLI does needs it.
+//!   object, and a tag points at whatever it was tagged. Resolving a ref to a commit means peeling
+//!   tags first, which is revision parsing (Phase 4) and needs the object database; this module
+//!   deliberately stops at "what does the ref file say". [`RefStore::head_commit`] is the one
+//!   helper that takes the extra step, because everything the CLI does needs it.
 //! * **Refs are not a snapshot.** A concurrent `git gc`, `commit` or `fetch` can move a ref between
-//!    two reads of the same store, and a `pack-refs` run can move a ref from a file into
-//!    `packed-refs` under a reader's feet. A long-lived [`RefStore`] must [`RefStore::refresh`],
-//!    especially after an operation that failed to find a ref that the user can see.
+//!   two reads of the same store, and a `pack-refs` run can move a ref from a file into
+//!   `packed-refs` under a reader's feet. A long-lived [`RefStore`] must [`RefStore::refresh`],
+//!   especially after an operation that failed to find a ref that the user can see.
 //! * **Deleting a ref is two deletions.** The loose file and the `packed-refs` entry are separate
-//!    pieces of storage, and a deletion that removes only one leaves the ref in place. Git's own
-//!    delete handles both; so must [`RefStore::delete`].
+//!   pieces of storage, and a deletion that removes only one leaves the ref in place. Git's own
+//!   delete handles both; so must [`RefStore::delete`].
 //! * **Nothing here allocates a lock implicitly at open.** A [`RefStore`] holds no file handles and
-//!    takes no locks; a lock exists only for the duration of [`RefLock`]'s guard, which is what
-//!    makes an interrupted process leave a stale lock rather than a half-written ref.
+//!   takes no locks; a lock exists only for the duration of [`RefLock`]'s guard, which is what
+//!   makes an interrupted process leave a stale lock rather than a half-written ref.
 //! * **`refs/` is walked, so its contents are untrusted.** Loose ref storage is a directory tree on
-//!    a filesystem the user (and malware) can write to: a symlink under `refs/` must not be
-//!    followed, a file whose name is not a valid ref name must be skipped rather than failing the
-//!    listing, and a ref file is bounded in size rather than read into memory whatever its length.
+//!   a filesystem the user (and malware) can write to: a symlink under `refs/` must not be
+//!   followed, a file whose name is not a valid ref name must be skipped rather than failing the
+//!   listing, and a ref file is bounded in size rather than read into memory whatever its length.
 
 pub mod loose;
 pub mod name;
@@ -1354,8 +1354,7 @@ impl RefStore {
     /// the candidate namespaces.
     pub fn resolve_short(&self, short: &bstr::BStr) -> Result<RefName> {
                 let short: &[u8] = short.as_ref();
-        let mut candidates: Vec<Vec<u8>> = Vec::with_capacity(6);
-        candidates.push(short.to_vec());
+        let mut candidates: Vec<Vec<u8>> = vec![short.to_vec()];
         candidates.push([b"refs/".as_slice(), short].concat());
         candidates.push([b"refs/tags/".as_slice(), short].concat());
         candidates.push([b"refs/heads/".as_slice(), short].concat());

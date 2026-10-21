@@ -116,7 +116,7 @@ impl<'a> Tree<'a> {
             };
             let name_end = name_start + nul;
             let name = &data[name_start..name_end];
-            if name.iter().any(|&b| b == b'/') {
+            if name.contains(&b'/') {
                 return Err(Error::MalformedObject {
                     kind: ObjectKind::Tree,
                     reason: format!("name contains '/' at offset {name_start}"),
@@ -129,10 +129,7 @@ impl<'a> Tree<'a> {
                     reason: format!("truncated oid at offset {oid_start}"),
                 });
             }
-            let oid = match ObjectId::from_bytes(format, &data[oid_start..oid_start + hash_len]) {
-                Ok(o) => o,
-                Err(e) => return Err(e),
-            };
+            let oid = ObjectId::from_bytes(format, &data[oid_start..oid_start + hash_len])?;
             entries.push(TreeEntry {
                 mode,
                 name: BString::new(name.to_vec()),

@@ -132,11 +132,13 @@ impl Default for SidebandOptions {
 ///
 /// [`crate::error::Error::Protocol`] for an unknown channel, a channel 3 abort or a stream that ends
 /// without its terminator; and whatever `reader` raises.
+/// An optional callback that receives side-band progress text.
+pub type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&[u8])>;
 
 pub fn demultiplex<R: Read>(
     reader: &mut R,
     options: &SidebandOptions,
-    progress: Option<&mut dyn FnMut(&[u8])>,
+    progress: ProgressCallback<'_>,
 ) -> Result<Vec<u8>> {
     let mut pack = Vec::new();
     stream_pack(reader, options, &mut pack, progress)?;
@@ -147,7 +149,7 @@ pub fn stream_pack<R: Read, W: Write>(
     reader: &mut R,
     options: &SidebandOptions,
     out: &mut W,
-    progress: Option<&mut dyn FnMut(&[u8])>,
+    progress: ProgressCallback<'_>,
 ) -> Result<usize> {
     let mut progress = progress;
 
@@ -185,11 +187,10 @@ pub fn stream_pack<R: Read, W: Write>(
                 SidebandKind::Progress => {
                     // `None` means "read and discard", not "stop reading": the server blocks on a
                     // full pipe if its progress is never consumed.
-                    if options.want_progress {
-                        if let Some(callback) = progress.as_mut() {
+                    if options.want_progress
+                        && let Some(callback) = progress.as_mut() {
                             (**callback)(&packet.data);
                         }
-                    }
                 }
                 SidebandKind::Error => error_text.extend_from_slice(&packet.data),
             },
@@ -208,7 +209,7 @@ pub fn store_pack<R: Read>(
     options: &SidebandOptions,
     odb: &mut Odb,
     format: ObjectFormat,
-    progress: Option<&mut dyn FnMut(&[u8])>,
+    progress: ProgressCallback<'_>,
 ) -> Result<IndexPackResult> {
     let mut pack = Vec::new();
     stream_pack(reader, options, &mut pack, progress)?;
@@ -274,11 +275,10 @@ fn write_file_atomic(path: &std::path::Path, data: &[u8]) -> Result<()> {
 /// # Errors
 ///
 /// As [`demultiplex`], minus the pack-specific cases.
-
 pub fn read_status_stream<R: Read>(
     reader: &mut R,
     options: &SidebandOptions,
-    progress: Option<&mut dyn FnMut(&[u8])>,
+    progress: ProgressCallback<'_>,
 ) -> Result<Vec<u8>> {
     let mut progress = progress;
 
@@ -299,11 +299,10 @@ pub fn read_status_stream<R: Read>(
             Some(packet) => match packet.channel {
                 SidebandKind::Pack => status.extend_from_slice(&packet.data),
                 SidebandKind::Progress => {
-                    if options.want_progress {
-                        if let Some(callback) = progress.as_mut() {
+                    if options.want_progress
+                        && let Some(callback) = progress.as_mut() {
                             (**callback)(&packet.data);
                         }
-                    }
                 }
                 SidebandKind::Error => error_text.extend_from_slice(&packet.data),
             },

@@ -570,10 +570,7 @@ impl Repository {
             Some(v) => PathBuf::from(v),
             None => find_git_dir(&cwd()?)?,
         };
-        let work_tree = match std::env::var_os("GIT_WORK_TREE") {
-            Some(v) => Some(PathBuf::from(v)),
-            None => None,
-        };
+        let work_tree = std::env::var_os("GIT_WORK_TREE").map(PathBuf::from);
         Self::open_with(&git_dir, work_tree.as_deref(), None)
     }
 
@@ -688,15 +685,13 @@ impl Repository {
         } else {
             Config::new()
         };
-        if existed {
-            if let Ok(existing) = config.object_format() {
-                if existing != options.format {
+        if existed
+            && let Ok(existing) = config.object_format()
+                && existing != options.format {
                     return Err(Error::RepositoryExists(BString::from(
                         git_dir.to_string_lossy().into_owned(),
                     )));
                 }
-            }
-        }
         let version: &[u8] = match options.format {
             ObjectFormat::Sha1 => b"0",
             ObjectFormat::Sha256 => b"1",
@@ -724,12 +719,11 @@ impl Repository {
         // A work tree outside the repository root cannot be rediscovered from the layout, so it
         // has to be written down: a later `open_with(git_dir, None)` would otherwise guess the
         // root and stage into the wrong directory.
-        if let Some(wt) = work_tree.as_deref() {
-            if wt != root.as_path() {
+        if let Some(wt) = work_tree.as_deref()
+            && wt != root.as_path() {
                 use std::os::unix::ffi::OsStrExt;
                 config.set(BStr::new(b"core.worktree"), wt.as_os_str().as_bytes())?;
             }
-        }
         config.write(&config_path)?;
 
         // The two template files every `git init` leaves behind; neither is overwritten on a
@@ -1291,8 +1285,8 @@ impl Repository {
             && options.parents.is_empty()
             && crate::merge::merge_in_progress(&self.git_dir);
 
-        if !options.allow_empty && !options.amend && parents.len() < 2 {
-            if let Some(parent) = parents.first() {
+        if !options.allow_empty && !options.amend && parents.len() < 2
+            && let Some(parent) = parents.first() {
                 let parent_tree = match self.odb.read_typed(parent, ObjectKind::Commit)?.parse()? {
                     AnyObject::Commit(commit) => commit.tree,
                     _ => tree,
@@ -1303,7 +1297,6 @@ impl Repository {
                     ));
                 }
             }
-        }
 
         // Identity: the options if given, then the environment, then the configuration
         // (repository, global, system — Git's precedence).
@@ -1646,7 +1639,7 @@ fn build_tree_level(
         i = j;
     }
 
-    entries.sort_by(|a, b| tree_sort_key(a).cmp(&tree_sort_key(b)));
+    entries.sort_by_key(tree_sort_key);
 
     // `data` is the payload `id()` hashes; it is filled in here because the payload is
     // exactly what `serialize` produces from these entries.

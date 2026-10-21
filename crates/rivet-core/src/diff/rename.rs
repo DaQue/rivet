@@ -198,12 +198,11 @@ pub fn detect_renames(diff: &mut TreeDiff, odb: &Odb, options: &DiffOptions) -> 
                 sources.push(RenameSide { path: file.path().to_owned(), oid, mode });
                 source_files.push(index);
             }
-        } else if file.is_new {
-            if let (Some(oid), Some(mode)) = (file.new_oid, file.new_mode) {
+        } else if file.is_new
+            && let (Some(oid), Some(mode)) = (file.new_oid, file.new_mode) {
                 destinations.push(RenameSide { path: file.path().to_owned(), oid, mode });
                 destination_files.push(index);
             }
-        }
     }
     let pairs = pair_renames(&sources, &destinations, odb)?;
     if pairs.is_empty() {

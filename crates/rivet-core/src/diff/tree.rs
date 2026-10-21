@@ -116,7 +116,7 @@ impl FileDiff {
     ///   three-variant enum for a case that cannot arise from a tree walk. The implementation
     ///   must not panic on it; see the crate's "never panic on repository data" rule.
     pub fn path(&self) -> &BStr {
-        self.new_path.as_ref().map(|p| BStr::new(&p[..])).or_else(|| self.old_path.as_ref().map(|p| BStr::new(&p[..]))).unwrap_or(&BStr::new(&[]))
+        self.new_path.as_ref().map(|p| BStr::new(&p[..])).or_else(|| self.old_path.as_ref().map(|p| BStr::new(&p[..]))).unwrap_or(BStr::new(&[]))
     }
 
     /// Phase 8 — whether the change is only a mode change.

@@ -179,7 +179,7 @@ impl Worktree {
     /// [`Worktree::require_root`], which is the same query with the bare-repository case turned
     /// into [`crate::error::Error::BareRepository`].
     pub fn root(&self) -> Option<&Path> {
-        self.root.as_ref().map(PathBuf::as_path)
+        self.root.as_deref()
     }
 
     /// Phase 4 — the work tree root, failing on a bare repository.
@@ -639,6 +639,12 @@ pub struct WorktreeWalkOptions {
     pub recursive: bool,
     /// A work-tree-relative directory to start from, empty for the root.
     pub prefix: BString,
+}
+
+impl Default for WorktreeWalkOptions {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WorktreeWalkOptions {

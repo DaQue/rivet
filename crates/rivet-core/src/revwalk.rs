@@ -393,7 +393,6 @@ impl RevSpec {
     /// [`crate::error::Error::RefNotFound`] for a name that resolves to no ref and is not an id,
     /// and [`crate::error::Error::InvalidHex`] for a hex-looking string of the wrong length.
     pub fn parse(format: ObjectFormat, spec: &BStr, _refs: &RefStore) -> Result<Self> {
-        let spec = &spec[..];
         if spec.is_empty() {
             return Err(Error::InvalidRevision {
                 spec: BString::from(""),
@@ -555,7 +554,6 @@ pub struct RevRange {
 ///
 /// As [`RevSpec::parse`] for either side.
 pub fn parse_rev_spec(format: ObjectFormat, spec: &BStr, refs: &RefStore) -> Result<RevRange> {
-    let spec = &spec[..];
     let (left, right, symmetric) = if spec.starts_with(b"...") {
         let rest = &spec[3..];
         let dot = rest.iter().position(|&b| b == b'.').unwrap_or(rest.len());
@@ -569,15 +567,13 @@ pub fn parse_rev_spec(format: ObjectFormat, spec: &BStr, refs: &RefStore) -> Res
     } else {
         (None, None, false)
     };
-    let from = if left.is_some() {
-        Some(RevSpec::parse(format, BStr::new(left.unwrap()), refs)?)
-    } else {
-        None
+    let from = match left {
+        Some(side) => Some(RevSpec::parse(format, BStr::new(side), refs)?),
+        None => None,
     };
-    let to = if right.is_some() {
-        Some(RevSpec::parse(format, BStr::new(right.unwrap()), refs)?)
-    } else {
-        None
+    let to = match right {
+        Some(side) => Some(RevSpec::parse(format, BStr::new(side), refs)?),
+        None => None,
     };
     Ok(RevRange { from, to, symmetric })
 }
@@ -671,11 +667,8 @@ impl<'a> CommitWalker<'a> {
     pub fn into_vec(self) -> Result<Vec<Commit<'a>>> {
         let mut out = Vec::new();
         let mut walker = self;
-        loop {
-            match walker.next_commit()? {
-                Some(c) => out.push(c),
-                None => break,
-            }
+        while let Some(c) = walker.next_commit()? {
+            out.push(c);
         }
         Ok(out)
     }
@@ -694,11 +687,8 @@ impl<'a> CommitWalker<'a> {
     pub fn into_oids(self) -> Result<Vec<ObjectId>> {
         let mut out = Vec::new();
         let mut walker = self;
-        loop {
-            match walker.next_commit()? {
-                Some(c) => out.push(c.id(walker.odb.format())?),
-                None => break,
-            }
+        while let Some(c) = walker.next_commit()? {
+            out.push(c.id(walker.odb.format())?);
         }
         Ok(out)
     }
@@ -719,11 +709,8 @@ impl<'a> CommitWalker<'a> {
     pub fn by_date(self) -> Result<Vec<ObjectId>> {
         let mut walker = self;
         let mut out = Vec::new();
-        loop {
-            match walker.next_commit()? {
-                Some(c) => out.push(c.id(walker.odb.format())?),
-                None => break,
-            }
+        while let Some(c) = walker.next_commit()? {
+            out.push(c.id(walker.odb.format())?);
         }
         Ok(out)
     }
@@ -743,11 +730,8 @@ impl<'a> CommitWalker<'a> {
     pub fn by_topo(self) -> Result<Vec<ObjectId>> {
         let mut walker = self;
         let mut out = Vec::new();
-        loop {
-            match walker.next_commit()? {
-                Some(c) => out.push(c.id(walker.odb.format())?),
-                None => break,
-            }
+        while let Some(c) = walker.next_commit()? {
+            out.push(c.id(walker.odb.format())?);
         }
         Ok(out)
     }
@@ -951,8 +935,8 @@ pub fn walk_oids(odb: &Odb, starts: &[ObjectId], options: &WalkOptions) -> Resul
     let mut out: Vec<ObjectId> = order
         .into_iter()
         .filter(|oid| shown[oid])
-        .filter(|oid| options.since.map_or(true, |t| infos[oid].committer_time >= t))
-        .filter(|oid| options.until.map_or(true, |t| infos[oid].committer_time <= t))
+        .filter(|oid| options.since.is_none_or(|t| infos[oid].committer_time >= t))
+        .filter(|oid| options.until.is_none_or(|t| infos[oid].committer_time <= t))
         .collect();
     if options.sort == SortOrder::Reverse {
         out.reverse();

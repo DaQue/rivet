@@ -222,6 +222,9 @@ pub struct FetchRefUpdate {
     pub force: bool,
 }
 
+/// Where fetch progress text is delivered.
+pub type ProgressSink = Box<dyn FnMut(&[u8])>;
+
 /// Phase 11 — everything a fetch needs besides a transport.
 ///
 /// # Caveats
@@ -245,7 +248,7 @@ pub struct FetchOptions {
     /// What to do with the advertisement's refs afterwards.
     pub refs: Option<FetchRefs>,
     /// Where progress text goes; `None` discards it.
-    pub progress: Option<Box<dyn FnMut(&[u8])>>,
+    pub progress: Option<ProgressSink>,
     /// Whether to negotiate without downloading.
     pub dry_run: bool,
     /// Whether to fix a thin pack and index it, or hand the raw pack to the caller.
@@ -477,17 +480,15 @@ fn apply_ref_update(
         Err(e) => return Err(e),
     };
 
-    if !update.force {
-        if let Some(old) = current {
-            if old != update.new && !is_fast_forward(odb, old, update.new)? {
+    if !update.force
+        && let Some(old) = current
+            && old != update.new && !is_fast_forward(odb, old, update.new)? {
                 return Err(Error::NonFastForward {
                     name: update.name.clone(),
                     old,
                     new: update.new,
                 });
             }
-        }
-    }
 
     // `expect` is the value the caller believes is there; `None` means "I did not look", which the
     // ref lock turns into a plain overwrite rather than a check.
@@ -634,11 +635,10 @@ pub fn local_haves(odb: &Odb, refs: &RefStore) -> Result<Vec<ObjectId>> {
         if !odb.contains(&oid) {
             continue;
         }
-        if let Ok(commit) = refs.peel_oid(oid, odb) {
-            if !haves.contains(&commit) {
+        if let Ok(commit) = refs.peel_oid(oid, odb)
+            && !haves.contains(&commit) {
                 haves.push(commit);
             }
-        }
     }
     Ok(haves)
 }
@@ -702,8 +702,8 @@ pub fn write_tracking_refs(
         }
 
         let is_tag = advertised_name.starts_with(b"refs/tags/");
-        if is_tag {
-            if let Some(old) = current {
+        if is_tag
+            && let Some(old) = current {
                 // Never overwrite a tag: a moved tag is reported, not followed.
                 return Err(Error::NonFastForward {
                     name: target.clone(),
@@ -711,7 +711,6 @@ pub fn write_tracking_refs(
                     new: advertised.oid,
                 });
             }
-        }
 
         // A fetch decides what the remote has, so the write is unconditional apart from the
         // expected value it just observed.

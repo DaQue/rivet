@@ -319,14 +319,8 @@ pub fn merge_trees(
                         kind: None,
                     });
                     tree_entries.push((path, their.0, their.1));
-                } else if their == base_entry {
-                    result.paths.push(PathMerge {
-                        path: path.clone(),
-                        result: Some(our.1),
-                        kind: None,
-                    });
-                    tree_entries.push((path, our.0, our.1));
-                } else if our == their {
+                } else if their == base_entry || our == their {
+                    // Only we changed it, or both made the same change: ours is the result.
                     result.paths.push(PathMerge {
                         path: path.clone(),
                         result: Some(our.1),
@@ -356,9 +350,7 @@ pub fn merge_trees(
                     // sides to different modes is a conflict even when the content agrees.
                     let mode = if our.0 == base_entry.0 {
                         their.0
-                    } else if their.0 == base_entry.0 {
-                        our.0
-                    } else if our.0 == their.0 {
+                    } else if their.0 == base_entry.0 || our.0 == their.0 {
                         our.0
                     } else {
                         result.paths.push(PathMerge {
@@ -573,6 +565,7 @@ fn merge_blob_contents(
 /// [`crate::error::Error::ObjectNotFound`] for a blob the database lacks,
 /// [`crate::error::Error::WrongObjectKind`] for an id that is not a blob, and
 /// [`crate::error::Error::NotImplemented`] for a histogram diff.
+#[allow(clippy::too_many_arguments)] // signature fixed by the scaffold
 pub fn merge_path(
     odb: &Odb,
     path: &bstr::BStr,
@@ -757,11 +750,10 @@ pub fn write_merged_worktree(
                     .unwrap_or(crate::object::EntryMode::Blob);
                 crate::worktree::checkout::write_blob(worktree, path, oid, mode, odb)?;
             }
-            (None, None) => {
-                if worktree.stat(path)?.is_some() {
+            (None, None)
+                if worktree.stat(path)?.is_some() => {
                     crate::worktree::checkout::remove_path(worktree, path)?;
                 }
-            }
             _ => {}
         }
     }
@@ -916,6 +908,9 @@ pub fn merge_worktree_paths(
 
 type EntryMap = BTreeMap<BString, (EntryMode, ObjectId)>;
 
+/// Conflicts that renames produce, each with the path result that goes with it.
+type RenameConflicts = Vec<(Conflict, PathMerge)>;
+
 /// Pair the files `side` removed from `base` with the files it added.
 fn renames_on_side(odb: &Odb, base: &EntryMap, side: &EntryMap) -> Result<BTreeMap<BString, BString>> {
     use crate::diff::rename::{RenameSide, pair_renames};
@@ -944,7 +939,7 @@ fn apply_renames(
     ours: &mut EntryMap,
     theirs: &mut EntryMap,
     options: &MergeOptions,
-) -> Result<(Vec<(Conflict, PathMerge)>, Vec<BString>)> {
+) -> Result<(RenameConflicts, Vec<BString>)> {
     use crate::merge::ConflictKind;
     let mut removals: Vec<BString> = Vec::new();
     let our_renames = renames_on_side(odb, base, ours)?;

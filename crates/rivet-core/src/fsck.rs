@@ -83,11 +83,10 @@ fn tree_problems(tree: &crate::object::Tree<'_>) -> Vec<&'static str> {
             duplicate = true;
         }
         let key = sort_key(&entry.name, entry.mode);
-        if let Some(prev) = &previous {
-            if *prev > key {
+        if let Some(prev) = &previous
+            && *prev > key {
                 unsorted = true;
             }
-        }
         previous = Some(key);
         if entry.name.as_slice() == b"." {
             out.push("hasDot: contains '.'");
@@ -206,19 +205,17 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
                 report.status |= ERROR_REFS;
             }
         }
-        if !options.no_reflogs {
-            if let Ok(entries) = repo.refs().reflog(name) {
+        if !options.no_reflogs
+            && let Ok(entries) = repo.refs().reflog(name) {
                 for entry in entries {
                     for oid in [entry.old, entry.new] {
-                        if !oid.is_zero() {
-                            if let Some(kind) = kinds.get(&oid) {
+                        if !oid.is_zero()
+                            && let Some(kind) = kinds.get(&oid) {
                                 roots.push((oid, *kind));
                             }
-                        }
                     }
                 }
             }
-        }
     }
     for entry in repo.index().entries() {
         if entry.mode == EntryMode::Commit {

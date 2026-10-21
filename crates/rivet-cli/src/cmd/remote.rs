@@ -974,14 +974,13 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
             }
         }
     }
-    if args.set_upstream {
-        if let Some(spec) = specs.first() {
+    if args.set_upstream
+        && let Some(spec) = specs.first() {
             let local = if spec.src.is_empty() { branch.clone().unwrap_or_default() } else { spec.src.to_string() };
             let local = if local == "HEAD" { branch.clone().unwrap_or_default() } else { local };
             let dst = if spec.dst.is_empty() { local.clone() } else { spec.dst.to_string() };
             set_upstream_to = Some((local, dst));
         }
-    }
 
     let request = PushRequest {
         refspecs: specs,
@@ -1061,24 +1060,21 @@ fn default_remote(repository: &Repository, named: Option<&str>) -> Result<String
     if let Some(name) = named {
         return Ok(name.to_string());
     }
-    if let Some(branch) = repository.head()?.branch() {
-        if let Some((remote, _)) = repository.branch_upstream(&branch.short_name().to_string())? {
-            if remote != "." {
+    if let Some(branch) = repository.head()?.branch()
+        && let Some((remote, _)) = repository.branch_upstream(&branch.short_name().to_string())?
+            && remote != "." {
                 return Ok(remote);
             }
-        }
-    }
     Ok("origin".to_string())
 }
 
 /// Git shows a remote URL without a trailing slash or `.git` in `From <url>`.
 pub fn display_url(url: &str, strip_git: bool) -> String {
     let mut shown = url.trim_end_matches('/').to_string();
-    if strip_git {
-        if let Some(stripped) = shown.strip_suffix(".git") {
+    if strip_git
+        && let Some(stripped) = shown.strip_suffix(".git") {
             shown = stripped.to_string();
         }
-    }
     shown
 }
 

@@ -220,11 +220,14 @@ fn assume_valid_and_skip_worktree_are_not_reported() {
     assert!(unstaged.is_empty(), "{unstaged:?}");
 }
 
+/// `(status letter, path)` pairs.
+type Classified = Vec<(char, String)>;
+
 /// `(code, path)` for each entry, in the order `compute` produced them.
 fn rivet_classifications(
     root: &Path,
     options: &StatusOptions,
-) -> (Vec<(char, String)>, Vec<(char, String)>) {
+) -> (Classified, Classified) {
     let repo = Repository::open_or_discover(root).expect("open");
     let head_tree = repo
         .head_tree()

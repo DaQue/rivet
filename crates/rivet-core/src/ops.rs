@@ -73,11 +73,10 @@ pub fn load_outer_configs() -> Result<Vec<Config>> {
 ///
 /// `local` may be `None` for commands that run outside a repository (`init`, `clone`).
 pub fn lookup_config(local: Option<&Config>, key: &BStr) -> Result<Option<BString>> {
-    if let Some(local) = local {
-        if let Some(value) = local.get(key)? {
+    if let Some(local) = local
+        && let Some(value) = local.get(key)? {
             return Ok(Some(value.to_owned()));
         }
-    }
     for config in load_outer_configs()?.iter().rev() {
         if let Some(value) = config.get(key)? {
             return Ok(Some(value.to_owned()));
@@ -712,11 +711,10 @@ impl Repository {
                     continue;
                 }
             }
-            if let Some(entry) = index_entry {
-                if self.worktree()?.stat(path_ref)?.is_some() && self.worktree()?.hash_file(path_ref)? != entry.oid {
+            if let Some(entry) = index_entry
+                && self.worktree()?.stat(path_ref)?.is_some() && self.worktree()?.hash_file(path_ref)? != entry.oid {
                     dirty.push(path.clone());
                 }
-            }
         }
         dirty.sort();
         dirty.dedup();
@@ -797,11 +795,10 @@ pub fn parse_approxidate(text: &str) -> Option<i64> {
     if let Some(rest) = text.strip_prefix('@') {
         return rest.split_whitespace().next()?.parse().ok();
     }
-    if let Ok(n) = text.parse::<i64>() {
-        if text.len() >= 9 {
+    if let Ok(n) = text.parse::<i64>()
+        && text.len() >= 9 {
             return Some(n);
         }
-    }
     crate::object::commit::parse_git_date(BStr::new(text.as_bytes())).map(|(when, _)| when)
 }
 
@@ -827,7 +824,7 @@ pub fn quote_path(path: &[u8], quote_space: bool) -> BString {
             13 => out.extend_from_slice(b"\\r"),
             b'"' => out.extend_from_slice(b"\\\""),
             b'\\' => out.extend_from_slice(b"\\\\"),
-            b if b < 0x20 || b >= 0x7f => out.extend_from_slice(format!("\\{b:03o}").as_bytes()),
+            b if !(0x20..0x7f).contains(&b) => out.extend_from_slice(format!("\\{b:03o}").as_bytes()),
             b => out.push(b),
         }
     }

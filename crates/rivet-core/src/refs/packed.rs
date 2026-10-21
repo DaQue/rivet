@@ -478,7 +478,7 @@ impl PackedRefs {
     /// corruption. Callers that need to know whether the peel landed must check
     /// [`PackedRefs::get`] first.
     pub fn set_peeled(&mut self, name: &RefName, peeled: ObjectId) {
-        for (_i, entry) in self.entries.iter_mut().enumerate() {
+        for entry in self.entries.iter_mut() {
             if entry.name == *name {
                 entry.peeled = Some(peeled);
                 return;
@@ -625,5 +625,5 @@ pub fn location(loose_present: bool, packed_present: bool) -> RefLocation {
 /// with a tag per release is tens of thousands; a caller that only needs to iterate should use
 /// [`PackedRefs::iter`].
 pub fn packed_names(packed: &PackedRefs) -> Vec<RefName> {
-    packed.names().into_iter().map(|n| n.clone()).collect()
+    packed.names().cloned().collect()
 }

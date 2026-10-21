@@ -261,6 +261,12 @@ pub enum UntrackedMode {
     All,
 }
 
+impl Default for StatusOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StatusOptions {
     /// Phase 4 — the options a plain `rivet status` uses.
     ///

@@ -260,7 +260,7 @@ pub fn read_merge_state(
     })?;
     let line = content.lines().next().unwrap_or("");
     let hex = BStr::new(line.trim().as_bytes());
-    let head = ObjectId::from_hex(format, hex).map_err(|e| e)?;
+    let head = ObjectId::from_hex(format, hex)?;
     let mut state = MergeState::new();
     state.merge_head.push(head);
     let orig_head_path = git_dir.join("ORIG_HEAD");
@@ -271,7 +271,7 @@ pub fn read_merge_state(
         })?;
         let orig_line = orig_content.lines().next().unwrap_or("");
         let orig_hex = BStr::new(orig_line.trim().as_bytes());
-        state.orig_head = Some(ObjectId::from_hex(format, orig_hex).map_err(|e| e)?);
+        state.orig_head = Some(ObjectId::from_hex(format, orig_hex)?);
     }
     let merge_msg_path = git_dir.join("MERGE_MSG");
     if merge_msg_path.exists() {
@@ -413,11 +413,10 @@ pub fn abort_merge(
         let path_ref = BStr::new(&path[..]);
         let target_entry = target.get(&path);
 
-        if target_entry.is_none() {
-            if !removals.contains(&path) {
+        if target_entry.is_none()
+            && !removals.contains(&path) {
                 removals.push(path.clone());
             }
-        }
         // Only a stage-0 entry describes content the user could have edited; a conflicted path's
         // work tree file is the merge's own marker file, and losing it loses nothing.
         if entry.stage() != crate::index::Stage::Normal {

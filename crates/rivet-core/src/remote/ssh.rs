@@ -418,7 +418,7 @@ impl SshTransport {
         }
         refs.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let agent = capabilities.value(b"agent").map(|value| BString::from(&value[..]));
+        let agent = capabilities.value(b"agent").map(BString::from);
         let advertisement = RefAdvertisement {
             capabilities: capabilities.clone(),
             refs,

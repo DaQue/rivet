@@ -695,16 +695,11 @@ impl<R: Read> SidebandReader<R> {
     pub fn drain(&mut self, progress: &mut dyn FnMut(&[u8])) -> Result<Vec<u8>> {
         let mut pack = Vec::new();
         let mut error_text = Vec::new();
-        loop {
-            match self.next_packet()? {
-                Some(packet) => {
-                    match packet.channel {
-                        SidebandKind::Pack => pack.extend_from_slice(&packet.data),
-                        SidebandKind::Progress => progress(&packet.data),
-                        SidebandKind::Error => error_text.extend_from_slice(&packet.data),
-                    }
-                }
-                None => break,
+        while let Some(packet) = self.next_packet()? {
+            match packet.channel {
+                SidebandKind::Pack => pack.extend_from_slice(&packet.data),
+                SidebandKind::Progress => progress(&packet.data),
+                SidebandKind::Error => error_text.extend_from_slice(&packet.data),
             }
         }
         if !error_text.is_empty() {

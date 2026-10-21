@@ -58,6 +58,7 @@ impl ObjectFormat {
     ///
     /// 20 or 32. This is the width of the *stored* id, not of a hex string — see
     /// [`ObjectFormat::hex_len`] for that, which is exactly twice this.
+    #[allow(clippy::len_without_is_empty)] // an id is never empty
     pub const fn len(self) -> usize {
         match self {
             ObjectFormat::Sha1 => 20,
@@ -459,10 +460,10 @@ fn decode_hex(out: &mut [u8], hex: &[u8]) -> Result<()> {
         value: BString::from(hex),
         reason,
     };
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(bad("odd number of hex digits"));
     }
-    for (pair, out_byte) in hex.chunks_exact(2).zip(out.iter_mut()) {
+    for (pair, out_byte) in hex.as_chunks::<2>().0.iter().zip(out.iter_mut()) {
         let hi = nibble(pair[0]).ok_or_else(|| bad("not a hex digit"))?;
         let lo = nibble(pair[1]).ok_or_else(|| bad("not a hex digit"))?;
         *out_byte = (hi << 4) | lo;
@@ -473,7 +474,7 @@ fn decode_hex(out: &mut [u8], hex: &[u8]) -> Result<()> {
 /// Encode `bytes` as lowercase hex into `out`, which must have exactly twice as many slots.
 fn encode_hex(out: &mut [u8], bytes: &[u8]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    for (byte, pair) in bytes.iter().zip(out.chunks_exact_mut(2)) {
+    for (byte, pair) in bytes.iter().zip(out.as_chunks_mut::<2>().0.iter_mut()) {
         pair[0] = HEX[(byte >> 4) as usize];
         pair[1] = HEX[(byte & 0x0f) as usize];
     }

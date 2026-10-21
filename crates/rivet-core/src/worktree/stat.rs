@@ -132,8 +132,8 @@ impl StatData {
             dev: meta.dev() as u32,
             ino: meta.ino() as u32,
             mode,
-            uid: meta.uid() as u32,
-            gid: meta.gid() as u32,
+            uid: meta.uid(),
+            gid: meta.gid(),
             size: meta.len() as u32,
         })
     }

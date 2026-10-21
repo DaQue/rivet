@@ -427,11 +427,10 @@ mod tests {
     /// missing checksum fails here rather than surviving until the first clone.
     #[test]
     fn git_index_pack_accepts_a_written_pack() {
-        let git = match std::process::Command::new("git").arg("--version").output() {
-            Ok(output) if output.status.success() => (),
+        match std::process::Command::new("git").arg("--version").output() {
+            Ok(output) if output.status.success() => {}
             _ => return,
-        };
-        let _ = git;
+        }
 
         let mut writer = PackWriter::new(ObjectFormat::Sha1);
         let blob = writer.write_raw(crate::object::ObjectKind::Blob, b"hello\n").unwrap();

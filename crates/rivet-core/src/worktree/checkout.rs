@@ -151,6 +151,12 @@ pub struct CheckoutOptions {
     pub create_dirs: bool,
 }
 
+impl Default for CheckoutOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CheckoutOptions {
     /// Phase 4 — the options a plain `rivet checkout <rev>` uses: no force, stop on the first
     /// error, no dry run, the whole tree, directories created.
@@ -389,13 +395,11 @@ impl CheckoutPlan {
                 // `untracked_obstructions` decides whether the file is in the way.
                 // Only when the target rewrites the path: if it removes it too, the index
                 // already agrees with where the checkout is going.
-                if entry.action == CheckoutAction::Update {
-                    if let Some(from_tree) = self.from_tree {
-                        if lookup_tree_entry(odb, self.format, from_tree, path)?.is_some() {
+                if entry.action == CheckoutAction::Update
+                    && let Some(from_tree) = self.from_tree
+                        && lookup_tree_entry(odb, self.format, from_tree, path)?.is_some() {
                             dirty.push(entry.path.clone());
                         }
-                    }
-                }
                 continue;
             };
             // Clause one: the file on disk differs from what the index last recorded.
@@ -566,11 +570,10 @@ impl CheckoutPlan {
             }
             // A keep is a mode change with the same bytes: only a `chmod`. A file the user has
             // deleted stays deleted.
-            if let Some(mode) = entry.mode {
-                if worktree.stat(BStr::new(&entry.path[..]))?.is_some() {
+            if let Some(mode) = entry.mode
+                && worktree.stat(BStr::new(&entry.path[..]))?.is_some() {
                     apply_mode(worktree, BStr::new(&entry.path[..]), mode)?;
                 }
-            }
         }
         // Longest paths first, so a path that only exists because a directory did is not
         // removed after something that could take the directory out from under it.
@@ -579,7 +582,7 @@ impl CheckoutPlan {
             .iter()
             .filter(|e| e.action == CheckoutAction::Remove)
             .collect();
-        removals.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+        removals.sort_by_key(|e| std::cmp::Reverse(e.path.len()));
         let mut removals = removals.into_iter();
         for entry in removals.by_ref() {
             remove_path(worktree, BStr::new(&entry.path[..]))?;
@@ -728,14 +731,14 @@ pub fn write_bytes(
     }
     if mode == EntryMode::Link && worktree.symlinks() {
         use std::os::unix::ffi::OsStrExt;
-        std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(&data), &file)?;
+        std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(data), &file)?;
         return Ok(());
     }
     use std::io::Write;
     if existed {
         // In place: a rename would break a hard link the user has, and Git writes in place too.
         let mut out = std::fs::File::create(&file)?;
-        out.write_all(&data)?;
+        out.write_all(data)?;
         out.sync_all()?;
     } else {
         // Temporary and rename, so a torn write cannot leave a half-file where a file the user
@@ -749,7 +752,7 @@ pub fn write_bytes(
         ));
         {
             let mut out = std::fs::File::create(&temp)?;
-            out.write_all(&data)?;
+            out.write_all(data)?;
             out.sync_all()?;
         }
         std::fs::rename(&temp, &file).inspect_err(|_| {
@@ -811,7 +814,7 @@ pub fn paths_collide(a: &bstr::BStr, b: &bstr::BStr, ignore_case: bool) -> bool 
     a.len() != b.len()
     || a.iter().zip(b.iter()).any(|(x, y)| {
         if ignore_case {
-            x.to_ascii_lowercase() != y.to_ascii_lowercase()
+            !x.eq_ignore_ascii_case(y)
         } else {
             x != y
         }
@@ -851,7 +854,7 @@ fn path_in_pathspec(path: &BStr, pathspec: &BStr) -> bool {
     }
     path == pathspec
         || (path.len() > pathspec.len()
-            && path.starts_with(&pathspec[..])
+            && path.starts_with(pathspec)
             && path.get(pathspec.len()) == Some(&b'/'))
 }
 

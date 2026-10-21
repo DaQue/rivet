@@ -302,7 +302,7 @@ impl<'a> PackIndex<'a> {
         let mut result = Vec::new();
         for entry in self.iter() {
             if entry.oid.starts_with(prefix) {
-                result.push(entry.clone());
+                result.push(entry);
             }
         }
         result
@@ -459,7 +459,6 @@ impl OwnedPackIndex {
     /// Identical to [`PackIndex::parse`], which does the actual work; this only takes ownership of
     /// the buffer first.
     pub fn parse(data: Vec<u8>, format: ObjectFormat) -> Result<Self> {
-        let data = data;
         let _index = PackIndex::parse(&data, format)?;
         Ok(Self { data, format })
     }

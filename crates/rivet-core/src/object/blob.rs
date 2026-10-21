@@ -245,7 +245,7 @@ mod tests {
         assert_eq!(blob.to_bytes(), expected);
 
         // A blob whose declared length in the header does not match the body must be detectable.
-        let buf: Vec<u8> = [b'b', b'l', b'o', b'b', b' ', b'2', b'\0', b'x', b'y'].to_vec();
+        let buf: Vec<u8> = b"blob 2\0xy".to_vec();
         let declared: u64 = (buf[5] - b'0') as u64;
         assert_eq!(declared, 2);
         // Body starts right after the NUL: offset = "blob"(4) + ' '(1) + len digits(1) + NUL(1) = 7.

@@ -472,7 +472,7 @@ impl<'a> Commit<'a> {
             out.push(b'\n');
         }
         out.push(b'\n');
-        out.extend_from_slice(&self.message[..]);
+        out.extend_from_slice(self.message);
         out
     }
 
@@ -495,7 +495,7 @@ impl<'a> Commit<'a> {
     /// A message whose subject wraps across lines shows as the whole wrapped paragraph, joined
     /// with spaces. Taking only up to the first `\n` gets this visibly wrong on real messages.
     pub fn summary(&self) -> &'a BStr {
-        let msg = &self.message[..];
+        let msg = self.message;
         // The subject is the first paragraph: everything up to (not including)
         // the first blank line ("\n\n") or the end of the message.
         // If the message is folded, we return the *un-folded* first physical line,
@@ -516,7 +516,7 @@ impl<'a> Commit<'a> {
     /// Git's own definition of "body" for `format-patch`: everything after the first blank line.
     /// A message with no blank line has an empty body, not a body equal to its subject.
     pub fn body(&self) -> &'a BStr {
-        let msg = &self.message[..];
+        let msg = self.message;
         // The body is everything after the first blank line.
         // The message starts with the subject, then "\n\n", then the body.
         // Find the first "\n\n".
@@ -561,8 +561,8 @@ impl<'a> Commit<'a> {
     /// The name match is byte-exact and case-sensitive, as Git's header names are.
     pub fn header(&self, name: &[u8]) -> Option<&'a BStr> {
         for (header_name, value) in &self.extra_headers {
-            if &header_name[..] == name {
-                let value_ref: &'a [u8] = *value;
+            if header_name[..] == name {
+                let value_ref: &'a [u8] = value;
                 return Some(BStr::new(value_ref));
             }
         }
@@ -676,7 +676,7 @@ impl CommitBuilder {
     /// sensible default; [`crate::error::Error::Message`] if the author or committer cannot be
     /// resolved, which is the "please tell me who you are" failure `git commit` has.
     pub fn build(&self, _format: ObjectFormat) -> Result<Vec<u8>> {
-        let tree = self.tree.as_ref().ok_or_else(|| Error::MissingHeader {
+        let tree = self.tree.as_ref().ok_or(Error::MissingHeader {
             kind: ObjectKind::Commit,
             header: "tree",
         })?;
@@ -773,7 +773,7 @@ fn parse_two_digits(bytes: &[u8]) -> Option<u32> {
 /// a caller that needs them must resolve them before calling this. A date with no offset is
 /// taken in the local zone, which is also what Git does.
 pub fn parse_git_date(value: &BStr) -> Option<(i64, i32)> {
-    let text = std::str::from_utf8(&value[..]).ok()?.trim();
+    let text = std::str::from_utf8(value).ok()?.trim();
     if text.is_empty() {
         return None;
     }

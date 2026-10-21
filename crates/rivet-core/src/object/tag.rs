@@ -228,25 +228,25 @@ impl<'a> Tag<'a> {
         }
 
         // 4. Required headers.
-        let object = object.ok_or_else(|| {
+        let object = object.ok_or({
             crate::error::Error::MissingHeader {
                 kind: ObjectKind::Tag,
                 header: "object",
             }
         })?;
-        let kind = kind.ok_or_else(|| {
+        let kind = kind.ok_or({
             crate::error::Error::MissingHeader {
                 kind: ObjectKind::Tag,
                 header: "type",
             }
         })?;
-        let name = name.ok_or_else(|| {
+        let name = name.ok_or({
             crate::error::Error::MissingHeader {
                 kind: ObjectKind::Tag,
                 header: "tag",
             }
         })?;
-        let tagger = tagger.ok_or_else(|| {
+        let tagger = tagger.ok_or({
             crate::error::Error::MissingHeader {
                 kind: ObjectKind::Tag,
                 header: "tagger",
@@ -334,13 +334,13 @@ impl<'a> Tag<'a> {
         out.extend_from_slice(self.kind.as_bytes());
         out.push(b'\n');
         out.extend_from_slice(b"tag ");
-        out.extend_from_slice(&self.name[..]);
+        out.extend_from_slice(self.name);
         out.push(b'\n');
         out.extend_from_slice(b"tagger ");
         out.extend_from_slice(&self.tagger.to_bytes());
         out.push(b'\n');
         out.push(b'\n');
-        out.extend_from_slice(&self.message[..]);
+        out.extend_from_slice(self.message);
         // Signature appended with no separator.
         if let Some(sig) = &self.signature {
             out.extend_from_slice(&sig[..]);
@@ -427,7 +427,7 @@ impl<'a> Tag<'a> {
     /// [`Tag::to_bytes`] must write back. An unsigned tag with no message returns an empty slice,
     /// which is a legal state, not an error.
     pub fn message(&self) -> &'a [u8] {
-        &self.message[..]
+        self.message
     }
 
     /// Phase 1 — the appended signature, if the tag has one.
@@ -585,7 +585,7 @@ impl TagBuilder {
     /// is the "please tell me who you are" failure `git tag -a` has.
     pub fn build(&self, _format: ObjectFormat) -> Result<Vec<u8>> {
         // D3: object is the one field with no sensible default.
-        let object = self.object.ok_or_else(|| {
+        let object = self.object.ok_or({
             crate::error::Error::MissingHeader {
                 kind: ObjectKind::Tag,
                 header: "object",
@@ -600,7 +600,7 @@ impl TagBuilder {
         })?;
 
         // D2: type is resolved from `kind`; without it, `build` cannot resolve it.
-        let kind = self.kind.ok_or_else(|| {
+        let kind = self.kind.ok_or({
             crate::error::Error::MissingHeader {
                 kind: ObjectKind::Tag,
                 header: "type",

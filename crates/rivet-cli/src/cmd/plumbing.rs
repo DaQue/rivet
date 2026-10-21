@@ -870,6 +870,7 @@ pub fn run_ls_tree(global: &GlobalArgs, args: &LsTreeArgs) -> Result<i32> {
 }
 
 /// Walks one tree, printing each entry and, when asked, descending into subtrees.
+#[allow(clippy::too_many_arguments)] // threads one recursive walk's state; a struct would only rename it
 fn list_tree(
     out: &mut impl std::io::Write,
     repository: &rivet_core::Repository,
@@ -1233,19 +1234,17 @@ fn symbolic_name(
     // expression) has no symbolic name and Git prints the spec unchanged.
     let mut candidate = bstr::BString::from(spec);
     if !spec.starts_with("refs/") && !spec.starts_with("HEAD") {
-        if let Ok(name) = rivet_core::refs::RefName::from_bytes(&candidate) {
-            if repository.refs().read(&name).is_ok() {
+        if let Ok(name) = rivet_core::refs::RefName::from_bytes(&candidate)
+            && repository.refs().read(&name).is_ok() {
                 return spec.to_string();
             }
-        }
         for prefix in ["refs/heads/", "refs/tags/", "refs/remotes/"] {
             candidate = bstr::BString::from(prefix);
             candidate.extend_from_slice(spec.as_bytes());
-            if let Ok(name) = rivet_core::refs::RefName::from_bytes(&candidate) {
-                if repository.refs().resolve_oid(&name).map(|id| id == oid).unwrap_or(false) {
+            if let Ok(name) = rivet_core::refs::RefName::from_bytes(&candidate)
+                && repository.refs().resolve_oid(&name).map(|id| id == oid).unwrap_or(false) {
                     return candidate.to_string();
                 }
-            }
         }
         return spec.to_string();
     }

@@ -957,14 +957,13 @@ impl LocalTransport {
         if url.scheme == RemoteScheme::File {
             // `parse` already refuses a remote host, but a hand-built value can still carry one and
             // this is the last place before the local filesystem is read.
-            if let Some(host) = url.host.as_ref() {
-                if !host.is_empty() && &host[..] != b"localhost" {
+            if let Some(host) = url.host.as_ref()
+                && !host.is_empty() && &host[..] != b"localhost" {
                     return Err(Error::InvalidRemoteUrl {
                         url: url.redacted(),
                         reason: "file URL naming a remote host",
                     });
                 }
-            }
         }
 
         use std::os::unix::ffi::OsStringExt;
@@ -1043,12 +1042,11 @@ impl Transport for LocalTransport {
             caps.insert(name.as_bytes())?;
         }
         caps.insert(format!("object-format={}", format.as_str()).as_bytes())?;
-        if let Ok(head) = repo.head() {
-            if let Some(branch) = head.branch() {
+        if let Ok(head) = repo.head()
+            && let Some(branch) = head.branch() {
                 let value = format!("symref=HEAD:{}", String::from_utf8_lossy(branch.as_bytes()));
                 caps.insert(value.as_bytes())?;
             }
-        }
 
         let refs = local_advertised_refs(&repo)?;
         let advertisement = RefAdvertisement {
@@ -1180,9 +1178,9 @@ impl Transport for LocalTransport {
             };
             let outcome = (|| -> Result<()> {
                 let expected = if update.old.is_zero() { None } else { Some(update.old) };
-                if !update.force {
-                    if let Some(old) = expected {
-                        if repo.refs().try_read(&name)?.is_some()
+                if !update.force
+                    && let Some(old) = expected
+                        && repo.refs().try_read(&name)?.is_some()
                             && !is_fast_forward(repo.odb(), old, update.new)?
                         {
                             return Err(Error::NonFastForward {
@@ -1191,18 +1189,14 @@ impl Transport for LocalTransport {
                                 new: update.new,
                             });
                         }
-                    }
-                }
-                if !self.is_bare {
-                    if let Ok(head) = repo.head() {
-                        if head.branch().map(|b| b.as_bytes() == &update.name[..]).unwrap_or(false) {
+                if !self.is_bare
+                    && let Ok(head) = repo.head()
+                        && head.branch().map(|b| b.as_bytes() == &update.name[..]).unwrap_or(false) {
                             return Err(Error::Protocol(format!(
                                 "refusing to update checked-out branch {} of a non-bare repository",
                                 update.name
                             )));
                         }
-                    }
-                }
                 if update.new.is_zero() {
                     // A deletion removes the ref; writing the null id would leave a broken one.
                     return repo.refs().delete(&name);
@@ -1593,15 +1587,14 @@ fn local_advertised_refs(repo: &crate::repo::Repository) -> Result<Vec<Advertise
             peeled,
         });
     }
-    if let Ok(head) = refs.head() {
-        if let Some(oid) = head.oid() {
+    if let Ok(head) = refs.head()
+        && let Some(oid) = head.oid() {
             out.push(AdvertisedRef {
                 name: BString::from("HEAD"),
                 oid,
                 peeled: None,
             });
         }
-    }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }

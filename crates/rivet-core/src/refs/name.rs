@@ -169,7 +169,7 @@ impl RefName {
     /// name is reported as given: it is bytes, it may not be valid UTF-8, and a lossy conversion
     /// for the sake of an error message would misreport it.
     pub fn parse(name: &BStr) -> Result<Self> {
-        Self::from_bytes(&name[..])
+        Self::from_bytes(name)
     }
 
     /// Phase 2 — validate a ref name from raw bytes.

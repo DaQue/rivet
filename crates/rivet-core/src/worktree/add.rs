@@ -85,6 +85,12 @@ pub struct AddOptions {
     pub pathspec: BString,
 }
 
+impl Default for AddOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AddOptions {
     /// Phase 3 — the options a plain `rivet add <paths>` uses: no force, no update, no all, no
     /// intent-to-add, no dry run, no extra pathspec.
@@ -174,6 +180,12 @@ pub struct RmOptions {
     pub force: bool,
     /// Do everything but write anything.
     pub dry_run: bool,
+}
+
+impl Default for RmOptions {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RmOptions {

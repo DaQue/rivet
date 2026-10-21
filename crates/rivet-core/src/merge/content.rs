@@ -346,8 +346,8 @@ fn cluster_regions(regions: &[(Side, Region)]) -> Vec<Cluster> {
     let mut clusters: Vec<Cluster> = Vec::new();
     for (side, region) in regions {
         let mut merged = false;
-        if let Some(last) = clusters.last_mut() {
-            if regions_overlap(last.base_start, last.base_end, region) {
+        if let Some(last) = clusters.last_mut()
+            && regions_overlap(last.base_start, last.base_end, region) {
                 last.base_start = last.base_start.min(region.base_start);
                 last.base_end = last.base_end.max(region.base_end);
                 match side {
@@ -368,7 +368,6 @@ fn cluster_regions(regions: &[(Side, Region)]) -> Vec<Cluster> {
                 }
                 merged = true;
             }
-        }
         if !merged {
             let mut cluster = Cluster {
                 base_start: region.base_start,

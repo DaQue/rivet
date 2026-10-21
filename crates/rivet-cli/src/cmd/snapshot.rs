@@ -460,11 +460,10 @@ pub fn run_rm(global: &GlobalArgs, args: &RmArgs) -> Result<i32> {
         paths.push(super::worktree_path(&repository, path, "rm")?);
     }
 
-    if !args.force && !args.cached && !args.dry_run {
-        if let Some(code) = check_rm_safety(&repository, &paths)? {
+    if !args.force && !args.cached && !args.dry_run
+        && let Some(code) = check_rm_safety(&repository, &paths)? {
             return Ok(code);
         }
-    }
 
     let options = RmOptions {
         cached: args.cached,

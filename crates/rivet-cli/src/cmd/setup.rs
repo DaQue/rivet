@@ -491,11 +491,10 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
         let want_system = args.system || scope_count == 0;
         let want_global = args.global || scope_count == 0;
         let want_local = args.local || scope_count == 0;
-        if want_system {
-            if let Some(path) = system_config_path().filter(|p| p.is_file()) {
+        if want_system
+            && let Some(path) = system_config_path().filter(|p| p.is_file()) {
                 sources.push(("system".to_string(), rivet_core::Config::load(&path)?));
             }
-        }
         if want_global {
             for path in global_config_paths().into_iter().filter(|p| p.is_file()) {
                 sources.push(("global".to_string(), rivet_core::Config::load(&path)?));

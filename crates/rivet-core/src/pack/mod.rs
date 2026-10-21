@@ -561,13 +561,11 @@ pub fn fix_thin_pack(
     let mut pos = 12usize;
     for _ in 0..count {
         let entry = file.entry_at(pos as u64)?;
-        if entry.kind == EntryKind::RefDelta {
-            if let Some(oid) = entry.base_oid {
-                if index.lookup(&oid).is_none() && !missing.contains(&oid) {
+        if entry.kind == EntryKind::RefDelta
+            && let Some(oid) = entry.base_oid
+                && index.lookup(&oid).is_none() && !missing.contains(&oid) {
                     missing.push(oid);
                 }
-            }
-        }
         let (_payload, consumed) = inflate_at(pack, entry.data_offset as usize)?;
         pos = entry.data_offset as usize + consumed;
     }

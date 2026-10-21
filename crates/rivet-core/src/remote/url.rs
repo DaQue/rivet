@@ -144,10 +144,7 @@ impl RemoteScheme {
     /// `git://` is networked and unauthenticated, and `https://` against a public repository is
     /// networked and needs no credentials.
     pub const fn is_networked(self) -> bool {
-        match self {
-            RemoteScheme::File => false,
-            _ => true,
-        }
+        !matches!(self, RemoteScheme::File)
     }
 
     /// Phase 11 — the spelling Git uses in config and in its own error messages.
@@ -248,18 +245,10 @@ impl RemoteUrl {
     /// URL, a URL with a scheme but no host, an empty path, a port that is not a number, or a URL
     /// with no scheme, no colon and no path — with `reason` naming which rule was broken.
     pub fn parse(input: &BStr) -> Result<Self> {
-        let bytes = &input[..];
+        let bytes = input;
         let colon = bytes.iter().position(|&b| b == b':');
         let slash = bytes.iter().position(|&b| b == b'/');
-        let scheme_end = if let Some(c) = colon {
-            if slash.is_none() || slash.unwrap() > c {
-                Some(c)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let scheme_end = colon.filter(|&c| slash.is_none() || slash.unwrap() > c);
         // `host:path` and `user@host:path` are Git's scp-like spelling of an SSH URL. A colon
         // that is not followed by `//` and whose prefix is not a scheme name is that form.
         if let Some(c) = scheme_end {
@@ -345,7 +334,7 @@ impl RemoteUrl {
                 return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "no host" });
             }
             let port = match port_str {
-                Some(text) if text.is_empty() => {
+                Some([]) => {
                     return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "empty port" });
                 }
                 Some(text) => match std::str::from_utf8(text).ok().and_then(|t| t.parse::<u16>().ok()) {
@@ -383,7 +372,7 @@ impl RemoteUrl {
     /// other than `localhost`, which is a URL naming a remote machine's filesystem and therefore not
     /// a local path at all.
     pub fn parse_local(input: &BStr) -> Result<Self> {
-        let bytes = &input[..];
+        let bytes = input;
         let scheme_end = bytes.iter().position(|&b| b == b':').unwrap_or(bytes.len());
         let scheme = &bytes[..scheme_end];
         let rest = &bytes[scheme_end..];
