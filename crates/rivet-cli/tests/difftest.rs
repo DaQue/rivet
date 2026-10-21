@@ -40,6 +40,26 @@ fn every_scenario_matches_real_git() {
 }
 
 #[test]
+fn clone_of_a_real_sized_repo_is_object_equivalent_to_git() {
+    if !have("git") || !have("bash") {
+        eprintln!("skipping: git and bash are required");
+        return;
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new("bash")
+        .arg(root.join("tools/difftest/scale.sh"))
+        .env("RIVET", env!("CARGO_BIN_EXE_rivet"))
+        .output()
+        .expect("run scale.sh");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && text.contains("SCALE-OK"),
+        "clone of a scale fixture diverged from git:\n{text}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn corrupt_repositories_fail_cleanly_without_panics_or_hangs() {
     if !have("git") || !have("bash") {
         eprintln!("skipping: git and bash are required");
