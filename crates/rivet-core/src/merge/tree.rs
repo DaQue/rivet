@@ -79,16 +79,15 @@ use crate::worktree::Worktree;
 /// * **Paths are visited in tree order**, so the conflict list is sorted by construction and a
 ///   caller does not have to sort it. The order of `paths` and the order of `conflicts` are the
 ///   same order.
-/// * **`options.find_renames` must be honoured even though nothing implements it.** With it
-///   `true` the call should fail with [`crate::error::Error::NotImplemented`] rather than silently
-///   proceeding without detection — a user who asked for rename following and got a delete/modify
-///   conflict has been told nothing about why.
+/// * **`options.find_renames` turns on rename detection.** With it `true`, a path moved on one
+///   side and edited on the other is merged under its new name; cases that cannot be merged
+///   become rename conflicts instead of a delete/modify pair, and the old name is dropped from
+///   the result. With it `false` a rename is a delete plus an add, as Git without `-M`.
 ///
 /// # Errors
 ///
 /// [`crate::error::Error::ObjectNotFound`] for a tree or blob the database lacks;
-/// [`crate::error::Error::WrongObjectKind`] for an id that is not what its mode implies;
-/// [`crate::error::Error::NotImplemented`] for rename detection and for a histogram diff — both
+/// [`crate::error::Error::WrongObjectKind`] for an id that is not what its mode implies. Both are
 /// reported before anything is written.
 pub fn merge_trees(
     odb: &Odb,
@@ -573,9 +572,9 @@ fn merge_blob_contents(
 ///
 /// # Errors
 ///
-/// [`crate::error::Error::ObjectNotFound`] for a blob the database lacks,
-/// [`crate::error::Error::WrongObjectKind`] for an id that is not a blob, and
-/// [`crate::error::Error::NotImplemented`] for a histogram diff.
+/// [`crate::error::Error::ObjectNotFound`] for a blob the database lacks and
+/// [`crate::error::Error::WrongObjectKind`] for an id that is not a blob. Every diff algorithm is
+/// supported.
 #[allow(clippy::too_many_arguments)] // signature kept for the callers below
 pub fn merge_path(
     odb: &Odb,

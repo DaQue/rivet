@@ -559,8 +559,8 @@ pub const fn change_letter(is_new: bool, is_deleted: bool, is_type_change: bool)
 ///
 /// # Errors
 ///
-/// The writer's errors, as [`crate::error::Error::Io`], and
-/// [`crate::error::Error::NotImplemented`] for a histogram diff whose hunks were never computed.
+/// The writer's errors, as [`crate::error::Error::Io`]. The diff is formatted as given; both diff
+/// algorithms are already resolved into hunks by the time it gets here.
 pub fn format_unified(
     diff: &crate::diff::TreeDiff,
     _format: crate::hash::ObjectFormat,

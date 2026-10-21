@@ -104,9 +104,9 @@ pub struct ContentMerge {
 ///
 /// # Errors
 ///
-/// [`crate::error::Error::NotImplemented`] when the algorithm selected is
-/// [`crate::diff::DiffAlgorithm::Histogram`] — reported before any output is produced, so a
-/// failed merge writes nothing.
+/// No error: both [`crate::diff::DiffAlgorithm`] variants are implemented and every path returns
+/// `Ok`. The [`Result`] is kept in the signature for callers written against earlier versions and
+/// for merge strategies that can fail.
 pub fn merge_content(
     base: Option<&[u8]>,
     ours: &[u8],

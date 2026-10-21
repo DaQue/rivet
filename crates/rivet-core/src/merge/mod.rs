@@ -303,17 +303,14 @@ impl Conflict {
 ///
 /// # Caveats
 ///
-/// * **`find_renames` is accepted and not implemented** (plan §4 Phase 8 puts rename detection
-///   after the merge path works). With it `false` — the only behaviour Rivet has — a rename is a
-///   delete plus an add, which means a merge *across* a rename conflicts where Git would follow
-///   the rename and merge the content cleanly. That is a real behavioural difference on real
-///   histories and it must be documented for users rather than silently accepted.
+/// * **`find_renames` selects rename detection.** With it `true` a path moved on one side and
+///   edited on the other is merged under its new name, as `git merge` does; with it `false` a
+///   rename is a delete plus an add, which conflicts where Git would have followed the rename.
 /// * **`conflict_style` changes what is written to disk**, per [`ConflictStyle`]; it is not a
 ///   display option and a caller must not pass it speculatively.
-/// * **`diff_algorithm` is threaded through to the content merge's line diff**, and a histogram
-///   selection must fail with [`crate::error::Error::NotImplemented`] before any file is
-///   touched — a merge that failed halfway through would leave the index in a state that neither
-///   `merge --abort` nor a re-run could describe.
+/// * **`diff_algorithm` is threaded through to the content merge's line diff**; Myers and
+///   histogram are both implemented, and [`crate::diff`] documents where histogram's tie-breaking
+///   can differ from Git's.
 /// * **`no_ff` is the fast-forward switch**, and `false` is *not* "always create a merge commit":
 ///   Git fast-forwards by default when the merge base is one of the two commits, and `no_ff`
 ///   forces a real merge commit there instead. A caller that reads it as "allow fast-forward"

@@ -77,11 +77,11 @@ pub use unified::{
 /// * **[`DiffAlgorithm::Myers`] is quadratic in the worst case** — `O(ND)` where `D` is the edit
 ///   distance — so two files that share nothing, of 100 000 lines each, are a serious amount of
 ///   work. Git's own default has the same property and mitigates it with a heuristic cutoff;
-///   Rivet does not yet, and the plan puts histogram diff later (plan §4 Phase 8).
-/// * **[`DiffAlgorithm::Histogram`] is named here and not implemented.** It exists in the enum
-///   so that the CLI's flag and this type do not have to change when it arrives; selecting it
-///   must be [`crate::error::Error::NotImplemented`] rather than a silent fallback to Myers,
-///   because a silent fallback produces output that is valid and that the user did not ask for.
+///   Rivet computes the full script and does not shorten it.
+/// * **[`DiffAlgorithm::Histogram`] is implemented and selected per call.** It is not a fallback
+///   for Myers: the two produce different hunks for the same input, and where lines repeat the
+///   histogram's tie-breaking can pick a different but equally valid alignment than Git's. The
+///   differential tests in `tests/` measure that rather than assume it away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum DiffAlgorithm {
     /// Myers' `O(ND)` greedy algorithm, Git's default.

@@ -302,8 +302,8 @@ impl TreeDiff {
 /// # Errors
 ///
 /// [`crate::error::Error::ObjectNotFound`] for a blob the database lacks;
-/// [`crate::error::Error::WrongObjectKind`] if an id names a tree, a commit or a tag;
-/// [`crate::error::Error::NotImplemented`] for [`crate::diff::DiffAlgorithm::Histogram`].
+/// [`crate::error::Error::WrongObjectKind`] if an id names a tree, a commit or a tag. Both diff
+/// algorithms are supported.
 pub fn blob_diff(
     _format: ObjectFormat,
     path: &BStr,
@@ -848,8 +848,7 @@ pub fn work_tree_diff(
 ///
 /// # Errors
 ///
-/// [`crate::error::Error::ObjectNotFound`] if the entry's blob is missing from the database, and
-/// [`crate::error::Error::NotImplemented`] for the histogram algorithm.
+/// [`crate::error::Error::ObjectNotFound`] if the entry's blob is missing from the database.
 pub fn entry_diff(
     worktree: &Worktree,
     entry: &IndexEntry,

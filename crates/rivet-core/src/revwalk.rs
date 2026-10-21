@@ -150,8 +150,8 @@ pub enum WalkTerminator {
 ///   corner cases around merges), and a walker that filtered by "the commit's tree differs from
 ///   its parent at this path" produces a *different* and wrong answer for merges — it drops a
 ///   merge that resolved a conflict without changing the path, which `git log -- path` shows. The
-///   field is here so the CLI has somewhere to put the paths to pass on to the later phase; the
-///   walker must return [`crate::error::Error::NotImplemented`] rather than approximate them.
+///   walker compares the commit's tree against each parent's tree at those paths and drops the
+///   commits that change nothing there.
 /// * **`all` means every ref under `refs/`**, which for a large repository is every branch and
 ///   every tag and is therefore not a cheap default. It is not "every object" — a dangling commit
 ///   is not in the walk, which is why `git log --all` does not show the results of a botched
@@ -634,9 +634,8 @@ impl<'a> CommitWalker<'a> {
     /// # Errors
     ///
     /// [`crate::error::Error::ObjectNotFound`] if a starting point or a terminator names a commit
-    /// the database lacks, [`crate::error::Error::WrongObjectKind`] if one names a tree or blob,
-    /// and [`crate::error::Error::NotImplemented`] if `options.paths` is non-empty — see
-    /// [`WalkOptions`].
+    /// the database lacks, [`crate::error::Error::WrongObjectKind`] if one names a tree or blob.
+    /// `options.paths` is honoured through history simplification.
     pub fn new(odb: &'a Odb, starts: &[ObjectId], options: WalkOptions) -> Result<Self> {
         let order = walk_oids(odb, starts, &options)?;
         // `queue` holds the commits still to be produced, next one last, so a pop is O(1).
