@@ -597,6 +597,52 @@ s_renames() {
     v diff HEAD~1 HEAD
 }
 
+s_restore_edges() {
+    v init -q repo; cd repo
+    echo 1 >a; echo 2 >b; mkdir d; echo 3 >d/x; v add -A; v commit -q -m one
+    echo new >n; v add n                       # staged, absent from HEAD
+    echo wt >>a
+    v restore n
+    v restore --staged n
+    v status -s
+    v restore --staged n
+    v restore --worktree n
+    v restore missing
+    v restore --staged missing
+    v restore --source=HEAD n
+    v restore --source=HEAD --worktree b
+    v restore --source=HEAD~0 --staged d
+    v restore a b
+    v restore a nope
+    cat a
+    rm b; v restore --staged b
+    v restore b
+    v status -s
+    v restore .
+    v restore --staged .
+    v status -s
+    v restore --source=nonexistent a
+}
+
+s_rename_config() {
+    v init -q repo; cd repo
+    seq 1 30 >a; v add a; v commit -q -m one
+    mv a b; v add -A
+    v status -s
+    v diff --cached --name-status
+    v config diff.renames false
+    v status -s
+    v diff --cached --name-status
+    v config diff.renames true
+    v config status.renames false
+    v status -s
+    v diff --cached --name-status
+    tick; v commit -q -m two
+    v log --name-status --oneline -n 1
+    v config diff.renames copies
+    v log --name-status --oneline -n 1
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

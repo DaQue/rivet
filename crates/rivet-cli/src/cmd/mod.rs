@@ -343,7 +343,7 @@ pub fn print_diffstat(
     };
     let options = rivet_core::DiffOptions::new();
     let mut diff = rivet_core::tree_diff(repository.format(), old_tree, new_tree, repository.odb(), &options)?;
-    rivet_core::detect_renames(&mut diff, repository.odb(), &options)?;
+    detect_renames(repository, &mut diff, &options)?;
     let mut out = Vec::new();
     rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
     print_summary(&diff, &mut out);
@@ -395,7 +395,7 @@ pub fn print_shortstat_summary(
     };
     let options = rivet_core::DiffOptions::new();
     let mut diff = rivet_core::tree_diff(repository.format(), old_tree, new_tree, repository.odb(), &options)?;
-    rivet_core::detect_renames(&mut diff, repository.odb(), &options)?;
+    detect_renames(repository, &mut diff, &options)?;
     let mut stat = Vec::new();
     rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut stat)?;
     let text = String::from_utf8_lossy(&stat);
@@ -414,4 +414,30 @@ pub fn print_shortstat_summary(
 /// stored — writing it would leave a dangling object for `fsck` to report.
 pub fn empty_tree(repository: &Repository) -> Result<rivet_core::ObjectId> {
     Ok(rivet_core::hash_object(repository.format(), rivet_core::ObjectKind::Tree, b"")?.0)
+}
+
+/// Whether rename detection is on for a command: `<key>` (`diff.renames` or `status.renames`)
+/// when set, otherwise `diff.renames`, otherwise Git's default of on. `copies` counts as on.
+pub fn renames_enabled(repository: &Repository, key: &str) -> bool {
+    let read = |name: &str| -> Option<bool> {
+        let value = repository.config_value(bstr::BStr::new(name.as_bytes())).ok().flatten()?;
+        let lower = value.to_ascii_lowercase();
+        if lower == b"copies" || lower == b"copy" {
+            return Some(true);
+        }
+        rivet_core::parse_bool(bstr::BStr::new(&value[..])).ok()
+    };
+    read(key).or_else(|| read("diff.renames")).unwrap_or(true)
+}
+
+/// Detect renames in `diff` unless configuration turns them off.
+pub fn detect_renames(
+    repository: &Repository,
+    diff: &mut rivet_core::TreeDiff,
+    options: &rivet_core::DiffOptions,
+) -> Result<()> {
+    if renames_enabled(repository, "diff.renames") {
+        rivet_core::diff::detect_renames(diff, repository.odb(), options)?;
+    }
+    Ok(())
 }

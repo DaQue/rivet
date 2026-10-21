@@ -578,7 +578,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
         let mut cache = rivet_core::StatCache::new();
         rivet_core::work_tree_diff(&worktree, repository.index(), &mut cache, repository.odb(), &options)?
     };
-    rivet_core::detect_renames(&mut diff, repository.odb(), &options)?;
+    super::detect_renames(&repository, &mut diff, &options)?;
     if !specs.is_empty() {
         let keep: Vec<bool> = diff
             .files
@@ -743,7 +743,7 @@ fn commit_diff(
         None => super::empty_tree(repository)?,
     };
     let mut diff = rivet_core::tree_diff(repository.format(), base, commit.tree, repository.odb(), options)?;
-    rivet_core::detect_renames(&mut diff, repository.odb(), options)?;
+    super::detect_renames(repository, &mut diff, options)?;
     if !specs.is_empty() {
         let keep: Vec<bool> = diff
             .files

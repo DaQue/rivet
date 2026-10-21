@@ -782,7 +782,12 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
                 _ => {}
             }
         }
-        for pair in rivet_core::pair_renames(&sources, &destinations, repository.odb())? {
+        let pairs = if super::renames_enabled(&repository, "status.renames") {
+            rivet_core::pair_renames(&sources, &destinations, repository.odb())?
+        } else {
+            Vec::new()
+        };
+        for pair in pairs {
             renames.insert(destinations[pair.destination].path.clone(), sources[pair.source].path.clone());
             renamed_sources.insert(sources[pair.source].path.clone());
         }
@@ -1047,7 +1052,7 @@ pub fn run_restore(global: &GlobalArgs, args: &RestoreArgs) -> Result<i32> {
     let source = match &args.source {
         Some(spec) => {
             let oid = super::resolve_rev(&repository, spec)
-                .map_err(|_| anyhow::anyhow!("could not resolve {spec}"))?;
+                .map_err(|_| anyhow::anyhow!("could not resolve '{spec}'"))?;
             Some(repository.commit_tree(oid)?)
         }
         // Restoring the index defaults to HEAD; restoring only the work tree defaults to the index.
