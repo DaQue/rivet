@@ -679,8 +679,11 @@ pub(crate) fn inflate_at(data: &[u8], at: usize) -> Result<(Vec<u8>, usize)> {
     let mut chunk = [0u8; 16 * 1024];
     loop {
         let produced_before = decoder.total_out() as usize;
+        // Resume where the decoder stopped: re-feeding the stream from its start after the first
+        // chunk of output never reaches the end of any object that inflates past one chunk.
+        let input_used = decoder.total_in() as usize;
         let status = decoder
-            .decompress(&data[at..], &mut chunk, FlushDecompress::None)
+            .decompress(&data[at + input_used..], &mut chunk, FlushDecompress::None)
             .map_err(|e| Error::CorruptPack {
                 reason: format!("bad zlib stream: {e}"),
             })?;
@@ -690,7 +693,8 @@ pub(crate) fn inflate_at(data: &[u8], at: usize) -> Result<(Vec<u8>, usize)> {
             Status::StreamEnd => break,
             Status::Ok | Status::BufError => {
                 let consumed_all_input = decoder.total_in() as usize >= data.len() - at;
-                if consumed_all_input && produced == 0 {
+                let stalled = produced == 0 && decoder.total_in() as usize == input_used;
+                if (consumed_all_input && produced == 0) || stalled {
                     return Err(Error::CorruptPack {
                         reason: "truncated zlib stream".into(),
                     });

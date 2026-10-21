@@ -191,3 +191,32 @@ fn diff_edits_replay_to_new_sequence() {
         }
     }
 }
+
+/// `index_pack` used to spin forever on any entry that inflates to more than one 16 KiB chunk,
+/// because the zlib stream was re-fed from its start after the first chunk. That made `clone` of
+/// any repository with a real-sized object hang at 100% CPU.
+#[test]
+fn index_pack_handles_objects_larger_than_one_inflate_chunk() {
+    use rivet_core::object::ObjectKind;
+    use rivet_core::pack::{PackWriter, index_pack};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let format = ObjectFormat::Sha1;
+        // Poorly compressible and well past 16 KiB, so the decoder needs several output chunks.
+        let big: Vec<u8> = (0..300_000u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+            .collect();
+        let mut writer = PackWriter::new(format);
+        let small_id = writer.write_raw(ObjectKind::Blob, b"tiny\n").unwrap();
+        let big_id = writer.write_raw(ObjectKind::Blob, &big).unwrap();
+        let (pack, _) = writer.finish().unwrap();
+        let result = index_pack(&pack, format, None).unwrap();
+        let ids: Vec<ObjectId> = result.entries.iter().map(|e| e.oid).collect();
+        tx.send((ids, small_id, big_id)).unwrap();
+    });
+    let (ids, small_id, big_id) = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("index_pack did not finish: inflate loop is spinning");
+    assert_eq!(ids, vec![small_id, big_id]);
+}
