@@ -4,12 +4,11 @@
 //! Git's index and Git's refs, so `git` and GitHub can operate on the same repository that
 //! Rivet is working on. `git fsck` must accept anything Rivet writes.
 //!
-//! # Scaffold stage
+//! # Verification
 //!
-//! This crate is a **signature-only scaffold**. Every function body is `todo!()`, and every
-//! public item carries a doc comment saying what the implementation has to do and which
-//! caveats it has to respect. Nothing is implemented yet; the signatures and the doc comments
-//! are the design.
+//! Behaviour is checked against real `git` rather than against this crate's own opinion of
+//! it: `crates/rivet-core/tests/*_git_differential.rs` and `tools/difftest/` run the same
+//! operation through both tools and compare the repositories and the output.
 //!
 //! # Byte strings, not strings
 //!
