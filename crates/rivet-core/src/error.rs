@@ -626,6 +626,17 @@ pub enum Error {
         paths: Vec<BString>,
     },
 
+    /// A merge would both overwrite local changes and write over untracked files.
+    ///
+    /// Git reports the two sets together, so a caller can print both blocks of advice at once.
+    #[error("merge blocked by local changes in {dirty:?} and untracked files {untracked:?}")]
+    MergeBlocked {
+        /// Tracked paths with local modifications the merge would lose.
+        dirty: Vec<BString>,
+        /// Untracked paths the merge would overwrite.
+        untracked: Vec<BString>,
+    },
+
     /// A path was given that lies outside the work tree.
     #[error("path is outside the work tree: {0}")]
     OutsideWorktree(BString),

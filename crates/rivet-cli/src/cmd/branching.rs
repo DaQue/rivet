@@ -1000,6 +1000,7 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         &options,
         show_stat,
         "merge",
+        args.message.is_some(),
     )
 }
 
@@ -1302,30 +1303,50 @@ fn rename_branch(
 
 /// Report a refused checkout the way Git does and return its exit status.
 fn report_checkout_refusal(error: rivet_core::Error, op: &str) -> Result<i32> {
-    match error {
-        rivet_core::Error::DirtyWorktree { paths } => {
-            eprintln!("error: Your local changes to the following files would be overwritten by {op}:");
-            for path in paths {
-                eprintln!("\t{path}");
-            }
-            let advice = if op == "checkout" {
+    let dirty_block = |paths: &[bstr::BString]| {
+        eprintln!("error: Your local changes to the following files would be overwritten by {op}:");
+        for path in paths {
+            eprintln!("\t{path}");
+        }
+        eprintln!(
+            "{}",
+            if op == "checkout" {
                 "Please commit your changes or stash them before you switch branches."
             } else {
                 "Please commit your changes or stash them before you merge."
-            };
-            eprintln!("{advice}");
+            }
+        );
+    };
+    let untracked_block = |paths: &[bstr::BString]| {
+        eprintln!("error: The following untracked working tree files would be overwritten by {op}:");
+        for path in paths {
+            eprintln!("\t{path}");
+        }
+        eprintln!(
+            "{}",
+            if op == "checkout" {
+                "Please move or remove them before you switch branches."
+            } else {
+                "Please move or remove them before you merge."
+            }
+        );
+    };
+    match error {
+        rivet_core::Error::DirtyWorktree { paths } => {
+            dirty_block(&paths);
             eprintln!("Aborting");
             Ok(1)
         }
         rivet_core::Error::UntrackedOverwrite(path) => {
-            eprintln!("error: The following untracked working tree files would be overwritten by {op}:");
-            eprintln!("\t{path}");
-            let advice = if op == "checkout" {
-                "Please move or remove them before you switch branches."
-            } else {
-                "Please move or remove them before you merge."
-            };
-            eprintln!("{advice}");
+            untracked_block(&[path]);
+            eprintln!("Aborting");
+            Ok(1)
+        }
+        rivet_core::Error::MergeBlocked { dirty, untracked } => {
+            if !dirty.is_empty() {
+                dirty_block(&dirty);
+            }
+            untracked_block(&untracked);
             eprintln!("Aborting");
             Ok(1)
         }
@@ -1620,6 +1641,7 @@ pub fn merge_commit(
     options: &rivet_core::MergeOptions,
     show_stat: bool,
     action: &str,
+    explicit_message: bool,
 ) -> Result<i32> {
     let git_dir = repository.git_dir().to_path_buf();
     let head = repository.head()?;
@@ -1652,7 +1674,8 @@ pub fn merge_commit(
         if let Err(error) = repository.checkout_tree(new_tree, false) {
             return report_checkout_refusal(error, "merge");
         }
-        let reason = if action.starts_with("pull") { format!("{action}: Fast-forward") } else { format!("{action} {label}: Fast-forward") };
+        let note = if explicit_message { "Fast-forward (no commit created; -m option ignored)" } else { "Fast-forward" };
+        let reason = if action.starts_with("pull") { format!("{action}: {note}") } else { format!("{action} {label}: {note}") };
         repository.move_head(theirs, BStr::new(reason.as_bytes()))?;
         if show_stat {
             println!("Fast-forward");

@@ -718,12 +718,17 @@ impl Repository {
                 }
             }
         }
-        if !dirty.is_empty() {
-            dirty.dedup();
-            return Err(Error::DirtyWorktree { paths: dirty });
-        }
-        if let Some(path) = obstructed.into_iter().next() {
-            return Err(Error::UntrackedOverwrite(path));
+        dirty.sort();
+        dirty.dedup();
+        obstructed.sort();
+        obstructed.dedup();
+        match (dirty.is_empty(), obstructed.is_empty()) {
+            (true, true) => {}
+            (false, true) => return Err(Error::DirtyWorktree { paths: dirty }),
+            (true, false) if obstructed.len() == 1 => {
+                return Err(Error::UntrackedOverwrite(obstructed.remove(0)));
+            }
+            (_, _) => return Err(Error::MergeBlocked { dirty, untracked: obstructed }),
         }
 
         let mut index = std::mem::take(self.index_mut());

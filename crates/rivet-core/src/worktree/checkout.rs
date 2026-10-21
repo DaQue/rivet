@@ -387,9 +387,13 @@ impl CheckoutPlan {
                 // Not in the index. If the tree being left has it, the index deletes it: a staged
                 // removal the checkout would silently undo. Otherwise it is untracked, and
                 // `untracked_obstructions` decides whether the file is in the way.
-                if let Some(from_tree) = self.from_tree {
-                    if lookup_tree_entry(odb, self.format, from_tree, path)?.is_some() {
-                        dirty.push(entry.path.clone());
+                // Only when the target rewrites the path: if it removes it too, the index
+                // already agrees with where the checkout is going.
+                if entry.action == CheckoutAction::Update {
+                    if let Some(from_tree) = self.from_tree {
+                        if lookup_tree_entry(odb, self.format, from_tree, path)?.is_some() {
+                            dirty.push(entry.path.clone());
+                        }
                     }
                 }
                 continue;
@@ -488,12 +492,17 @@ impl CheckoutPlan {
             return Ok(());
         }
         let untracked = self.untracked_obstructions(worktree, index)?;
-        if !untracked.is_empty() {
-            return Err(Error::UntrackedOverwrite(untracked[0].clone()));
-        }
         let dirty = self.dirty_paths(worktree, index, odb, stat_cache)?;
-        if !dirty.is_empty() {
-            return Err(Error::DirtyWorktree { paths: dirty });
+        match (dirty.is_empty(), untracked.is_empty()) {
+            (true, true) => {}
+            (false, true) => return Err(Error::DirtyWorktree { paths: dirty }),
+            (true, false) if untracked.len() == 1 => {
+                return Err(Error::UntrackedOverwrite(untracked[0].clone()));
+            }
+            (true, false) => {
+                return Err(Error::MergeBlocked { dirty, untracked });
+            }
+            (false, false) => return Err(Error::MergeBlocked { dirty, untracked }),
         }
         Ok(())
     }

@@ -849,6 +849,7 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         &options,
         !global.quiet,
         &command_action("pull"),
+        false,
     )
 }
 

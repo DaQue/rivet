@@ -27,6 +27,7 @@ tick() {
 
 v() {
     local out rc
+    if [ -n "${STOP_ON:-}" ] && [ "$IMPL" = rivet ]; then rm -rf "$base_stop.prev"; cp -a "$PWD" "$base_stop.prev"; fi
     echo "\$ v $*" | sed -e "s#$ROOT#<ROOT>#g" >>"$TRANSCRIPT"
     if [ "$IMPL" = git ]; then
         timeout 60 "$GIT" "$@" >"$TMPOUT" 2>"$TMPERR"; rc=$?
