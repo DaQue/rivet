@@ -31,3 +31,19 @@ fn every_scenario_matches_real_git() {
     );
     assert!(text.contains("failures: 0"), "unexpected scenario summary:\n{text}");
 }
+
+#[test]
+fn corrupt_repositories_fail_cleanly_without_panics_or_hangs() {
+    if !have("git") || !have("bash") {
+        eprintln!("skipping: git and bash are required");
+        return;
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new("bash")
+        .arg(root.join("tools/difftest/robustness.sh"))
+        .env("RIVET", env!("CARGO_BIN_EXE_rivet"))
+        .output()
+        .expect("run robustness.sh");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success() && text.contains("ROBUST-OK"), "robustness failures:\n{text}");
+}
