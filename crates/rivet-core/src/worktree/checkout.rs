@@ -564,10 +564,12 @@ impl CheckoutPlan {
             if entry.action != CheckoutAction::Keep {
                 continue;
             }
-            // A keep with a mode change is a chmod and nothing else: the bytes are already
-            // right, and rewriting them would change the inode for no reason.
+            // A keep is a mode change with the same bytes: only a `chmod`. A file the user has
+            // deleted stays deleted.
             if let Some(mode) = entry.mode {
-                apply_mode(worktree, BStr::new(&entry.path[..]), mode)?;
+                if worktree.stat(BStr::new(&entry.path[..]))?.is_some() {
+                    apply_mode(worktree, BStr::new(&entry.path[..]), mode)?;
+                }
             }
         }
         // Longest paths first, so a path that only exists because a directory did is not
@@ -954,8 +956,11 @@ fn walk_plan(
                         );
                     }
                     _ => {
-                        if old.oid == new.oid {
-                            // Equal id, possibly different mode: a chmod, planned as a keep.
+                        if old.oid == new.oid && old.mode == new.mode {
+                            // Nothing differs: Git does not touch the path, whatever the work tree
+                            // holds there.
+                        } else if old.oid == new.oid {
+                            // Equal id, different mode: a chmod, planned as a keep.
                             push_planned(
                                 out,
                                 prefix,

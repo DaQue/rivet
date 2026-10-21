@@ -52,7 +52,7 @@ fn main() -> ExitCode {
         Err(error) => {
             // Git's fatal diagnostics are one line on stderr, prefixed and unbounded; `{:#}`
             // keeps the whole anyhow chain on that line rather than printing a backtrace shape.
-            eprintln!("fatal: {error:#}");
+            eprintln!("fatal: {error:#}"); if std::env::var_os("RIVET_DEBUG").is_some() { eprintln!("{error:?}"); }
             ExitCode::from(128)
         }
     }
