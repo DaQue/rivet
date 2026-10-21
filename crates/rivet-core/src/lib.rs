@@ -35,9 +35,6 @@
 //!
 //! The core has no `async`. Network I/O in `remote` uses blocking transports.
 
-#![allow(dead_code)] // scaffold stage: everything is todo!() + unused
-#![allow(unused_variables)] // scaffold stage: every parameter is unused until a body exists
-#![allow(unused_mut)] // scaffold stage: every binding is unused until a body exists
 
 pub mod config;
 pub mod diff;

@@ -1237,7 +1237,7 @@ impl Transport for LocalTransport {
     /// # Errors
     ///
     /// [`crate::error::Error::Protocol`], always.
-    fn ls_refs(&mut self, prefixes: &[BString], peel: bool) -> Result<Vec<AdvertisedRef>> {
+    fn ls_refs(&mut self, _prefixes: &[BString], _peel: bool) -> Result<Vec<AdvertisedRef>> {
         Err(Error::Protocol("ls-refs is not supported over the local transport".to_string()))
     }
 

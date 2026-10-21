@@ -384,8 +384,8 @@ mod tests {
     /// `foo.txt` (the directory is the prefix).
     #[test]
     fn dir_sorts_before_file_with_shared_prefix() {
-        let dir_oid = ObjectId::Sha1([0x33; 20]);
-        let file_oid = ObjectId::Sha1([0x44; 20]);
+        let _dir_oid = ObjectId::Sha1([0x33; 20]);
+        let _file_oid = ObjectId::Sha1([0x44; 20]);
         // `foo` (tree) then `foo.txt` (blob): tree is the prefix, sorts first.
         let mut payload = Vec::new();
         payload.extend_from_slice(b"40000 foo\0");

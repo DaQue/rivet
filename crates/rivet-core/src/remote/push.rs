@@ -246,7 +246,7 @@ impl RefUpdate {
     /// * **The capabilities are not appended here.** They go on the first line only, and this method
     ///   has no way to know whether it is writing the first line. A caller assembling the request
     ///   appends them; see [`push_request`].
-    pub fn command_line(&self, format: crate::hash::ObjectFormat) -> BString {
+    pub fn command_line(&self, _format: crate::hash::ObjectFormat) -> BString {
         let mut out = BString::from(self.old.to_hex());
         out.push(b' ');
         out.extend_from_slice(&self.new.to_hex()[..]);

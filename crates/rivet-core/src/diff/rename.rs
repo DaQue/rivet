@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use bstr::{BStr, BString, ByteSlice};
+use bstr::{BStr, BString};
 
 use crate::diff::{DiffOptions, FileDiff, TreeDiff, blob_diff};
 use crate::error::Result;
@@ -134,7 +134,7 @@ pub fn pair_renames(
     // Inexact renames among what is left.
     let mut candidates: Vec<(u64, u8, usize, usize)> = Vec::new();
     let mut cache: HashMap<ObjectId, (u64, HashMap<u64, u64>)> = HashMap::new();
-    let mut load = |oid: &ObjectId, cache: &mut HashMap<ObjectId, (u64, HashMap<u64, u64>)>| -> Result<()> {
+    let load = |oid: &ObjectId, cache: &mut HashMap<ObjectId, (u64, HashMap<u64, u64>)>| -> Result<()> {
         if !cache.contains_key(oid) {
             let data = odb.read_typed(oid, crate::object::ObjectKind::Blob)?.into_data();
             cache.insert(*oid, (data.len() as u64, span_counts(&data)));

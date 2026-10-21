@@ -381,16 +381,6 @@ impl DeltaBaseCache {
         }
     }
 
-    /// Phase 10 — how many entries are currently held.
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Phase 10 — whether nothing is cached.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     /// Phase 10 — look up a base, returning an owned copy on a hit.
     ///
     /// # Caveats
@@ -430,17 +420,5 @@ impl DeltaBaseCache {
                 self.entries.remove(0);
             }
         }
-    }
-
-    /// Phase 10 — discard everything.
-    ///
-    /// # Caveats
-    ///
-    /// Needed when a pack is removed or a repository is reloaded: the keys embed a pack checksum,
-    /// and a pack that has gone away can never produce a hit again. Nothing calls this per read —
-    /// clearing on every read would make the cache worse than useless, and the ordinary reason to
-    /// hold a database open is to keep its packs' bases warm.
-    pub(crate) fn clear(&mut self) {
-        self.entries.clear();
     }
 }

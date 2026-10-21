@@ -897,7 +897,7 @@ pub fn update_index_after_merge(
 }
 
 pub fn merge_worktree_paths(
-    odb: &Odb,
+    _odb: &Odb,
     index: &Index,
     result: &crate::merge::TreeMerge,
 ) -> Result<Vec<BString>> {

@@ -645,7 +645,7 @@ impl IndexEntry {
             0
         };
 
-        let stage = flags.stage()?;
+        let _stage = flags.stage()?;
 
         // The stored name length is a hint only: it is the byte count before the NUL, saturated at
         // 4095. Locate the NUL by scanning; the hint must match when it is below the saturation

@@ -595,7 +595,7 @@ impl Transport for SshTransport {
     /// [`crate::error::Error::InvalidRemoteUrl`], [`crate::error::Error::Transport`] for a spawn or
     /// pipe failure, [`crate::error::Error::ObjectFormatMismatch`], and
     /// [`crate::error::Error::Protocol`] for an advertisement that does not parse.
-    fn connect(&mut self, url: &RemoteUrl, format: ObjectFormat) -> Result<RefAdvertisement> {
+    fn connect(&mut self, _url: &RemoteUrl, format: ObjectFormat) -> Result<RefAdvertisement> {
         self.spawn(Service::UploadPack)?;
         self.read_advertisement(format)
         }
@@ -666,7 +666,7 @@ impl Transport for SshTransport {
             requested.push("multi_ack_detailed");
         }
         requested.push("agent=Rivet");
-        let format = self.advertisement.as_ref().map(|ad| ad.format).unwrap_or(ObjectFormat::Sha1);
+        let _format = self.advertisement.as_ref().map(|ad| ad.format).unwrap_or(ObjectFormat::Sha1);
 
         {
             let child = self.child.as_mut().ok_or_else(|| {
@@ -1012,7 +1012,7 @@ pub fn remote_command(service: Service, path: &BStr) -> BString {
 ///   what Git sends and matching it costs nothing.
 /// * **An IPv6 literal is re-bracketed**, per [`crate::remote::RemoteUrl::host_port`]; a bare `::1`
 ///   as an `ssh` host is read as a malformed port.
-pub fn ssh_args(url: &RemoteUrl, port: Option<u16>, version: ProtocolVersion) -> Vec<BString> {
+pub fn ssh_args(url: &RemoteUrl, port: Option<u16>, _version: ProtocolVersion) -> Vec<BString> {
     let mut args = Vec::new();
     if let Some(port) = port {
         args.push("-p".into());

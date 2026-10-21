@@ -32,9 +32,6 @@
 //! * `129` — never returned by a handler; `clap` exits with it for an unrecognised command line,
 //!   before `main` runs.
 
-#![allow(dead_code)] // scaffold stage: everything is todo!() + unused
-#![allow(unused_variables)] // scaffold stage: every parameter is unused until a body exists
-#![allow(unused_imports)] // scaffold stage: imports are used by the todo!() bodies
 
 mod cli;
 mod cmd;
@@ -53,7 +50,7 @@ fn main() -> ExitCode {
             // Git's fatal diagnostics are one line on stderr, prefixed and unbounded; `{:#}`
             // keeps the whole anyhow chain on that line rather than printing a backtrace shape.
             eprintln!("fatal: {error:#}"); if std::env::var_os("RIVET_DEBUG").is_some() { eprintln!("{error:?}"); }
-            ExitCode::from(128)
+            ExitCode::from(cmd::EXIT_FATAL as u8)
         }
     }
 }

@@ -1000,10 +1000,6 @@ fn branch_name(head: &HeadState) -> String {
     }
 }
 
-fn branch_or_head() -> &'static str {
-    "HEAD"
-}
-
 fn short_oid(oid: &rivet_core::hash::ObjectId) -> String {
     oid.to_string().chars().take(7).collect()
 }

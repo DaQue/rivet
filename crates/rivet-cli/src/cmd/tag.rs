@@ -179,7 +179,7 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
     if args.column.is_some() || args.merged.is_some() || args.no_merged.is_some() || args.contains.is_some() {
         anyhow::bail!("tag: --column, --merged, --no-merged and --contains are not implemented");
     }
-    let mut repository = super::open(global)?;
+    let repository = super::open(global)?;
 
     if args.delete {
         let mut code = 0;

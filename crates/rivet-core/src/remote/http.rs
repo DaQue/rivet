@@ -71,7 +71,7 @@ use crate::remote::transport::{CapabilitySet, HttpResponse, Service};
 use crate::remote::url::RemoteUrl;
 use crate::remote::{
     AdvertisedRef, DELIM_PACKET, FLUSH_PACKET, PktLine, ProtocolVersion, PushStatus,
-    RefAdvertisement, RefUpdate, Transport, haves_request, wants_request,
+    RefAdvertisement, RefUpdate, Transport, wants_request,
 };
 use crate::remote::url::RemoteScheme;
 use crate::error::Error;
@@ -697,7 +697,7 @@ pub fn send_streaming<T>(
         }
     }
 
-    let mut body = response.body_mut();
+    let body = response.body_mut();
     let mut reader = body.as_reader();
     consume(&mut reader)
 }

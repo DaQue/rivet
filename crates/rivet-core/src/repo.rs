@@ -803,7 +803,7 @@ impl Repository {
     /// # Errors
     ///
     /// [`crate::error::Error::BareRepository`] when there is no work tree.
-    pub fn require_worktree(&self, op: &'static str) -> Result<&Worktree> {
+    pub fn require_worktree(&self, _op: &'static str) -> Result<&Worktree> {
         self.worktree()
     }
 

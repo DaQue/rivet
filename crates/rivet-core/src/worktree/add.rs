@@ -684,7 +684,7 @@ fn is_repository_dir(worktree: &Worktree, path: &BStr) -> bool {
 ///   passes an id it did not store has staged content that does not exist — and the failure
 ///   surfaces much later, at commit or at checkout.
 pub fn build_index_entry(
-    format: ObjectFormat,
+    _format: ObjectFormat,
     path: &BStr,
     oid: crate::hash::ObjectId,
     stat: &crate::worktree::StatData,
@@ -703,7 +703,7 @@ pub fn build_index_entry(
         gid: stat.gid,
         size: stat.size,
         oid,
-        flags: IndexEntryFlags::empty(),
+        flags: IndexEntryFlags::with(stage, path.len()),
         extended_flags: 0,
         path: path.to_owned(),
     }

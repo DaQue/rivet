@@ -320,9 +320,8 @@ impl Config {
         let mut line_no = 0usize;
         let mut i = 0usize;
         let mut logical: Vec<u8> = Vec::new();
-        let mut logical_start = 0usize;
         let mut cont = false;
-        let mut n = data.len();
+        let n = data.len();
         while i < n {
             let start = i;
             let mut j = i;
@@ -353,7 +352,6 @@ impl Config {
                 logical.extend_from_slice(&trimmed[k..]);
                 continue;
             }
-            logical_start = line_no;
             logical = trimmed.to_vec();
             let t = &logical[..];
             if t[0] == b'[' {
@@ -956,7 +954,7 @@ impl Config {
         let key = BStr::new(b"core.repositoryformatversion");
         let value = self.get(key)?;
         match value {
-            Some(v) => {
+            Some(_v) => {
                 let n = self.get_int(key)?;
                 match n {
                     Some(n) => {

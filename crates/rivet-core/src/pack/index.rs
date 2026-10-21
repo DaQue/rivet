@@ -460,7 +460,7 @@ impl OwnedPackIndex {
     /// the buffer first.
     pub fn parse(data: Vec<u8>, format: ObjectFormat) -> Result<Self> {
         let data = data;
-        let index = PackIndex::parse(&data, format)?;
+        let _index = PackIndex::parse(&data, format)?;
         Ok(Self { data, format })
     }
 

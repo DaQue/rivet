@@ -47,20 +47,6 @@ use anyhow::Result;
 use crate::cli::{Cli, Commands, GlobalArgs};
 use rivet_core::Repository;
 
-/// The exit code of a command that ran and succeeded.
-pub const EXIT_OK: i32 = 0;
-
-/// The exit code of a command that ran, and whose answer is a documented negative.
-///
-/// # Caveats
-///
-/// **This is not an error code.** `rivet diff --quiet` on a dirty work tree, `rivet check-ignore`
-/// on a path with no matching rule, and `rivet merge-base --is-ancestor` that answers "no" all
-/// exit `1` having done exactly what they were asked. A script that treats a non-zero exit as a
-/// failure will misreport all three, which is why the three commands document it individually
-/// rather than sharing a "failed" helper.
-pub const EXIT_FALSE: i32 = 1;
-
 /// The exit code of a command that could not be carried out.
 ///
 /// # Caveats
@@ -154,40 +140,6 @@ pub fn open(global: &GlobalArgs) -> Result<Repository> {
         Err(rivet_core::Error::NotARepository(_)) => Err(anyhow::anyhow!(
             "not a git repository (or any of the parent directories): .git"
         )),
-        Err(error) => Err(error.into()),
-    }
-}
-
-/// Open the repository the global flags point at, or create one if there is none.
-///
-/// # Caveats
-///
-/// * **Used only by `rivet init` and `rivet clone`**, and it is the *absence* of a repository
-///   that it turns into a creation rather than an error. Every other command uses [`open`].
-/// * **A `--repo` path that does not exist is not an error here** — it is a directory to be
-///   created, which is what `rivet init --repo /new/place` means.
-/// * **"There is no repository" is tested as [`rivet_core::Error::NotARepository`] and nothing
-///   else.** A corrupt config or an unreadable parent directory must propagate as the error it
-///   is; swallowing it and initialising a fresh repository on top would destroy the user's
-///   `.git` without ever printing why.
-///
-/// # Errors
-///
-/// As [`rivet_core::Repository::init`], plus any error other than `NotARepository` that
-/// [`open`] raised.
-pub fn open_or_init(global: &GlobalArgs) -> Result<Repository> {
-    let directory = base_dir(global)?;
-    match Repository::open_or_discover(&directory) {
-        Ok(repository) => Ok(repository),
-        Err(rivet_core::Error::NotARepository(_)) => {
-            let options = rivet_core::InitOptions {
-                bare: false,
-                initial_branch: rivet_core::ops::default_branch_name()?,
-                format: rivet_core::ObjectFormat::Sha1,
-                work_tree: None,
-            };
-            Repository::init(&directory, &options).map_err(Into::into)
-        }
         Err(error) => Err(error.into()),
     }
 }

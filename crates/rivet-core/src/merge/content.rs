@@ -254,7 +254,7 @@ fn change_regions(base: &[&[u8]], side: &[&[u8]]) -> Vec<Region> {
     let mut regions = Vec::new();
     let mut pending_delete: Option<crate::diff::Edit> = None;
     let mut pending_insert: Option<crate::diff::Edit> = None;
-    let mut flush = |del: &mut Option<crate::diff::Edit>, ins: &mut Option<crate::diff::Edit>, out: &mut Vec<Region>| {
+    let flush = |del: &mut Option<crate::diff::Edit>, ins: &mut Option<crate::diff::Edit>, out: &mut Vec<Region>| {
         if del.is_none() && ins.is_none() {
             return;
         }

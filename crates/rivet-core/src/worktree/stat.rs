@@ -263,7 +263,7 @@ impl StatCache {
     /// past it, and a caller sizing it from the index's entry count is doing the right thing for
     /// the common case and nothing wrong in any other.
     pub fn with_capacity(capacity: usize) -> Self {
-        let mut entries = HashMap::with_capacity(capacity);
+        let entries = HashMap::with_capacity(capacity);
         Self { entries }
     }
 

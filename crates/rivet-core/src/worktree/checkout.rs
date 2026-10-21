@@ -370,7 +370,7 @@ impl CheckoutPlan {
         worktree: &Worktree,
         index: &Index,
         odb: &Odb,
-        stat_cache: &mut StatCache,
+        _stat_cache: &mut StatCache,
     ) -> Result<Vec<BString>> {
         // Neither clause can be answered from the plan alone: the first needs the work tree's
         // bytes, the second needs the index's ids. A path that fails both is reported once.

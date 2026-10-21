@@ -392,7 +392,7 @@ impl RevSpec {
     /// [`crate::error::Error::InvalidRevision`] for anything that does not parse,
     /// [`crate::error::Error::RefNotFound`] for a name that resolves to no ref and is not an id,
     /// and [`crate::error::Error::InvalidHex`] for a hex-looking string of the wrong length.
-    pub fn parse(format: ObjectFormat, spec: &BStr, refs: &RefStore) -> Result<Self> {
+    pub fn parse(format: ObjectFormat, spec: &BStr, _refs: &RefStore) -> Result<Self> {
         let spec = &spec[..];
         if spec.is_empty() {
             return Err(Error::InvalidRevision {
@@ -406,7 +406,7 @@ impl RevSpec {
             return Ok(RevSpec::Oid(id));
         }
         if spec.len() < hex_len && spec.iter().all(|b| b.is_ascii_hexdigit()) {
-            let id = ObjectId::from_hex_prefix(format, BStr::new(spec))?;
+            let _id = ObjectId::from_hex_prefix(format, BStr::new(spec))?;
             return Ok(RevSpec::Abbrev(BString::from(spec)));
         }
         let name = BString::from(spec);

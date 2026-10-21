@@ -830,7 +830,7 @@ pub fn run_cat_file(global: &GlobalArgs, args: &CatFileArgs) -> Result<i32> {
 pub fn run_ls_tree(global: &GlobalArgs, args: &LsTreeArgs) -> Result<i32> {
     use std::io::Write;
 
-    let mut repository = super::open(global)?;
+    let repository = super::open(global)?;
     let format = repository.format();
 
     // No tree-ish means "the index": Git materialises it as a tree rather than pretending an
@@ -1559,7 +1559,7 @@ fn cat_file_batch(global: &GlobalArgs, args: &CatFileArgs) -> Result<i32> {
 
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
-    let mut answer = |out: &mut dyn Write, oid: rivet_core::ObjectId, rest: &str| -> Result<()> {
+    let answer = |out: &mut dyn Write, oid: rivet_core::ObjectId, rest: &str| -> Result<()> {
         let object = repository.odb().read(&oid)?;
         let line = render(&oid, object.kind(), object.data().len() as u64, rest);
         writeln!(out, "{line}")?;

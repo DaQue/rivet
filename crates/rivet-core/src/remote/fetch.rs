@@ -67,7 +67,6 @@ use crate::refs::{RefName, RefStore};
 use crate::remote::transport::Transport;
 use crate::remote::url::RemoteUrl;
 use crate::remote::{AdvertisedRef, RefAdvertisement};
-use crate::object::ObjectKind;
 use crate::error::Error;
 
 /// Phase 11 — how many objects to put in one `have` line's round.
@@ -556,7 +555,7 @@ pub fn negotiate(
             wants.push(*id);
         }
     }
-    let haves = crate::fetch::local_haves(odb, refs)?;
+    let _haves = crate::fetch::local_haves(odb, refs)?;
     let mut used = Vec::new();
     if capabilities.multi_ack {
         used.push(BString::from("multi_ack"));

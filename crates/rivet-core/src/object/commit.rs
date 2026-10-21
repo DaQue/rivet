@@ -675,7 +675,7 @@ impl CommitBuilder {
     /// [`crate::error::Error::MissingHeader`] if no tree was set — the one field with no
     /// sensible default; [`crate::error::Error::Message`] if the author or committer cannot be
     /// resolved, which is the "please tell me who you are" failure `git commit` has.
-    pub fn build(&self, format: ObjectFormat) -> Result<Vec<u8>> {
+    pub fn build(&self, _format: ObjectFormat) -> Result<Vec<u8>> {
         let tree = self.tree.as_ref().ok_or_else(|| Error::MissingHeader {
             kind: ObjectKind::Commit,
             header: "tree",

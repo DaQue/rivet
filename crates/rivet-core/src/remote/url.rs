@@ -624,7 +624,7 @@ pub fn redact_url(input: &BStr) -> BString {
 /// the user is a secret is not this function's judgement to make.
 pub fn credential_span(input: &BStr) -> Option<std::ops::Range<usize>> {
     let scheme = input.iter().position(|b| *b == b':').and_then(|i| input.get(i..i + 3).map(|s| s == b"://"));
-    let scheme = scheme?;
+    let _scheme = scheme?;
     let at = input.iter().position(|b| *b == b'@');
     let at = at?;
     let slash = input.iter().position(|b| *b == b'/');

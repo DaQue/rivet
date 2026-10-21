@@ -261,7 +261,7 @@ impl PackedRefs {
     /// * Ids are written at the repository's format width, lowercase hex. There is no format field
     ///   in the file: a SHA-256 repository's `packed-refs` is distinguishable only by the line
     ///   length, which is exactly why the caller supplies the format.
-    pub fn serialize(&self, format: ObjectFormat) -> Vec<u8> {
+    pub fn serialize(&self, _format: ObjectFormat) -> Vec<u8> {
         let mut out = Vec::new();
         if !self.traits.is_empty() {
             out.extend_from_slice(b"# pack-refs with: ");
@@ -478,7 +478,7 @@ impl PackedRefs {
     /// corruption. Callers that need to know whether the peel landed must check
     /// [`PackedRefs::get`] first.
     pub fn set_peeled(&mut self, name: &RefName, peeled: ObjectId) {
-        for (i, entry) in self.entries.iter_mut().enumerate() {
+        for (_i, entry) in self.entries.iter_mut().enumerate() {
             if entry.name == *name {
                 entry.peeled = Some(peeled);
                 return;

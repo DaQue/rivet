@@ -136,9 +136,6 @@ fn read_pack_dir(pack_dir: &Path) -> Result<Vec<fs::DirEntry>> {
 /// None. Corrupt repository data produces an [`crate::error::Error`] (plan §5).
 #[derive(Debug)]
 pub struct Odb {
-    /// The `objects` directory. Loose objects live in two-hex subdirectories of it and packs in
-    /// `pack/`; the path is kept so a written object can be placed without rescanning.
-    objects_dir: PathBuf,
     /// The repository's id width, taken from `extensions.objectFormat` when the repository was
     /// opened. Everything here is read and written through it.
     format: ObjectFormat,
@@ -220,7 +217,6 @@ impl Odb {
         packs.sort_by_key(|pack| pack.checksum());
 
         Ok(Self {
-            objects_dir: objects_dir.to_path_buf(),
             format,
             loose,
             packs,
@@ -976,14 +972,14 @@ mod tests {
     /// 4-char abbreviation is genuinely ambiguous.
     #[test]
     fn resolve_prefix_unique_ambiguous_and_missing() {
-        let Some(git_exe) = git_exe() else {
+        let Some(_git_exe) = git_exe() else {
             eprintln!("git not on PATH; skipping");
             return;
         };
         let (_tmp, odb) = fresh_objects_odb();
 
-        let data_a = b"alpha\n";
-        let data_b = b"beta\n";
+        let _data_a = b"alpha\n";
+        let _data_b = b"beta\n";
 
         // Write both blobs into the loose store via git hash-object so the ids are
         // exactly what git computes.
@@ -1013,9 +1009,9 @@ mod tests {
         }
         let (i, j) = pair.expect("no two blobs share a 4-char prefix");
         let hex_a = &hexes[i];
-        let hex_b = &hexes[j];
+        let _hex_b = &hexes[j];
         let oid_a = &oids[i];
-        let oid_b = &oids[j];
+        let _oid_b = &oids[j];
 
         // The 4-char hex prefix of oid_a (which equals the first 4 chars of oid_b
         // since we verified they share >= 4 chars) is ambiguous.
@@ -1054,22 +1050,6 @@ mod tests {
             })
     }
 
-    fn git_hex(git: &str, args: &[&str], data: &[u8]) -> String {
-        let mut child = std::process::Command::new(git);
-        child.args(args);
-        child.stdin(std::process::Stdio::piped());
-        let mut child = child.spawn().expect("git spawn");
-        child
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(data)
-            .expect("write stdin");
-        child.stdin.take().unwrap().flush().expect("flush stdin");
-        let out = child.wait_with_output().expect("wait");
-        assert!(out.status.success(), "git failed: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
 
     fn common_hex_prefix_len(a: &str, b: &str) -> usize {
         a.as_bytes()

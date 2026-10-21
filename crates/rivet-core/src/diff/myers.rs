@@ -341,7 +341,7 @@ pub fn myers_diff<T: PartialEq>(old: &[T], new: &[T]) -> Vec<Edit> {
 /// # Errors
 ///
 /// [`crate::error::Error::NotImplemented`] always, until the algorithm lands.
-pub fn histogram_diff<T: PartialEq>(old: &[T], new: &[T]) -> Result<Vec<Edit>> {
+pub fn histogram_diff<T: PartialEq>(_old: &[T], _new: &[T]) -> Result<Vec<Edit>> {
     Err(Error::NotImplemented { what: "histogram diff" })
 }
 

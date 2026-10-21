@@ -7,7 +7,6 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use bstr::{BStr, ByteSlice};
 
 use crate::error::Result;
 use crate::hash::ObjectId;
@@ -291,6 +290,5 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
             report.dangling.push(entry);
         }
     }
-    let _ = BStr::new("");
     Ok(report)
 }

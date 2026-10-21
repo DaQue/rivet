@@ -157,7 +157,7 @@ fn run_scenario(tag: &str, expect_conflicts: bool, build: impl Fn(&Path)) {
     let _ = git_ok(&dir, &["checkout", "-q", "master"]);
 
     // Rivet's answer, on the identical starting state.
-    let mut repo = Repository::open_or_discover(&dir).expect("open repo");
+    let repo = Repository::open_or_discover(&dir).expect("open repo");
     let ours_tree = tree_of(&repo, &ours_hex);
     let theirs_tree = tree_of(&repo, &theirs_hex);
     let base_tree = tree_of(&repo, &base_hex);

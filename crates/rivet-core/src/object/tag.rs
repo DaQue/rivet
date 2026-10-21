@@ -583,7 +583,7 @@ impl TagBuilder {
     /// [`crate::error::Error::MissingHeader`] if no object was set — the one field with no
     /// sensible default; [`crate::error::Error::Message`] if the tagger cannot be resolved, which
     /// is the "please tell me who you are" failure `git tag -a` has.
-    pub fn build(&self, format: ObjectFormat) -> Result<Vec<u8>> {
+    pub fn build(&self, _format: ObjectFormat) -> Result<Vec<u8>> {
         // D3: object is the one field with no sensible default.
         let object = self.object.ok_or_else(|| {
             crate::error::Error::MissingHeader {

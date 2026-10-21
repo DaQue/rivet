@@ -301,7 +301,7 @@ impl TreeDiff {
 /// [`crate::error::Error::WrongObjectKind`] if an id names a tree, a commit or a tag;
 /// [`crate::error::Error::NotImplemented`] for [`crate::diff::DiffAlgorithm::Histogram`].
 pub fn blob_diff(
-    format: ObjectFormat,
+    _format: ObjectFormat,
     path: &BStr,
     old: Option<(ObjectId, EntryMode)>,
     new: Option<(ObjectId, EntryMode)>,

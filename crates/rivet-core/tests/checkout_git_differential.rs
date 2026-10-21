@@ -12,7 +12,6 @@ use std::process::Command;
 use bstr::BStr;
 
 use rivet_core::hash::ObjectId;
-use rivet_core::index::Index;
 use rivet_core::repo::Repository;
 use rivet_core::worktree::checkout::{CheckoutOptions, CheckoutPlan};
 use rivet_core::worktree::StatCache;
@@ -183,19 +182,6 @@ fn rivet_checkout(root: &Path, pathspec: &str) -> Result<(), rivet_core::error::
     plan.validate(worktree, repo.index(), repo.odb(), &mut StatCache::new(), &options)?;
     plan.apply(worktree, repo.odb())?;
     Ok(())
-}
-
-fn index_snapshot(index: &Index) -> BTreeMap<String, (u32, ObjectId)> {
-    index
-        .entries()
-        .iter()
-        .map(|entry| {
-            (
-                entry.path.to_string(),
-                (entry.mode.to_u32(), entry.oid),
-            )
-        })
-        .collect()
 }
 
 #[test]

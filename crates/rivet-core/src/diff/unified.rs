@@ -550,7 +550,7 @@ pub const fn change_letter(is_new: bool, is_deleted: bool, is_type_change: bool)
 /// [`crate::error::Error::NotImplemented`] for a histogram diff whose hunks were never computed.
 pub fn format_unified(
     diff: &crate::diff::TreeDiff,
-    format: crate::hash::ObjectFormat,
+    _format: crate::hash::ObjectFormat,
     out: &mut impl Write,
 ) -> Result<()> {
     let hex = |oid: &crate::hash::ObjectId| -> String {

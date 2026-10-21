@@ -309,7 +309,7 @@ pub struct DiffArgs {
 ///   the behaviour a script sees, so the empty-history case must be distinguished from the
 ///   `--all`-with-no-refs case rather than both returning early.
 pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
-    let mut repository = super::open(global)?;
+    let repository = super::open(global)?;
     if args.graph {
         anyhow::bail!("log: --graph is not implemented");
     }
@@ -519,7 +519,7 @@ pub fn run_show(global: &GlobalArgs, args: &ShowArgs) -> Result<i32> {
 ///   how `git diff` is used as a plain diff tool, and a caller who runs `rivet diff a.txt b.txt`
 ///   outside a repository gets `NotARepository` rather than a diff of the two files.
 pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
-    let mut repository = super::open(global)?;
+    let repository = super::open(global)?;
     let format = repository.format();
     if args.revisions.len() > 2 {
         anyhow::bail!("diff: combined diffs of three or more revisions are not implemented");
@@ -656,7 +656,6 @@ struct LogCommit {
     parents: Vec<ObjectId>,
     tree: ObjectId,
     author: rivet_core::Signature,
-    committer: rivet_core::Signature,
     message: Vec<u8>,
 }
 
@@ -667,7 +666,6 @@ fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<LogCommit> {
         parents: commit.parents.clone(),
         tree: commit.tree,
         author: commit.author.clone(),
-        committer: commit.committer.clone(),
         message: commit.message.to_vec(),
     })
 }
