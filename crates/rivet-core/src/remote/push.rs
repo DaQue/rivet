@@ -66,9 +66,9 @@ use crate::hash::ObjectId;
 use crate::odb::Odb;
 use crate::refs::RefStore;
 
+use crate::error::Error;
 use crate::remote::RefAdvertisement;
 use crate::remote::transport::Transport;
-use crate::error::Error;
 
 /// Phase 11 — the text a server returns for a ref whose update succeeded.
 ///
@@ -385,7 +385,11 @@ pub fn check_updates(updates: &[RefUpdate], odb: &Odb, refs: &RefStore) -> Resul
         // The remote's current value must be an ancestor of what is being pushed. When we do not
         // even have it, the remote has history we have not fetched: Git's "fetch first".
         if !odb.contains(&old) || !push_is_fast_forward(odb, old, new)? {
-            return Err(Error::NonFastForward { name: update.name.clone(), old, new });
+            return Err(Error::NonFastForward {
+                name: update.name.clone(),
+                old,
+                new,
+            });
         }
     }
     Ok(())
@@ -473,7 +477,9 @@ pub fn parse_report_status(input: &[u8], v2: bool) -> Result<PushOutcome> {
                 continue;
             }
             if len < 4 || at + len > input.len() {
-                return Err(Error::Protocol("truncated pkt-line in report-status".into()));
+                return Err(Error::Protocol(
+                    "truncated pkt-line in report-status".into(),
+                ));
             }
             let payload = &input[at + 4..at + len];
             text.extend_from_slice(payload);
@@ -495,7 +501,10 @@ pub fn parse_report_status(input: &[u8], v2: bool) -> Result<PushOutcome> {
     let mut rejected = Vec::new();
     let mut first = true;
     while pos < input.len() {
-        let line_end = input[pos..].iter().position(|&b| b == b'\n').map_or(input.len(), |i| pos + i);
+        let line_end = input[pos..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(input.len(), |i| pos + i);
         let line = &input[pos..line_end];
         pos = line_end + 1;
         if line.is_empty() {
@@ -503,11 +512,16 @@ pub fn parse_report_status(input: &[u8], v2: bool) -> Result<PushOutcome> {
         }
         if first {
             first = false;
-            let rest = line.strip_prefix(b"unpack ").ok_or_else(|| Error::Protocol("missing unpack line".into()))?;
+            let rest = line
+                .strip_prefix(b"unpack ")
+                .ok_or_else(|| Error::Protocol("missing unpack line".into()))?;
             unpack_ok = rest == b"ok";
             continue;
         }
-        let sp = line.iter().position(|&b| b == b' ').ok_or_else(|| Error::Protocol("bad status line".into()))?;
+        let sp = line
+            .iter()
+            .position(|&b| b == b' ')
+            .ok_or_else(|| Error::Protocol("bad status line".into()))?;
         let status = &line[..sp];
         let rest = &line[sp + 1..];
         // `ok <ref>` or `ng <ref> <reason>`; v2 adds option lines that this parser skips over.
@@ -517,11 +531,18 @@ pub fn parse_report_status(input: &[u8], v2: bool) -> Result<PushOutcome> {
         let name = BString::from(name);
         let message = BString::from(message);
         let ok = status == b"ok";
-        let st = PushStatus { name: name.clone(), ok, message: message.clone() };
+        let st = PushStatus {
+            name: name.clone(),
+            ok,
+            message: message.clone(),
+        };
         statuses.push(st.clone());
         if ok {
             status_reported = true;
-            updated.push(RefUpdate::create(name, ObjectId::zero(crate::hash::ObjectFormat::Sha1)));
+            updated.push(RefUpdate::create(
+                name,
+                ObjectId::zero(crate::hash::ObjectFormat::Sha1),
+            ));
         } else {
             rejected.push(st);
         }
@@ -529,7 +550,13 @@ pub fn parse_report_status(input: &[u8], v2: bool) -> Result<PushOutcome> {
     if pos != input.len() {
         return Err(Error::Protocol("no flush".into()));
     }
-    Ok(PushOutcome { statuses, unpack_ok, status_reported, updated, rejected })
+    Ok(PushOutcome {
+        statuses,
+        unpack_ok,
+        status_reported,
+        updated,
+        rejected,
+    })
 }
 
 /// Phase 11 — run a push against a transport.

@@ -70,8 +70,7 @@ use crate::hash::ObjectFormat;
 use crate::remote::transport::{CapabilitySet, Service};
 use crate::remote::url::{RemoteScheme, RemoteUrl};
 use crate::remote::{
-    AdvertisedRef, ProtocolVersion, PushStatus, RefAdvertisement, RefUpdate,
-    Transport,
+    AdvertisedRef, ProtocolVersion, PushStatus, RefAdvertisement, RefUpdate, Transport,
 };
 
 /// Phase 11 — the program Rivet runs to reach an SSH remote.
@@ -288,7 +287,9 @@ impl SshTransport {
                     <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&program[..]),
                 );
                 for arg in &args {
-                    command.arg(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&arg[..]));
+                    command.arg(
+                        <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&arg[..]),
+                    );
                 }
                 command
             }
@@ -310,7 +311,9 @@ impl SshTransport {
                 }
                 let mut command = Command::new("/bin/sh");
                 command.arg("-c");
-                command.arg(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&script[..]));
+                command.arg(
+                    <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&script[..]),
+                );
                 command
             }
         };
@@ -329,7 +332,7 @@ impl SshTransport {
         self.remote_command = remote_command;
         self.advertisement = None;
         Ok(())
-        }
+    }
 
     /// Phase 11 — read the advertisement the remote service wrote on startup.
     ///
@@ -381,7 +384,9 @@ impl SshTransport {
                     continue;
                 }
                 if let Some(message) = data.strip_prefix(b"ERR ") {
-                    return Err(Error::Protocol(String::from_utf8_lossy(message).into_owned()));
+                    return Err(Error::Protocol(
+                        String::from_utf8_lossy(message).into_owned(),
+                    ));
                 }
                 lines.push(data.to_vec());
             }
@@ -391,7 +396,10 @@ impl SshTransport {
             Some(line) => match crate::remote::http::split_ref_line(line)?.2 {
                 Some(bytes) => {
                     let parsed = CapabilitySet::parse(&bytes)?;
-                    CapabilitySet { entries: parsed.entries.clone(), raw: &[] }
+                    CapabilitySet {
+                        entries: parsed.entries.clone(),
+                        raw: &[],
+                    }
                 }
                 None => CapabilitySet::default(),
             },
@@ -399,7 +407,10 @@ impl SshTransport {
         };
         let peer = capabilities.object_format()?;
         if peer != format {
-            return Err(Error::ObjectFormatMismatch { expected: format, found: peer });
+            return Err(Error::ObjectFormatMismatch {
+                expected: format,
+                found: peer,
+            });
         }
         let mut refs: Vec<AdvertisedRef> = Vec::new();
         for line in &lines {
@@ -428,7 +439,7 @@ impl SshTransport {
         };
         self.advertisement = Some(advertisement.clone());
         Ok(advertisement)
-        }
+    }
 
     /// Phase 11 — the child's stdout, for a caller that wants to read the stream itself.
     ///
@@ -500,13 +511,13 @@ impl SshTransport {
             None => return Ok(None),
         };
         drop(child.stdin.take());
-        child
-            .wait()
-            .map(Some)
-            .map_err(|error| {
-                Error::Transport(format!("waiting for `{}` failed: {}", self.remote_command, error))
-            })
-        }
+        child.wait().map(Some).map_err(|error| {
+            Error::Transport(format!(
+                "waiting for `{}` failed: {}",
+                self.remote_command, error
+            ))
+        })
+    }
 }
 
 /// Phase 11 — the command line to run, resolving `GIT_SSH_COMMAND` and `GIT_SSH`.
@@ -542,7 +553,10 @@ pub fn ssh_command_for(url: &RemoteUrl, port: Option<u16>) -> (SshInvocation, Ve
     let ssh = std::env::var("GIT_SSH").ok();
     let program = std::env::var("SSH_PROGRAM").ok();
     if let Some(cmd) = command {
-        (SshInvocation::ShellLine(BString::from(cmd.as_bytes())), args)
+        (
+            SshInvocation::ShellLine(BString::from(cmd.as_bytes())),
+            args,
+        )
     } else if let Some(path) = ssh {
         (SshInvocation::Program(BString::from(path.as_bytes())), args)
     } else if let Some(prog) = program {
@@ -598,7 +612,7 @@ impl Transport for SshTransport {
     fn connect(&mut self, _url: &RemoteUrl, format: ObjectFormat) -> Result<RefAdvertisement> {
         self.spawn(Service::UploadPack)?;
         self.read_advertisement(format)
-        }
+    }
 
     /// Phase 11 — the capabilities from the last [`Transport::connect`].
     fn capabilities(&self) -> &CapabilitySet<'_> {
@@ -610,7 +624,7 @@ impl Transport for SshTransport {
                 EMPTY.get_or_init(CapabilitySet::default)
             }
         }
-        }
+    }
 
     /// Phase 11 — negotiate a fetch down the child's pipes and write the pack to `into`.
     ///
@@ -666,12 +680,17 @@ impl Transport for SshTransport {
             requested.push("multi_ack_detailed");
         }
         requested.push("agent=Rivet");
-        let _format = self.advertisement.as_ref().map(|ad| ad.format).unwrap_or(ObjectFormat::Sha1);
+        let _format = self
+            .advertisement
+            .as_ref()
+            .map(|ad| ad.format)
+            .unwrap_or(ObjectFormat::Sha1);
 
         {
-            let child = self.child.as_mut().ok_or_else(|| {
-                Error::Protocol("fetch called before connect".to_string())
-            })?;
+            let child = self
+                .child
+                .as_mut()
+                .ok_or_else(|| Error::Protocol("fetch called before connect".to_string()))?;
             let stdin = child.stdin.as_mut().ok_or_else(|| {
                 Error::Transport("the ssh child's stdin is not available".to_string())
             })?;
@@ -706,9 +725,10 @@ impl Transport for SshTransport {
             want_progress: false,
             version: ProtocolVersion::V0,
         };
-        let child = self.child.as_mut().ok_or_else(|| {
-            Error::Protocol("fetch called before connect".to_string())
-        })?;
+        let child = self
+            .child
+            .as_mut()
+            .ok_or_else(|| Error::Protocol("fetch called before connect".to_string()))?;
         let stdout = child.stdout.as_mut().ok_or_else(|| {
             Error::Transport("the ssh child's stdout is not available".to_string())
         })?;
@@ -735,14 +755,16 @@ impl Transport for SshTransport {
                 Some(rest) if rest.ends_with(" common") || rest.ends_with(" ready") => continue,
                 Some(_) => break,
                 None => {
-                    return Err(Error::Protocol(format!("unrecognised negotiation line: {text:?}")));
+                    return Err(Error::Protocol(format!(
+                        "unrecognised negotiation line: {text:?}"
+                    )));
                 }
             }
         }
         let mut writer = into;
         crate::remote::sideband::stream_pack(stdout, &options, &mut writer, None)?;
         Ok(())
-        }
+    }
 
     /// Phase 11 — write the updates and the pack, and read `report-status`.
     ///
@@ -811,9 +833,10 @@ impl Transport for SshTransport {
         body.extend_from_slice(crate::remote::pktline::FLUSH_PACKET);
         body.extend_from_slice(pack);
         {
-            let child = self.child.as_mut().ok_or_else(|| {
-                Error::Protocol("push called before connect".to_string())
-            })?;
+            let child = self
+                .child
+                .as_mut()
+                .ok_or_else(|| Error::Protocol("push called before connect".to_string()))?;
             let stdin = child.stdin.as_mut().ok_or_else(|| {
                 Error::Transport("the ssh child's stdin is not available".to_string())
             })?;
@@ -830,9 +853,10 @@ impl Transport for SshTransport {
         // sends the section directly. Either way the payload is pkt-lines of its own.
         let mut status_bytes = Vec::new();
         {
-            let child = self.child.as_mut().ok_or_else(|| {
-                Error::Protocol("push called before connect".to_string())
-            })?;
+            let child = self
+                .child
+                .as_mut()
+                .ok_or_else(|| Error::Protocol("push called before connect".to_string()))?;
             let stdout = child.stdout.as_mut().ok_or_else(|| {
                 Error::Transport("the ssh child's stdout is not available".to_string())
             })?;
@@ -871,7 +895,7 @@ impl Transport for SshTransport {
         self.wait()?;
         let outcome = crate::remote::push::parse_report_status(&status_bytes, false)?;
         Ok(outcome.statuses)
-        }
+    }
 
     /// Phase 11 — unsupported over this SSH transport.
     ///
@@ -887,9 +911,10 @@ impl Transport for SshTransport {
     ///
     /// [`crate::error::Error::Protocol`], always.
     fn ls_refs(&mut self, prefixes: &[BString], peel: bool) -> Result<Vec<AdvertisedRef>> {
-        let advertisement = self.advertisement.as_ref().ok_or_else(|| {
-            Error::Protocol("ls_refs called before connect".to_string())
-        })?;
+        let advertisement = self
+            .advertisement
+            .as_ref()
+            .ok_or_else(|| Error::Protocol("ls_refs called before connect".to_string()))?;
         // v0 has no `ls-refs` command: the advertisement already listed every ref, so the request
         // is answered from what was read at connect time.
         let _ = peel;
@@ -909,7 +934,7 @@ impl Transport for SshTransport {
             });
         }
         Ok(refs)
-        }
+    }
 
     /// Phase 11 — close the child's stdin and reap it.
     ///
@@ -938,12 +963,15 @@ impl Transport for SshTransport {
             }
             drop(child.stdin.take());
             child.wait().map_err(|error| {
-                Error::Transport(format!("waiting for `{}` failed: {}", self.remote_command, error))
+                Error::Transport(format!(
+                    "waiting for `{}` failed: {}",
+                    self.remote_command, error
+                ))
             })?;
         }
         self.advertisement = None;
         Ok(())
-        }
+    }
 }
 
 /// Phase 11 — quote a path for the remote shell, as `git-upload-pack`'s argument.
@@ -976,7 +1004,7 @@ pub fn quote_remote_path(path: &BStr) -> BString {
     }
     quoted.push(b'\'');
     BString::from(quoted)
-    }
+}
 
 /// Phase 11 — build the single command string an `ssh` invocation runs on the remote host.
 ///

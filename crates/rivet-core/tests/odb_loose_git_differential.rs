@@ -7,10 +7,10 @@
 use std::io::Write as _;
 use std::process::Command;
 
-use rivet_core::odb::LooseObjectStore;
 use rivet_core::ObjectFormat;
 use rivet_core::ObjectId;
 use rivet_core::ObjectKind;
+use rivet_core::odb::LooseObjectStore;
 
 fn git_in_dir(dir: &std::path::Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -39,13 +39,21 @@ fn git_written_blob_rivet_reads() {
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("git spawn failed");
-    child.stdin.as_mut().unwrap().write_all(body).expect("write to git stdin failed");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(body)
+        .expect("write to git stdin failed");
     let out = child.wait_with_output().expect("git wait failed");
     let stdout = String::from_utf8(out.stdout).expect("not UTF-8");
     assert!(out.status.success(), "git hash-object failed: {stdout}");
     let id_hex = stdout.trim();
 
-    let store = LooseObjectStore::open(tmp.path().join(".git").join("objects").as_path(), ObjectFormat::Sha1);
+    let store = LooseObjectStore::open(
+        tmp.path().join(".git").join("objects").as_path(),
+        ObjectFormat::Sha1,
+    );
     let oid = ObjectId::from_hex(ObjectFormat::Sha1, id_hex.as_bytes().into()).unwrap();
     assert!(store.contains(&oid));
 
@@ -61,7 +69,10 @@ fn rivet_written_blob_git_reads() {
     git_in_dir(tmp.path(), &["init", "--quiet"]);
 
     let body = b"hello from rivet\n";
-    let store = LooseObjectStore::open(tmp.path().join(".git").join("objects").as_path(), ObjectFormat::Sha1);
+    let store = LooseObjectStore::open(
+        tmp.path().join(".git").join("objects").as_path(),
+        ObjectFormat::Sha1,
+    );
     let oid = store.write_raw(ObjectKind::Blob, body).unwrap();
 
     // git cat-file -p <id> must print the body verbatim
@@ -90,9 +101,18 @@ fn rivet_written_blob_git_reads() {
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("git spawn failed");
-    child.stdin.as_mut().unwrap().write_all(body).expect("write to git stdin failed");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(body)
+        .expect("write to git stdin failed");
     let out = child.wait_with_output().expect("git wait failed");
     let derived = String::from_utf8(out.stdout).expect("not UTF-8");
     assert!(out.status.success(), "git hash-object failed: {derived}");
-    assert_eq!(derived.trim(), hex, "git derived a different id than rivet wrote");
+    assert_eq!(
+        derived.trim(),
+        hex,
+        "git derived a different id than rivet wrote"
+    );
 }

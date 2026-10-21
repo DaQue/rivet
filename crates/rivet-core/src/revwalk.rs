@@ -64,12 +64,12 @@
 
 use bstr::{BStr, BString};
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::Commit;
 use crate::odb::Odb;
 use crate::refs::{RefName, RefStore};
-use crate::error::Error;
 
 /// Phase 4 — what order a walk should emit commits in.
 ///
@@ -478,11 +478,7 @@ impl RevSpec {
                     current = parsed.object();
                     hops += 1;
                 }
-                _ => {
-                    return Err(Error::NotACommit {
-                        name: spec.clone(),
-                    })
-                }
+                _ => return Err(Error::NotACommit { name: spec.clone() }),
             }
         };
 
@@ -576,7 +572,11 @@ pub fn parse_rev_spec(format: ObjectFormat, spec: &BStr, refs: &RefStore) -> Res
         Some(side) => Some(RevSpec::parse(format, BStr::new(side), refs)?),
         None => None,
     };
-    Ok(RevRange { from, to, symmetric })
+    Ok(RevRange {
+        from,
+        to,
+        symmetric,
+    })
 }
 
 /// Phase 4 — a commit walker over the object database.
@@ -657,8 +657,12 @@ impl<'a> CommitWalker<'a> {
     /// [`crate::error::Error`] if the commit cannot be read or parsed — a missing object or a
     /// corrupt header ends the walk instead of being skipped.
     pub fn next_commit(&mut self) -> Result<Option<Commit<'a>>> {
-        let Some(oid) = self.queue.pop() else { return Ok(None) };
-        let object = self.odb.read_typed(&oid, crate::object::ObjectKind::Commit)?;
+        let Some(oid) = self.queue.pop() else {
+            return Ok(None);
+        };
+        let object = self
+            .odb
+            .read_typed(&oid, crate::object::ObjectKind::Commit)?;
         // The returned commit borrows its bytes for `'a`, which no local buffer can satisfy;
         // the walker is a short-lived, per-command object, so the bytes are leaked instead.
         let data: &'a [u8] = Box::leak(object.into_data().into_boxed_slice());
@@ -812,7 +816,10 @@ pub fn walk_oids(odb: &Odb, starts: &[ObjectId], options: &WalkOptions) -> Resul
 
     let path_oid = |tree: ObjectId, path: &[u8]| -> Result<Option<ObjectId>> {
         let mut current = tree;
-        let mut parts = path.split(|b| *b == b'/').filter(|p| !p.is_empty()).peekable();
+        let mut parts = path
+            .split(|b| *b == b'/')
+            .filter(|p| !p.is_empty())
+            .peekable();
         if parts.peek().is_none() {
             return Ok(Some(tree));
         }

@@ -17,7 +17,9 @@ use crate::index::{Index, IndexEntry, IndexEntryExtendedFlags, IndexEntryFlags, 
 use crate::object::{AnyObject, EntryMode, ObjectKind, Signature};
 use crate::refs::{HeadState, RefName, ReflogEntry, ReflogMessage};
 use crate::repo::Repository;
-use crate::worktree::checkout::{CheckoutAction, CheckoutOptions, CheckoutPlan, remove_path, write_blob};
+use crate::worktree::checkout::{
+    CheckoutAction, CheckoutOptions, CheckoutPlan, remove_path, write_blob,
+};
 use crate::worktree::{StatCache, StatData};
 
 /// The paths of the user-level configuration files Git reads, lowest priority first.
@@ -74,9 +76,10 @@ pub fn load_outer_configs() -> Result<Vec<Config>> {
 /// `local` may be `None` for commands that run outside a repository (`init`, `clone`).
 pub fn lookup_config(local: Option<&Config>, key: &BStr) -> Result<Option<BString>> {
     if let Some(local) = local
-        && let Some(value) = local.get(key)? {
-            return Ok(Some(value.to_owned()));
-        }
+        && let Some(value) = local.get(key)?
+    {
+        return Ok(Some(value.to_owned()));
+    }
     for config in load_outer_configs()?.iter().rev() {
         if let Some(value) = config.get(key)? {
             return Ok(Some(value.to_owned()));
@@ -111,7 +114,12 @@ pub enum IdentityKind {
 /// `GIT_*_DATE` if set and the current time otherwise.
 pub fn resolve_identity(local: Option<&Config>, kind: IdentityKind) -> Result<Signature> {
     let (name_var, email_var, date_var, what) = match kind {
-        IdentityKind::Author => ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE", "author"),
+        IdentityKind::Author => (
+            "GIT_AUTHOR_NAME",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_AUTHOR_DATE",
+            "author",
+        ),
         IdentityKind::Committer => (
             "GIT_COMMITTER_NAME",
             "GIT_COMMITTER_EMAIL",
@@ -135,8 +143,8 @@ pub fn resolve_identity(local: Option<&Config>, kind: IdentityKind) -> Result<Si
             "cannot resolve {what} identity: set user.name and user.email"
         )));
     };
-    let date = env_bytes(date_var)
-        .and_then(|v| crate::object::commit::parse_git_date(BStr::new(&v)));
+    let date =
+        env_bytes(date_var).and_then(|v| crate::object::commit::parse_git_date(BStr::new(&v)));
     Ok(match date {
         Some((when, tz_offset_minutes)) => Signature {
             name,
@@ -254,7 +262,13 @@ impl Repository {
     }
 
     /// Point a ref at `new` unconditionally, logging per [`Repository::should_log_ref`].
-    pub fn set_ref_logged(&self, name: &RefName, new: ObjectId, who: &Signature, reason: &BStr) -> Result<()> {
+    pub fn set_ref_logged(
+        &self,
+        name: &RefName,
+        new: ObjectId,
+        who: &Signature,
+        reason: &BStr,
+    ) -> Result<()> {
         let message = self
             .should_log_ref(name)
             .then(|| ReflogMessage::new(who, reason));
@@ -336,7 +350,7 @@ impl Repository {
     }
 
     /// The tree `HEAD` records, or `None` on an unborn branch.
-        pub fn head_tree_oid(&self) -> Result<Option<ObjectId>> {
+    pub fn head_tree_oid(&self) -> Result<Option<ObjectId>> {
         match self.head()?.oid() {
             Some(oid) => Ok(Some(self.commit_tree(oid)?)),
             None => Ok(None),
@@ -387,7 +401,9 @@ impl Repository {
                     updates.push((entry.path.clone(), None));
                 }
                 CheckoutAction::Create | CheckoutAction::Update => {
-                    let (Some(oid), Some(mode)) = (entry.oid, entry.mode) else { continue };
+                    let (Some(oid), Some(mode)) = (entry.oid, entry.mode) else {
+                        continue;
+                    };
                     let stat = self.worktree()?.stat(path)?;
                     updates.push((
                         entry.path.clone(),
@@ -515,7 +531,12 @@ impl Repository {
 
     /// Write a commit object for `tree` with the given parents and message, using the resolved
     /// author and committer identities. No ref moves; the caller decides how to log that.
-    pub fn write_commit_object(&self, tree: ObjectId, parents: &[ObjectId], message: &BStr) -> Result<ObjectId> {
+    pub fn write_commit_object(
+        &self,
+        tree: ObjectId,
+        parents: &[ObjectId],
+        message: &BStr,
+    ) -> Result<ObjectId> {
         let mut builder = crate::object::CommitBuilder::new();
         builder.tree(tree);
         for parent in parents {
@@ -574,7 +595,8 @@ impl Repository {
                 .map(|e| (e.path.clone(), (e.mode, e.oid)))
                 .collect(),
         };
-        let mut candidates: std::collections::BTreeSet<BString> = source_map.keys().cloned().collect();
+        let mut candidates: std::collections::BTreeSet<BString> =
+            source_map.keys().cloned().collect();
         if !overlay {
             for entry in self.index().entries() {
                 candidates.insert(entry.path.clone());
@@ -582,10 +604,17 @@ impl Repository {
         }
         let selected: Vec<BString> = candidates
             .into_iter()
-            .filter(|path| pathspecs.iter().any(|spec| pathspec_matches(BStr::new(&path[..]), BStr::new(&spec[..]))))
+            .filter(|path| {
+                pathspecs
+                    .iter()
+                    .any(|spec| pathspec_matches(BStr::new(&path[..]), BStr::new(&spec[..])))
+            })
             .collect();
         for spec in pathspecs {
-            if !selected.iter().any(|path| pathspec_matches(BStr::new(&path[..]), BStr::new(&spec[..]))) {
+            if !selected
+                .iter()
+                .any(|path| pathspec_matches(BStr::new(&path[..]), BStr::new(&spec[..])))
+            {
                 return Err(Error::PathNotFound(spec.clone()));
             }
         }
@@ -610,7 +639,11 @@ impl Repository {
                 }
             }
             if staged {
-                let stat = if worktree { self.worktree()?.stat(path_ref)? } else { None };
+                let stat = if worktree {
+                    self.worktree()?.stat(path_ref)?
+                } else {
+                    None
+                };
                 let previous = self
                     .index()
                     .entry(path_ref)
@@ -621,7 +654,9 @@ impl Repository {
                 if let Some((mode, oid)) = src {
                     let entry = match (&stat, previous) {
                         (Some(stat), _) => make_index_entry(path_ref, mode, oid, Some(stat)),
-                        (None, Some(previous)) if previous.oid == oid && previous.mode == mode => previous,
+                        (None, Some(previous)) if previous.oid == oid && previous.mode == mode => {
+                            previous
+                        }
                         _ => make_index_entry(path_ref, mode, oid, None),
                     };
                     index.insert(entry);
@@ -634,10 +669,9 @@ impl Repository {
                 // new stat data; refreshing it saves the next `status` a rehash.
                 if let Some((mode, oid)) = src {
                     let stat = self.worktree()?.stat(path_ref)?;
-                    let refresh = self
-                        .index()
-                        .entry(path_ref)
-                        .is_some_and(|e| e.stage() == Stage::Normal && e.oid == oid && e.mode == mode);
+                    let refresh = self.index().entry(path_ref).is_some_and(|e| {
+                        e.stage() == Stage::Normal && e.oid == oid && e.mode == mode
+                    });
                     if refresh {
                         let index = self.index_mut();
                         index.remove_path(path_ref);
@@ -712,9 +746,11 @@ impl Repository {
                 }
             }
             if let Some(entry) = index_entry
-                && self.worktree()?.stat(path_ref)?.is_some() && self.worktree()?.hash_file(path_ref)? != entry.oid {
-                    dirty.push(path.clone());
-                }
+                && self.worktree()?.stat(path_ref)?.is_some()
+                && self.worktree()?.hash_file(path_ref)? != entry.oid
+            {
+                dirty.push(path.clone());
+            }
         }
         dirty.sort();
         dirty.dedup();
@@ -726,7 +762,12 @@ impl Repository {
             (true, false) if obstructed.len() == 1 => {
                 return Err(Error::UntrackedOverwrite(obstructed.remove(0)));
             }
-            (_, _) => return Err(Error::MergeBlocked { dirty, untracked: obstructed }),
+            (_, _) => {
+                return Err(Error::MergeBlocked {
+                    dirty,
+                    untracked: obstructed,
+                });
+            }
         }
 
         let mut index = std::mem::take(self.index_mut());
@@ -734,7 +775,13 @@ impl Repository {
         crate::merge::write_conflict_stages(&mut index, &result.conflicts)?;
         index.sort();
         *self.index_mut() = index;
-        crate::merge::write_merged_worktree(self.worktree()?, self.index(), self.odb(), &result, options)?;
+        crate::merge::write_merged_worktree(
+            self.worktree()?,
+            self.index(),
+            self.odb(),
+            &result,
+            options,
+        )?;
 
         // Refresh stat data for the clean paths just written, and tidy deleted ones.
         let conflicted: std::collections::BTreeSet<BString> =
@@ -775,8 +822,8 @@ pub enum HeadTarget<'a> {
 /// Format a signature's time the way `git log` prints it by default:
 /// `Tue Nov 14 23:13:20 2023 +0100`, in the signature's own zone.
 pub fn format_git_date(when: i64, tz_offset_minutes: i32) -> String {
-    let offset = jiff::tz::Offset::from_seconds(tz_offset_minutes * 60)
-        .unwrap_or(jiff::tz::Offset::UTC);
+    let offset =
+        jiff::tz::Offset::from_seconds(tz_offset_minutes * 60).unwrap_or(jiff::tz::Offset::UTC);
     let stamp = jiff::Timestamp::from_second(when).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
     let zoned = stamp.to_zoned(jiff::tz::TimeZone::fixed(offset));
     let abs = tz_offset_minutes.abs();
@@ -796,9 +843,10 @@ pub fn parse_approxidate(text: &str) -> Option<i64> {
         return rest.split_whitespace().next()?.parse().ok();
     }
     if let Ok(n) = text.parse::<i64>()
-        && text.len() >= 9 {
-            return Some(n);
-        }
+        && text.len() >= 9
+    {
+        return Some(n);
+    }
     crate::object::commit::parse_git_date(BStr::new(text.as_bytes())).map(|(when, _)| when)
 }
 
@@ -807,7 +855,9 @@ pub fn parse_approxidate(text: &str) -> Option<i64> {
 /// path is returned as is. With `quote_space` a path containing a space is quoted too, which is
 /// how `status --short` shows it.
 pub fn quote_path(path: &[u8], quote_space: bool) -> BString {
-    let needs = path.iter().any(|b| *b < 0x20 || *b == b'"' || *b == b'\\' || *b >= 0x7f)
+    let needs = path
+        .iter()
+        .any(|b| *b < 0x20 || *b == b'"' || *b == b'\\' || *b >= 0x7f)
         || (quote_space && path.contains(&b' '));
     if !needs {
         return BString::from(path);
@@ -824,7 +874,9 @@ pub fn quote_path(path: &[u8], quote_space: bool) -> BString {
             13 => out.extend_from_slice(b"\\r"),
             b'"' => out.extend_from_slice(b"\\\""),
             b'\\' => out.extend_from_slice(b"\\\\"),
-            b if !(0x20..0x7f).contains(&b) => out.extend_from_slice(format!("\\{b:03o}").as_bytes()),
+            b if !(0x20..0x7f).contains(&b) => {
+                out.extend_from_slice(format!("\\{b:03o}").as_bytes())
+            }
             b => out.push(b),
         }
     }

@@ -65,8 +65,8 @@
 
 use bstr::{BStr, BString};
 
-use crate::error::Result;
 use crate::error::Error;
+use crate::error::Result;
 
 /// Phase 11 — which protocol a remote URL selects.
 ///
@@ -130,7 +130,10 @@ impl RemoteScheme {
         } else if lower == "file" {
             Ok(Self::File)
         } else {
-            Err(Error::InvalidRemoteUrl { url: name.into(), reason: "unsupported scheme" })
+            Err(Error::InvalidRemoteUrl {
+                url: name.into(),
+                reason: "unsupported scheme",
+            })
         }
     }
 
@@ -261,7 +264,10 @@ impl RemoteUrl {
                     None => (None, prefix),
                 };
                 if host.is_empty() || after.is_empty() {
-                    return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "no host" });
+                    return Err(Error::InvalidRemoteUrl {
+                        url: BString::from(input),
+                        reason: "no host",
+                    });
                 }
                 return Ok(Self {
                     scheme: RemoteScheme::Ssh,
@@ -276,20 +282,35 @@ impl RemoteUrl {
         let scheme = if let Some(end) = scheme_end {
             let s = &bytes[..end];
             if s.is_empty() {
-                return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "empty scheme" });
+                return Err(Error::InvalidRemoteUrl {
+                    url: BString::from(input),
+                    reason: "empty scheme",
+                });
             }
             match RemoteScheme::parse(BStr::new(s)) {
                 Ok(v) => v,
-                Err(_) => return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "unsupported scheme" }),
+                Err(_) => {
+                    return Err(Error::InvalidRemoteUrl {
+                        url: BString::from(input),
+                        reason: "unsupported scheme",
+                    });
+                }
             }
         } else {
             if bytes.is_empty() {
-                return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "no scheme, no colon, no path" });
+                return Err(Error::InvalidRemoteUrl {
+                    url: BString::from(input),
+                    reason: "no scheme, no colon, no path",
+                });
             }
             // A bare path, absolute or relative, names a repository on this machine.
             RemoteScheme::File
         };
-        let rest = if let Some(end) = scheme_end { &bytes[end + 1..] } else { bytes };
+        let rest = if let Some(end) = scheme_end {
+            &bytes[end + 1..]
+        } else {
+            bytes
+        };
         let mut user: Option<BString> = None;
         let mut password: Option<BString> = None;
         let (host, port, path) = if scheme == RemoteScheme::File {
@@ -322,7 +343,12 @@ impl RemoteUrl {
                         let after = &hostport[close + 1..];
                         (&hostport[1..close], after.strip_prefix(b":"))
                     }
-                    None => return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "unterminated IPv6 literal" }),
+                    None => {
+                        return Err(Error::InvalidRemoteUrl {
+                            url: BString::from(input),
+                            reason: "unterminated IPv6 literal",
+                        });
+                    }
                 }
             } else {
                 match hostport.iter().rposition(|&b| b == b':') {
@@ -331,26 +357,54 @@ impl RemoteUrl {
                 }
             };
             if host_str.is_empty() {
-                return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "no host" });
+                return Err(Error::InvalidRemoteUrl {
+                    url: BString::from(input),
+                    reason: "no host",
+                });
             }
             let port = match port_str {
                 Some([]) => {
-                    return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "empty port" });
+                    return Err(Error::InvalidRemoteUrl {
+                        url: BString::from(input),
+                        reason: "empty port",
+                    });
                 }
-                Some(text) => match std::str::from_utf8(text).ok().and_then(|t| t.parse::<u16>().ok()) {
+                Some(text) => match std::str::from_utf8(text)
+                    .ok()
+                    .and_then(|t| t.parse::<u16>().ok())
+                {
                     Some(p) => Some(p),
-                    None => return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "port is not a number" }),
+                    None => {
+                        return Err(Error::InvalidRemoteUrl {
+                            url: BString::from(input),
+                            reason: "port is not a number",
+                        });
+                    }
                 },
                 None => None,
             };
-            let path_bytes = if authority_end < rest.len() { &rest[authority_end..] } else { &b""[..] };
+            let path_bytes = if authority_end < rest.len() {
+                &rest[authority_end..]
+            } else {
+                &b""[..]
+            };
             if path_bytes.is_empty() {
-                return Err(Error::InvalidRemoteUrl { url: BString::from(input), reason: "empty path" });
+                return Err(Error::InvalidRemoteUrl {
+                    url: BString::from(input),
+                    reason: "empty path",
+                });
             }
             let host = BString::from(host_str);
             (Some(host), port, BString::from(path_bytes))
         };
-        Ok(Self { scheme, user, password, host, port, path })
+        Ok(Self {
+            scheme,
+            user,
+            password,
+            host,
+            port,
+            path,
+        })
     }
 
     /// Phase 11 — parse a local path, without URL syntax being considered.
@@ -622,7 +676,10 @@ pub fn redact_url(input: &BStr) -> BString {
 /// span. A bare `user@` — no colon — yields `None`, because there is nothing secret in it; deciding
 /// the user is a secret is not this function's judgement to make.
 pub fn credential_span(input: &BStr) -> Option<std::ops::Range<usize>> {
-    let scheme = input.iter().position(|b| *b == b':').and_then(|i| input.get(i..i + 3).map(|s| s == b"://"));
+    let scheme = input
+        .iter()
+        .position(|b| *b == b':')
+        .and_then(|i| input.get(i..i + 3).map(|s| s == b"://"));
     let _scheme = scheme?;
     let at = input.iter().position(|b| *b == b'@');
     let at = at?;

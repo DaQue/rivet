@@ -100,12 +100,13 @@ impl Signature {
     /// behaviour is the specification and this must be relaxed to match, not the other way round.
     pub fn parse(data: &BStr) -> Result<Self> {
         let line: &[u8] = data;
-        let open = line.iter().position(|b| *b == b'<').ok_or_else(|| {
-            Error::MalformedObject {
+        let open = line
+            .iter()
+            .position(|b| *b == b'<')
+            .ok_or_else(|| Error::MalformedObject {
                 kind: ObjectKind::Commit,
                 reason: "no '<' found before the '>' in signature".to_string(),
-            }
-        })?;
+            })?;
         let close = line[open + 1..]
             .iter()
             .position(|b| *b == b'>')
@@ -280,12 +281,13 @@ impl<'a> Commit<'a> {
     /// name.
     pub fn parse(format: ObjectFormat, data: &'a [u8]) -> Result<Self> {
         // Find the first blank line separating headers from the message.
-        let blank = data.windows(2).position(|w| w == b"\n\n").ok_or_else(|| {
-            Error::MalformedObject {
-                kind: ObjectKind::Commit,
-                reason: "no blank line separating headers from message".to_string(),
-            }
-        })?;
+        let blank =
+            data.windows(2)
+                .position(|w| w == b"\n\n")
+                .ok_or_else(|| Error::MalformedObject {
+                    kind: ObjectKind::Commit,
+                    reason: "no blank line separating headers from message".to_string(),
+                })?;
         let header_end = blank + 2;
         let header_bytes = &data[..header_end];
         let message = &data[header_end..];
@@ -327,13 +329,15 @@ impl<'a> Commit<'a> {
                 }
             };
             // Value after the space: drop trailing newline.
-            let v = if value.ends_with(b"\n") { &value[..value.len() - 1] } else { value };
+            let v = if value.ends_with(b"\n") {
+                &value[..value.len() - 1]
+            } else {
+                value
+            };
             let name_bytes = name;
-            let name_str = std::str::from_utf8(name_bytes).map_err(|_| {
-                Error::MalformedObject {
-                    kind: ObjectKind::Commit,
-                    reason: "non-UTF-8 header name".to_string(),
-                }
+            let name_str = std::str::from_utf8(name_bytes).map_err(|_| Error::MalformedObject {
+                kind: ObjectKind::Commit,
+                reason: "non-UTF-8 header name".to_string(),
             })?;
             let header_key = name_str;
 
@@ -348,50 +352,42 @@ impl<'a> Commit<'a> {
             let name_owned = BStr::new(name_bytes);
             match header_key {
                 "tree" => {
-                    tree = Some(
-                        ObjectId::from_hex(format, BStr::new(value_bytes)).map_err(|_| {
-                            Error::InvalidHeader {
-                                kind: ObjectKind::Commit,
-                                header: "tree",
-                                reason: "tree is not a valid object id for this format",
-                            }
-                        })?,
-                    );
+                    tree = Some(ObjectId::from_hex(format, BStr::new(value_bytes)).map_err(
+                        |_| Error::InvalidHeader {
+                            kind: ObjectKind::Commit,
+                            header: "tree",
+                            reason: "tree is not a valid object id for this format",
+                        },
+                    )?);
                     required[0] = true;
                 }
                 "parent" => {
-                    parents.push(
-                        ObjectId::from_hex(format, BStr::new(value_bytes)).map_err(|_| {
-                            Error::InvalidHeader {
-                                kind: ObjectKind::Commit,
-                                header: "parent",
-                                reason: "parent is not a valid object id for this format",
-                            }
-                        })?,
-                    );
+                    parents.push(ObjectId::from_hex(format, BStr::new(value_bytes)).map_err(
+                        |_| Error::InvalidHeader {
+                            kind: ObjectKind::Commit,
+                            header: "parent",
+                            reason: "parent is not a valid object id for this format",
+                        },
+                    )?);
                 }
                 "author" => {
-                    author = Some(
-                        Signature::parse(BStr::new(value_bytes)).map_err(|_| {
-                            Error::InvalidHeader {
-                                kind: ObjectKind::Commit,
-                                header: "author",
-                                reason: "author signature is not a valid signature",
-                            }
-                        })?,
-                    );
+                    author = Some(Signature::parse(BStr::new(value_bytes)).map_err(|_| {
+                        Error::InvalidHeader {
+                            kind: ObjectKind::Commit,
+                            header: "author",
+                            reason: "author signature is not a valid signature",
+                        }
+                    })?);
                     required[1] = true;
                 }
                 "committer" => {
-                    committer = Some(
-                        Signature::parse(BStr::new(value_bytes)).map_err(|_| {
-                            Error::InvalidHeader {
-                                kind: ObjectKind::Commit,
-                                header: "committer",
-                                reason: "committer signature is not a valid signature",
-                            }
-                        })?,
-                    );
+                    committer = Some(Signature::parse(BStr::new(value_bytes)).map_err(|_| {
+                        Error::InvalidHeader {
+                            kind: ObjectKind::Commit,
+                            header: "committer",
+                            reason: "committer signature is not a valid signature",
+                        }
+                    })?);
                     required[2] = true;
                 }
                 _ => {
@@ -502,7 +498,10 @@ impl<'a> Commit<'a> {
         // since BStr can only point into the original byte slice.
         // For simplicity and correctness with the &'a BStr return type, we return
         // the first paragraph's byte slice verbatim (newlines included).
-        let end = msg.windows(2).position(|w| w == b"\n\n").unwrap_or(msg.len());
+        let end = msg
+            .windows(2)
+            .position(|w| w == b"\n\n")
+            .unwrap_or(msg.len());
         let subject_bytes = &msg[..end];
         // Trim trailing newline if present.
         let trimmed = subject_bytes.strip_suffix(b"\n").unwrap_or(subject_bytes);
@@ -680,18 +679,17 @@ impl CommitBuilder {
             kind: ObjectKind::Commit,
             header: "tree",
         })?;
-        let author = self
-            .author
-            .clone()
-            .ok_or_else(|| {
-                Error::Message("cannot resolve author identity: set GIT_AUTHOR_NAME or user.name".to_string())
-            })?;
-        let committer = self
-            .committer
-            .clone()
-            .ok_or_else(|| {
-                Error::Message("cannot resolve committer identity: set GIT_COMMITTER_NAME or user.name".to_string())
-            })?;
+        let author = self.author.clone().ok_or_else(|| {
+            Error::Message(
+                "cannot resolve author identity: set GIT_AUTHOR_NAME or user.name".to_string(),
+            )
+        })?;
+        let committer = self.committer.clone().ok_or_else(|| {
+            Error::Message(
+                "cannot resolve committer identity: set GIT_COMMITTER_NAME or user.name"
+                    .to_string(),
+            )
+        })?;
 
         let mut out = Vec::new();
         out.extend_from_slice(b"tree ");
@@ -920,7 +918,13 @@ committer David Queen <david@queen.example> 2000 +0000\n\
 committer David Queen <david@queen.example> 2000 +0000\n\
 \nmessage\n";
         let err = Commit::parse(ObjectFormat::Sha1, body).unwrap_err();
-        assert!(matches!(err, Error::MissingHeader { header: "author", .. }));
+        assert!(matches!(
+            err,
+            Error::MissingHeader {
+                header: "author",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -929,7 +933,13 @@ committer David Queen <david@queen.example> 2000 +0000\n\
 author David Queen <david@queen.example> 1000 +0000\n\
 \nmessage\n";
         let err = Commit::parse(ObjectFormat::Sha1, body).unwrap_err();
-        assert!(matches!(err, Error::MissingHeader { header: "committer", .. }));
+        assert!(matches!(
+            err,
+            Error::MissingHeader {
+                header: "committer",
+                ..
+            }
+        ));
     }
 
     /// Absent parent is legal.
@@ -952,7 +962,13 @@ author David Queen <david@queen.example> 1000 +9999\n\
 committer David Queen <david@queen.example> 2000 +0000\n\
 \nmessage\n";
         let err = Commit::parse(ObjectFormat::Sha1, body).unwrap_err();
-        assert!(matches!(err, Error::InvalidHeader { header: "author", .. }));
+        assert!(matches!(
+            err,
+            Error::InvalidHeader {
+                header: "author",
+                ..
+            }
+        ));
     }
 
     /// A negative `when` is legal.
@@ -965,7 +981,11 @@ committer David Queen <david@queen.example> 2000 +0000\n\
     /// `build` accepts an empty message.
     #[test]
     fn build_accepts_empty_message() {
-        let tree = ObjectId::from_hex(ObjectFormat::Sha1, BStr::new("0000000000000000000000000000000000000000")).unwrap();
+        let tree = ObjectId::from_hex(
+            ObjectFormat::Sha1,
+            BStr::new("0000000000000000000000000000000000000000"),
+        )
+        .unwrap();
         let sig = Signature {
             name: BString::from(b"D"),
             email: BString::from(b"d@e.example"),
@@ -985,7 +1005,11 @@ committer David Queen <david@queen.example> 2000 +0000\n\
     /// `build`'s "who are you" error.
     #[test]
     fn build_who_are_you_error() {
-        let tree = ObjectId::from_hex(ObjectFormat::Sha1, BStr::new("0000000000000000000000000000000000000000")).unwrap();
+        let tree = ObjectId::from_hex(
+            ObjectFormat::Sha1,
+            BStr::new("0000000000000000000000000000000000000000"),
+        )
+        .unwrap();
         let c = CommitBuilder::new()
             .tree(tree)
             .build(ObjectFormat::Sha1)

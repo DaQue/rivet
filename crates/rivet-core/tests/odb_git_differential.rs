@@ -12,16 +12,15 @@ use std::io::Write as _;
 use std::process::{Command, Stdio};
 
 fn git_path() -> Option<String> {
-    env::var_os("PATH")
-        .and_then(|path| {
-            for dir in env::split_paths(&path) {
-                let candidate = dir.join("git");
-                if candidate.is_file() {
-                    return Some(candidate.to_string_lossy().into_owned());
-                }
+    env::var_os("PATH").and_then(|path| {
+        for dir in env::split_paths(&path) {
+            let candidate = dir.join("git");
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().into_owned());
             }
-            None
-        })
+        }
+        None
+    })
 }
 
 fn git(git: &str, args: &[&str], input: Option<&[u8]>) -> Result<String, String> {
@@ -44,7 +43,12 @@ fn git(git: &str, args: &[&str], input: Option<&[u8]>) -> Result<String, String>
             .unwrap()
             .write_all(data)
             .map_err(|e| e.to_string())?;
-        child.stdin.take().unwrap().flush().map_err(|e| e.to_string())?;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .flush()
+            .map_err(|e| e.to_string())?;
     }
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     if !output.status.success() {
@@ -154,17 +158,28 @@ fn odb_read_agrees_with_git_on_blob_and_tree() {
     .expect("re-hash tree");
     assert_eq!(rehashed.trim(), tree_hex.as_str());
 
-    let pretty = git(&git_exe, &["-C", repo_str, "cat-file", "-p", tree_hex.as_str()], None)
-        .expect("git cat-file -p tree");
+    let pretty = git(
+        &git_exe,
+        &["-C", repo_str, "cat-file", "-p", tree_hex.as_str()],
+        None,
+    )
+    .expect("git cat-file -p tree");
     assert_eq!(pretty, format!("100644 blob {blob_hex}\thello.txt\n"));
     let object = odb.read(&tree_oid).expect("read tree");
     assert_eq!(object.kind(), ObjectKind::Tree);
     assert_eq!(object.data(), tree_data.as_slice());
 
     // read_typed: right kind passes, wrong kind is WrongObjectKind.
-    let _ = odb.read_typed(&blob_oid, ObjectKind::Blob).expect("read_typed blob");
-    let err = odb.read_typed(&blob_oid, ObjectKind::Tree).expect_err("wrong kind");
-    assert!(matches!(err, rivet_core::error::Error::WrongObjectKind { .. }));
+    let _ = odb
+        .read_typed(&blob_oid, ObjectKind::Blob)
+        .expect("read_typed blob");
+    let err = odb
+        .read_typed(&blob_oid, ObjectKind::Tree)
+        .expect_err("wrong kind");
+    assert!(matches!(
+        err,
+        rivet_core::error::Error::WrongObjectKind { .. }
+    ));
 
     // read_header agrees with read on kind and size.
     let (kind, size) = odb.read_header(&blob_oid).expect("read_header blob");
@@ -195,8 +210,18 @@ fn odb_reads_a_gc_packed_repository() {
     let repo = tmp.path();
     let repo_str = repo.to_str().expect("repo path is valid utf-8");
     git(&git_exe, &["init", repo_str], None).expect("git init");
-    git(&git_exe, &["-C", repo_str, "config", "user.email", "a@example.com"], None).unwrap();
-    git(&git_exe, &["-C", repo_str, "config", "user.name", "A"], None).unwrap();
+    git(
+        &git_exe,
+        &["-C", repo_str, "config", "user.email", "a@example.com"],
+        None,
+    )
+    .unwrap();
+    git(
+        &git_exe,
+        &["-C", repo_str, "config", "user.name", "A"],
+        None,
+    )
+    .unwrap();
 
     let base: String = (0..300)
         .map(|i| format!("line {i} shared by every revision\n"))
@@ -204,24 +229,39 @@ fn odb_reads_a_gc_packed_repository() {
     std::fs::write(repo.join("big.txt"), &base).unwrap();
     std::fs::write(repo.join("small.txt"), "hello\n").unwrap();
     git(&git_exe, &["-C", repo_str, "add", "."], None).unwrap();
-    git(&git_exe, &["-C", repo_str, "commit", "--quiet", "-m", "one"], None).unwrap();
+    git(
+        &git_exe,
+        &["-C", repo_str, "commit", "--quiet", "-m", "one"],
+        None,
+    )
+    .unwrap();
     for revision in 0..3 {
-        std::fs::write(
-            repo.join("big.txt"),
-            format!("{base}revision {revision}\n"),
-        )
-        .unwrap();
+        std::fs::write(repo.join("big.txt"), format!("{base}revision {revision}\n")).unwrap();
         git(&git_exe, &["-C", repo_str, "add", "."], None).unwrap();
         git(
             &git_exe,
-            &["-C", repo_str, "commit", "--quiet", "-m", &format!("r{revision}")],
+            &[
+                "-C",
+                repo_str,
+                "commit",
+                "--quiet",
+                "-m",
+                &format!("r{revision}"),
+            ],
             None,
         )
         .unwrap();
     }
     git(
         &git_exe,
-        &["-C", repo_str, "gc", "--quiet", "--aggressive", "--prune=now"],
+        &[
+            "-C",
+            repo_str,
+            "gc",
+            "--quiet",
+            "--aggressive",
+            "--prune=now",
+        ],
         None,
     )
     .unwrap();
@@ -240,8 +280,18 @@ fn odb_reads_a_gc_packed_repository() {
     let odb = Odb::open(&repo.join(".git"), ObjectFormat::Sha1).expect("open packed odb");
     assert_eq!(odb.packs().len(), 1, "one pack after gc");
 
-    let listing = git(&git_exe, &["-C", repo_str, "cat-file", "--batch-all-objects", "--batch-check"], None)
-        .expect("git batch-check");
+    let listing = git(
+        &git_exe,
+        &[
+            "-C",
+            repo_str,
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check",
+        ],
+        None,
+    )
+    .expect("git batch-check");
     let mut checked = 0usize;
     for line in listing.lines() {
         let mut fields = line.split_whitespace();
@@ -265,7 +315,10 @@ fn odb_reads_a_gc_packed_repository() {
             checked += 1;
         }
     }
-    assert!(checked >= 6, "expected the history's objects, saw {checked}");
+    assert!(
+        checked >= 6,
+        "expected the history's objects, saw {checked}"
+    );
 }
 
 /// rivet writes a blob; real git reads it back and recomputes the same id.
@@ -294,15 +347,23 @@ fn odb_write_is_read_by_git() {
     let blob_hex = blob_oid.to_hex();
 
     // git cat-file -t must say "blob".
-    let kind = git(&git_exe, &["-C", repo_str, "cat-file", "-t", &blob_hex.to_string()], None)
-        .expect("git cat-file -t")
-        .trim()
-        .to_string();
+    let kind = git(
+        &git_exe,
+        &["-C", repo_str, "cat-file", "-t", &blob_hex.to_string()],
+        None,
+    )
+    .expect("git cat-file -t")
+    .trim()
+    .to_string();
     assert_eq!(kind, "blob");
 
     // git cat-file -p must return exactly the body rivet wrote.
-    let cat = git(&git_exe, &["-C", repo_str, "cat-file", "-p", &blob_hex.to_string()], None)
-        .expect("git cat-file -p");
+    let cat = git(
+        &git_exe,
+        &["-C", repo_str, "cat-file", "-p", &blob_hex.to_string()],
+        None,
+    )
+    .expect("git cat-file -p");
     assert_eq!(cat.as_bytes(), blob_data);
 
     // git hash-object -t blob --stdin over the same body must reproduce rivet's id.

@@ -53,7 +53,10 @@ impl RenamePair {
 }
 
 fn is_regular_kind(mode: EntryMode) -> bool {
-    matches!(mode, EntryMode::Blob | EntryMode::BlobExecutable | EntryMode::Link)
+    matches!(
+        mode,
+        EntryMode::Blob | EntryMode::BlobExecutable | EntryMode::Link
+    )
 }
 
 fn same_kind(a: EntryMode, b: EntryMode) -> bool {
@@ -113,7 +116,9 @@ pub fn pair_renames(
         if !is_regular_kind(destination.mode) {
             continue;
         }
-        let Some(candidates) = by_oid.get(&destination.oid) else { continue };
+        let Some(candidates) = by_oid.get(&destination.oid) else {
+            continue;
+        };
         let free: Vec<usize> = candidates
             .iter()
             .copied()
@@ -127,26 +132,36 @@ pub fn pair_renames(
         if let Some(s) = best {
             source_used[s] = true;
             destination_used[d] = true;
-            pairs.push(RenamePair { source: s, destination: d, score: MAX_SCORE });
+            pairs.push(RenamePair {
+                source: s,
+                destination: d,
+                score: MAX_SCORE,
+            });
         }
     }
 
     // Inexact renames among what is left.
     let mut candidates: Vec<(u64, u8, usize, usize)> = Vec::new();
     let mut cache: HashMap<ObjectId, (u64, HashMap<u64, u64>)> = HashMap::new();
-    let load = |oid: &ObjectId, cache: &mut HashMap<ObjectId, (u64, HashMap<u64, u64>)>| -> Result<()> {
-        if !cache.contains_key(oid) {
-            let data = odb.read_typed(oid, crate::object::ObjectKind::Blob)?.into_data();
-            cache.insert(*oid, (data.len() as u64, span_counts(&data)));
-        }
-        Ok(())
-    };
+    let load =
+        |oid: &ObjectId, cache: &mut HashMap<ObjectId, (u64, HashMap<u64, u64>)>| -> Result<()> {
+            if !cache.contains_key(oid) {
+                let data = odb
+                    .read_typed(oid, crate::object::ObjectKind::Blob)?
+                    .into_data();
+                cache.insert(*oid, (data.len() as u64, span_counts(&data)));
+            }
+            Ok(())
+        };
     for (d, destination) in destinations.iter().enumerate() {
         if destination_used[d] || !is_regular_kind(destination.mode) {
             continue;
         }
         for (s, source) in sources.iter().enumerate() {
-            if source_used[s] || !is_regular_kind(source.mode) || !same_kind(source.mode, destination.mode) {
+            if source_used[s]
+                || !is_regular_kind(source.mode)
+                || !same_kind(source.mode, destination.mode)
+            {
                 continue;
             }
             load(&source.oid, &mut cache)?;
@@ -173,14 +188,23 @@ pub fn pair_renames(
             }
         }
     }
-    candidates.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
+    candidates.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(b.1.cmp(&a.1))
+            .then(a.2.cmp(&b.2))
+            .then(a.3.cmp(&b.3))
+    });
     for (score, _, d, s) in candidates {
         if source_used[s] || destination_used[d] {
             continue;
         }
         source_used[s] = true;
         destination_used[d] = true;
-        pairs.push(RenamePair { source: s, destination: d, score });
+        pairs.push(RenamePair {
+            source: s,
+            destination: d,
+            score,
+        });
     }
     pairs.sort_by_key(|p| p.destination);
     Ok(pairs)
@@ -195,14 +219,23 @@ pub fn detect_renames(diff: &mut TreeDiff, odb: &Odb, options: &DiffOptions) -> 
     for (index, file) in diff.files.iter().enumerate() {
         if file.is_deleted {
             if let (Some(oid), Some(mode)) = (file.old_oid, file.old_mode) {
-                sources.push(RenameSide { path: file.path().to_owned(), oid, mode });
+                sources.push(RenameSide {
+                    path: file.path().to_owned(),
+                    oid,
+                    mode,
+                });
                 source_files.push(index);
             }
         } else if file.is_new
-            && let (Some(oid), Some(mode)) = (file.new_oid, file.new_mode) {
-                destinations.push(RenameSide { path: file.path().to_owned(), oid, mode });
-                destination_files.push(index);
-            }
+            && let (Some(oid), Some(mode)) = (file.new_oid, file.new_mode)
+        {
+            destinations.push(RenameSide {
+                path: file.path().to_owned(),
+                oid,
+                mode,
+            });
+            destination_files.push(index);
+        }
     }
     let pairs = pair_renames(&sources, &destinations, odb)?;
     if pairs.is_empty() {

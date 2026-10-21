@@ -289,12 +289,18 @@ impl Hunk {
     /// are present on the new side. Used for `--stat` and by tests, and the distinction is the
     /// whole reason the function exists rather than a caller using `new_lines`.
     pub fn added(&self) -> usize {
-        self.lines.iter().filter(|l| l.kind == LineKind::Added).count()
+        self.lines
+            .iter()
+            .filter(|l| l.kind == LineKind::Added)
+            .count()
     }
 
     /// Phase 8 — how many lines the hunk removes.
     pub fn removed(&self) -> usize {
-        self.lines.iter().filter(|l| l.kind == LineKind::Removed).count()
+        self.lines
+            .iter()
+            .filter(|l| l.kind == LineKind::Removed)
+            .count()
     }
 
     /// Phase 8 — write the hunk: header, lines, and the missing-newline markers.
@@ -456,11 +462,18 @@ pub fn build_hunks(
             lines,
             section: {
                 // The line before the hunk's first old line, searching upwards.
-                let first = if old_count == 0 { old_before } else { old_start.unwrap_or(old_before + 1) - 1 };
+                let first = if old_count == 0 {
+                    old_before
+                } else {
+                    old_start.unwrap_or(old_before + 1) - 1
+                };
                 let mut found = BString::default();
                 for index in (0..first.min(old_lines.len())).rev() {
                     let content = old_lines[index].content;
-                    if content.first().is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_' || *b == b'$') {
+                    if content
+                        .first()
+                        .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_' || *b == b'$')
+                    {
                         let mut text: Vec<u8> = content.to_vec();
                         while text.last().is_some_and(|b| b.is_ascii_whitespace()) {
                             text.pop();
@@ -580,10 +593,24 @@ pub fn format_unified(
 
         if file.is_rename() {
             if file.old_mode != file.new_mode {
-                out.write_all(format!("old mode {:06o}\n", file.old_mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
-                out.write_all(format!("new mode {:06o}\n", file.new_mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+                out.write_all(
+                    format!(
+                        "old mode {:06o}\n",
+                        file.old_mode.map(|m| m.to_u32()).unwrap_or(0o100644)
+                    )
+                    .as_bytes(),
+                )?;
+                out.write_all(
+                    format!(
+                        "new mode {:06o}\n",
+                        file.new_mode.map(|m| m.to_u32()).unwrap_or(0o100644)
+                    )
+                    .as_bytes(),
+                )?;
             }
-            out.write_all(format!("similarity index {}%\n", file.similarity.unwrap_or(100)).as_bytes())?;
+            out.write_all(
+                format!("similarity index {}%\n", file.similarity.unwrap_or(100)).as_bytes(),
+            )?;
             out.write_all(b"rename from ")?;
             out.write_all(&crate::ops::quote_path(old_name, false))?;
             out.write_all(b"\nrename to ")?;
@@ -591,48 +618,116 @@ pub fn format_unified(
             out.write_all(b"\n")?;
             if file.old_oid != file.new_oid {
                 out.write_all(b"index ")?;
-                out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+                out.write_all(
+                    file.old_oid
+                        .as_ref()
+                        .map(hex)
+                        .unwrap_or_else(|| zeros.to_string())
+                        .as_bytes(),
+                )?;
                 out.write_all(b"..")?;
-                out.write_all(file.new_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+                out.write_all(
+                    file.new_oid
+                        .as_ref()
+                        .map(hex)
+                        .unwrap_or_else(|| zeros.to_string())
+                        .as_bytes(),
+                )?;
                 if file.old_mode == file.new_mode {
-                    out.write_all(format!(" {:06o}", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+                    out.write_all(
+                        format!(" {:06o}", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes(),
+                    )?;
                 }
                 out.write_all(b"\n")?;
             }
         } else if file.is_new {
             out.write_all(b"new file mode ")?;
-            out.write_all(format!("{:06o}\n", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+            out.write_all(
+                format!("{:06o}\n", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes(),
+            )?;
             out.write_all(b"index ")?;
             out.write_all(zeros.as_bytes())?;
             out.write_all(b"..")?;
-            out.write_all(file.new_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+            out.write_all(
+                file.new_oid
+                    .as_ref()
+                    .map(hex)
+                    .unwrap_or_else(|| zeros.to_string())
+                    .as_bytes(),
+            )?;
             out.write_all(b"\n")?;
         } else if file.is_deleted {
             out.write_all(b"deleted file mode ")?;
-            out.write_all(format!("{:06o}\n", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+            out.write_all(
+                format!("{:06o}\n", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes(),
+            )?;
             out.write_all(b"index ")?;
-            out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+            out.write_all(
+                file.old_oid
+                    .as_ref()
+                    .map(hex)
+                    .unwrap_or_else(|| zeros.to_string())
+                    .as_bytes(),
+            )?;
             out.write_all(b"..")?;
             out.write_all(zeros.as_bytes())?;
             out.write_all(b"\n")?;
         } else if file.old_mode != file.new_mode {
-            out.write_all(format!("old mode {:06o}\n", file.old_mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
-            out.write_all(format!("new mode {:06o}\n", file.new_mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+            out.write_all(
+                format!(
+                    "old mode {:06o}\n",
+                    file.old_mode.map(|m| m.to_u32()).unwrap_or(0o100644)
+                )
+                .as_bytes(),
+            )?;
+            out.write_all(
+                format!(
+                    "new mode {:06o}\n",
+                    file.new_mode.map(|m| m.to_u32()).unwrap_or(0o100644)
+                )
+                .as_bytes(),
+            )?;
             // A pure mode change keeps the blob, and Git prints no `index` line for it.
             if file.old_oid != file.new_oid {
                 out.write_all(b"index ")?;
-                out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+                out.write_all(
+                    file.old_oid
+                        .as_ref()
+                        .map(hex)
+                        .unwrap_or_else(|| zeros.to_string())
+                        .as_bytes(),
+                )?;
                 out.write_all(b"..")?;
-                out.write_all(file.new_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+                out.write_all(
+                    file.new_oid
+                        .as_ref()
+                        .map(hex)
+                        .unwrap_or_else(|| zeros.to_string())
+                        .as_bytes(),
+                )?;
                 out.write_all(b"\n")?;
             }
         } else {
             out.write_all(b"index ")?;
-            out.write_all(file.old_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+            out.write_all(
+                file.old_oid
+                    .as_ref()
+                    .map(hex)
+                    .unwrap_or_else(|| zeros.to_string())
+                    .as_bytes(),
+            )?;
             out.write_all(b"..")?;
-            out.write_all(file.new_oid.as_ref().map(hex).unwrap_or_else(|| zeros.to_string()).as_bytes())?;
+            out.write_all(
+                file.new_oid
+                    .as_ref()
+                    .map(hex)
+                    .unwrap_or_else(|| zeros.to_string())
+                    .as_bytes(),
+            )?;
             out.write_all(b" ")?;
-            out.write_all(format!("{:06o}\n", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes())?;
+            out.write_all(
+                format!("{:06o}\n", mode.map(|m| m.to_u32()).unwrap_or(0o100644)).as_bytes(),
+            )?;
         }
 
         if file.is_binary {
@@ -743,7 +838,10 @@ pub fn format_stat_sized(
     let decimal_width = |n: usize| n.to_string().len();
     let size_of = |oid: Option<crate::hash::ObjectId>| -> usize {
         match (oid, odb) {
-            (Some(oid), Some(odb)) => odb.read_header(&oid).map(|(_, size)| size as usize).unwrap_or(0),
+            (Some(oid), Some(odb)) => odb
+                .read_header(&oid)
+                .map(|(_, size)| size as usize)
+                .unwrap_or(0),
             _ => 0,
         }
     };
@@ -752,7 +850,11 @@ pub fn format_stat_sized(
     let mut name_width = 0usize;
     let mut number_width = 0usize;
     for (stat, file) in diff.stats.iter().zip(diff.files.iter()) {
-        name_width = name_width.max(String::from_utf8_lossy(&stat_name(stat, file)).chars().count());
+        name_width = name_width.max(
+            String::from_utf8_lossy(&stat_name(stat, file))
+                .chars()
+                .count(),
+        );
         if stat.is_binary {
             // "Bin" occupies the number column.
             number_width = number_width.max(3);
@@ -776,7 +878,11 @@ pub fn format_stat_sized(
     }
     // Git's `scale_linear`: a non-zero count always gets at least one mark.
     let scale = |n: usize| -> usize {
-        if n == 0 { 0 } else { 1 + n * (graph_width.saturating_sub(1)) / max_change }
+        if n == 0 {
+            0
+        } else {
+            1 + n * (graph_width.saturating_sub(1)) / max_change
+        }
     };
 
     let mut total_added = 0usize;
@@ -827,12 +933,24 @@ pub fn format_stat_sized(
         out.write_all(line.as_bytes())?;
     }
     let files = diff.stats.len();
-    let mut summary = format!(" {} file{} changed", files, if files == 1 { "" } else { "s" });
+    let mut summary = format!(
+        " {} file{} changed",
+        files,
+        if files == 1 { "" } else { "s" }
+    );
     if total_added > 0 || total_deleted == 0 {
-        summary.push_str(&format!(", {} insertion{}(+)", total_added, if total_added == 1 { "" } else { "s" }));
+        summary.push_str(&format!(
+            ", {} insertion{}(+)",
+            total_added,
+            if total_added == 1 { "" } else { "s" }
+        ));
     }
     if total_deleted > 0 || total_added == 0 {
-        summary.push_str(&format!(", {} deletion{}(-)", total_deleted, if total_deleted == 1 { "" } else { "s" }));
+        summary.push_str(&format!(
+            ", {} deletion{}(-)",
+            total_deleted,
+            if total_deleted == 1 { "" } else { "s" }
+        ));
     }
     summary.push('\n');
     out.write_all(summary.as_bytes())?;
@@ -858,7 +976,10 @@ pub fn format_name_status(diff: &crate::diff::TreeDiff, out: &mut impl Write) ->
     for file in &diff.files {
         if file.is_rename() {
             out.write_all(format!("R{:03}\t", file.similarity.unwrap_or(100)).as_bytes())?;
-            out.write_all(&crate::ops::quote_path(file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&b""[..]), false))?;
+            out.write_all(&crate::ops::quote_path(
+                file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&b""[..]),
+                false,
+            ))?;
             out.write_all(b"\t")?;
             out.write_all(&crate::ops::quote_path(file.path(), false))?;
             out.write_all(b"\n")?;
@@ -903,7 +1024,12 @@ pub fn index_line_abbrev(
     let new_hex = new.to_hex();
     let old_abbr = BString::from(&old_hex[..abbrev.min(old_hex.len())]);
     let new_abbr = BString::from(&new_hex[..abbrev.min(new_hex.len())]);
-    BString::from(format!("index {}..{} {}\n", old_abbr, new_abbr, mode.to_string()))
+    BString::from(format!(
+        "index {}..{} {}\n",
+        old_abbr,
+        new_abbr,
+        mode.to_string()
+    ))
 }
 
 /// The name column of a `--stat` line: the quoted path, or `old => new` for a rename.
@@ -911,7 +1037,10 @@ fn stat_name(stat: &DiffStat, file: &crate::diff::FileDiff) -> Vec<u8> {
     if file.is_rename() {
         let old = file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&b""[..]);
         let new = file.path();
-        let (qo, qn) = (crate::ops::quote_path(old, false), crate::ops::quote_path(new, false));
+        let (qo, qn) = (
+            crate::ops::quote_path(old, false),
+            crate::ops::quote_path(new, false),
+        );
         if qo.as_slice() != old || qn.as_slice() != new {
             let mut out = qo.to_vec();
             out.extend_from_slice(b" => ");

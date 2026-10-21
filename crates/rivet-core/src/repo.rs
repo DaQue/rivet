@@ -73,6 +73,7 @@ use std::os::unix::ffi::OsStrExt;
 use bstr::{BStr, BString};
 
 use crate::config::Config;
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::ignore::IgnoreStack;
@@ -81,7 +82,6 @@ use crate::object::{Signature, Tree};
 use crate::odb::Odb;
 use crate::refs::{HeadState, RefStore};
 use crate::worktree::Worktree;
-use crate::error::Error;
 
 /// Phase 4 — the environment variable naming a git directory directly.
 ///
@@ -461,7 +461,9 @@ impl Repository {
                     // valid UTF-8, so it goes straight into an `OsString`.
                     use std::ffi::OsString;
                     use std::os::unix::ffi::OsStringExt;
-                    let configured = PathBuf::from(OsString::from_vec(<BString as AsRef<[u8]>>::as_ref(&p).to_vec()));
+                    let configured = PathBuf::from(OsString::from_vec(
+                        <BString as AsRef<[u8]>>::as_ref(&p).to_vec(),
+                    ));
                     Some(if configured.is_absolute() {
                         configured
                     } else {
@@ -671,7 +673,14 @@ impl Repository {
         };
 
         std::fs::create_dir_all(&git_dir).map_err(|e| io_at(&git_dir, e))?;
-        for dir in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks", "info"] {
+        for dir in [
+            "objects/info",
+            "objects/pack",
+            "refs/heads",
+            "refs/tags",
+            "hooks",
+            "info",
+        ] {
             let p = git_dir.join(dir);
             std::fs::create_dir_all(&p).map_err(|e| io_at(&p, e))?;
         }
@@ -687,11 +696,12 @@ impl Repository {
         };
         if existed
             && let Ok(existing) = config.object_format()
-                && existing != options.format {
-                    return Err(Error::RepositoryExists(BString::from(
-                        git_dir.to_string_lossy().into_owned(),
-                    )));
-                }
+            && existing != options.format
+        {
+            return Err(Error::RepositoryExists(BString::from(
+                git_dir.to_string_lossy().into_owned(),
+            )));
+        }
         let version: &[u8] = match options.format {
             ObjectFormat::Sha1 => b"0",
             ObjectFormat::Sha256 => b"1",
@@ -720,10 +730,11 @@ impl Repository {
         // has to be written down: a later `open_with(git_dir, None)` would otherwise guess the
         // root and stage into the wrong directory.
         if let Some(wt) = work_tree.as_deref()
-            && wt != root.as_path() {
-                use std::os::unix::ffi::OsStrExt;
-                config.set(BStr::new(b"core.worktree"), wt.as_os_str().as_bytes())?;
-            }
+            && wt != root.as_path()
+        {
+            use std::os::unix::ffi::OsStrExt;
+            config.set(BStr::new(b"core.worktree"), wt.as_os_str().as_bytes())?;
+        }
         config.write(&config_path)?;
 
         // The two template files every `git init` leaves behind; neither is overwritten on a
@@ -1033,7 +1044,7 @@ impl Repository {
                     oid: Some(oid),
                     expected: ObjectKind::Commit,
                     found: ObjectKind::Tree,
-                })
+                });
             }
         };
         let bytes = match self.odb.read_typed(&tree_id, ObjectKind::Tree)? {
@@ -1043,7 +1054,7 @@ impl Repository {
                     oid: Some(tree_id),
                     expected: ObjectKind::Tree,
                     found: ObjectKind::Commit,
-                })
+                });
             }
         };
 
@@ -1228,7 +1239,7 @@ impl Repository {
     /// missing identity or an empty commit without `allow_empty`, the object database's write
     /// errors, and the ref store's update errors.
     pub fn commit(&mut self, options: &CommitOptions) -> Result<ObjectId> {
-        use crate::object::{AnyObject, ObjectKind, CommitBuilder};
+        use crate::object::{AnyObject, CommitBuilder, ObjectKind};
         if self.index.has_conflicts() {
             let path = self
                 .index
@@ -1285,18 +1296,21 @@ impl Repository {
             && options.parents.is_empty()
             && crate::merge::merge_in_progress(&self.git_dir);
 
-        if !options.allow_empty && !options.amend && parents.len() < 2
-            && let Some(parent) = parents.first() {
-                let parent_tree = match self.odb.read_typed(parent, ObjectKind::Commit)?.parse()? {
-                    AnyObject::Commit(commit) => commit.tree,
-                    _ => tree,
-                };
-                if parent_tree == tree {
-                    return Err(Error::Message(
-                        "nothing to commit: the tree is unchanged".to_string(),
-                    ));
-                }
+        if !options.allow_empty
+            && !options.amend
+            && parents.len() < 2
+            && let Some(parent) = parents.first()
+        {
+            let parent_tree = match self.odb.read_typed(parent, ObjectKind::Commit)?.parse()? {
+                AnyObject::Commit(commit) => commit.tree,
+                _ => tree,
+            };
+            if parent_tree == tree {
+                return Err(Error::Message(
+                    "nothing to commit: the tree is unchanged".to_string(),
+                ));
             }
+        }
 
         // Identity: the options if given, then the environment, then the configuration
         // (repository, global, system — Git's precedence).
@@ -1323,11 +1337,7 @@ impl Repository {
         // commit rather than a ref pointing at nothing.
         let oid = self.odb.write_raw(ObjectKind::Commit, &body)?;
 
-        let subject = options
-            .message
-            .split(|b| *b == b'\n')
-            .next()
-            .unwrap_or(&[]);
+        let subject = options.message.split(|b| *b == b'\n').next().unwrap_or(&[]);
         // Git distinguishes the first commit and an amend in the reflog; `HEAD@{n}` searches
         // and `git reflog` output depend on the exact words.
         let operation = if options.amend {
@@ -1364,12 +1374,15 @@ impl Repository {
         if let Some(branch) = head.branch() {
             let old = head.oid().unwrap_or_else(|| ObjectId::zero(self.format));
             if self.should_log_ref(branch) {
-                let entry = crate::refs::ReflogEntry::new(old, oid, committer.clone(), reason.clone());
+                let entry =
+                    crate::refs::ReflogEntry::new(old, oid, committer.clone(), reason.clone());
                 self.refs.append_reflog(branch, &entry)?;
             }
             if message.is_some() {
-                let entry = crate::refs::ReflogEntry::new(old, oid, committer.clone(), reason.clone());
-                self.refs.append_reflog(&crate::refs::RefName::head(), &entry)?;
+                let entry =
+                    crate::refs::ReflogEntry::new(old, oid, committer.clone(), reason.clone());
+                self.refs
+                    .append_reflog(&crate::refs::RefName::head(), &entry)?;
             }
         }
 
@@ -1643,10 +1656,7 @@ fn build_tree_level(
 
     // `data` is the payload `id()` hashes; it is filled in here because the payload is
     // exactly what `serialize` produces from these entries.
-    let tree = Tree {
-        data: &[],
-        entries,
-    };
+    let tree = Tree { data: &[], entries };
     odb.write_raw(ObjectKind::Tree, &tree.serialize())
 }
 

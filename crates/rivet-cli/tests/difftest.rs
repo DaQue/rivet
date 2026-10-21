@@ -7,7 +7,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn have(tool: &str) -> bool {
-    Command::new(tool).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new(tool)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[test]
@@ -29,7 +33,10 @@ fn every_scenario_matches_real_git() {
         "differential scenarios diverged from git:\n{text}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(text.contains("failures: 0"), "unexpected scenario summary:\n{text}");
+    assert!(
+        text.contains("failures: 0"),
+        "unexpected scenario summary:\n{text}"
+    );
 }
 
 #[test]
@@ -45,5 +52,8 @@ fn corrupt_repositories_fail_cleanly_without_panics_or_hangs() {
         .output()
         .expect("run robustness.sh");
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success() && text.contains("ROBUST-OK"), "robustness failures:\n{text}");
+    assert!(
+        output.status.success() && text.contains("ROBUST-OK"),
+        "robustness failures:\n{text}"
+    );
 }

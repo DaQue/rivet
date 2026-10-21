@@ -147,12 +147,7 @@ pub fn peel_to_commit(
 }
 
 /// Resolves the base of a spec — everything before the first suffix operator.
-fn resolve_base(
-    format: ObjectFormat,
-    refs: &RefStore,
-    odb: &Odb,
-    base: &BStr,
-) -> Result<ObjectId> {
+fn resolve_base(format: ObjectFormat, refs: &RefStore, odb: &Odb, base: &BStr) -> Result<ObjectId> {
     if base == "HEAD" || base == "@" {
         // `head_commit` both follows a symbolic ref and peels an annotated tag on a detached
         // HEAD; it reports an unborn branch as an error rather than an id.
@@ -252,13 +247,7 @@ fn split_suffix(spec: &BStr) -> Result<Option<(&BStr, Op)>> {
 }
 
 /// Applies one suffix operator.
-fn apply(
-    format: ObjectFormat,
-    odb: &Odb,
-    oid: ObjectId,
-    op: Op,
-    spec: &BStr,
-) -> Result<ObjectId> {
+fn apply(format: ObjectFormat, odb: &Odb, oid: ObjectId, op: Op, spec: &BStr) -> Result<ObjectId> {
     match op {
         Op::Parent(0) => {
             let object = peel_tags(format, odb, oid)?;

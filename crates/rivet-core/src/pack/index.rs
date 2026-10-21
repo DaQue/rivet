@@ -55,9 +55,9 @@
 
 use std::fmt;
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
-use crate::error::Error;
 
 /// Phase 10 — one row of a v2 index: an object, and where in the pack it lives.
 ///
@@ -224,8 +224,12 @@ impl<'a> PackIndex<'a> {
     /// trustworthy source.
     pub fn len(&self) -> usize {
         let at = 8 + 255 * 4;
-        u32::from_be_bytes([self.data[at], self.data[at + 1], self.data[at + 2], self.data[at + 3]])
-            as usize
+        u32::from_be_bytes([
+            self.data[at],
+            self.data[at + 1],
+            self.data[at + 2],
+            self.data[at + 3],
+        ]) as usize
     }
 
     /// Phase 10 — whether the index describes no objects at all.
@@ -276,11 +280,7 @@ impl<'a> PackIndex<'a> {
             }
         }
         let entry = self.entry(lo)?;
-        if entry.oid == *oid {
-            Some(entry)
-        } else {
-            None
-        }
+        if entry.oid == *oid { Some(entry) } else { None }
     }
 
     /// Phase 10 — find every object whose id begins with `prefix`.
@@ -393,7 +393,10 @@ impl<'a> PackIndex<'a> {
     /// underlying buffer is dropped. Each item decodes its id on the fly; there is no cached copy
     /// of the table anywhere, so this is O(1) memory regardless of how many objects the pack has.
     pub fn iter(&self) -> PackIndexIter<'_> {
-        PackIndexIter { index: self.clone(), next: 0 }
+        PackIndexIter {
+            index: self.clone(),
+            next: 0,
+        }
     }
 
     /// Phase 10 — serialise back to `.idx` v2 bytes.
@@ -606,7 +609,10 @@ impl<'a> Iterator for PackIndexIter<'a> {
     /// here, unlike on most iterators — but note that it does not make the iteration cheap, since
     /// each remaining item still decodes its id.
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.index.len() - self.next, Some(self.index.len() - self.next))
+        (
+            self.index.len() - self.next,
+            Some(self.index.len() - self.next),
+        )
     }
 }
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rivet_core::repo::Repository;
-use rivet_core::worktree::status::{compute, StatusOptions, UntrackedMode};
+use rivet_core::worktree::status::{StatusOptions, UntrackedMode, compute};
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -116,10 +116,19 @@ fn untracked_normal_matches_git() {
     let (untracked, ignored) = rivet_paths(&root, &options);
 
     assert_eq!(untracked, git_paths(&root, &[], "?? "));
-    assert!(ignored.is_empty(), "ignored requires the option: {ignored:?}");
+    assert!(
+        ignored.is_empty(),
+        "ignored requires the option: {ignored:?}"
+    );
     // The untracked directory is reported once, with the trailing slash Git uses.
-    assert!(untracked.contains(&"untracked_dir/".to_string()), "{untracked:?}");
-    assert!(!untracked.iter().any(|p| p.starts_with("untracked_dir/a")), "{untracked:?}");
+    assert!(
+        untracked.contains(&"untracked_dir/".to_string()),
+        "{untracked:?}"
+    );
+    assert!(
+        !untracked.iter().any(|p| p.starts_with("untracked_dir/a")),
+        "{untracked:?}"
+    );
 }
 
 #[test]
@@ -138,7 +147,10 @@ fn untracked_all_matches_git() {
     let (untracked, _) = rivet_paths(&root, &options);
 
     assert_eq!(untracked, git_paths(&root, &["-uall"], "?? "));
-    assert!(untracked.contains(&"untracked_dir/a.txt".to_string()), "{untracked:?}");
+    assert!(
+        untracked.contains(&"untracked_dir/a.txt".to_string()),
+        "{untracked:?}"
+    );
     assert!(!untracked.iter().any(|p| p.ends_with('/')), "{untracked:?}");
 }
 
@@ -195,8 +207,14 @@ fn nested_gitignore_rules_apply_while_descending() {
 
     assert_eq!(ignored, git_paths(&root, &["--ignored"], "!! "));
     assert_eq!(untracked, git_paths(&root, &[], "?? "));
-    assert!(ignored.contains(&"src/debug.log".to_string()), "{ignored:?}");
-    assert!(!untracked.contains(&"src/debug.log".to_string()), "{untracked:?}");
+    assert!(
+        ignored.contains(&"src/debug.log".to_string()),
+        "{ignored:?}"
+    );
+    assert!(
+        !untracked.contains(&"src/debug.log".to_string()),
+        "{untracked:?}"
+    );
 }
 
 #[test]
@@ -205,7 +223,10 @@ fn assume_valid_and_skip_worktree_are_not_reported() {
         return;
     }
     let (_dir, root) = repository();
-    git(&root, &["update-index", "--assume-unchanged", "tracked_b.txt"]);
+    git(
+        &root,
+        &["update-index", "--assume-unchanged", "tracked_b.txt"],
+    );
     git(&root, &["update-index", "--skip-worktree", "tracked_c.txt"]);
     write(&root.join("tracked_b.txt"), "changed but promised\n");
     write(&root.join("tracked_c.txt"), "changed but sparse\n");
@@ -224,10 +245,7 @@ fn assume_valid_and_skip_worktree_are_not_reported() {
 type Classified = Vec<(char, String)>;
 
 /// `(code, path)` for each entry, in the order `compute` produced them.
-fn rivet_classifications(
-    root: &Path,
-    options: &StatusOptions,
-) -> (Classified, Classified) {
+fn rivet_classifications(root: &Path, options: &StatusOptions) -> (Classified, Classified) {
     let repo = Repository::open_or_discover(root).expect("open");
     let head_tree = repo
         .head_tree()
@@ -265,7 +283,9 @@ fn staged_and_unstaged_classifications_match_git() {
     git(&root, &["rm", "-q", "tracked_c.txt"]);
     write(&root.join("added.txt"), "new\n");
     git(&root, &["add", "added.txt"]);
-    let mut perms = std::fs::metadata(root.join("exec.txt")).expect("stat").permissions();
+    let mut perms = std::fs::metadata(root.join("exec.txt"))
+        .expect("stat")
+        .permissions();
     {
         use std::os::unix::fs::PermissionsExt;
         perms.set_mode(0o755);
@@ -300,4 +320,3 @@ fn staged_and_unstaged_classifications_match_git() {
     // change of file type (file to symlink), which this fixture does not contain.
     assert_eq!(unstaged, expected_unstaged, "porcelain: {porcelain}");
 }
-

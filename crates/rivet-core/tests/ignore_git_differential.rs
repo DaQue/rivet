@@ -128,7 +128,11 @@ fn ignore_decisions_match_git_check_ignore() {
             ));
         }
     }
-    assert!(mismatches.is_empty(), "mismatches:\n{}", mismatches.join("\n"));
+    assert!(
+        mismatches.is_empty(),
+        "mismatches:\n{}",
+        mismatches.join("\n")
+    );
 }
 
 #[test]
@@ -147,7 +151,12 @@ fn exclusion_of_an_ancestor_beats_re_inclusion() {
     stack.push_info_exclude(&root.join(".git")).unwrap();
     stack.push_dir(BStr::new("")).unwrap();
 
-    let ours = stack.is_ignored(BStr::new("build/keep.txt"), PathKind::File).unwrap();
+    let ours = stack
+        .is_ignored(BStr::new("build/keep.txt"), PathKind::File)
+        .unwrap();
     assert_eq!(ours, git_ignores(root, "build/keep.txt"));
-    assert!(ours, "a negated pattern must not rescue a file inside an excluded directory");
+    assert!(
+        ours,
+        "a negated pattern must not rescue a file inside an excluded directory"
+    );
 }

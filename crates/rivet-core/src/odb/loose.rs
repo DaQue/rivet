@@ -52,7 +52,7 @@ use flate2::read::ZlibDecoder;
 
 use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
-use crate::object::{hash_object, Object, ObjectKind};
+use crate::object::{Object, ObjectKind, hash_object};
 use bstr::BString;
 
 /// Phase 10 — the loose half of the object database: `objects/xx/yyy…` files.
@@ -96,7 +96,10 @@ impl LooseObjectStore {
     /// `.git` directory above it. Nothing is checked to exist: the store is a path and a width, and
     /// a repository with no loose objects is the state every clone is in after `gc`.
     pub fn open(objects_dir: &Path, format: ObjectFormat) -> Self {
-        Self { objects_dir: objects_dir.to_path_buf(), format }
+        Self {
+            objects_dir: objects_dir.to_path_buf(),
+            format,
+        }
     }
 
     /// Phase 10 — the objects directory this store reads and writes.
@@ -175,13 +178,13 @@ impl LooseObjectStore {
             Ok(data) => data,
             // A loose object that is not on disk is a plain miss, not an I/O failure.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(Error::ObjectNotFound { oid: *oid })
+                return Err(Error::ObjectNotFound { oid: *oid });
             }
             Err(e) => {
                 return Err(Error::IoAtPath {
                     path: BString::from(path_str.as_ref()),
                     source: e,
-                })
+                });
             }
         };
 
@@ -189,19 +192,23 @@ impl LooseObjectStore {
         let mut body = Vec::with_capacity(data.len());
         inflator
             .read_to_end(&mut body)
-            .map_err(|e| Error::CorruptObject { oid: *oid, reason: format!("bad zlib stream: {e}") })?;
-
-        let (kind, declared, header_len) =
-            parse_loose_header(&body).map_err(|e| match e {
-                Error::CorruptObject { reason, .. } => Error::CorruptObject { oid: *oid, reason },
-                other => other,
+            .map_err(|e| Error::CorruptObject {
+                oid: *oid,
+                reason: format!("bad zlib stream: {e}"),
             })?;
+
+        let (kind, declared, header_len) = parse_loose_header(&body).map_err(|e| match e {
+            Error::CorruptObject { reason, .. } => Error::CorruptObject { oid: *oid, reason },
+            other => other,
+        })?;
 
         let actual = u64::try_from(body.len()).unwrap() - u64::try_from(header_len).unwrap();
         if actual != declared {
             return Err(Error::CorruptObject {
                 oid: *oid,
-                reason: format!("declared length {declared} does not match actual body length {actual}"),
+                reason: format!(
+                    "declared length {declared} does not match actual body length {actual}"
+                ),
             });
         }
 
@@ -255,13 +262,13 @@ impl LooseObjectStore {
             Ok(data) => data,
             // A loose object that is not on disk is a plain miss, not an I/O failure.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(Error::ObjectNotFound { oid: *oid })
+                return Err(Error::ObjectNotFound { oid: *oid });
             }
             Err(e) => {
                 return Err(Error::IoAtPath {
                     path: BString::from(path_str.as_ref()),
                     source: e,
-                })
+                });
             }
         };
 
@@ -271,12 +278,10 @@ impl LooseObjectStore {
         let mut nul_seen = false;
         let mut remaining = 0u64;
         loop {
-            let n = inflator
-                .read(&mut buf)
-                .map_err(|e| Error::CorruptObject {
-                    oid: *oid,
-                    reason: format!("bad zlib stream: {e}"),
-                })?;
+            let n = inflator.read(&mut buf).map_err(|e| Error::CorruptObject {
+                oid: *oid,
+                reason: format!("bad zlib stream: {e}"),
+            })?;
             if n == 0 {
                 break;
             }
@@ -297,17 +302,18 @@ impl LooseObjectStore {
             }
         }
 
-        let (kind, declared, _header_len) =
-            parse_loose_header(&header).map_err(|e| match e {
-                Error::CorruptObject { reason, .. } => Error::CorruptObject { oid: *oid, reason },
-                other => other,
-            })?;
+        let (kind, declared, _header_len) = parse_loose_header(&header).map_err(|e| match e {
+            Error::CorruptObject { reason, .. } => Error::CorruptObject { oid: *oid, reason },
+            other => other,
+        })?;
 
         let actual = remaining;
         if actual != declared {
             return Err(Error::CorruptObject {
                 oid: *oid,
-                reason: format!("declared length {declared} does not match actual body length {actual}"),
+                reason: format!(
+                    "declared length {declared} does not match actual body length {actual}"
+                ),
             });
         }
 
@@ -377,7 +383,10 @@ impl LooseObjectStore {
         let tmp = dir.join(format!(
             "tmp_obj_{}_{}",
             std::process::id(),
-            std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_nanos()
+            std::time::UNIX_EPOCH
+                .elapsed()
+                .unwrap_or_default()
+                .as_nanos()
         ));
         let tmp_str = tmp.to_string_lossy();
         let mut file = OpenOptions::new()
@@ -504,19 +513,23 @@ impl LooseObjectStore {
         let entries = match fs::read_dir(&self.objects_dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
-            Err(e) => return Err(Error::IoAtPath {
-                path: BString::from(objects_str.as_ref()),
-                source: e,
-            }),
+            Err(e) => {
+                return Err(Error::IoAtPath {
+                    path: BString::from(objects_str.as_ref()),
+                    source: e,
+                });
+            }
         };
 
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
-                Err(e) => return Err(Error::IoAtPath {
-                    path: BString::from(objects_str.as_ref()),
-                    source: e,
-                }),
+                Err(e) => {
+                    return Err(Error::IoAtPath {
+                        path: BString::from(objects_str.as_ref()),
+                        source: e,
+                    });
+                }
             };
             let path = entry.path();
             if !path.is_dir() {
@@ -540,10 +553,12 @@ impl LooseObjectStore {
             })? {
                 let file = match file {
                     Ok(file) => file,
-                    Err(e) => return Err(Error::IoAtPath {
-                        path: BString::from(dir_str.as_ref()),
-                        source: e,
-                    }),
+                    Err(e) => {
+                        return Err(Error::IoAtPath {
+                            path: BString::from(dir_str.as_ref()),
+                            source: e,
+                        });
+                    }
                 };
                 let path = file.path();
                 if !path.is_file() {
@@ -645,14 +660,16 @@ pub(crate) fn parse_loose_header(data: &[u8]) -> Result<(ObjectKind, u64, usize)
         });
     }
 
-    let declared: u64 = len_bytes.iter().try_fold(0u64, |acc, &b| {
-        acc.checked_mul(10)
-            .and_then(|a| a.checked_add(u64::from(b - b'0')))
-    })
-    .ok_or_else(|| Error::CorruptObject {
-        oid: ObjectId::zero(ObjectFormat::Sha1),
-        reason: "length overflows u64".to_string(),
-    })?;
+    let declared: u64 = len_bytes
+        .iter()
+        .try_fold(0u64, |acc, &b| {
+            acc.checked_mul(10)
+                .and_then(|a| a.checked_add(u64::from(b - b'0')))
+        })
+        .ok_or_else(|| Error::CorruptObject {
+            oid: ObjectId::zero(ObjectFormat::Sha1),
+            reason: "length overflows u64".to_string(),
+        })?;
 
     Ok((kind, declared, nul + 1))
 }
@@ -689,7 +706,12 @@ mod tests {
         write_and_read_roundtrip(&dir, fmt, ObjectKind::Blob, b"hello\n");
         write_and_read_roundtrip(&dir, fmt, ObjectKind::Tree, b"\x0100000000blob\0hello\n");
         write_and_read_roundtrip(&dir, fmt, ObjectKind::Commit, b"tree 0000000000000000000000000000000000000000\nauthor A <a@b> 0 +0000\ncommitter A <a@b> 0 +0000\n\nmsg\n");
-        write_and_read_roundtrip(&dir, fmt, ObjectKind::Tag, b"object 0000000000000000000000000000000000000000\ntype commit\n");
+        write_and_read_roundtrip(
+            &dir,
+            fmt,
+            ObjectKind::Tag,
+            b"object 0000000000000000000000000000000000000000\ntype commit\n",
+        );
     }
 
     #[test]

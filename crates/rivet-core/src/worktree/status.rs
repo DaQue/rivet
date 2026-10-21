@@ -190,9 +190,7 @@ impl Status {
     /// which is the whole point of an ignore rule — `git status` prints "nothing to commit,
     /// working tree clean" while a build directory sits there.
     pub fn is_clean(&self) -> bool {
-        self.staged.is_empty()
-        && self.unstaged.is_empty()
-        && self.untracked.is_empty()
+        self.staged.is_empty() && self.unstaged.is_empty() && self.untracked.is_empty()
     }
 
     /// Phase 4 — how many paths are reported anywhere, ignored entries excluded.
@@ -215,7 +213,11 @@ impl Status {
     /// `unstaged`: its work tree content is the conflict-marked file `merge` wrote, and
     /// comparing that against the index would report a modification the user did not make.
     pub fn conflicts(&self) -> Vec<&BString> {
-        self.staged.iter().filter(|e| e.kind == ChangeKind::Unmerged).map(|e| &e.path).collect()
+        self.staged
+            .iter()
+            .filter(|e| e.kind == ChangeKind::Unmerged)
+            .map(|e| &e.path)
+            .collect()
     }
 }
 
@@ -685,7 +687,9 @@ pub fn untracked_paths(
     untracked_dirs.retain(|dir| {
         let mut prefix = dir.clone();
         prefix.push(b'/');
-        untracked_files.iter().any(|file| file.starts_with(&prefix[..]))
+        untracked_files
+            .iter()
+            .any(|file| file.starts_with(&prefix[..]))
     });
 
     let mut untracked: BTreeSet<BString> = BTreeSet::new();

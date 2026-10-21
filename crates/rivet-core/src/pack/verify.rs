@@ -39,7 +39,9 @@ pub struct VerifiedObject {
 /// [`Error::CorruptPack`] for any mismatch, [`Error::ThinPack`] when a delta base is not in the
 /// pack, and the errors of inflating and delta application.
 pub fn verify_pack(pack: &PackFile<'_>) -> Result<Vec<VerifiedObject>> {
-    let corrupt = |reason: &str| Error::CorruptPack { reason: reason.to_string() };
+    let corrupt = |reason: &str| Error::CorruptPack {
+        reason: reason.to_string(),
+    };
     let index = pack
         .index()
         .ok_or_else(|| corrupt("verify-pack needs an index"))?;
@@ -82,14 +84,19 @@ pub fn verify_pack(pack: &PackFile<'_>) -> Result<Vec<VerifiedObject>> {
             return Err(corrupt("entry CRC does not match the index"));
         }
 
-        let (kind, data) = pack.get_at_offset(*offset, None).map_err(|error| match error {
-            Error::MissingDeltaBase { oid, base } => Error::ThinPack { oid, base },
-            other => other,
-        })?;
+        let (kind, data) = pack
+            .get_at_offset(*offset, None)
+            .map_err(|error| match error {
+                Error::MissingDeltaBase { oid, base } => Error::ThinPack { oid, base },
+                other => other,
+            })?;
         let object = crate::pack::wrap_object(kind, data);
         let actual = object.id(pack.format())?;
         if actual != indexed.oid {
-            return Err(Error::HashMismatch { expected: indexed.oid, actual });
+            return Err(Error::HashMismatch {
+                expected: indexed.oid,
+                actual,
+            });
         }
 
         // Follow the chain for depth and the direct base.
@@ -108,7 +115,10 @@ pub fn verify_pack(pack: &PackFile<'_>) -> Result<Vec<VerifiedObject>> {
                 base = by_offset.get(&parent).map(|e| e.oid);
             }
             if depth as usize > crate::pack::MAX_DELTA_DEPTH {
-                return Err(Error::DeltaChainTooDeep { oid: indexed.oid, depth: crate::pack::MAX_DELTA_DEPTH });
+                return Err(Error::DeltaChainTooDeep {
+                    oid: indexed.oid,
+                    depth: crate::pack::MAX_DELTA_DEPTH,
+                });
             }
             current = pack.entry_at(parent)?;
         }
@@ -130,7 +140,7 @@ pub fn verify_pack(pack: &PackFile<'_>) -> Result<Vec<VerifiedObject>> {
 }
 
 fn pack_bytes<'a>(pack: &'a PackFile<'_>, range: std::ops::Range<usize>) -> Result<&'a [u8]> {
-    pack.raw()
-        .get(range)
-        .ok_or_else(|| Error::CorruptPack { reason: "entry range is outside the pack".to_string() })
+    pack.raw().get(range).ok_or_else(|| Error::CorruptPack {
+        reason: "entry range is outside the pack".to_string(),
+    })
 }

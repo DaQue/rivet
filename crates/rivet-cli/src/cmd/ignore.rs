@@ -120,7 +120,12 @@ pub fn run_check_ignore(global: &GlobalArgs, args: &CheckIgnoreArgs) -> Result<i
         let mut input = Vec::new();
         std::io::stdin().read_to_end(&mut input)?;
         let sep = if args.null_terminated { 0u8 } else { b'\n' };
-        raw.extend(input.split(|b| *b == sep).filter(|p| !p.is_empty()).map(<[u8]>::to_vec));
+        raw.extend(
+            input
+                .split(|b| *b == sep)
+                .filter(|p| !p.is_empty())
+                .map(<[u8]>::to_vec),
+        );
     } else {
         if args.null_terminated {
             anyhow::bail!("-z only makes sense with --stdin");
@@ -147,7 +152,11 @@ pub fn run_check_ignore(global: &GlobalArgs, args: &CheckIgnoreArgs) -> Result<i
 
         let tracked = !args.no_index && repository.index().entry(relative_ref).is_some();
         let full = repository.worktree()?.join(relative_ref)?;
-        let kind = if wants_dir || full.is_dir() { PathKind::Directory } else { PathKind::File };
+        let kind = if wants_dir || full.is_dir() {
+            PathKind::Directory
+        } else {
+            PathKind::File
+        };
 
         let mut stack = repository.ignore()?.clone();
         // Load every `.gitignore` between the root and the path, shallowest first.
@@ -184,7 +193,11 @@ pub fn run_check_ignore(global: &GlobalArgs, args: &CheckIgnoreArgs) -> Result<i
 
         let pattern = decision.pattern().cloned();
         let ignored = decision.is_ignored();
-        let reported = if args.verbose { pattern.is_some() } else { ignored };
+        let reported = if args.verbose {
+            pattern.is_some()
+        } else {
+            ignored
+        };
         if reported {
             matched = true;
         }
@@ -194,9 +207,15 @@ pub fn run_check_ignore(global: &GlobalArgs, args: &CheckIgnoreArgs) -> Result<i
                 let (source, line, text) = match &pattern {
                     Some(p) => {
                         let source = match &p.source {
-                            rivet_core::IgnoreSource::Gitignore(dir) if dir.is_empty() || dir.as_slice() == b"." => ".gitignore".to_string(),
+                            rivet_core::IgnoreSource::Gitignore(dir)
+                                if dir.is_empty() || dir.as_slice() == b"." =>
+                            {
+                                ".gitignore".to_string()
+                            }
                             rivet_core::IgnoreSource::Gitignore(dir) => format!("{dir}/.gitignore"),
-                            rivet_core::IgnoreSource::InfoExclude => ".git/info/exclude".to_string(),
+                            rivet_core::IgnoreSource::InfoExclude => {
+                                ".git/info/exclude".to_string()
+                            }
                             rivet_core::IgnoreSource::CoreExcludesFile => repository
                                 .config()
                                 .get(BStr::new("core.excludesfile"))?

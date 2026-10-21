@@ -47,9 +47,9 @@ use crate::error::{Error, Result};
 use crate::hash::ObjectFormat;
 use crate::ignore::{IgnoreDecision, IgnoreStack, PathKind};
 use crate::index::{Index, IndexEntry, IndexEntryFlags, IndexExt, Stage};
-use crate::object::{hash_object, EntryMode, ObjectKind};
+use crate::object::{EntryMode, ObjectKind, hash_object};
 use crate::odb::Odb;
-use crate::worktree::{check_relative_path, StatCache, Worktree, WorktreeWalkOptions};
+use crate::worktree::{StatCache, Worktree, WorktreeWalkOptions, check_relative_path};
 
 /// Phase 3 — how an `add` should behave.
 ///
@@ -427,11 +427,7 @@ pub fn add_paths(
     // ── deletions ───────────────────────────────────────────────────────────────────────────
     // Deliberately after staging: a path that was just written is present on disk, so it can
     // never be mistaken for a deletion even when the stat cache was stale.
-    let mut tracked_paths: Vec<BString> = index
-        .entries()
-        .iter()
-        .map(|e| e.path.clone())
-        .collect();
+    let mut tracked_paths: Vec<BString> = index.entries().iter().map(|e| e.path.clone()).collect();
     tracked_paths.sort();
     tracked_paths.dedup();
 
@@ -607,7 +603,7 @@ pub fn rm_paths(
                     return Err(Error::IoAtPath {
                         path: path.clone(),
                         source,
-                    })
+                    });
                 }
             }
         }

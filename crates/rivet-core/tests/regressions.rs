@@ -10,11 +10,23 @@ use rivet_core::{ObjectFormat, ObjectId, Odb, RemoteUrl, parse_int};
 fn url_display_masks_the_password_but_config_form_keeps_it() {
     let url = RemoteUrl::parse(BStr::new("https://user:secret@example.com:8443/repo.git")).unwrap();
     assert_eq!(url.port, Some(8443));
-    assert_eq!(url.host.as_deref().map(|h| h.as_slice()), Some(&b"example.com"[..]));
-    assert_eq!(url.user.as_deref().map(|u| u.as_slice()), Some(&b"user"[..]));
-    assert_eq!(format!("{url}"), "https://user:***@example.com:8443/repo.git");
+    assert_eq!(
+        url.host.as_deref().map(|h| h.as_slice()),
+        Some(&b"example.com"[..])
+    );
+    assert_eq!(
+        url.user.as_deref().map(|u| u.as_slice()),
+        Some(&b"user"[..])
+    );
+    assert_eq!(
+        format!("{url}"),
+        "https://user:***@example.com:8443/repo.git"
+    );
     assert_eq!(url.redacted(), "https://user:***@example.com:8443/repo.git");
-    assert_eq!(url.to_config_string(), "https://user:secret@example.com:8443/repo.git");
+    assert_eq!(
+        url.to_config_string(),
+        "https://user:secret@example.com:8443/repo.git"
+    );
 }
 
 #[test]
@@ -52,16 +64,30 @@ fn paths_are_quoted_the_way_git_quotes_them() {
 fn rename_display_factors_out_the_common_prefix_and_suffix() {
     use rivet_core::diff::pprint_rename;
     assert_eq!(pprint_rename(b"a.txt", b"b.txt"), "a.txt => b.txt");
-    assert_eq!(pprint_rename(b"src/old/deep.txt", b"src/new/deep.txt"), "src/{old => new}/deep.txt");
+    assert_eq!(
+        pprint_rename(b"src/old/deep.txt", b"src/new/deep.txt"),
+        "src/{old => new}/deep.txt"
+    );
     assert_eq!(pprint_rename(b"dir/a.c", b"dir/b.c"), "dir/{a.c => b.c}");
     assert_eq!(pprint_rename(b"a/x.rs", b"b/x.rs"), "{a => b}/x.rs");
 }
 
 fn signature(when: i64) -> Signature {
-    Signature { name: BString::from("T"), email: BString::from("t@example.com"), when, tz_offset_minutes: 0 }
+    Signature {
+        name: BString::from("T"),
+        email: BString::from("t@example.com"),
+        when,
+        tz_offset_minutes: 0,
+    }
 }
 
-fn commit(odb: &Odb, tree: ObjectId, parents: &[ObjectId], when: i64, format: ObjectFormat) -> ObjectId {
+fn commit(
+    odb: &Odb,
+    tree: ObjectId,
+    parents: &[ObjectId],
+    when: i64,
+    format: ObjectFormat,
+) -> ObjectId {
     let mut builder = CommitBuilder::new();
     builder.tree(tree);
     for parent in parents {
@@ -106,17 +132,62 @@ fn history_walk_orders_by_date_and_honours_exclusions_and_limits() {
 
     let mut excluded = WalkOptions::new();
     excluded.exclude(left);
-    assert_eq!(walk_oids(&odb, &[merge], &excluded).unwrap(), vec![merge, right]);
+    assert_eq!(
+        walk_oids(&odb, &[merge], &excluded).unwrap(),
+        vec![merge, right]
+    );
 
     let mut limited = WalkOptions::new();
     limited.max_count(2).skip(1);
-    assert_eq!(walk_oids(&odb, &[merge], &limited).unwrap(), vec![left, right]);
+    assert_eq!(
+        walk_oids(&odb, &[merge], &limited).unwrap(),
+        vec![left, right]
+    );
 
     let mut reversed = WalkOptions::new();
     reversed.sort(SortOrder::Reverse);
-    assert_eq!(walk_oids(&odb, &[merge], &reversed).unwrap(), vec![base, right, left, merge]);
+    assert_eq!(
+        walk_oids(&odb, &[merge], &reversed).unwrap(),
+        vec![base, right, left, merge]
+    );
 
     let mut first_parent = WalkOptions::new();
     first_parent.first_parent(true);
-    assert_eq!(walk_oids(&odb, &[merge], &first_parent).unwrap(), vec![merge, left, base]);
+    assert_eq!(
+        walk_oids(&odb, &[merge], &first_parent).unwrap(),
+        vec![merge, left, base]
+    );
+}
+
+/// Applying the change runs of a diff to the old sequence must give the new one, for both
+/// algorithms, including the repeated-line shapes that histogram diff handles specially.
+#[test]
+fn diff_edits_replay_to_new_sequence() {
+    use rivet_core::diff::myers::{histogram_diff, myers_diff};
+    let cases: &[(&str, &str)] = &[
+        ("b y b b", "b b b b"),
+        ("x y x y z y z z", "z z z z"),
+        (
+            "l1 l3 l3 l0 l0 l2 l2 l2 l2 l3 l1 l2 l0",
+            "l2 l3 l3 l0 l1 l0 l1 l1 l2 l0 l2 l3 l0",
+        ),
+        ("", "a b"),
+        ("a b", ""),
+        ("a b c", "a b c"),
+    ];
+    for (a, b) in cases {
+        let old: Vec<&str> = a.split_whitespace().collect();
+        let new: Vec<&str> = b.split_whitespace().collect();
+        for edits in [histogram_diff(&old, &new).unwrap(), myers_diff(&old, &new)] {
+            let mut out: Vec<&str> = Vec::new();
+            let mut at = 0;
+            for e in &edits {
+                out.extend_from_slice(&old[at..e.old_index]);
+                out.extend_from_slice(&new[e.new_index..e.new_index + e.new_len]);
+                at = e.old_index + e.old_len;
+            }
+            out.extend_from_slice(&old[at..]);
+            assert_eq!(out, new, "replay of {a:?} -> {b:?}");
+        }
+    }
 }

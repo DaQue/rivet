@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use rivet_core::diff::DiffAlgorithm;
-use rivet_core::merge::{merge_content, ConflictStyle};
+use rivet_core::merge::{ConflictStyle, merge_content};
 
 fn have_git() -> bool {
     Command::new("git")
@@ -112,7 +112,11 @@ fn non_overlapping_edits_merge_without_markers() {
     let base = b"one\ntwo\nthree\nfour\nfive\n";
     let ours = b"one\nTWO\nthree\nfour\nfive\n";
     let theirs = b"one\ntwo\nthree\nfour\nFIVE\n";
-    for style in [ConflictStyle::Merge, ConflictStyle::Diff3, ConflictStyle::Zd3] {
+    for style in [
+        ConflictStyle::Merge,
+        ConflictStyle::Diff3,
+        ConflictStyle::Zd3,
+    ] {
         compare(base, ours, theirs, style);
     }
     let result = merge_content(
@@ -219,7 +223,11 @@ fn one_sided_change_returns_that_side_verbatim() {
     let base = b"a\nb\nc\n";
     let ours = b"a\nb\nc\n";
     let theirs = b"a\nb\nC\n";
-    for style in [ConflictStyle::Merge, ConflictStyle::Diff3, ConflictStyle::Zd3] {
+    for style in [
+        ConflictStyle::Merge,
+        ConflictStyle::Diff3,
+        ConflictStyle::Zd3,
+    ] {
         compare(base, ours, theirs, style);
     }
 }

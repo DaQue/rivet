@@ -67,14 +67,14 @@ use bstr::{BStr, BString};
 use crate::error::Result;
 use crate::hash::ObjectFormat;
 
+use crate::error::Error;
 use crate::remote::transport::{CapabilitySet, HttpResponse, Service};
+use crate::remote::url::RemoteScheme;
 use crate::remote::url::RemoteUrl;
 use crate::remote::{
     AdvertisedRef, DELIM_PACKET, FLUSH_PACKET, PktLine, ProtocolVersion, PushStatus,
     RefAdvertisement, RefUpdate, Transport, wants_request,
 };
-use crate::remote::url::RemoteScheme;
-use crate::error::Error;
 
 /// Phase 11 — the user agent Rivet sends.
 ///
@@ -181,7 +181,10 @@ impl HttpTransport {
             });
         }
         if url.host.is_none() {
-            return Err(Error::InvalidRemoteUrl { url: display_url(&url), reason: "no host" });
+            return Err(Error::InvalidRemoteUrl {
+                url: display_url(&url),
+                reason: "no host",
+            });
         }
         // `http_status_as_error(false)` keeps a 401's headers and body reachable: ureq's default
         // turns every 4xx into `Error::StatusCode`, which loses both and would make the
@@ -193,9 +196,10 @@ impl HttpTransport {
             .build();
         let agent = ureq::Agent::new_with_config(config);
         let credentials = match (&url.user, &url.password) {
-            (Some(user), password) => {
-                Some((user.clone(), password.clone().unwrap_or_else(|| BString::from(""))))
-            }
+            (Some(user), password) => Some((
+                user.clone(),
+                password.clone().unwrap_or_else(|| BString::from("")),
+            )),
             _ => None,
         };
         Ok(Self {
@@ -281,13 +285,12 @@ impl HttpTransport {
         }
         let mut out = BString::from(url.scheme.as_str());
         out.extend_from_slice(b"://");
-        if credentials
-            && let Some((user, password)) = &self.credentials {
-                out.extend_from_slice(&user[..]);
-                out.push(b':');
-                out.extend_from_slice(&password[..]);
-                out.push(b'@');
-            }
+        if credentials && let Some((user, password)) = &self.credentials {
+            out.extend_from_slice(&user[..]);
+            out.push(b':');
+            out.extend_from_slice(&password[..]);
+            out.push(b'@');
+        }
         if let Some(host) = url.host_port() {
             out.extend_from_slice(&host[..]);
         }
@@ -328,7 +331,10 @@ fn join_url(base: &[u8], target: &[u8]) -> BString {
 /// Map a `ureq` failure onto the crate's error, with the URL already redacted.
 fn map_ureq(error: ureq::Error, url: &BStr) -> Error {
     match error {
-        ureq::Error::StatusCode(status) => Error::HttpStatus { url: url.to_owned(), status },
+        ureq::Error::StatusCode(status) => Error::HttpStatus {
+            url: url.to_owned(),
+            status,
+        },
         other => Error::Transport(format!("{}: {}", url, other)),
     }
 }
@@ -357,7 +363,9 @@ fn read_frame<R: std::io::Read>(reader: &mut R) -> Result<Option<Frame>> {
     if head == *DELIM_PACKET {
         return Ok(Some(Frame::Data(Vec::new())));
     }
-    let parsed = std::str::from_utf8(&head).ok().and_then(|text| usize::from_str_radix(text, 16).ok());
+    let parsed = std::str::from_utf8(&head)
+        .ok()
+        .and_then(|text| usize::from_str_radix(text, 16).ok());
     let Some(len) = parsed.filter(|len| *len >= 4) else {
         return Ok(Some(Frame::Raw(head)));
     };
@@ -367,7 +375,10 @@ fn read_frame<R: std::io::Read>(reader: &mut R) -> Result<Option<Frame>> {
 }
 
 /// Copy the rest of a stream into a writer without needing a sized writer type.
-fn copy_stream<R: std::io::Read, W: std::io::Write + ?Sized>(reader: &mut R, out: &mut W) -> Result<()> {
+fn copy_stream<R: std::io::Read, W: std::io::Write + ?Sized>(
+    reader: &mut R,
+    out: &mut W,
+) -> Result<()> {
     let mut buffer = [0u8; 64 * 1024];
     loop {
         let read = reader.read(&mut buffer)?;
@@ -407,7 +418,9 @@ pub(crate) fn split_ref_line(line: &[u8]) -> Result<(BString, BString, Option<Ve
         return Err(Error::Protocol("empty ref line".to_string()));
     }
     if let Some(message) = line.strip_prefix(b"ERR ") {
-        return Err(Error::Protocol(String::from_utf8_lossy(message).into_owned()));
+        return Err(Error::Protocol(
+            String::from_utf8_lossy(message).into_owned(),
+        ));
     }
     let space = line
         .iter()
@@ -450,7 +463,10 @@ pub fn advertise_request(
     version: crate::remote::ProtocolVersion,
 ) -> Result<crate::remote::HttpRequest> {
     if url.host.is_none() {
-        return Err(Error::InvalidRemoteUrl { url: display_url(url), reason: "no host" });
+        return Err(Error::InvalidRemoteUrl {
+            url: display_url(url),
+            reason: "no host",
+        });
     }
     let mut headers = Vec::new();
     headers.push(("Accept-Encoding", BString::from("gzip")));
@@ -492,7 +508,10 @@ pub fn service_request(
     body: Vec<u8>,
 ) -> Result<crate::remote::HttpRequest> {
     if url.host.is_none() {
-        return Err(Error::InvalidRemoteUrl { url: display_url(url), reason: "no host" });
+        return Err(Error::InvalidRemoteUrl {
+            url: display_url(url),
+            reason: "no host",
+        });
     }
     // Validate the pkt-line section only: a push appends the raw pack after the flush, and the pack
     // is deliberately not pkt-line framed.
@@ -580,22 +599,30 @@ pub fn send(
 
     use ureq::ResponseExt as _;
     let final_url = Some(BString::from(response.get_uri().to_string()));
-    let content_type = header_string(&response, "content-type").map(|text| media_type(BStr::new(&text)));
+    let content_type =
+        header_string(&response, "content-type").map(|text| media_type(BStr::new(&text)));
     let encoding = header_string(&response, "content-encoding");
-    let body = response.body_mut().read_to_vec().map_err(|err| {
-        Error::Transport(format!("{}: {}", safe, err))
-    })?;
+    let body = response
+        .body_mut()
+        .read_to_vec()
+        .map_err(|err| Error::Transport(format!("{}: {}", safe, err)))?;
     let body = decode_body(encoding.as_ref().map(|enc| BStr::new(&enc[..])), body)?;
 
     if let Some(content_type) = &content_type
-        && !is_git_content_type(BStr::new(content_type)) {
-            return Err(Error::Protocol(format!(
-                "unexpected content type {}: {}",
-                content_type,
-                body_preview(&body)
-            )));
-        }
-    Ok(HttpResponse { status, content_type, body, final_url })
+        && !is_git_content_type(BStr::new(content_type))
+    {
+        return Err(Error::Protocol(format!(
+            "unexpected content type {}: {}",
+            content_type,
+            body_preview(&body)
+        )));
+    }
+    Ok(HttpResponse {
+        status,
+        content_type,
+        body,
+        final_url,
+    })
 }
 
 /// The header as text, or `None` when it is absent or not printable ASCII.
@@ -613,7 +640,8 @@ fn header_string(response: &ureq::http::Response<ureq::Body>, name: &str) -> Opt
 /// same prefix, and anything else is a server's human-readable complaint rather than a protocol
 /// body.
 fn is_git_content_type(content_type: &BStr) -> bool {
-    content_type.starts_with(b"application/x-git-") || content_type.starts_with(b"application/x-git")
+    content_type.starts_with(b"application/x-git-")
+        || content_type.starts_with(b"application/x-git")
 }
 
 /// The first few bytes of a body, for an error message.
@@ -683,16 +711,17 @@ pub fn send_streaming<T>(
     }
 
     if let Some(content_type) = header_string(&response, "content-type")
-        && !is_git_content_type(BStr::new(&content_type)) {
-            // The body is the server's explanation, and this is the only chance to read it: the
-            // caller's callback expects protocol bytes and would report a framing error instead.
-            let body = response.body_mut().read_to_vec().unwrap_or_default();
-            return Err(Error::Protocol(format!(
-                "unexpected content type {}: {}",
-                content_type,
-                body_preview(&body)
-            )));
-        }
+        && !is_git_content_type(BStr::new(&content_type))
+    {
+        // The body is the server's explanation, and this is the only chance to read it: the
+        // caller's callback expects protocol bytes and would report a framing error instead.
+        let body = response.body_mut().read_to_vec().unwrap_or_default();
+        return Err(Error::Protocol(format!(
+            "unexpected content type {}: {}",
+            content_type,
+            body_preview(&body)
+        )));
+    }
 
     let body = response.body_mut();
     let mut reader = body.as_reader();
@@ -735,16 +764,20 @@ pub fn decode_body(encoding: Option<&bstr::BStr>, body: Vec<u8>) -> Result<Vec<u
     if enc == b"gzip" {
         let mut d = flate2::read::GzDecoder::new(&body[..]);
         let mut out = Vec::new();
-        std::io::Read::read_to_end(&mut d, &mut out).map_err(|_| Error::Protocol(String::from("gzip decode failed")))?;
+        std::io::Read::read_to_end(&mut d, &mut out)
+            .map_err(|_| Error::Protocol(String::from("gzip decode failed")))?;
         return Ok(out);
     }
     if enc == b"deflate" {
         let mut d = flate2::read::ZlibDecoder::new(&body[..]);
         let mut out = Vec::new();
-        std::io::Read::read_to_end(&mut d, &mut out).map_err(|_| Error::Protocol(String::from("deflate decode failed")))?;
+        std::io::Read::read_to_end(&mut d, &mut out)
+            .map_err(|_| Error::Protocol(String::from("deflate decode failed")))?;
         return Ok(out);
     }
-    Err(Error::Protocol(String::from("unsupported content-encoding")))
+    Err(Error::Protocol(String::from(
+        "unsupported content-encoding",
+    )))
 }
 
 /// Phase 11 — parse the `Content-Type` of a response into its media type, lowercased.
@@ -786,7 +819,12 @@ pub const fn is_success(status: u16) -> bool {
 
 impl HttpTransport {
     /// Fetch and parse the ref advertisement of one service.
-    fn advertise(&mut self, url: &RemoteUrl, format: ObjectFormat, service: Service) -> Result<RefAdvertisement> {
+    fn advertise(
+        &mut self,
+        url: &RemoteUrl,
+        format: ObjectFormat,
+        service: Service,
+    ) -> Result<RefAdvertisement> {
         // v0 advertises every ref in the first response, which is what the fetch layer consumes;
         // asking for v2 would also need a separate `ls-refs` round before any ref is known.
         let request = advertise_request(url, service, ProtocolVersion::V0)?;
@@ -823,7 +861,10 @@ impl HttpTransport {
         }
 
         if first.data() == b"version 2" || first.data() == b"version 2\n" {
-            let mut capabilities = CapabilitySet { entries: Vec::new(), raw: &[] };
+            let mut capabilities = CapabilitySet {
+                entries: Vec::new(),
+                raw: &[],
+            };
             loop {
                 let pkt = PktLine::read_from(&mut cursor)?;
                 if pkt.is_flush() {
@@ -841,7 +882,10 @@ impl HttpTransport {
             }
             let peer = capabilities.object_format()?;
             if peer != format {
-                return Err(Error::ObjectFormatMismatch { expected: format, found: peer });
+                return Err(Error::ObjectFormatMismatch {
+                    expected: format,
+                    found: peer,
+                });
             }
             let agent = capabilities.value(b"agent").map(BString::from);
             self.capabilities = capabilities.clone();
@@ -887,7 +931,10 @@ impl HttpTransport {
             Some(line) => match split_ref_line(line)?.2 {
                 Some(bytes) => {
                     let parsed = CapabilitySet::parse(&bytes)?;
-                    CapabilitySet { entries: parsed.entries.clone(), raw: &[] }
+                    CapabilitySet {
+                        entries: parsed.entries.clone(),
+                        raw: &[],
+                    }
                 }
                 None => CapabilitySet::default(),
             },
@@ -895,7 +942,10 @@ impl HttpTransport {
         };
         let peer = capabilities.object_format()?;
         if peer != format {
-            return Err(Error::ObjectFormatMismatch { expected: format, found: peer });
+            return Err(Error::ObjectFormatMismatch {
+                expected: format,
+                found: peer,
+            });
         }
         let mut refs: Vec<AdvertisedRef> = Vec::new();
         for line in &lines {
@@ -993,7 +1043,6 @@ impl Transport for HttpTransport {
         haves: &[crate::hash::ObjectId],
         into: &mut dyn std::io::Write,
     ) -> Result<()> {
-
         let v2 = self.version == ProtocolVersion::V2;
         let sideband = self.capabilities.contains(b"side-band-64k")
             || self.capabilities.contains(b"side-band");
@@ -1006,10 +1055,12 @@ impl Transport for HttpTransport {
             PktLine::new_data(b"thin-pack").write_to(&mut body)?;
             PktLine::new_data(b"ofs-delta").write_to(&mut body)?;
             for want in wants {
-                PktLine::new_data(format!("want {}", want.to_hex()).as_bytes()).write_to(&mut body)?;
+                PktLine::new_data(format!("want {}", want.to_hex()).as_bytes())
+                    .write_to(&mut body)?;
             }
             for have in haves {
-                PktLine::new_data(format!("have {}", have.to_hex()).as_bytes()).write_to(&mut body)?;
+                PktLine::new_data(format!("have {}", have.to_hex()).as_bytes())
+                    .write_to(&mut body)?;
             }
             PktLine::new_data(b"done").write_to(&mut body)?;
             body.extend_from_slice(FLUSH_PACKET);
@@ -1018,7 +1069,8 @@ impl Transport for HttpTransport {
             // One stateless round: the haves go straight into `done`. A flush between them would
             // end the round and leave the server waiting for a request that never comes.
             for have in haves {
-                PktLine::new_data(format!("have {}\n", have.to_hex()).as_bytes()).write_to(&mut body)?;
+                PktLine::new_data(format!("have {}\n", have.to_hex()).as_bytes())
+                    .write_to(&mut body)?;
             }
             PktLine::new_data(b"done\n").write_to(&mut body)?;
         }
@@ -1073,9 +1125,10 @@ impl Transport for HttpTransport {
                             match data[0] {
                                 1 => into.write_all(&data[1..])?,
                                 2 => {}
-                                3 => server_error = Some(
-                                    String::from_utf8_lossy(&data[1..]).into_owned(),
-                                ),
+                                3 => {
+                                    server_error =
+                                        Some(String::from_utf8_lossy(&data[1..]).into_owned())
+                                }
                                 other => {
                                     return Err(Error::Protocol(format!(
                                         "unknown sideband channel {other}"
@@ -1262,7 +1315,9 @@ impl Transport for HttpTransport {
             let line = pkt.data();
             let line = line.strip_suffix(b"\n").unwrap_or(line);
             if let Some(message) = line.strip_prefix(b"ERR ") {
-                return Err(Error::Protocol(String::from_utf8_lossy(message).into_owned()));
+                return Err(Error::Protocol(
+                    String::from_utf8_lossy(message).into_owned(),
+                ));
             }
             if line.is_empty() {
                 continue;
@@ -1280,7 +1335,10 @@ impl Transport for HttpTransport {
                 name = &rest[..tab];
                 for attribute in rest[tab + 1..].split(|&b| b == b' ') {
                     if let Some(value) = attribute.strip_prefix(b"peeled:") {
-                        peeled = Some(crate::hash::ObjectId::from_hex(self.format, BStr::new(value))?);
+                        peeled = Some(crate::hash::ObjectId::from_hex(
+                            self.format,
+                            BStr::new(value),
+                        )?);
                     } else if let Some(value) = attribute.strip_prefix(b"symref-target:") {
                         symref_target = Some(BString::from(value));
                     }

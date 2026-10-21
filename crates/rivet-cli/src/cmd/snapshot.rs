@@ -460,10 +460,13 @@ pub fn run_rm(global: &GlobalArgs, args: &RmArgs) -> Result<i32> {
         paths.push(super::worktree_path(&repository, path, "rm")?);
     }
 
-    if !args.force && !args.cached && !args.dry_run
-        && let Some(code) = check_rm_safety(&repository, &paths)? {
-            return Ok(code);
-        }
+    if !args.force
+        && !args.cached
+        && !args.dry_run
+        && let Some(code) = check_rm_safety(&repository, &paths)?
+    {
+        return Ok(code);
+    }
 
     let options = RmOptions {
         cached: args.cached,
@@ -590,10 +593,7 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
         if name.is_empty() || email.is_empty() {
             anyhow::bail!("commit: --signoff needs both user.name and user.email configured");
         }
-        message = format!(
-            "{}\n\nSigned-off-by: {name} <{email}>",
-            message.trim_end()
-        );
+        message = format!("{}\n\nSigned-off-by: {name} <{email}>", message.trim_end());
     }
 
     // Nothing to record: Git shows the status instead of failing, and exits 1.
@@ -638,7 +638,11 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
         other => branch_name(other),
     };
     let parents = repository.commit_parents(oid)?;
-    let root = if parents.is_empty() { " (root-commit)" } else { "" };
+    let root = if parents.is_empty() {
+        " (root-commit)"
+    } else {
+        ""
+    };
     let subject = super::commit_subject(&repository, &oid)?;
     println!("[{branch}{root} {}] {subject}", short_oid(&oid));
     let author = repository.author_signature()?;
@@ -764,20 +768,32 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     status.unstaged.retain(|e| e.kind != ChangeKind::Unmerged);
 
     // Staged renames: a deleted path and an added one holding (nearly) the same content.
-    let mut renames: std::collections::BTreeMap<BString, BString> = std::collections::BTreeMap::new();
-    let mut renamed_sources: std::collections::BTreeSet<BString> = std::collections::BTreeSet::new();
+    let mut renames: std::collections::BTreeMap<BString, BString> =
+        std::collections::BTreeMap::new();
+    let mut renamed_sources: std::collections::BTreeSet<BString> =
+        std::collections::BTreeSet::new();
     {
         use rivet_core::diff::RenameSide;
         let mut sources = Vec::new();
         let mut destinations = Vec::new();
         for entry in &status.staged {
-            match (entry.kind, entry.old_oid, entry.old_mode, entry.new_oid, entry.new_mode) {
-                (ChangeKind::Deleted, Some(oid), Some(mode), _, _) => {
-                    sources.push(RenameSide { path: entry.path.clone(), oid, mode })
-                }
-                (ChangeKind::Added, _, _, Some(oid), Some(mode)) => {
-                    destinations.push(RenameSide { path: entry.path.clone(), oid, mode })
-                }
+            match (
+                entry.kind,
+                entry.old_oid,
+                entry.old_mode,
+                entry.new_oid,
+                entry.new_mode,
+            ) {
+                (ChangeKind::Deleted, Some(oid), Some(mode), _, _) => sources.push(RenameSide {
+                    path: entry.path.clone(),
+                    oid,
+                    mode,
+                }),
+                (ChangeKind::Added, _, _, Some(oid), Some(mode)) => destinations.push(RenameSide {
+                    path: entry.path.clone(),
+                    oid,
+                    mode,
+                }),
                 _ => {}
             }
         }
@@ -787,7 +803,10 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             Vec::new()
         };
         for pair in pairs {
-            renames.insert(destinations[pair.destination].path.clone(), sources[pair.source].path.clone());
+            renames.insert(
+                destinations[pair.destination].path.clone(),
+                sources[pair.source].path.clone(),
+            );
             renamed_sources.insert(sources[pair.source].path.clone());
         }
     }
@@ -813,7 +832,11 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             match tracking_state(&repository, &head)? {
                 Tracking::None => {}
                 Tracking::Gone { upstream } => header.push_str(&format!("...{upstream} [gone]")),
-                Tracking::State { upstream, ahead, behind } => {
+                Tracking::State {
+                    upstream,
+                    ahead,
+                    behind,
+                } => {
                     header.push_str(&format!("...{upstream}"));
                     match (ahead, behind) {
                         (0, 0) => {}
@@ -826,13 +849,18 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             println!("{header}");
         }
         // One line per path, index state then work-tree state, in path order.
-        let mut lines: std::collections::BTreeMap<BString, (char, char)> = std::collections::BTreeMap::new();
+        let mut lines: std::collections::BTreeMap<BString, (char, char)> =
+            std::collections::BTreeMap::new();
         for entry in &status.staged {
             if renamed_sources.contains(&entry.path) {
                 continue;
             }
             lines.entry(entry.path.clone()).or_insert((' ', ' ')).0 =
-                if renames.contains_key(&entry.path) { 'R' } else { entry.kind.code() };
+                if renames.contains_key(&entry.path) {
+                    'R'
+                } else {
+                    entry.kind.code()
+                };
         }
         for entry in &status.unstaged {
             lines.entry(entry.path.clone()).or_insert((' ', ' ')).1 = entry.kind.code();
@@ -889,8 +917,17 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
                 continue;
             }
             match renames.get(&entry.path) {
-                Some(from) => println!("\t{:<12}{} -> {}", "renamed:", q(from, false), q(&entry.path, false)),
-                None => println!("\t{:<12}{}", section_label(entry.kind), q(&entry.path, false)),
+                Some(from) => println!(
+                    "\t{:<12}{} -> {}",
+                    "renamed:",
+                    q(from, false),
+                    q(&entry.path, false)
+                ),
+                None => println!(
+                    "\t{:<12}{}",
+                    section_label(entry.kind),
+                    q(&entry.path, false)
+                ),
             }
         }
         wrote_section = true;
@@ -912,14 +949,22 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         }
         println!("Changes not staged for commit:");
         // Git offers `add/rm` as soon as one of the unstaged changes is a deletion.
-        if status.unstaged.iter().any(|e| e.kind == ChangeKind::Deleted) {
+        if status
+            .unstaged
+            .iter()
+            .any(|e| e.kind == ChangeKind::Deleted)
+        {
             println!("  (use \"git add/rm <file>...\" to update what will be committed)");
         } else {
             println!("  (use \"git add <file>...\" to update what will be committed)");
         }
         println!("  (use \"git restore <file>...\" to discard changes in working directory)");
         for entry in &status.unstaged {
-            println!("\t{:<12}{}", section_label(entry.kind), q(&entry.path, false));
+            println!(
+                "\t{:<12}{}",
+                section_label(entry.kind),
+                q(&entry.path, false)
+            );
         }
         wrote_section = true;
     }
@@ -958,7 +1003,9 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         // points at `git commit -a` as well.
         println!();
         if status.unstaged.is_empty() && !status.untracked.is_empty() {
-            println!("nothing added to commit but untracked files present (use \"git add\" to track)");
+            println!(
+                "nothing added to commit but untracked files present (use \"git add\" to track)"
+            );
         } else {
             println!("no changes added to commit (use \"git add\" and/or \"git commit -a\")");
         }
@@ -1111,7 +1158,10 @@ pub fn run_reset(global: &GlobalArgs, args: &ResetArgs) -> Result<i32> {
     if args.keep || args.merge {
         anyhow::bail!("reset: --keep and --merge are not implemented");
     }
-    let modes = [args.soft, args.mixed, args.hard].iter().filter(|m| **m).count();
+    let modes = [args.soft, args.mixed, args.hard]
+        .iter()
+        .filter(|m| **m)
+        .count();
     if modes > 1 {
         anyhow::bail!("options '--soft', '--mixed' and '--hard' cannot be used together");
     }
@@ -1126,7 +1176,11 @@ pub fn run_reset(global: &GlobalArgs, args: &ResetArgs) -> Result<i32> {
             .ok()
             .is_some_and(|p| {
                 repository.index().entry(bstr::BStr::new(&p[..])).is_some()
-                    || repository.worktree().ok().and_then(|w| w.stat(bstr::BStr::new(&p[..])).ok().flatten()).is_some()
+                    || repository
+                        .worktree()
+                        .ok()
+                        .and_then(|w| w.stat(bstr::BStr::new(&p[..])).ok().flatten())
+                        .is_some()
             });
         if exists {
             pathspecs.push(PathBuf::from(&commit_spec));
@@ -1231,13 +1285,22 @@ fn print_unstaged(repository: &mut rivet_core::Repository) -> Result<()> {
 /// How the current branch relates to its configured upstream.
 enum Tracking {
     None,
-    Gone { upstream: String },
-    State { upstream: String, ahead: usize, behind: usize },
+    Gone {
+        upstream: String,
+    },
+    State {
+        upstream: String,
+        ahead: usize,
+        behind: usize,
+    },
 }
 
 fn tracking_state(repository: &rivet_core::Repository, head: &HeadState) -> Result<Tracking> {
-    let (Some(branch), Some(oid)) = (head.branch(), head.oid()) else { return Ok(Tracking::None) };
-    let Some((remote, merge)) = repository.branch_upstream(&branch.short_name().to_string())? else {
+    let (Some(branch), Some(oid)) = (head.branch(), head.oid()) else {
+        return Ok(Tracking::None);
+    };
+    let Some((remote, merge)) = repository.branch_upstream(&branch.short_name().to_string())?
+    else {
         return Ok(Tracking::None);
     };
     let tracking_name = if remote == "." {
@@ -1263,7 +1326,9 @@ fn tracking_state(repository: &rivet_core::Repository, head: &HeadState) -> Resu
         .or_else(|| tracking_name.strip_prefix("refs/heads/"))
         .unwrap_or(&tracking_name)
         .to_string();
-    let Ok(name) = rivet_core::RefName::from_bytes(tracking_name.as_bytes()) else { return Ok(Tracking::None) };
+    let Ok(name) = rivet_core::RefName::from_bytes(tracking_name.as_bytes()) else {
+        return Ok(Tracking::None);
+    };
     let Ok(upstream_oid) = repository.refs().resolve_oid(&name) else {
         return Ok(Tracking::Gone { upstream: short });
     };
@@ -1288,21 +1353,43 @@ fn print_tracking(tracking: &Tracking) {
             println!("  (use \"git branch --unset-upstream\" to fixup)");
             println!();
         }
-        Tracking::State { upstream, ahead: 0, behind: 0 } => {
+        Tracking::State {
+            upstream,
+            ahead: 0,
+            behind: 0,
+        } => {
             println!("Your branch is up to date with '{upstream}'.");
             println!();
         }
-        Tracking::State { upstream, ahead, behind: 0 } => {
-            println!("Your branch is ahead of '{upstream}' by {ahead} {}.", plural(*ahead));
+        Tracking::State {
+            upstream,
+            ahead,
+            behind: 0,
+        } => {
+            println!(
+                "Your branch is ahead of '{upstream}' by {ahead} {}.",
+                plural(*ahead)
+            );
             println!("  (use \"git push\" to publish your local commits)");
             println!();
         }
-        Tracking::State { upstream, ahead: 0, behind } => {
-            println!("Your branch is behind '{upstream}' by {behind} {}, and can be fast-forwarded.", plural(*behind));
+        Tracking::State {
+            upstream,
+            ahead: 0,
+            behind,
+        } => {
+            println!(
+                "Your branch is behind '{upstream}' by {behind} {}, and can be fast-forwarded.",
+                plural(*behind)
+            );
             println!("  (use \"git pull\" to update your local branch)");
             println!();
         }
-        Tracking::State { upstream, ahead, behind } => {
+        Tracking::State {
+            upstream,
+            ahead,
+            behind,
+        } => {
             println!("Your branch and '{upstream}' have diverged,");
             println!("and have {ahead} and {behind} different commits each, respectively.");
             println!("  (use \"git pull\" if you want to integrate the remote branch with yours)");
@@ -1324,7 +1411,9 @@ fn check_rm_safety(repository: &rivet_core::Repository, specs: &[BString]) -> Re
         if entry.stage() != rivet_core::index::Stage::Normal {
             continue;
         }
-        let selected = specs.iter().any(|spec| rivet_core::ops::pathspec_matches(BStr::new(&entry.path[..]), BStr::new(&spec[..])));
+        let selected = specs.iter().any(|spec| {
+            rivet_core::ops::pathspec_matches(BStr::new(&entry.path[..]), BStr::new(&spec[..]))
+        });
         if !selected || entry.mode == rivet_core::EntryMode::Commit {
             continue;
         }

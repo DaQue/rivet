@@ -65,13 +65,13 @@ use std::collections::BTreeSet;
 
 use bstr::{BStr, BString};
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::index::{Index, IndexEntryFlags, Stage};
 use crate::object::{EntryMode, ObjectKind, Tree};
 use crate::odb::Odb;
 use crate::worktree::{StatCache, Worktree};
-use crate::error::Error;
 
 /// Phase 4 — one filesystem action a checkout will perform.
 ///
@@ -397,9 +397,10 @@ impl CheckoutPlan {
                 // already agrees with where the checkout is going.
                 if entry.action == CheckoutAction::Update
                     && let Some(from_tree) = self.from_tree
-                        && lookup_tree_entry(odb, self.format, from_tree, path)?.is_some() {
-                            dirty.push(entry.path.clone());
-                        }
+                    && lookup_tree_entry(odb, self.format, from_tree, path)?.is_some()
+                {
+                    dirty.push(entry.path.clone());
+                }
                 continue;
             };
             // Clause one: the file on disk differs from what the index last recorded.
@@ -447,7 +448,10 @@ impl CheckoutPlan {
         // that name and the user's first suspicion is the wrong command.
         let mut obstructed = Vec::new();
         for entry in &self.entries {
-            if !matches!(entry.action, CheckoutAction::Create | CheckoutAction::Update) {
+            if !matches!(
+                entry.action,
+                CheckoutAction::Create | CheckoutAction::Update
+            ) {
                 continue;
             }
             let path = BStr::new(&entry.path[..]);
@@ -571,9 +575,10 @@ impl CheckoutPlan {
             // A keep is a mode change with the same bytes: only a `chmod`. A file the user has
             // deleted stays deleted.
             if let Some(mode) = entry.mode
-                && worktree.stat(BStr::new(&entry.path[..]))?.is_some() {
-                    apply_mode(worktree, BStr::new(&entry.path[..]), mode)?;
-                }
+                && worktree.stat(BStr::new(&entry.path[..]))?.is_some()
+            {
+                apply_mode(worktree, BStr::new(&entry.path[..]), mode)?;
+            }
         }
         // Longest paths first, so a path that only exists because a directory did is not
         // removed after something that could take the directory out from under it.
@@ -652,7 +657,8 @@ impl CheckoutPlan {
                 path: entry.path.clone(),
             });
         }
-        Ok(entries)    }
+        Ok(entries)
+    }
 }
 
 /// Phase 4 — read a blob for checkout, applying the filesystem's symlink setting.
@@ -793,7 +799,6 @@ pub fn remove_path(worktree: &Worktree, path: &bstr::BStr) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
-
 }
 
 /// Phase 4 — whether two paths in one tree would collide on a case-insensitive filesystem.
@@ -812,13 +817,13 @@ pub fn remove_path(worktree: &Worktree, path: &bstr::BStr) -> Result<()> {
 ///   names the two components.
 pub fn paths_collide(a: &bstr::BStr, b: &bstr::BStr, ignore_case: bool) -> bool {
     a.len() != b.len()
-    || a.iter().zip(b.iter()).any(|(x, y)| {
-        if ignore_case {
-            !x.eq_ignore_ascii_case(y)
-        } else {
-            x != y
-        }
-    })
+        || a.iter().zip(b.iter()).any(|(x, y)| {
+            if ignore_case {
+                !x.eq_ignore_ascii_case(y)
+            } else {
+                x != y
+            }
+        })
 }
 
 /// One directory's entries, copied out of a parsed tree so the parsed bytes can be dropped.
@@ -849,8 +854,7 @@ fn path_in_pathspec(path: &BStr, pathspec: &BStr) -> bool {
     // that file. The trailing slash makes the intent explicit on the command line.
     if pathspec.last() == Some(&b'/') {
         return path.starts_with(&pathspec[..pathspec.len() - 1])
-            && (path.len() == pathspec.len() - 1
-                || path.get(pathspec.len() - 1) == Some(&b'/'));
+            && (path.len() == pathspec.len() - 1 || path.get(pathspec.len() - 1) == Some(&b'/'));
     }
     path == pathspec
         || (path.len() > pathspec.len()
@@ -928,7 +932,15 @@ fn walk_plan(
                     // and descending would walk the tree on every one-file checkout.
                     (EntryMode::Tree, EntryMode::Tree) => {
                         if old.oid != new.oid {
-                            walk_plan(format, odb, Some(old.oid), Some(new.oid), prefix, options, out)?;
+                            walk_plan(
+                                format,
+                                odb,
+                                Some(old.oid),
+                                Some(new.oid),
+                                prefix,
+                                options,
+                                out,
+                            )?;
                         }
                     }
                     (EntryMode::Tree, _) => {

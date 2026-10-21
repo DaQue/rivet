@@ -396,7 +396,11 @@ impl IndexEntryFlags {
 
     /// Phase 3 — set the assume-valid bit.
     pub const fn set_assume_valid(self, on: bool) -> Self {
-        Self(if on { self.0 | 0x8000 } else { self.0 & !0x8000 })
+        Self(if on {
+            self.0 | 0x8000
+        } else {
+            self.0 & !0x8000
+        })
     }
 
     /// Phase 3 — set the extended bit, which forces the file to v3.
@@ -408,7 +412,11 @@ impl IndexEntryFlags {
     /// [`IndexEntryExtendedFlags::skip_worktree`] and the extended bit stay in step; a caller that
     /// sets the bit by hand must also write a second flags word for that entry.
     pub const fn set_extended(self, on: bool) -> Self {
-        Self(if on { self.0 | 0x4000 } else { self.0 & !0x4000 })
+        Self(if on {
+            self.0 | 0x4000
+        } else {
+            self.0 & !0x4000
+        })
     }
 }
 
@@ -464,7 +472,11 @@ impl IndexEntryExtendedFlags {
 
     /// Phase 3 — set the skip-worktree bit.
     pub const fn set_skip_worktree(self, on: bool) -> Self {
-        Self(if on { self.0 | 0x4000 } else { self.0 & !0x4000 })
+        Self(if on {
+            self.0 | 0x4000
+        } else {
+            self.0 & !0x4000
+        })
     }
 
     /// Phase 3 — the extended mode bits, uninterpreted.
@@ -618,9 +630,8 @@ impl IndexEntry {
         }
         let oid = ObjectId::from_bytes(format, &data[FIXED..id_end])?;
 
-        let flags = IndexEntryFlags::from_bits(
-            u16::from_be_bytes([data[id_end], data[id_end + 1]]),
-        );
+        let flags =
+            IndexEntryFlags::from_bits(u16::from_be_bytes([data[id_end], data[id_end + 1]]));
         if data.len() < id_end + 2 {
             return Err(Error::CorruptIndex {
                 offset: id_end + 2,
@@ -679,7 +690,7 @@ impl IndexEntry {
                 return Err(Error::InvalidEntryMode {
                     name: path.clone(),
                     mode,
-                })
+                });
             }
         };
 
@@ -1016,14 +1027,12 @@ impl Index {
     pub fn load(path: &Path, format: ObjectFormat) -> Result<Self> {
         let data = match std::fs::read(path) {
             Ok(d) => d,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::new())
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::new()),
             Err(e) => {
                 return Err(Error::IoAtPath {
                     path: BString::from(path.to_string_lossy().as_bytes()),
                     source: e,
-                })
+                });
             }
         };
         if data.len() < 12 {
@@ -1071,8 +1080,18 @@ impl Index {
                     reason: "truncated extension",
                 });
             }
-            let sig = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]];
-            let ext_len = u32::from_be_bytes([data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7]]) as usize;
+            let sig = [
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ];
+            let ext_len = u32::from_be_bytes([
+                data[offset + 4],
+                data[offset + 5],
+                data[offset + 6],
+                data[offset + 7],
+            ]) as usize;
             offset += 8;
             if body_end - offset < ext_len {
                 return Err(Error::CorruptIndex {
@@ -1119,10 +1138,15 @@ impl Index {
     pub fn parse(format: ObjectFormat, data: &[u8]) -> Result<Self> {
         let data_len = data.len();
         if data_len < 12 {
-            return Err(Error::CorruptIndex { offset: 0, reason: "truncated index" });
+            return Err(Error::CorruptIndex {
+                offset: 0,
+                reason: "truncated index",
+            });
         }
         if &data[0..4] != b"DIRC" {
-            return Err(Error::BadIndexSignature { found: [data[0], data[1], data[2], data[3]] });
+            return Err(Error::BadIndexSignature {
+                found: [data[0], data[1], data[2], data[3]],
+            });
         }
         let version_u32 = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
         let version = IndexVersion::from_u32(version_u32)?;
@@ -1141,20 +1165,39 @@ impl Index {
         const CHECKSUM: usize = 20;
         while offset + CHECKSUM < data_len {
             if data_len - offset < 8 {
-                return Err(Error::CorruptIndex { offset, reason: "truncated extension" });
+                return Err(Error::CorruptIndex {
+                    offset,
+                    reason: "truncated extension",
+                });
             }
-            let sig = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]];
-            let ext_len = u32::from_be_bytes([data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7]]) as usize;
+            let sig = [
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ];
+            let ext_len = u32::from_be_bytes([
+                data[offset + 4],
+                data[offset + 5],
+                data[offset + 6],
+                data[offset + 7],
+            ]) as usize;
             offset += 8;
             if offset + ext_len > data_len {
-                return Err(Error::CorruptIndex { offset, reason: "extension extends past end" });
+                return Err(Error::CorruptIndex {
+                    offset,
+                    reason: "extension extends past end",
+                });
             }
             let ext_data = data[offset..offset + ext_len].to_vec();
             extensions.push(IndexExtension::new(sig, ext_data));
             offset += ext_len;
         }
         if offset + 20 > data_len {
-            return Err(Error::CorruptIndex { offset, reason: "missing checksum" });
+            return Err(Error::CorruptIndex {
+                offset,
+                reason: "missing checksum",
+            });
         }
         let expected = ObjectId::read(format, &data[offset..offset + 20])?;
         let mut hasher = format.hasher();
@@ -1163,7 +1206,11 @@ impl Index {
         if expected != actual {
             return Err(Error::BadIndexChecksum { expected, actual });
         }
-        Ok(Self { version, entries, extensions })
+        Ok(Self {
+            version,
+            entries,
+            extensions,
+        })
     }
 
     /// Phase 3 — serialise with a fresh trailing checksum.
@@ -1193,7 +1240,9 @@ impl Index {
         out.extend_from_slice(&version.as_u32().to_be_bytes());
         out.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
         for entry in &self.entries {
-            let bytes = entry.to_bytes(format, version).expect("entry serialization failed");
+            let bytes = entry
+                .to_bytes(format, version)
+                .expect("entry serialization failed");
             out.extend_from_slice(&bytes);
         }
         for ext in &self.extensions {
@@ -1231,7 +1280,9 @@ impl Index {
     pub fn write(&self, path: &Path, format: ObjectFormat) -> Result<()> {
         let lock_path = path.with_file_name("index.lock");
         if lock_path.exists() {
-            return Err(Error::LockHeld { path: BString::from(path.to_string_lossy().as_bytes()) });
+            return Err(Error::LockHeld {
+                path: BString::from(path.to_string_lossy().as_bytes()),
+            });
         }
         let bytes = self.to_bytes(format);
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("index");
@@ -1239,12 +1290,18 @@ impl Index {
         let result = std::fs::write(&tmp_path, &bytes);
         if let Err(e) = result {
             let _ = std::fs::remove_file(&tmp_path);
-            return Err(Error::IoAtPath { path: BString::from(path.to_string_lossy().as_bytes()), source: e });
+            return Err(Error::IoAtPath {
+                path: BString::from(path.to_string_lossy().as_bytes()),
+                source: e,
+            });
         }
         let result = std::fs::rename(&tmp_path, path);
         if let Err(e) = result {
             let _ = std::fs::remove_file(&tmp_path);
-            return Err(Error::IoAtPath { path: BString::from(path.to_string_lossy().as_bytes()), source: e });
+            return Err(Error::IoAtPath {
+                path: BString::from(path.to_string_lossy().as_bytes()),
+                source: e,
+            });
         }
         let _ = std::fs::remove_file(&lock_path);
         Ok(())
@@ -1317,7 +1374,9 @@ impl Index {
     ///   [`IndexExt::is_unmerged`], because treating a conflict as untracked makes `status` report a
     ///   file that is very much tracked as new.
     pub fn entry(&self, path: &BStr) -> Option<&IndexEntry> {
-        self.entries.iter().find(|e| e.path == path && e.stage() == Stage::Normal)
+        self.entries
+            .iter()
+            .find(|e| e.path == path && e.stage() == Stage::Normal)
     }
 
     /// Phase 3 — find a specific stage of a path.
@@ -1414,7 +1473,15 @@ impl Index {
     /// silently swapped — `fsck` should report the duplicate, and a sort that reordered it would
     /// change which one a lookup finds.
     pub fn sort(&mut self) {
-        self.entries.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.flags.stage().unwrap_or(Stage::Normal).as_bits().cmp(&b.flags.stage().unwrap_or(Stage::Normal).as_bits())))
+        self.entries.sort_by(|a, b| {
+            a.path.cmp(&b.path).then_with(|| {
+                a.flags
+                    .stage()
+                    .unwrap_or(Stage::Normal)
+                    .as_bits()
+                    .cmp(&b.flags.stage().unwrap_or(Stage::Normal).as_bits())
+            })
+        })
     }
 
     /// Phase 3 — whether any path has conflict stages.
@@ -1425,7 +1492,9 @@ impl Index {
     /// is a whole-index question and not a per-path one: a single conflicted path blocks the commit,
     /// exactly as Git's "you have unmerged paths" does.
     pub fn has_conflicts(&self) -> bool {
-        self.entries.iter().any(|e| e.flags.stage().unwrap_or(Stage::Normal) != Stage::Normal)
+        self.entries
+            .iter()
+            .any(|e| e.flags.stage().unwrap_or(Stage::Normal) != Stage::Normal)
     }
 
     /// Phase 3 — whether entries are in Git's canonical order.
@@ -1436,7 +1505,15 @@ impl Index {
     /// not a tidiness one. It is `O(n)` and is therefore for `fsck`, a test assertion, and the debug
     /// path of [`Index::write`] — not something to run before every lookup.
     pub fn is_sorted(&self) -> bool {
-        self.entries.windows(2).all(|w| w[0].path.cmp(&w[1].path).then_with(|| w[0].flags.stage().unwrap_or(Stage::Normal).as_bits().cmp(&w[1].flags.stage().unwrap_or(Stage::Normal).as_bits())) != Ordering::Greater)
+        self.entries.windows(2).all(|w| {
+            w[0].path.cmp(&w[1].path).then_with(|| {
+                w[0].flags
+                    .stage()
+                    .unwrap_or(Stage::Normal)
+                    .as_bits()
+                    .cmp(&w[1].flags.stage().unwrap_or(Stage::Normal).as_bits())
+            }) != Ordering::Greater
+        })
     }
 
     /// Phase 3 — whether an entry's cached stat data is too fresh to trust.
@@ -1461,7 +1538,8 @@ impl Index {
     ///   file changed with its mtime and size restored — is missed. Git accepts this; the
     ///   alternative is reading the work tree on every `status`.
     pub fn is_racy(&self, entry: &IndexEntry, index_mtime: (u32, u32)) -> bool {
-        entry.mtime_seconds > index_mtime.0 || (entry.mtime_seconds == index_mtime.0 && entry.mtime_nanos >= index_mtime.1)
+        entry.mtime_seconds > index_mtime.0
+            || (entry.mtime_seconds == index_mtime.0 && entry.mtime_nanos >= index_mtime.1)
     }
 }
 
@@ -1583,10 +1661,7 @@ pub trait IndexExt {
 
 impl IndexExt for Index {
     fn stages(&self, path: &BStr) -> Vec<&IndexEntry> {
-        self.entries
-            .iter()
-            .filter(|e| *e.path == path)
-            .collect()
+        self.entries.iter().filter(|e| *e.path == path).collect()
     }
 
     fn is_unmerged(&self, path: &BStr) -> bool {
@@ -1698,7 +1773,10 @@ mod tests {
         assert_eq!(e.uid, 1000);
         assert_eq!(e.gid, 1000);
         assert_eq!(e.size, 2);
-        assert_eq!(e.oid.to_string(), "587be6b4c3f93f93c489c0111bba5596147a26cb");
+        assert_eq!(
+            e.oid.to_string(),
+            "587be6b4c3f93f93c489c0111bba5596147a26cb"
+        );
         assert_eq!(e.flags.bits(), 0x0001);
         assert_eq!(e.extended_flags, 0);
         assert_eq!(e.path.as_slice(), b"a");
@@ -1718,7 +1796,10 @@ mod tests {
         assert_eq!(consumed, 72);
         assert_eq!(e.ino, 4340);
         assert_eq!(e.size, 6);
-        assert_eq!(e.oid.to_string(), "ce013625030ba8dba906f756967f9e9ca394464a");
+        assert_eq!(
+            e.oid.to_string(),
+            "ce013625030ba8dba906f756967f9e9ca394464a"
+        );
         assert_eq!(e.flags.bits(), 0x0005);
         assert_eq!(e.path.as_slice(), b"a.txt");
         assert_eq!(
@@ -1731,13 +1812,22 @@ mod tests {
     fn flags_words_match_git() {
         assert_eq!(IndexEntryFlags::with(Stage::Normal, 5).bits(), 0x0005);
         assert_eq!(IndexEntryFlags::with(Stage::Theirs, 5).bits(), 0x3005);
-        assert_eq!(IndexEntryFlags::empty().set_assume_valid(true).bits(), 0x8000);
+        assert_eq!(
+            IndexEntryFlags::empty().set_assume_valid(true).bits(),
+            0x8000
+        );
         assert_eq!(IndexEntryFlags::empty().set_extended(true).bits(), 0x4000);
         assert!(IndexEntryFlags::from_bits(0x4000).is_extended());
         assert!(IndexEntryExtendedFlags::from_bits(0x4000).skip_worktree());
         assert!(!IndexEntryExtendedFlags::from_bits(0x2000).skip_worktree());
-        assert_eq!(IndexEntryExtendedFlags::from_bits(0x1FFF).extended_mode_bits(), 0x1FFF);
-        assert_eq!(IndexEntryExtendedFlags::from_bits(0x4001).extended_mode_bits(), 0x0001);
+        assert_eq!(
+            IndexEntryExtendedFlags::from_bits(0x1FFF).extended_mode_bits(),
+            0x1FFF
+        );
+        assert_eq!(
+            IndexEntryExtendedFlags::from_bits(0x4001).extended_mode_bits(),
+            0x0001
+        );
     }
 
     #[test]
@@ -1785,8 +1875,11 @@ mod tests {
             extended_flags: 0,
             path,
         };
-        let bytes = entry.to_bytes(ObjectFormat::Sha1, IndexVersion::V2).unwrap();
-        let (e, consumed) = IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &bytes).unwrap();
+        let bytes = entry
+            .to_bytes(ObjectFormat::Sha1, IndexVersion::V2)
+            .unwrap();
+        let (e, consumed) =
+            IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &bytes).unwrap();
         assert_eq!(e.flags.bits(), 0x0FFF);
         assert_eq!(e.path.len(), 4095);
         assert_eq!(e.path.as_slice(), b"x".repeat(4095));
@@ -1814,9 +1907,12 @@ mod tests {
                 extended_flags: 0,
                 path,
             };
-            let bytes = entry.to_bytes(ObjectFormat::Sha1, IndexVersion::V2).unwrap();
+            let bytes = entry
+                .to_bytes(ObjectFormat::Sha1, IndexVersion::V2)
+                .unwrap();
             assert_eq!(bytes.len() % 8, 0);
-            let (e, consumed) = IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &bytes).unwrap();
+            let (e, consumed) =
+                IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &bytes).unwrap();
             assert_eq!(consumed, bytes.len());
             assert_eq!(e.path.len(), len);
         }
@@ -1845,19 +1941,22 @@ mod tests {
     fn parse_rejects_bad_input() {
         // Truncated fixed part.
         let short = b"012345678901";
-        assert!(IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &short[..])
-            .is_err());
+        assert!(IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &short[..]).is_err());
 
         // No NUL terminator.
         let entry = blob_entry("abcd");
-        let mut bytes = entry.to_bytes(ObjectFormat::Sha1, IndexVersion::V2).unwrap();
+        let mut bytes = entry
+            .to_bytes(ObjectFormat::Sha1, IndexVersion::V2)
+            .unwrap();
         bytes[40 + 20 + 2 + 4] = b'x'; // replace the NUL
         let err = IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &bytes).unwrap_err();
         assert!(matches!(err, Error::CorruptIndex { .. }));
 
         // Invalid mode.
         let entry = blob_entry("abcd");
-        let mut bytes = entry.to_bytes(ObjectFormat::Sha1, IndexVersion::V2).unwrap();
+        let mut bytes = entry
+            .to_bytes(ObjectFormat::Sha1, IndexVersion::V2)
+            .unwrap();
         // mode is at bytes 24..28; set it to 010300 octal = 0o10300
         bytes[24..28].copy_from_slice(&0o10300u32.to_be_bytes());
         let err = IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &bytes).unwrap_err();
@@ -1866,11 +1965,12 @@ mod tests {
         // Stage is a two-bit field, so 4 is not representable on disk: the byte-level case is
         // that the two bits decode at all, and `Stage::from_bits` rejects 4 directly.
         let entry = blob_entry("abcd");
-        let mut bytes = entry.to_bytes(ObjectFormat::Sha1, IndexVersion::V2).unwrap();
+        let mut bytes = entry
+            .to_bytes(ObjectFormat::Sha1, IndexVersion::V2)
+            .unwrap();
         // flags word is at 40 + 20 = 60..62; stage 3 with name length 4.
         bytes[60..62].copy_from_slice(&0x3004u16.to_be_bytes());
-        let (parsed, _) =
-            IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &bytes).unwrap();
+        let (parsed, _) = IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &bytes).unwrap();
         assert_eq!(parsed.flags.stage().unwrap(), Stage::Theirs);
         assert!(matches!(
             Stage::from_bits(4).unwrap_err(),
@@ -1921,7 +2021,10 @@ mod tests {
             (EntryMode::Link, false, true, false),
             (EntryMode::Commit, false, false, true),
         ] {
-            let e = IndexEntry { mode, ..blob_entry("x") };
+            let e = IndexEntry {
+                mode,
+                ..blob_entry("x")
+            };
             assert_eq!(e.is_tree(), tree);
             assert_eq!(e.is_symlink(), symlink);
             assert_eq!(e.is_gitlink(), gitlink);

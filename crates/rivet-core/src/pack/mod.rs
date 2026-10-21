@@ -82,13 +82,13 @@ pub mod reader;
 pub mod verify;
 pub mod writer;
 
+use crate::error::Error;
 pub use delta::{
     DeltaBase, DeltaHeader, apply_delta, decode_ofs_distance, parse_delta_header, resolve_delta,
 };
 pub use index::{OwnedPackIndex, PackIndex, PackIndexEntry, PackIndexIter};
 pub use reader::{OwnedPackFile, PackFile, PackReader};
 pub use writer::{PackWriteSummary, PackWriter};
-use crate::error::Error;
 
 /// Phase 10 — somewhere a delta base can be fetched from when it is not in the pack.
 ///
@@ -203,7 +203,9 @@ impl EntryKind {
             4 => Ok(Self::Tag),
             6 => Ok(Self::OfsDelta),
             7 => Ok(Self::RefDelta),
-            _ => Err(Error::CorruptPack { reason: "unassigned pack type nibble".into() }),
+            _ => Err(Error::CorruptPack {
+                reason: "unassigned pack type nibble".into(),
+            }),
         }
     }
 
@@ -383,7 +385,11 @@ pub fn index_pack(
             });
         }
         pos = end;
-        raws.push(RawEntry { entry, payload, end });
+        raws.push(RawEntry {
+            entry,
+            payload,
+            end,
+        });
     }
     if pos != trailer_start {
         return Err(Error::TrailingPackBytes {
@@ -432,7 +438,7 @@ pub fn index_pack(
                         None => {
                             return Err(Error::CorruptDelta {
                                 reason: "OFS_DELTA base offset is not an entry boundary".into(),
-                            })
+                            });
                         }
                     }
                 }
@@ -484,10 +490,7 @@ pub fn index_pack(
         let (kind, data) = match &resolved[i] {
             Some(v) => v.clone(),
             None => {
-                let base = raw
-                    .entry
-                    .base_oid
-                    .unwrap_or_else(|| ObjectId::zero(format));
+                let base = raw.entry.base_oid.unwrap_or_else(|| ObjectId::zero(format));
                 return Err(Error::MissingDeltaBase {
                     oid: ObjectId::zero(format),
                     base,
@@ -563,9 +566,11 @@ pub fn fix_thin_pack(
         let entry = file.entry_at(pos as u64)?;
         if entry.kind == EntryKind::RefDelta
             && let Some(oid) = entry.base_oid
-                && index.lookup(&oid).is_none() && !missing.contains(&oid) {
-                    missing.push(oid);
-                }
+            && index.lookup(&oid).is_none()
+            && !missing.contains(&oid)
+        {
+            missing.push(oid);
+        }
         let (_payload, consumed) = inflate_at(pack, entry.data_offset as usize)?;
         pos = entry.data_offset as usize + consumed;
     }
@@ -720,8 +725,7 @@ pub(crate) fn inflate_at(data: &[u8], at: usize) -> Result<(Vec<u8>, usize)> {
 pub(crate) fn deflate(data: &[u8]) -> Result<Vec<u8>> {
     use std::io::Write;
 
-    let mut encoder =
-        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(data).map_err(|e| Error::CorruptPack {
         reason: format!("zlib compression failed: {e}"),
     })?;

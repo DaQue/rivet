@@ -7,7 +7,6 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-
 use crate::error::Result;
 use crate::hash::ObjectId;
 use crate::object::{AnyObject, EntryMode, ObjectKind};
@@ -84,9 +83,10 @@ fn tree_problems(tree: &crate::object::Tree<'_>) -> Vec<&'static str> {
         }
         let key = sort_key(&entry.name, entry.mode);
         if let Some(prev) = &previous
-            && *prev > key {
-                unsorted = true;
-            }
+            && *prev > key
+        {
+            unsorted = true;
+        }
         previous = Some(key);
         if entry.name.as_slice() == b"." {
             out.push("hasDot: contains '.'");
@@ -124,7 +124,9 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
         let object = match odb.read(&oid) {
             Ok(object) => object,
             Err(error) => {
-                report.problems.push(format!("error: {oid}: object corrupt or missing: {error}"));
+                report
+                    .problems
+                    .push(format!("error: {oid}: object corrupt or missing: {error}"));
                 report.status |= ERROR_OBJECT;
                 continue;
             }
@@ -149,7 +151,9 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
             Ok(AnyObject::Tree(tree)) => {
                 if !options.connectivity_only {
                     for problem in tree_problems(&tree) {
-                        report.problems.push(format!("error in tree {oid}: {problem}"));
+                        report
+                            .problems
+                            .push(format!("error in tree {oid}: {problem}"));
                         report.status |= ERROR_OBJECT;
                     }
                 }
@@ -164,7 +168,10 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
             Ok(AnyObject::Tag(tag)) => out.push((tag.kind, tag.object)),
             Ok(AnyObject::Blob(_)) => {}
             Err(error) => {
-                report.problems.push(format!("error in {} {oid}: {error}", kind_name(object.kind())));
+                report.problems.push(format!(
+                    "error in {} {oid}: {error}",
+                    kind_name(object.kind())
+                ));
                 report.status |= ERROR_OBJECT;
             }
         }
@@ -173,7 +180,12 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
 
     // Roots: refs, HEAD, reflogs and the index.
     let mut roots: Vec<(ObjectId, ObjectKind)> = Vec::new();
-    let mut ref_names: Vec<RefName> = repo.refs().list(b"refs/")?.into_iter().map(|(n, _)| n).collect();
+    let mut ref_names: Vec<RefName> = repo
+        .refs()
+        .list(b"refs/")?
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
     ref_names.push(RefName::head());
     for name in &ref_names {
         match repo.refs().try_read(name) {
@@ -185,7 +197,9 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
                 match oid {
                     Some(oid) if kinds.contains_key(&oid) => roots.push((oid, kinds[&oid])),
                     Some(oid) => {
-                        report.problems.push(format!("error: {name}: invalid sha1 pointer {oid}"));
+                        report
+                            .problems
+                            .push(format!("error: {name}: invalid sha1 pointer {oid}"));
                         report.status |= ERROR_REFS;
                     }
                     None if name.is_head() => {
@@ -206,16 +220,18 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
             }
         }
         if !options.no_reflogs
-            && let Ok(entries) = repo.refs().reflog(name) {
-                for entry in entries {
-                    for oid in [entry.old, entry.new] {
-                        if !oid.is_zero()
-                            && let Some(kind) = kinds.get(&oid) {
-                                roots.push((oid, *kind));
-                            }
+            && let Ok(entries) = repo.refs().reflog(name)
+        {
+            for entry in entries {
+                for oid in [entry.old, entry.new] {
+                    if !oid.is_zero()
+                        && let Some(kind) = kinds.get(&oid)
+                    {
+                        roots.push((oid, *kind));
                     }
                 }
             }
+        }
     }
     for entry in repo.index().entries() {
         if entry.mode == EntryMode::Commit {
@@ -247,10 +263,15 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
         }
     }
     for (oid, kind) in missing {
-        let kind = [ObjectKind::Blob, ObjectKind::Tree, ObjectKind::Commit, ObjectKind::Tag]
-            .into_iter()
-            .find(|k| *k as u8 == kind)
-            .unwrap_or(ObjectKind::Blob);
+        let kind = [
+            ObjectKind::Blob,
+            ObjectKind::Tree,
+            ObjectKind::Commit,
+            ObjectKind::Tag,
+        ]
+        .into_iter()
+        .find(|k| *k as u8 == kind)
+        .unwrap_or(ObjectKind::Blob);
         report.missing.push((kind, oid));
         report.status |= ERROR_REACHABLE;
     }

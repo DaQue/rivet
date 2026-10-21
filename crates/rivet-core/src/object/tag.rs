@@ -150,15 +150,12 @@ impl<'a> Tag<'a> {
     /// message, or a header line has no space after its name.
     pub fn parse(format: ObjectFormat, data: &'a [u8]) -> Result<Self> {
         // 1. Boundary: the first "\n\n" separates headers from the message region.
-        let sep = data
-            .windows(2)
-            .position(|w| w == b"\n\n")
-            .ok_or_else(|| {
-                crate::error::Error::MalformedObject {
-                    kind: ObjectKind::Tag,
-                    reason: "no blank line after headers".to_string(),
-                }
-            })?;
+        let sep = data.windows(2).position(|w| w == b"\n\n").ok_or_else(|| {
+            crate::error::Error::MalformedObject {
+                kind: ObjectKind::Tag,
+                reason: "no blank line after headers".to_string(),
+            }
+        })?;
         let msg_start = sep + 2;
         let header_region = &data[..sep];
 
@@ -179,7 +176,7 @@ impl<'a> Tag<'a> {
                     return Err(crate::error::Error::MalformedObject {
                         kind: ObjectKind::Tag,
                         reason: "header line has no space after its name".to_string(),
-                    })
+                    });
                 }
             };
 
@@ -204,7 +201,7 @@ impl<'a> Tag<'a> {
                                 kind: ObjectKind::Tag,
                                 header: "type",
                                 reason: "unknown object kind",
-                            })
+                            });
                         }
                     });
                 }
@@ -632,11 +629,11 @@ impl TagBuilder {
 
 #[cfg(test)]
 mod tests {
-    use bstr::{BStr, BString};
+    use super::{Tag, TagBuilder};
     use crate::hash::{ObjectFormat, ObjectId};
     use crate::object::ObjectKind;
     use crate::object::commit::Signature;
-    use super::{Tag, TagBuilder};
+    use bstr::{BStr, BString};
 
     fn sha1_id(hex: &str) -> ObjectId {
         ObjectId::from_hex(ObjectFormat::Sha1, BStr::new(hex)).unwrap()
@@ -677,10 +674,14 @@ mod tests {
         // Round-trip exact.
         assert_eq!(tag.to_bytes(), data);
         // id matches the object-id of the same buffer.
-        let (expected_id, _) = crate::object::hash_object(ObjectFormat::Sha1, ObjectKind::Tag, &data).unwrap();
+        let (expected_id, _) =
+            crate::object::hash_object(ObjectFormat::Sha1, ObjectKind::Tag, &data).unwrap();
         assert_eq!(tag.id(ObjectFormat::Sha1).unwrap(), expected_id);
         // Headers parse.
-        assert_eq!(tag.object(), sha1_id("4b825d6d2417e751203d05853896f2f6e2a25748"));
+        assert_eq!(
+            tag.object(),
+            sha1_id("4b825d6d2417e751203d05853896f2f6e2a25748")
+        );
         assert_eq!(tag.kind, ObjectKind::Commit);
         assert_eq!(tag.name(), b"v1.0");
         assert_eq!(tag.tagger().name, "Alice Tagger");
@@ -715,7 +716,10 @@ mod tests {
         let tag = Tag::parse(ObjectFormat::Sha1, &out).unwrap();
         // Git keeps the LAST line-start marker: here that is the PGP MESSAGE line, so the
         // quoted SIGNATURE block is message text.
-        assert_eq!(tag.message(), b"the tag message\n-----BEGIN PGP SIGNATURE-----\n");
+        assert_eq!(
+            tag.message(),
+            b"the tag message\n-----BEGIN PGP SIGNATURE-----\n"
+        );
         assert!(tag.is_signed());
         let sig = tag.signature().unwrap();
         assert!(sig.starts_with(b"-----BEGIN PGP MESSAGE-----"));
@@ -724,7 +728,8 @@ mod tests {
         assert_eq!(sig.to_vec(), out[out.len() - 86..]);
         // Round trip.
         assert_eq!(tag.to_bytes(), out);
-        let (expected_id, _) = crate::object::hash_object(ObjectFormat::Sha1, ObjectKind::Tag, &out).unwrap();
+        let (expected_id, _) =
+            crate::object::hash_object(ObjectFormat::Sha1, ObjectKind::Tag, &out).unwrap();
         assert_eq!(tag.id(ObjectFormat::Sha1).unwrap(), expected_id);
     }
 
@@ -755,7 +760,10 @@ mod tests {
         out.extend_from_slice(truncated);
         let tag = Tag::parse(ObjectFormat::Sha1, &out).unwrap();
         // Not a marker, so the whole region stays message text.
-        assert_eq!(tag.message(), b"the tag message\n-----BEGIN SIGNED MESSAGE----");
+        assert_eq!(
+            tag.message(),
+            b"the tag message\n-----BEGIN SIGNED MESSAGE----"
+        );
         assert_eq!(tag.signature(), None);
         assert!(!tag.is_signed());
 
@@ -766,7 +774,10 @@ mod tests {
         out2.extend_from_slice(b"-----BEGIN SIGNED MESSAGE-----");
         let tag2 = Tag::parse(ObjectFormat::Sha1, &out2).unwrap();
         assert_eq!(tag2.message(), b"the tag message\n");
-        assert_eq!(tag2.signature(), Some(BStr::new(b"-----BEGIN SIGNED MESSAGE-----")));
+        assert_eq!(
+            tag2.signature(),
+            Some(BStr::new(b"-----BEGIN SIGNED MESSAGE-----"))
+        );
         assert!(tag2.is_signed());
     }
 
@@ -798,7 +809,11 @@ mod tests {
             b"the tag message\n-----BEGIN PGP SIGNATURE-----\nabc\n-----END PGP SIGNATURE-----\n"
         );
         assert!(tag.is_signed());
-        assert!(tag.signature().unwrap().starts_with(b"-----BEGIN SSH SIGNATURE-----"));
+        assert!(
+            tag.signature()
+                .unwrap()
+                .starts_with(b"-----BEGIN SSH SIGNATURE-----")
+        );
 
         // SSH block first, then PGP block: the signature starts at the PGP marker.
         let mut out2 = Vec::new();
@@ -821,7 +836,11 @@ mod tests {
             b"the tag message\n-----BEGIN SSH SIGNATURE-----\nabc\n-----END SSH SIGNATURE-----\n"
         );
         assert!(tag2.is_signed());
-        assert!(tag2.signature().unwrap().starts_with(b"-----BEGIN PGP SIGNATURE-----"));
+        assert!(
+            tag2.signature()
+                .unwrap()
+                .starts_with(b"-----BEGIN PGP SIGNATURE-----")
+        );
     }
 
     #[test]
@@ -838,11 +857,17 @@ mod tests {
         out.extend_from_slice(&tagger.to_bytes());
         out.push(b'\n');
         out.push(b'\n');
-        out.extend_from_slice(b"msg\n-----BEGIN SSH SIGNATURE-----\nrest\n-----END SSH SIGNATURE-----");
+        out.extend_from_slice(
+            b"msg\n-----BEGIN SSH SIGNATURE-----\nrest\n-----END SSH SIGNATURE-----",
+        );
 
         let tag = Tag::parse(ObjectFormat::Sha1, &out).unwrap();
         assert!(tag.is_signed());
-        assert!(tag.signature().unwrap().starts_with(b"-----BEGIN SSH SIGNATURE-----"));
+        assert!(
+            tag.signature()
+                .unwrap()
+                .starts_with(b"-----BEGIN SSH SIGNATURE-----")
+        );
 
         // PGP MESSAGE marker.
         let marker_pgp = b"-----BEGIN PGP MESSAGE-----";
@@ -896,7 +921,9 @@ mod tests {
         out.push(b'\n');
         out.push(b'\n');
         // message contains a blank line — not the header separator
-        out.extend_from_slice(b"line1\n\nline2\n-----BEGIN PGP SIGNATURE-----\n-----END PGP SIGNATURE-----");
+        out.extend_from_slice(
+            b"line1\n\nline2\n-----BEGIN PGP SIGNATURE-----\n-----END PGP SIGNATURE-----",
+        );
 
         let tag = Tag::parse(ObjectFormat::Sha1, &out).unwrap();
         assert_eq!(tag.message(), b"line1\n\nline2\n");
@@ -1117,7 +1144,10 @@ mod tests {
         assert!(bytes.windows(9).any(|w| w == b"type comm"));
         // parse it back
         let tag = Tag::parse(ObjectFormat::Sha1, &bytes).unwrap();
-        assert_eq!(tag.object(), sha1_id("4b825d6d2417e751203d05853896f2f6e2a25748"));
+        assert_eq!(
+            tag.object(),
+            sha1_id("4b825d6d2417e751203d05853896f2f6e2a25748")
+        );
         assert_eq!(tag.name(), b"v1.0");
         assert_eq!(tag.message(), b"Release 1.0\n");
         // round trip exact
@@ -1136,7 +1166,11 @@ mod tests {
         let bytes = b.build(ObjectFormat::Sha1).unwrap();
         let tag = Tag::parse(ObjectFormat::Sha1, &bytes).unwrap();
         assert!(tag.is_signed());
-        assert!(tag.signature().unwrap().starts_with(b"-----BEGIN PGP SIGNATURE-----"));
+        assert!(
+            tag.signature()
+                .unwrap()
+                .starts_with(b"-----BEGIN PGP SIGNATURE-----")
+        );
         assert_eq!(tag.to_bytes(), bytes);
     }
 }

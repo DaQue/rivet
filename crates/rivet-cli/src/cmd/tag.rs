@@ -176,7 +176,11 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
     if args.sign || args.local_user.is_some() || args.verify {
         anyhow::bail!("tag: signing and verification are not implemented");
     }
-    if args.column.is_some() || args.merged.is_some() || args.no_merged.is_some() || args.contains.is_some() {
+    if args.column.is_some()
+        || args.merged.is_some()
+        || args.no_merged.is_some()
+        || args.contains.is_some()
+    {
         anyhow::bail!("tag: --column, --merged, --no-merged and --contains are not implemented");
     }
     let repository = super::open(global)?;
@@ -190,7 +194,11 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
         for name in names {
             let reference = RefName::tag(BStr::new(name.as_bytes()))
                 .map_err(|_| anyhow::anyhow!("'{name}' is not a valid tag name."))?;
-            match repository.refs().try_read(&reference)?.and_then(|t| t.oid().ok()) {
+            match repository
+                .refs()
+                .try_read(&reference)?
+                .and_then(|t| t.oid().ok())
+            {
                 Some(oid) => {
                     repository.refs().delete(&reference)?;
                     println!("Deleted tag '{name}' (was {})", super::short_oid(&oid));
@@ -204,14 +212,20 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
         return Ok(code);
     }
 
-    let listing = args.list.is_some() || (args.name.is_none() && !args.annotate && args.message.is_none() && args.file.is_none());
+    let listing = args.list.is_some()
+        || (args.name.is_none() && !args.annotate && args.message.is_none() && args.file.is_none());
     if listing {
         let pattern: Option<String> = match &args.list {
             Some(Some(p)) => Some(p.clone()),
             _ => args.name.clone(),
         };
         let points_at = match &args.points_at {
-            Some(spec) => Some(repository.refs().peel_oid(super::resolve_rev(&repository, spec)?, repository.odb()).unwrap_or(super::resolve_rev(&repository, spec)?)),
+            Some(spec) => Some(
+                repository
+                    .refs()
+                    .peel_oid(super::resolve_rev(&repository, spec)?, repository.odb())
+                    .unwrap_or(super::resolve_rev(&repository, spec)?),
+            ),
             None => None,
         };
         let mut rows: Vec<(String, ObjectId)> = repository
@@ -224,11 +238,15 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
         let mut printed = 0;
         for (name, oid) in rows {
             if let Some(pattern) = &pattern
-                && !super::branching::glob_match(pattern.as_bytes(), name.as_bytes()) {
-                    continue;
-                }
+                && !super::branching::glob_match(pattern.as_bytes(), name.as_bytes())
+            {
+                continue;
+            }
             if let Some(target) = points_at {
-                let peeled = repository.refs().peel_oid(oid, repository.odb()).unwrap_or(oid);
+                let peeled = repository
+                    .refs()
+                    .peel_oid(oid, repository.odb())
+                    .unwrap_or(oid);
                 if oid != target && peeled != target {
                     continue;
                 }
@@ -243,7 +261,11 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
                 None => println!("{name}"),
             }
         }
-        return Ok(if printed == 0 && pattern.is_some() { 1 } else { 0 });
+        return Ok(if printed == 0 && pattern.is_some() {
+            1
+        } else {
+            0
+        });
     }
 
     let Some(name) = &args.name else {
@@ -251,7 +273,10 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
     };
     let reference = RefName::tag(BStr::new(name.as_bytes()))
         .map_err(|_| anyhow::anyhow!("'{name}' is not a valid tag name."))?;
-    let existing = repository.refs().try_read(&reference)?.and_then(|t| t.oid().ok());
+    let existing = repository
+        .refs()
+        .try_read(&reference)?
+        .and_then(|t| t.oid().ok());
     if existing.is_some() && !args.force {
         anyhow::bail!("tag '{name}' already exists");
     }
@@ -268,7 +293,8 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
             std::io::stdin().read_to_end(&mut buffer)?;
             buffer
         } else {
-            std::fs::read(path).map_err(|e| anyhow::anyhow!("could not open '{}': {e}", path.display()))?
+            std::fs::read(path)
+                .map_err(|e| anyhow::anyhow!("could not open '{}': {e}", path.display()))?
         })
     } else {
         None
@@ -286,9 +312,16 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
         let kind = repository.odb().read_header(&target)?.0;
         let tagger = repository.committer_signature()?;
         let mut builder = rivet_core::object::tag::TagBuilder::new();
-        builder.object(target).kind(kind).name(name.as_bytes()).tagger(tagger).message(&message);
+        builder
+            .object(target)
+            .kind(kind)
+            .name(name.as_bytes())
+            .tagger(tagger)
+            .message(&message);
         let body = builder.build(repository.format())?;
-        repository.odb().write_raw(rivet_core::ObjectKind::Tag, &body)?
+        repository
+            .odb()
+            .write_raw(rivet_core::ObjectKind::Tag, &body)?
     } else {
         target
     };
@@ -337,7 +370,11 @@ fn tag_annotation(repository: &Repository, oid: &ObjectId, lines: usize) -> Resu
     };
     let text = String::from_utf8_lossy(&message);
     let mut shown: Vec<String> = Vec::new();
-    for line in text.lines().skip_while(|l| l.trim().is_empty()).take(lines.max(1)) {
+    for line in text
+        .lines()
+        .skip_while(|l| l.trim().is_empty())
+        .take(lines.max(1))
+    {
         shown.push(line.trim_end().to_string());
     }
     Ok(shown.join("\n                 "))

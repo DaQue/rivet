@@ -1,9 +1,9 @@
 //! End-to-end tests for [`Repository`]: layout, staging, tree building, committing and discovery.
 
 use rivet_core::{
-    find_git_dir, gitfile_target, AnyObject, CommitOptions, EntryMode, HeadState, IndexEntry,
-    IndexEntryFlags, InitOptions, Object, ObjectFormat, ObjectId, ObjectKind, Repository,
-    RepositoryKind, Signature, Tree,
+    AnyObject, CommitOptions, EntryMode, HeadState, IndexEntry, IndexEntryFlags, InitOptions,
+    Object, ObjectFormat, ObjectId, ObjectKind, Repository, RepositoryKind, Signature, Tree,
+    find_git_dir, gitfile_target,
 };
 
 fn entry(path: &str, oid: ObjectId) -> IndexEntry {
@@ -57,10 +57,7 @@ fn init_stage_tree_and_commit() {
     assert!(dir.path().join(".git/HEAD").is_file());
     assert!(dir.path().join(".git/objects").is_dir());
 
-    let alpha = repo
-        .odb()
-        .write_raw(ObjectKind::Blob, b"alpha\n")
-        .unwrap();
+    let alpha = repo.odb().write_raw(ObjectKind::Blob, b"alpha\n").unwrap();
     let beta = repo.odb().write_raw(ObjectKind::Blob, b"beta\n").unwrap();
     repo.index_mut().insert(entry("a.txt", alpha));
     repo.index_mut().insert(entry("dir/b.txt", beta));
@@ -101,7 +98,13 @@ fn init_stage_tree_and_commit() {
     }
     assert_eq!(repo.head_commit().unwrap(), Some(commit_id));
 
-    match repo.odb().read_typed(&commit_id, ObjectKind::Commit).unwrap().parse().unwrap() {
+    match repo
+        .odb()
+        .read_typed(&commit_id, ObjectKind::Commit)
+        .unwrap()
+        .parse()
+        .unwrap()
+    {
         AnyObject::Commit(commit) => {
             assert_eq!(commit.tree, tree_id);
             assert!(commit.parents.is_empty());
@@ -149,7 +152,13 @@ fn second_commit_parents_the_first_and_amend_replaces_it() {
         .unwrap();
     assert_ne!(first, second);
 
-    match repo.odb().read_typed(&second, ObjectKind::Commit).unwrap().parse().unwrap() {
+    match repo
+        .odb()
+        .read_typed(&second, ObjectKind::Commit)
+        .unwrap()
+        .parse()
+        .unwrap()
+    {
         AnyObject::Commit(commit) => assert_eq!(commit.parents, vec![first]),
         other => panic!("expected a commit, got {:?}", other.kind()),
     }
@@ -168,9 +177,19 @@ fn second_commit_parents_the_first_and_amend_replaces_it() {
         })
         .unwrap();
 
-    match repo.odb().read_typed(&amended, ObjectKind::Commit).unwrap().parse().unwrap() {
+    match repo
+        .odb()
+        .read_typed(&amended, ObjectKind::Commit)
+        .unwrap()
+        .parse()
+        .unwrap()
+    {
         AnyObject::Commit(commit) => {
-            assert_eq!(commit.parents, vec![first], "amend keeps the original parents");
+            assert_eq!(
+                commit.parents,
+                vec![first],
+                "amend keeps the original parents"
+            );
             assert_eq!(commit.message, b"two amended\n");
         }
         other => panic!("expected a commit, got {:?}", other.kind()),
@@ -230,7 +249,10 @@ fn malformed_gitfile_is_an_error() {
     let gitfile = dir.path().join(".git");
     std::fs::write(&gitfile, b"# not a gitfile\n").unwrap();
     let err = gitfile_target(&gitfile).unwrap_err();
-    assert!(matches!(err, rivet_core::Error::InvalidPath(_)), "got {err:?}");
+    assert!(
+        matches!(err, rivet_core::Error::InvalidPath(_)),
+        "got {err:?}"
+    );
 
     std::fs::write(&gitfile, b"gitdir: /does/not/exist\n").unwrap();
     assert!(matches!(
@@ -267,7 +289,10 @@ fn opening_a_directory_that_is_not_a_repository_fails_explicitly() {
     std::fs::create_dir_all(&empty).unwrap();
     match Repository::open_with(&empty, None, None).unwrap_err() {
         rivet_core::Error::NotARepository(path) => {
-            assert!(format!("{path:?}").contains("empty"), "error should name the path, got {path:?}")
+            assert!(
+                format!("{path:?}").contains("empty"),
+                "error should name the path, got {path:?}"
+            )
         }
         other => panic!("expected NotARepository, got {other:?}"),
     }

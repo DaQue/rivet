@@ -52,7 +52,6 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-
 use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{Object, ObjectKind};
@@ -93,7 +92,7 @@ fn read_pack_dir(pack_dir: &Path) -> Result<Vec<fs::DirEntry>> {
             return Err(Error::IoAtPath {
                 path: bstr::BString::from(pack_dir.to_string_lossy().as_ref()),
                 source: err,
-            })
+            });
         }
     };
     // An entry that cannot be read is a real failure, not an entry to skip.
@@ -300,7 +299,11 @@ impl Odb {
             let pack = packed::PackedObjectStore::open(data, index, self.format)?;
             // Already seen: a pack that vanished is a race, and we only add, not rescan.
             // Identity is the pack's own checksum, which is stable and unique per pack.
-            if self.packs.iter().any(|existing| existing.checksum() == pack.checksum()) {
+            if self
+                .packs
+                .iter()
+                .any(|existing| existing.checksum() == pack.checksum())
+            {
                 continue;
             }
             self.packs.push(pack);
@@ -395,7 +398,11 @@ impl Odb {
     pub fn read_typed(&self, oid: &ObjectId, expected: ObjectKind) -> Result<Object> {
         let object = self.read(oid)?;
         if object.kind() != expected {
-            return Err(Error::WrongObjectKind { oid: Some(*oid), found: object.kind(), expected });
+            return Err(Error::WrongObjectKind {
+                oid: Some(*oid),
+                found: object.kind(),
+                expected,
+            });
         }
         Ok(object)
     }
@@ -522,7 +529,9 @@ impl Odb {
             // It is a full id, so resolve it through the read path: a miss is ObjectNotFound.
             match self.read(prefix) {
                 Ok(_) => return Ok(*prefix),
-                Err(Error::ObjectNotFound { .. }) => return Err(Error::ObjectNotFound { oid: *prefix }),
+                Err(Error::ObjectNotFound { .. }) => {
+                    return Err(Error::ObjectNotFound { oid: *prefix });
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -610,7 +619,11 @@ impl Odb {
         let new = packed::PackedObjectStore::open(pack, index, self.format)?;
         // The pack's checksum is verified against the index's copy inside `open`; a mismatch
         // already surfaced as `CorruptPack` or `CorruptPackIndex`.
-        if self.packs.iter().any(|existing| existing.checksum() == new.checksum()) {
+        if self
+            .packs
+            .iter()
+            .any(|existing| existing.checksum() == new.checksum())
+        {
             return Err(Error::CorruptPack {
                 reason: "a pack with this checksum is already registered".to_string(),
             });
@@ -648,7 +661,9 @@ impl BaseProvider for Odb {
         }
         let object = self.read(oid)?;
         let cached = (object.kind(), object.data().to_vec());
-        self.delta_cache.borrow_mut().insert(*oid, 0, object.kind(), object.data().to_vec());
+        self.delta_cache
+            .borrow_mut()
+            .insert(*oid, 0, object.kind(), object.data().to_vec());
         Ok(cached)
     }
 }
@@ -775,7 +790,9 @@ mod tests {
         let pack = ObjectId::zero(ObjectFormat::Sha1);
         let data = b"base object";
         let key = ObjectId::zero(ObjectFormat::Sha1);
-        odb.delta_cache.borrow_mut().insert(pack, 0, ObjectKind::Blob, data.to_vec());
+        odb.delta_cache
+            .borrow_mut()
+            .insert(pack, 0, ObjectKind::Blob, data.to_vec());
 
         // Both calls must be cache hits — neither may fall through to `read`.
         let (kind, body) = odb.base_object(&key).expect("cache hit 1");
@@ -846,7 +863,10 @@ mod tests {
 
         // A plausible id that is absent is ObjectNotFound, not a panic.
         let missing = ObjectId::zero(ObjectFormat::Sha1);
-        assert!(matches!(odb.read(&missing), Err(Error::ObjectNotFound { .. })));
+        assert!(matches!(
+            odb.read(&missing),
+            Err(Error::ObjectNotFound { .. })
+        ));
     }
 
     #[test]
@@ -858,14 +878,14 @@ mod tests {
 
         // Write a good object, then corrupt its file with valid zlib of the wrong bytes.
         let oid = write_loose_blob(odb.loose(), b"hello from rivet\n");
-        let path = objects_dir.join("b4").join("e2bc81abc981e1056a883f86cdfe9971ac7295");
+        let path = objects_dir
+            .join("b4")
+            .join("e2bc81abc981e1056a883f86cdfe9971ac7295");
         fs::remove_file(&path).expect("remove read-only loose file");
         // Valid zlib of a well-formed object holding *different* bytes: the stream inflates and
         // the header parses, but the content hashes to an id the path does not name.
-        let mut encoder = flate2::write::ZlibEncoder::new(
-            Vec::new(),
-            flate2::Compression::default(),
-        );
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         encoder.write_all(b"blob 6\0world\n").expect("write zlib");
         let corrupted = encoder.finish().expect("finish zlib");
         fs::write(&path, corrupted).expect("corrupt file");
@@ -895,7 +915,9 @@ mod tests {
         assert_eq!(object.kind(), ObjectKind::Blob);
 
         // Wrong kind is WrongObjectKind, not a corrupt-object lie.
-        let err = odb.read_typed(&oid, ObjectKind::Commit).expect_err("wrong kind");
+        let err = odb
+            .read_typed(&oid, ObjectKind::Commit)
+            .expect_err("wrong kind");
         assert!(matches!(err, Error::WrongObjectKind { .. }));
     }
 
@@ -916,7 +938,10 @@ mod tests {
 
         // A miss is ObjectNotFound from read_header too.
         let missing = ObjectId::zero(ObjectFormat::Sha1);
-        assert!(matches!(odb.read_header(&missing), Err(Error::ObjectNotFound { .. })));
+        assert!(matches!(
+            odb.read_header(&missing),
+            Err(Error::ObjectNotFound { .. })
+        ));
     }
 
     fn fresh_objects_odb() -> (tempfile::TempDir, Odb) {
@@ -957,9 +982,7 @@ mod tests {
     fn write_raw_matches_write_id() {
         let (_tmp, odb) = fresh_objects_odb();
         let data = b"hello from rivet\n";
-        let oid_write = odb
-            .write(&Object::Blob(data.to_vec()))
-            .expect("write");
+        let oid_write = odb.write(&Object::Blob(data.to_vec())).expect("write");
         let oid_raw = odb.write_raw(ObjectKind::Blob, data).expect("write_raw");
         assert_eq!(oid_write, oid_raw);
     }
@@ -991,7 +1014,10 @@ mod tests {
         let mut pair: Option<(usize, usize)> = None;
         while oids.len() < 100_000 {
             let data = format!("blob-{}\n", oids.len()).into_bytes();
-            let oid = odb.loose().write_raw(ObjectKind::Blob, &data).expect("write");
+            let oid = odb
+                .loose()
+                .write_raw(ObjectKind::Blob, &data)
+                .expect("write");
             let hex = oid.to_hex().to_string();
             // Find a pair sharing at least 4 hex chars.
             if let Some(first) = hexes
@@ -1033,22 +1059,23 @@ mod tests {
             bstr::BStr::new(b"deadbeefdeadbeefdeadbeefdeadbeef"),
         )
         .expect("missing id");
-        assert!(matches!(odb.resolve_prefix(&missing), Err(Error::ObjectNotFound { .. })));
+        assert!(matches!(
+            odb.resolve_prefix(&missing),
+            Err(Error::ObjectNotFound { .. })
+        ));
     }
 
     fn git_exe() -> Option<String> {
-        std::env::var_os("PATH")
-            .and_then(|path| {
-                for dir in std::env::split_paths(&path) {
-                    let candidate = dir.join("git");
-                    if candidate.is_file() {
-                        return Some(candidate.to_string_lossy().into_owned());
-                    }
+        std::env::var_os("PATH").and_then(|path| {
+            for dir in std::env::split_paths(&path) {
+                let candidate = dir.join("git");
+                if candidate.is_file() {
+                    return Some(candidate.to_string_lossy().into_owned());
                 }
-                None
-            })
+            }
+            None
+        })
     }
-
 
     fn common_hex_prefix_len(a: &str, b: &str) -> usize {
         a.as_bytes()

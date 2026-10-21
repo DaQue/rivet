@@ -29,6 +29,10 @@ Old note: `log --format`, `show --stat`, `verify-pack -v` (use `--verbose`).
 
 ## Status (2026-10-21)
 
+Diff engine: Myers (`xdl_split`/`xdl_cleanup_records`) plus change compaction and the indent heuristic match git on 600/600 random
+pairs. Histogram diff follows `xhistogram.c` without `xdl_trim_ends` and matches git on ~98% of random pairs (294/300); the
+residual divergence is a tie-break on repeated lines that was not pinned down (trimming ends made it worse, 270/300).
+
 `cargo test --workspace`: 178 passed, 0 failed. `tools/difftest/scenarios.sh`: every scenario passes, named and randomized
 (random_1..8), including ssh and http transports (fake ssh, `git http-backend`), sha256, delta-heavy packs, cat-file batch,
 rename-aware merges, log path limiting.

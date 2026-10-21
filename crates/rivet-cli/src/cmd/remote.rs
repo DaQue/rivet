@@ -458,9 +458,19 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
         names.sort();
         for name in names {
             if verbose {
-                let config = repository.remote_config(&name.to_string())?.expect("listed remote exists");
-                let fetch = config.urls.first().map(|u| u.to_string()).unwrap_or_default();
-                let push = config.push_urls.first().map(|u| u.to_string()).unwrap_or_else(|| fetch.clone());
+                let config = repository
+                    .remote_config(&name.to_string())?
+                    .expect("listed remote exists");
+                let fetch = config
+                    .urls
+                    .first()
+                    .map(|u| u.to_string())
+                    .unwrap_or_default();
+                let push = config
+                    .push_urls
+                    .first()
+                    .map(|u| u.to_string())
+                    .unwrap_or_else(|| fetch.clone());
                 println!("{name}\t{fetch} (fetch)");
                 println!("{name}\t{push} (push)");
             } else {
@@ -469,7 +479,9 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
         }
         return Ok(0);
     };
-    let exists = |repository: &Repository, name: &str| repository.remote_config(name).ok().flatten().is_some();
+    let exists = |repository: &Repository, name: &str| {
+        repository.remote_config(name).ok().flatten().is_some()
+    };
     match subcommand {
         "add" => {
             let (Some(name), Some(url)) = (&args.name, &args.url) else {
@@ -484,7 +496,10 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
                 return Ok(3);
             }
             let config = repository.config_mut();
-            config.set(BStr::new(format!("remote.{name}.url").as_bytes()), url.as_bytes())?;
+            config.set(
+                BStr::new(format!("remote.{name}.url").as_bytes()),
+                url.as_bytes(),
+            )?;
             if args.track.is_empty() {
                 config.set(
                     BStr::new(format!("remote.{name}.fetch").as_bytes()),
@@ -499,13 +514,22 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
                 }
             }
             if args.tags {
-                config.set(BStr::new(format!("remote.{name}.tagopt").as_bytes()), b"--tags")?;
+                config.set(
+                    BStr::new(format!("remote.{name}.tagopt").as_bytes()),
+                    b"--tags",
+                )?;
             } else if args.no_tags {
-                config.set(BStr::new(format!("remote.{name}.tagopt").as_bytes()), b"--no-tags")?;
+                config.set(
+                    BStr::new(format!("remote.{name}.tagopt").as_bytes()),
+                    b"--no-tags",
+                )?;
             }
             repository.write_config()?;
             if args.fetch_after_add() {
-                let request = FetchRequest { write_fetch_head: true, ..Default::default() };
+                let request = FetchRequest {
+                    write_fetch_head: true,
+                    ..Default::default()
+                };
                 let report = repository.fetch_remote(name, &request)?;
                 print_fetch_report(&report, global.quiet);
             }
@@ -562,7 +586,12 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
                 .config()
                 .entries()
                 .iter()
-                .filter(|e| e.section.eq_ignore_ascii_case(b"remote") && e.subsection.as_ref().is_some_and(|s| s.as_slice() == old.as_bytes()))
+                .filter(|e| {
+                    e.section.eq_ignore_ascii_case(b"remote")
+                        && e.subsection
+                            .as_ref()
+                            .is_some_and(|s| s.as_slice() == old.as_bytes())
+                })
                 .map(|e| (e.key.to_string(), e.value.to_string()))
                 .collect();
             let branches: Vec<String> = repository
@@ -579,23 +608,38 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
             let config = repository.config_mut();
             config.remove_section(BStr::new("remote"), Some(BStr::new(old.as_bytes())));
             for (key, value) in moved {
-                let value = value.replace(&format!("refs/remotes/{old}/"), &format!("refs/remotes/{new}/"));
-                config.add(BStr::new(format!("remote.{new}.{key}").as_bytes()), value.as_bytes())?;
+                let value = value.replace(
+                    &format!("refs/remotes/{old}/"),
+                    &format!("refs/remotes/{new}/"),
+                );
+                config.add(
+                    BStr::new(format!("remote.{new}.{key}").as_bytes()),
+                    value.as_bytes(),
+                )?;
             }
             for branch in branches {
-                config.set(BStr::new(format!("branch.{branch}.remote").as_bytes()), new.as_bytes())?;
+                config.set(
+                    BStr::new(format!("branch.{branch}.remote").as_bytes()),
+                    new.as_bytes(),
+                )?;
             }
             repository.write_config()?;
             // Move the tracking refs and their reflogs.
             let from = format!("refs/remotes/{old}/");
             for (reference, _) in repository.refs().list(from.as_bytes())? {
                 let tail = &reference.as_bytes()[from.len()..];
-                let target = RefName::from_bytes(format!("refs/remotes/{new}/{}", String::from_utf8_lossy(tail)).as_bytes())?;
+                let target = RefName::from_bytes(
+                    format!("refs/remotes/{new}/{}", String::from_utf8_lossy(tail)).as_bytes(),
+                )?;
                 if reference.as_bytes().ends_with(b"/HEAD") {
                     // The symbolic HEAD must follow, pointing into the new namespace.
-                    if let Some(rivet_core::RefTarget::Symbolic(to)) = repository.refs().try_read(&reference)? {
+                    if let Some(rivet_core::RefTarget::Symbolic(to)) =
+                        repository.refs().try_read(&reference)?
+                    {
                         let new_to = RefName::from_bytes(
-                            String::from_utf8_lossy(to.as_bytes()).replace(&from, &format!("refs/remotes/{new}/")).as_bytes(),
+                            String::from_utf8_lossy(to.as_bytes())
+                                .replace(&from, &format!("refs/remotes/{new}/"))
+                                .as_bytes(),
                         )?;
                         repository.refs().set_symbolic(&target, &new_to, None)?;
                         repository.refs().delete(&reference)?;
@@ -615,7 +659,11 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
                 eprintln!("error: No such remote '{name}'");
                 return Ok(2);
             };
-            let url = if args.push { config.push_urls.first().or(config.urls.first()) } else { config.urls.first() };
+            let url = if args.push {
+                config.push_urls.first().or(config.urls.first())
+            } else {
+                config.urls.first()
+            };
             println!("{}", url.map(|u| u.to_string()).unwrap_or_default());
             Ok(0)
         }
@@ -629,7 +677,10 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
                 return Ok(2);
             }
             let key = if args.push { "pushurl" } else { "url" };
-            repository.config_mut().set(BStr::new(format!("remote.{name}.{key}").as_bytes()), url.as_bytes())?;
+            repository.config_mut().set(
+                BStr::new(format!("remote.{name}.{key}").as_bytes()),
+                url.as_bytes(),
+            )?;
             repository.write_config()?;
             Ok(0)
         }
@@ -680,25 +731,40 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
 /// * **A fetch into a bare repository is normal and needs no work tree**, so the handler must
 ///   not call `require_worktree` for any part of it except the `pull` that may follow.
 pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
-    reject_unsupported_fetch(args.depth.is_some() || args.deepen.is_some() || args.unshallow, "--depth/--deepen/--unshallow")?;
+    reject_unsupported_fetch(
+        args.depth.is_some() || args.deepen.is_some() || args.unshallow,
+        "--depth/--deepen/--unshallow",
+    )?;
     if args.atomic || args.keep || args.set_upstream || args.multiple {
         anyhow::bail!("fetch: --atomic, --keep, --set-upstream and --multiple are not implemented");
     }
     let mut repository = super::open(global)?;
     let remotes: Vec<String> = if args.all {
-        repository.remote_names().iter().map(|n| n.to_string()).collect()
+        repository
+            .remote_names()
+            .iter()
+            .map(|n| n.to_string())
+            .collect()
     } else {
         vec![default_remote(&repository, args.remote.as_deref())?]
     };
     let mut refspecs = Vec::new();
     for spec in &args.refspecs {
-        refspecs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(spec.as_bytes()))?);
+        refspecs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(
+            spec.as_bytes(),
+        ))?);
     }
     let mut code = 0;
     for remote in remotes {
         let request = FetchRequest {
             refspecs: refspecs.clone(),
-            tags: if args.tags { TagMode::All } else if args.no_tags { TagMode::None } else { TagMode::Auto },
+            tags: if args.tags {
+                TagMode::All
+            } else if args.no_tags {
+                TagMode::None
+            } else {
+                TagMode::Auto
+            },
             prune: args.prune,
             force: args.force,
             dry_run: args.dry_run,
@@ -709,7 +775,9 @@ pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
         let report = repository.fetch_remote(&remote, &request)?;
         print_fetch_report(&report, global.quiet);
         if report.rejected > 0 {
-            eprintln!("error: some local refs could not be updated; try running\n 'git remote prune {remote}' to remove any old, conflicting branches");
+            eprintln!(
+                "error: some local refs could not be updated; try running\n 'git remote prune {remote}' to remove any old, conflicting branches"
+            );
             code = 1;
         }
     }
@@ -756,7 +824,9 @@ pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
 ///   be inventing an upstream.
 pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
     if args.rebase || args.autostash || args.interactive || args.squash || args.gpg_sign.is_some() {
-        anyhow::bail!("pull: --rebase, --autostash, --interactive, --squash and --gpg-sign are not implemented");
+        anyhow::bail!(
+            "pull: --rebase, --autostash, --interactive, --squash and --gpg-sign are not implemented"
+        );
     }
     let mut repository = super::open(global)?;
     let head = repository.head()?;
@@ -784,7 +854,9 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
                 eprintln!();
                 eprintln!("    git pull <remote> <branch>");
                 eprintln!();
-                eprintln!("If you wish to set tracking information for this branch you can do so with:");
+                eprintln!(
+                    "If you wish to set tracking information for this branch you can do so with:"
+                );
                 eprintln!();
                 eprintln!("    git branch --set-upstream-to=origin/<branch> {b}");
                 eprintln!();
@@ -794,11 +866,19 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
     };
     let mut refspecs = Vec::new();
     for spec in &args.refspecs {
-        refspecs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(spec.as_bytes()))?);
+        refspecs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(
+            spec.as_bytes(),
+        ))?);
     }
     let request = FetchRequest {
         refspecs,
-        tags: if args.tags { TagMode::All } else if args.no_tags { TagMode::None } else { TagMode::Auto },
+        tags: if args.tags {
+            TagMode::All
+        } else if args.no_tags {
+            TagMode::None
+        } else {
+            TagMode::Auto
+        },
         prune: args.prune,
         force: false,
         dry_run: args.dry_run,
@@ -901,10 +981,19 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
 ///   must not be `128`, or a script that pushes on every build reports a failure whenever
 ///   nothing changed.
 pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
-    if args.mirror || args.follow_tags || args.signed.is_some() || args.atomic || args.force_with_lease.is_some()
-        || args.force_if_includes || args.porcelain || args.receive_pack.is_some() || args.exec.is_some()
+    if args.mirror
+        || args.follow_tags
+        || args.signed.is_some()
+        || args.atomic
+        || args.force_with_lease.is_some()
+        || args.force_if_includes
+        || args.porcelain
+        || args.receive_pack.is_some()
+        || args.exec.is_some()
     {
-        anyhow::bail!("push: --mirror, --follow-tags, --signed, --atomic, --force-with-lease, --force-if-includes, --porcelain and --receive-pack are not implemented");
+        anyhow::bail!(
+            "push: --mirror, --follow-tags, --signed, --atomic, --force-with-lease, --force-if-includes, --porcelain and --receive-pack are not implemented"
+        );
     }
     let mut repository = super::open(global)?;
     let head = repository.head()?;
@@ -918,7 +1007,11 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
         (None, Some((remote, _))) if remote != "." => remote.clone(),
         _ => "origin".to_string(),
     };
-    if repository.remote_config(&remote)?.is_none() && !remote.contains('/') && !remote.contains(':') && !remote.contains('.') {
+    if repository.remote_config(&remote)?.is_none()
+        && !remote.contains('/')
+        && !remote.contains(':')
+        && !remote.contains('.')
+    {
         eprintln!("fatal: '{remote}' does not appear to be a git repository");
         eprintln!("fatal: Could not read from remote repository.");
         eprintln!();
@@ -940,11 +1033,15 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
     if specs.is_empty() && !args.all && !args.tags {
         // push.default = simple: the current branch, to its upstream of the same name.
         let Some(branch) = branch.clone() else {
-            anyhow::bail!("You are not currently on a branch.\nTo push the history leading to the current (detached HEAD)\nstate now, use\n\n    git push {remote} HEAD:<name-of-remote-branch>");
+            anyhow::bail!(
+                "You are not currently on a branch.\nTo push the history leading to the current (detached HEAD)\nstate now, use\n\n    git push {remote} HEAD:<name-of-remote-branch>"
+            );
         };
         match &upstream {
             Some((_, merge)) if merge.strip_prefix("refs/heads/") == Some(branch.as_str()) => {
-                specs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(branch.as_bytes()))?);
+                specs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(
+                    branch.as_bytes(),
+                ))?);
             }
             Some((_, merge)) => {
                 eprintln!("fatal: The upstream branch of your current branch does not match");
@@ -959,7 +1056,9 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
                 return Ok(128);
             }
             None if args.set_upstream => {
-                specs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(branch.as_bytes()))?);
+                specs.push(rivet_core::remote_ops::Refspec::parse(BStr::new(
+                    branch.as_bytes(),
+                ))?);
             }
             None => {
                 eprintln!("fatal: The current branch {branch} has no upstream branch.");
@@ -975,12 +1074,25 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
         }
     }
     if args.set_upstream
-        && let Some(spec) = specs.first() {
-            let local = if spec.src.is_empty() { branch.clone().unwrap_or_default() } else { spec.src.to_string() };
-            let local = if local == "HEAD" { branch.clone().unwrap_or_default() } else { local };
-            let dst = if spec.dst.is_empty() { local.clone() } else { spec.dst.to_string() };
-            set_upstream_to = Some((local, dst));
-        }
+        && let Some(spec) = specs.first()
+    {
+        let local = if spec.src.is_empty() {
+            branch.clone().unwrap_or_default()
+        } else {
+            spec.src.to_string()
+        };
+        let local = if local == "HEAD" {
+            branch.clone().unwrap_or_default()
+        } else {
+            local
+        };
+        let dst = if spec.dst.is_empty() {
+            local.clone()
+        } else {
+            spec.dst.to_string()
+        };
+        set_upstream_to = Some((local, dst));
+    }
 
     let request = PushRequest {
         refspecs: specs,
@@ -1006,20 +1118,34 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
     if report.rejected > 0 {
         eprintln!("error: failed to push some refs to '{}'", report.url);
         if report.fetch_first {
-            eprintln!("hint: Updates were rejected because the remote contains work that you do not");
-            eprintln!("hint: have locally. This is usually caused by another repository pushing to");
+            eprintln!(
+                "hint: Updates were rejected because the remote contains work that you do not"
+            );
+            eprintln!(
+                "hint: have locally. This is usually caused by another repository pushing to"
+            );
             eprintln!("hint: the same ref. If you want to integrate the remote changes, use");
             eprintln!("hint: 'git pull' before pushing again.");
             eprintln!("hint: See the 'Note about fast-forwards' in 'git push --help' for details.");
         } else if report.non_fast_forward {
-            let current = report.changes.iter().any(|c| c.flag == '!' && Some(c.from.as_str()) == branch.as_deref() && c.from == c.to);
+            let current = report.changes.iter().any(|c| {
+                c.flag == '!' && Some(c.from.as_str()) == branch.as_deref() && c.from == c.to
+            });
             if current {
-                eprintln!("hint: Updates were rejected because the tip of your current branch is behind");
-                eprintln!("hint: its remote counterpart. If you want to integrate the remote changes,");
+                eprintln!(
+                    "hint: Updates were rejected because the tip of your current branch is behind"
+                );
+                eprintln!(
+                    "hint: its remote counterpart. If you want to integrate the remote changes,"
+                );
                 eprintln!("hint: use 'git pull' before pushing again.");
             } else {
-                eprintln!("hint: Updates were rejected because a pushed branch tip is behind its remote");
-                eprintln!("hint: counterpart. If you want to integrate the remote changes, use 'git pull'");
+                eprintln!(
+                    "hint: Updates were rejected because a pushed branch tip is behind its remote"
+                );
+                eprintln!(
+                    "hint: counterpart. If you want to integrate the remote changes, use 'git pull'"
+                );
                 eprintln!("hint: before pushing again.");
             }
             eprintln!("hint: See the 'Note about fast-forwards' in 'git push --help' for details.");
@@ -1062,19 +1188,19 @@ fn default_remote(repository: &Repository, named: Option<&str>) -> Result<String
     }
     if let Some(branch) = repository.head()?.branch()
         && let Some((remote, _)) = repository.branch_upstream(&branch.short_name().to_string())?
-            && remote != "." {
-                return Ok(remote);
-            }
+        && remote != "."
+    {
+        return Ok(remote);
+    }
     Ok("origin".to_string())
 }
 
 /// Git shows a remote URL without a trailing slash or `.git` in `From <url>`.
 pub fn display_url(url: &str, strip_git: bool) -> String {
     let mut shown = url.trim_end_matches('/').to_string();
-    if strip_git
-        && let Some(stripped) = shown.strip_suffix(".git") {
-            shown = stripped.to_string();
-        }
+    if strip_git && let Some(stripped) = shown.strip_suffix(".git") {
+        shown = stripped.to_string();
+    }
     shown
 }
 

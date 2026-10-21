@@ -37,11 +37,11 @@
 //! delta actually names — an `OFS_DELTA` never mentions an id at all, and looking one up would mean
 //! an index search per link.
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{Object, ObjectKind};
 use crate::pack::{BaseProvider, OwnedPackFile, OwnedPackIndex};
-use crate::error::Error;
 
 /// Phase 10 — one pack and its index, as a searchable store.
 ///
@@ -412,9 +412,19 @@ impl DeltaBaseCache {
             .iter()
             .position(|e| e.pack == pack && e.offset == offset);
         if let Some(pos) = pos {
-            self.entries[pos] = DeltaBaseEntry { pack, offset, kind, data };
+            self.entries[pos] = DeltaBaseEntry {
+                pack,
+                offset,
+                kind,
+                data,
+            };
         } else {
-            self.entries.push(DeltaBaseEntry { pack, offset, kind, data });
+            self.entries.push(DeltaBaseEntry {
+                pack,
+                offset,
+                kind,
+                data,
+            });
             // Evict the oldest entries until back within capacity.
             while self.entries.len() > self.capacity {
                 self.entries.remove(0);

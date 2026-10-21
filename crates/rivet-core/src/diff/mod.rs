@@ -48,10 +48,12 @@
 
 use bstr::{BStr, BString};
 
+pub mod compact;
 pub mod myers;
 pub mod rename;
 pub mod tree;
 pub mod unified;
+pub mod xdiff;
 
 pub use myers::{
     DiffLine, Edit, histogram_diff, line_count, myers_diff, needs_newline_marker, split_lines,
@@ -59,8 +61,8 @@ pub use myers::{
 pub use rename::{RenamePair, RenameSide, detect_renames, pair_renames, pprint_rename};
 pub use tree::{FileDiff, TreeDiff, blob_diff, entry_diff, index_diff, tree_diff, work_tree_diff};
 pub use unified::{
-    DiffStat, Hunk, HunkLine, LineKind, change_letter, format_name_status, format_stat, format_stat_sized,
-    format_unified, index_line_abbrev, write_unified,
+    DiffStat, Hunk, HunkLine, LineKind, change_letter, format_name_status, format_stat,
+    format_stat_sized, format_unified, index_line_abbrev, write_unified,
 };
 
 /// Phase 8 — which algorithm computes the line diff.

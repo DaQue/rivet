@@ -43,11 +43,11 @@
 //!   has grafted history; the walk reaches the shallow boundary and stops, and the honest answer
 //!   is [`crate::error::Error::NoMergeBase`] rather than a guess at the missing commits.
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::ObjectId;
-use crate::odb::Odb;
-use crate::error::Error;
 use crate::object::ObjectKind;
+use crate::odb::Odb;
 
 /// Phase 9 — how many commits the base walk may visit before giving up.
 ///
@@ -139,13 +139,19 @@ impl MergeBase {
 /// lacks; [`crate::error::Error::WrongObjectKind`] if an id names a tree, a blob or a tag.
 pub fn merge_base(odb: &Odb, ours: ObjectId, theirs: ObjectId) -> Result<MergeBase> {
     if ours == theirs {
-        return Ok(MergeBase { oid: ours, common: vec![ours] });
+        return Ok(MergeBase {
+            oid: ours,
+            common: vec![ours],
+        });
     }
     let bases = merge_bases(odb, ours, theirs)?;
     if bases.is_empty() {
         return Err(Error::NoMergeBase { ours, theirs });
     }
-    Ok(MergeBase { oid: bases[0], common: bases })
+    Ok(MergeBase {
+        oid: bases[0],
+        common: bases,
+    })
 }
 
 /// Phase 9 — every maximal common ancestor of two commits.
@@ -234,7 +240,10 @@ fn ancestors(
         }
         *steps += 1;
         if *steps > crate::merge::MAX_MERGE_BASE_STEPS {
-            return Err(Error::NoMergeBase { ours: start, theirs: start });
+            return Err(Error::NoMergeBase {
+                ours: start,
+                theirs: start,
+            });
         }
         stack.extend(parents_of(odb, oid)?);
     }

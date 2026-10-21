@@ -274,9 +274,8 @@ pub fn commit_subject(repository: &Repository, oid: &rivet_core::ObjectId) -> Re
 /// How the reflog names where `HEAD` was: the branch's short name, or the full id when detached.
 pub fn head_reflog_label(repository: &Repository) -> Result<String> {
     Ok(match repository.head()? {
-        rivet_core::HeadState::Attached { branch, .. } | rivet_core::HeadState::Unborn { branch } => {
-            branch.short_name().to_string()
-        }
+        rivet_core::HeadState::Attached { branch, .. }
+        | rivet_core::HeadState::Unborn { branch } => branch.short_name().to_string(),
         rivet_core::HeadState::Detached { oid } => oid.to_string(),
     })
 }
@@ -293,7 +292,13 @@ pub fn print_diffstat(
         None => empty_tree(repository)?,
     };
     let options = rivet_core::DiffOptions::new();
-    let mut diff = rivet_core::tree_diff(repository.format(), old_tree, new_tree, repository.odb(), &options)?;
+    let mut diff = rivet_core::tree_diff(
+        repository.format(),
+        old_tree,
+        new_tree,
+        repository.odb(),
+        &options,
+    )?;
     detect_renames(repository, &mut diff, &options)?;
     let mut out = Vec::new();
     rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
@@ -306,17 +311,30 @@ pub fn print_diffstat(
 /// Git's `--summary` lines: creations, deletions and mode changes.
 pub fn print_summary(diff: &rivet_core::TreeDiff, out: &mut Vec<u8>) {
     for file in &diff.files {
-        let path = String::from_utf8_lossy(&rivet_core::ops::quote_path(file.path(), false)).into_owned();
+        let path =
+            String::from_utf8_lossy(&rivet_core::ops::quote_path(file.path(), false)).into_owned();
         if file.is_rename() {
-            let old = file.old_path.as_ref().map(|p| p.to_vec()).unwrap_or_default();
+            let old = file
+                .old_path
+                .as_ref()
+                .map(|p| p.to_vec())
+                .unwrap_or_default();
             let shown = rivet_core::diff::pprint_rename(&old, file.path());
-            out.extend_from_slice(format!(" rename {shown} ({}%)\n", file.similarity.unwrap_or(100)).as_bytes());
+            out.extend_from_slice(
+                format!(" rename {shown} ({}%)\n", file.similarity.unwrap_or(100)).as_bytes(),
+            );
             if let (Some(old_mode), Some(new_mode)) = (file.old_mode, file.new_mode)
-                && old_mode != new_mode {
-                    out.extend_from_slice(
-                        format!(" mode change {:06o} => {:06o}\n", old_mode.to_u32(), new_mode.to_u32()).as_bytes(),
-                    );
-                }
+                && old_mode != new_mode
+            {
+                out.extend_from_slice(
+                    format!(
+                        " mode change {:06o} => {:06o}\n",
+                        old_mode.to_u32(),
+                        new_mode.to_u32()
+                    )
+                    .as_bytes(),
+                );
+            }
         } else if file.is_new {
             let mode = file.new_mode.map(|m| m.to_u32()).unwrap_or(0);
             out.extend_from_slice(format!(" create mode {mode:06o} {path}\n").as_bytes());
@@ -324,11 +342,18 @@ pub fn print_summary(diff: &rivet_core::TreeDiff, out: &mut Vec<u8>) {
             let mode = file.old_mode.map(|m| m.to_u32()).unwrap_or(0);
             out.extend_from_slice(format!(" delete mode {mode:06o} {path}\n").as_bytes());
         } else if let (Some(old), Some(new)) = (file.old_mode, file.new_mode)
-            && old != new && old.to_u32() & 0o170000 == new.to_u32() & 0o170000 {
-                out.extend_from_slice(
-                    format!(" mode change {:06o} => {:06o} {path}\n", old.to_u32(), new.to_u32()).as_bytes(),
-                );
-            }
+            && old != new
+            && old.to_u32() & 0o170000 == new.to_u32() & 0o170000
+        {
+            out.extend_from_slice(
+                format!(
+                    " mode change {:06o} => {:06o} {path}\n",
+                    old.to_u32(),
+                    new.to_u32()
+                )
+                .as_bytes(),
+            );
+        }
     }
 }
 
@@ -343,7 +368,13 @@ pub fn print_shortstat_summary(
         None => empty_tree(repository)?,
     };
     let options = rivet_core::DiffOptions::new();
-    let mut diff = rivet_core::tree_diff(repository.format(), old_tree, new_tree, repository.odb(), &options)?;
+    let mut diff = rivet_core::tree_diff(
+        repository.format(),
+        old_tree,
+        new_tree,
+        repository.odb(),
+        &options,
+    )?;
     detect_renames(repository, &mut diff, &options)?;
     let mut stat = Vec::new();
     rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut stat)?;
@@ -369,7 +400,10 @@ pub fn empty_tree(repository: &Repository) -> Result<rivet_core::ObjectId> {
 /// when set, otherwise `diff.renames`, otherwise Git's default of on. `copies` counts as on.
 pub fn renames_enabled(repository: &Repository, key: &str) -> bool {
     let read = |name: &str| -> Option<bool> {
-        let value = repository.config_value(bstr::BStr::new(name.as_bytes())).ok().flatten()?;
+        let value = repository
+            .config_value(bstr::BStr::new(name.as_bytes()))
+            .ok()
+            .flatten()?;
         let lower = value.to_ascii_lowercase();
         if lower == b"copies" || lower == b"copy" {
             return Some(true);

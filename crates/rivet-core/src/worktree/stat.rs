@@ -46,11 +46,11 @@ use std::collections::HashMap;
 
 use bstr::{BStr, BString};
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::index::IndexEntry;
 use crate::object::EntryMode;
 use crate::worktree::Worktree;
-use crate::error::Error;
 
 /// Phase 4 — one `lstat` result, in the shape the index stores it.
 ///
@@ -172,15 +172,15 @@ impl StatData {
     ///   as a change too, and it is the honest answer: the file was rewritten.
     pub fn matches_entry(&self, entry: &IndexEntry) -> bool {
         self.ctime_seconds == entry.ctime_seconds
-        && self.ctime_nanos == entry.ctime_nanos
-        && self.mtime_seconds == entry.mtime_seconds
-        && self.mtime_nanos == entry.mtime_nanos
-        && self.dev == entry.dev
-        && self.ino == entry.ino
-        && self.mode == entry.mode
-        && self.uid == entry.uid
-        && self.gid == entry.gid
-        && self.size == entry.size
+            && self.ctime_nanos == entry.ctime_nanos
+            && self.mtime_seconds == entry.mtime_seconds
+            && self.mtime_nanos == entry.mtime_nanos
+            && self.dev == entry.dev
+            && self.ino == entry.ino
+            && self.mode == entry.mode
+            && self.uid == entry.uid
+            && self.gid == entry.gid
+            && self.size == entry.size
     }
 
     /// Phase 4 — whether this entry is too fresh to be trusted.
@@ -203,7 +203,8 @@ impl StatData {
     ///   without reading its content, so a filesystem that lies about mtime defeats it; Git
     ///   accepts that, because the alternative is reading every file on every `status`.
     pub fn is_racy(&self, index_mtime: (u32, u32)) -> bool {
-        self.mtime_seconds > index_mtime.0 || (self.mtime_seconds == index_mtime.0 && self.mtime_nanos >= index_mtime.1)
+        self.mtime_seconds > index_mtime.0
+            || (self.mtime_seconds == index_mtime.0 && self.mtime_nanos >= index_mtime.1)
     }
 
     /// Phase 4 — the full question: does this stat data let an entry be trusted without reading
@@ -219,10 +220,10 @@ impl StatData {
     /// why the first `status` after a commit is slower than the second.
     pub fn is_unchanged(&self, entry: &IndexEntry, index_mtime: (u32, u32)) -> bool {
         self.mode == entry.mode
-        && self.size == entry.size
-        && self.mtime_seconds == entry.mtime_seconds
-        && self.mtime_nanos == entry.mtime_nanos
-        && !self.is_racy(index_mtime)
+            && self.size == entry.size
+            && self.mtime_seconds == entry.mtime_seconds
+            && self.mtime_nanos == entry.mtime_nanos
+            && !self.is_racy(index_mtime)
     }
 }
 
@@ -378,9 +379,9 @@ pub fn index_mtime(path: &std::path::Path) -> Result<(u32, u32)> {
     match meta {
         Ok(m) => {
             let d = m
-            .modified()
-            .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default())
-            .unwrap_or_default();
+                .modified()
+                .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default())
+                .unwrap_or_default();
             Ok((d.as_secs() as u32, d.subsec_nanos()))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((0, 0)),

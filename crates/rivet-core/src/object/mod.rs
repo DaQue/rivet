@@ -25,9 +25,9 @@
 //! does not index, unwrap or slice without bounds checks (plan §5). Objects come from the
 //! network and from other people's repositories, and this is the first code to touch them.
 
-use bstr::BString;
 use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
+use bstr::BString;
 
 pub mod blob;
 pub mod commit;
@@ -256,7 +256,10 @@ impl Object {
                     .map(AnyObject::Tree)
                     .map_err(|_| first),
             },
-            Object::Commit(d) => Ok(AnyObject::Commit(commit::Commit::parse(header_width(d), d)?)),
+            Object::Commit(d) => Ok(AnyObject::Commit(commit::Commit::parse(
+                header_width(d),
+                d,
+            )?)),
             Object::Tag(d) => Ok(AnyObject::Tag(tag::Tag::parse(header_width(d), d)?)),
         }
     }
@@ -319,7 +322,10 @@ impl<'a> AnyObject<'a> {
         match kind {
             ObjectKind::Blob => Ok(Self::Blob(Blob { data })),
             ObjectKind::Tree => Ok(Self::Tree(tree::Tree::parse(ObjectFormat::Sha1, data)?)),
-            ObjectKind::Commit => Ok(Self::Commit(commit::Commit::parse(ObjectFormat::Sha1, data)?)),
+            ObjectKind::Commit => Ok(Self::Commit(commit::Commit::parse(
+                ObjectFormat::Sha1,
+                data,
+            )?)),
             ObjectKind::Tag => Ok(Self::Tag(tag::Tag::parse(ObjectFormat::Sha1, data)?)),
         }
     }
@@ -440,17 +446,21 @@ impl EntryMode {
                 });
             }
         }
-        let value = bytes.iter().fold(0u32, |acc, &b| acc * 8 + (b - b'0') as u32);
+        let value = bytes
+            .iter()
+            .fold(0u32, |acc, &b| acc * 8 + (b - b'0') as u32);
         Ok(match value {
             0o100755 => EntryMode::BlobExecutable,
             0o100644 => EntryMode::Blob,
             0o40000 => EntryMode::Tree,
             0o120000 => EntryMode::Link,
             0o160000 => EntryMode::Commit,
-            _ => return Err(Error::InvalidEntryMode {
-                name: BString::default(),
-                mode: value,
-            }),
+            _ => {
+                return Err(Error::InvalidEntryMode {
+                    name: BString::default(),
+                    mode: value,
+                });
+            }
         })
     }
 
@@ -582,34 +592,19 @@ mod tests {
 
     #[test]
     fn from_bytes_canonical_modes() {
-        assert_eq!(
-            EntryMode::from_bytes(b"100644").unwrap(),
-            EntryMode::Blob
-        );
+        assert_eq!(EntryMode::from_bytes(b"100644").unwrap(), EntryMode::Blob);
         assert_eq!(
             EntryMode::from_bytes(b"100755").unwrap(),
             EntryMode::BlobExecutable
         );
-        assert_eq!(
-            EntryMode::from_bytes(b"120000").unwrap(),
-            EntryMode::Link
-        );
-        assert_eq!(
-            EntryMode::from_bytes(b"40000").unwrap(),
-            EntryMode::Tree
-        );
-        assert_eq!(
-            EntryMode::from_bytes(b"160000").unwrap(),
-            EntryMode::Commit
-        );
+        assert_eq!(EntryMode::from_bytes(b"120000").unwrap(), EntryMode::Link);
+        assert_eq!(EntryMode::from_bytes(b"40000").unwrap(), EntryMode::Tree);
+        assert_eq!(EntryMode::from_bytes(b"160000").unwrap(), EntryMode::Commit);
     }
 
     #[test]
     fn from_bytes_leading_zero_normalises() {
-        assert_eq!(
-            EntryMode::from_bytes(b"040000").unwrap(),
-            EntryMode::Tree
-        );
+        assert_eq!(EntryMode::from_bytes(b"040000").unwrap(), EntryMode::Tree);
     }
 
     #[test]
@@ -629,10 +624,7 @@ mod tests {
             EntryMode::Link,
             EntryMode::Commit,
         ] {
-            assert_eq!(
-                EntryMode::from_bytes(m.to_string().as_bytes()).unwrap(),
-                m
-            );
+            assert_eq!(EntryMode::from_bytes(m.to_string().as_bytes()).unwrap(), m);
         }
     }
 }

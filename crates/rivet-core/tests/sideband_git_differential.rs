@@ -12,9 +12,7 @@ use std::process::{Command, Stdio};
 
 use rivet_core::hash::ObjectFormat;
 use rivet_core::odb::Odb;
-use rivet_core::remote::sideband::{
-    ChannelWrite, SidebandOptions, demultiplex, frame, store_pack,
-};
+use rivet_core::remote::sideband::{ChannelWrite, SidebandOptions, demultiplex, frame, store_pack};
 use rivet_core::remote::transport::ProtocolVersion;
 use rivet_core::remote::{PktLine, SidebandKind, SidebandReader};
 
@@ -66,7 +64,10 @@ fn source_repo(root: &Path) -> PathBuf {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "first"]);
     let big = "line\n".repeat(400);
-    write(&repo.join("src/main.rs"), &format!("fn main() {{\n{big}}}\n"));
+    write(
+        &repo.join("src/main.rs"),
+        &format!("fn main() {{\n{big}}}\n"),
+    );
     write(&repo.join("docs/notes.txt"), "notes\n");
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "second"]);
@@ -234,20 +235,22 @@ fn stores_a_fetched_pack_that_git_can_read() {
     let mut odb = Odb::open(&dest_git, ObjectFormat::Sha1).expect("odb");
 
     let mut cursor = std::io::Cursor::new(&stream[..]);
-    let stored = store_pack(
-        &mut cursor,
-        &options(),
-        &mut odb,
-        ObjectFormat::Sha1,
-        None,
-    )
-    .expect("store pack");
+    let stored = store_pack(&mut cursor, &options(), &mut odb, ObjectFormat::Sha1, None)
+        .expect("store pack");
 
     let name = format!("pack-{}", stored.pack_checksum.to_hex());
     let pack_path = dest_git.join("objects/pack").join(format!("{name}.pack"));
     let idx_path = dest_git.join("objects/pack").join(format!("{name}.idx"));
-    assert!(pack_path.is_file(), "pack written to {}", pack_path.display());
-    assert!(idx_path.is_file(), "index written to {}", idx_path.display());
+    assert!(
+        pack_path.is_file(),
+        "pack written to {}",
+        pack_path.display()
+    );
+    assert!(
+        idx_path.is_file(),
+        "index written to {}",
+        idx_path.display()
+    );
 
     // `git verify-pack` parses the idx we wrote and checks it against the pack. A wrong offset or
     // a wrong CRC fails here, which no in-memory test of ours would catch.
@@ -260,13 +263,19 @@ fn stores_a_fetched_pack_that_git_can_read() {
     let readme = git(&repo, &["rev-parse", "HEAD:README.md"]);
     let readme = readme.trim();
     let stored_readme = git(&dest, &["cat-file", "-p", readme]);
-    assert_eq!(stored_readme, "rivet\n", "blob bytes survive the round trip");
+    assert_eq!(
+        stored_readme, "rivet\n",
+        "blob bytes survive the round trip"
+    );
 
     let commit_type = git(&dest, &["cat-file", "-t", &head]);
     assert_eq!(commit_type.trim(), "commit");
     let source_commit = git(&repo, &["cat-file", "-p", &head]);
     let dest_commit = git(&dest, &["cat-file", "-p", &head]);
-    assert_eq!(dest_commit, source_commit, "commit object is byte-identical");
+    assert_eq!(
+        dest_commit, source_commit,
+        "commit object is byte-identical"
+    );
 
     // `git fsck` is the final word on whether the repository we wrote is sound.
     git(&dest, &["fsck", "--strict"]);
@@ -291,7 +300,10 @@ fn frames_a_write_the_reader_can_parse() {
             16,
         )
         .expect("hex length");
-        assert!(len <= params.max_payload + 5, "packet length {len} in range");
+        assert!(
+            len <= params.max_payload + 5,
+            "packet length {len} in range"
+        );
         assert!(len >= 5, "every sideband packet carries a channel byte");
         offset += len;
         packets += 1;

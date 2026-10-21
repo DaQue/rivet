@@ -224,7 +224,8 @@ mod tests {
         // the header occupies 8 bytes ("blob" + ' ' + "12" + NUL) and the body starts at offset 8.
         assert_eq!(&buf[..8], b"blob 12\0");
         assert_eq!(&buf[8..], data);
-        let (id, buf2) = crate::object::hash_object(ObjectFormat::Sha1, Blob::kind(), data).unwrap();
+        let (id, buf2) =
+            crate::object::hash_object(ObjectFormat::Sha1, Blob::kind(), data).unwrap();
         assert_eq!(buf, buf2);
         // Reconstruct a blob from the parsed buffer and verify identity is stable.
         let parsed = Blob::new(&buf[8..]);
@@ -260,7 +261,8 @@ mod tests {
     fn from_reader_matches_to_bytes() {
         let data: &[u8] = b"some bytes\n";
         let mut reader = data;
-        let (id, buf) = Blob::from_reader(ObjectFormat::Sha1, &mut reader, data.len() as u64).unwrap();
+        let (id, buf) =
+            Blob::from_reader(ObjectFormat::Sha1, &mut reader, data.len() as u64).unwrap();
         assert_eq!(buf, Blob::new(data).to_bytes());
         assert_eq!(id, Blob::new(data).id(ObjectFormat::Sha1).unwrap());
     }

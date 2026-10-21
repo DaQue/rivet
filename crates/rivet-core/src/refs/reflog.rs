@@ -122,8 +122,10 @@ impl ReflogEntry {
             line: 0,
             reason,
         };
-        let old = ObjectId::from_hex(format, BStr::new(old_raw)).map_err(|_| corrupt("bad old id"))?;
-        let new = ObjectId::from_hex(format, BStr::new(new_raw)).map_err(|_| corrupt("bad new id"))?;
+        let old =
+            ObjectId::from_hex(format, BStr::new(old_raw)).map_err(|_| corrupt("bad old id"))?;
+        let new =
+            ObjectId::from_hex(format, BStr::new(new_raw)).map_err(|_| corrupt("bad new id"))?;
         let (signature, message) = match rest.iter().position(|b| *b == b'\t') {
             Some(tab) => (&rest[..tab], &rest[tab + 1..]),
             None => (rest, &b""[..]),
@@ -243,10 +245,7 @@ pub struct ReflogMessage<'a> {
 impl<'a> ReflogMessage<'a> {
     /// Phase 2 — pair an identity with a reason.
     pub const fn new(who: &'a Signature, message: &'a BStr) -> Self {
-        Self {
-            who,
-            message,
-        }
+        Self { who, message }
     }
 }
 
@@ -279,7 +278,7 @@ pub fn read(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<Vec<
             return Err(Error::IoAtPath {
                 path: path.to_string_lossy().as_bytes().into(),
                 source: e,
-            })
+            });
         }
     };
     let display = name.as_bytes().to_vec();

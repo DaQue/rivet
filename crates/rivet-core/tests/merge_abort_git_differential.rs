@@ -42,7 +42,8 @@ fn have_git() -> bool {
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("rivet-merge-abort-{}-{}", tag, std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("rivet-merge-abort-{}-{}", tag, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -64,7 +65,11 @@ fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
             if entry.file_name() == ".git" {
                 continue;
             }
-            let rel = path.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+            let rel = path
+                .strip_prefix(base)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
             if std::fs::symlink_metadata(&path).unwrap().is_dir() {
                 walk(base, &path, out);
             } else {
@@ -139,9 +144,23 @@ fn abort_restores_worktree_and_index_like_git() {
     let worktree = rivet_core::worktree::Worktree::new(Some(&dir), format, &config).expect("wt");
     abort_merge(&worktree, &mut index, &odb, &git_dir).expect("abort runs");
 
-    assert_eq!(snapshot(&dir), expected_files, "work tree differs after abort");
-    assert_eq!(index_rows(&dir), expected_index, "index differs after abort");
-    assert!(!dir.join(".git/MERGE_HEAD").exists(), "MERGE_HEAD left behind");
-    assert!(!dir.join(".git/MERGE_MSG").exists(), "MERGE_MSG left behind");
+    assert_eq!(
+        snapshot(&dir),
+        expected_files,
+        "work tree differs after abort"
+    );
+    assert_eq!(
+        index_rows(&dir),
+        expected_index,
+        "index differs after abort"
+    );
+    assert!(
+        !dir.join(".git/MERGE_HEAD").exists(),
+        "MERGE_HEAD left behind"
+    );
+    assert!(
+        !dir.join(".git/MERGE_MSG").exists(),
+        "MERGE_MSG left behind"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -86,8 +86,8 @@ use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString};
 
-use crate::error::Result;
 use crate::error::Error;
+use crate::error::Result;
 
 /// Phase 5 — where a set of patterns came from.
 ///
@@ -126,7 +126,7 @@ impl IgnoreSource {
     pub fn path(&self) -> Option<&BStr> {
         match self {
             IgnoreSource::Gitignore(p) => Some(p.as_ref()),
-            _ => None
+            _ => None,
         }
     }
 
@@ -302,7 +302,8 @@ impl Pattern {
                 trimmed = &trimmed[..trimmed.len() - 1];
             }
             if !trimmed.is_empty() && !trimmed.starts_with(b"#") {
-                let pattern = Pattern::parse(BStr::new(trimmed), source.clone(), line_number, base)?;
+                let pattern =
+                    Pattern::parse(BStr::new(trimmed), source.clone(), line_number, base)?;
                 if let Some(p) = pattern {
                     out.push(p);
                 }
@@ -429,7 +430,11 @@ impl Pattern {
         match self.source {
             IgnoreSource::CommandLine => BString::from("::"),
             _ => {
-                let path = self.source.path().map(|p| p.to_string()).unwrap_or_default();
+                let path = self
+                    .source
+                    .path()
+                    .map(|p| p.to_string())
+                    .unwrap_or_default();
                 BString::from(format!("{}:{}", path, self.line))
             }
         }
@@ -499,7 +504,12 @@ impl IgnoreFrame {
     /// Any [`crate::error::Error::InvalidIgnorePattern`] from [`Pattern::parse_file`].
     pub fn parse(data: &[u8], source: IgnoreSource, base: &BStr, depth: usize) -> Result<Self> {
         let patterns = Pattern::parse_file(data, source.clone(), base)?;
-        Ok(Self { source, base: BString::from(base), depth, patterns })
+        Ok(Self {
+            source,
+            base: BString::from(base),
+            depth,
+            patterns,
+        })
     }
 
     /// Phase 5 — the frame's patterns, in file order.
@@ -622,7 +632,12 @@ impl IgnoreStack {
         };
         for p in patterns {
             let line = BStr::new(&p[..]);
-            let parsed = Pattern::parse(line, IgnoreSource::CommandLine, frame.patterns.len() + 1, BStr::new(&frame.base[..]))?;
+            let parsed = Pattern::parse(
+                line,
+                IgnoreSource::CommandLine,
+                frame.patterns.len() + 1,
+                BStr::new(&frame.base[..]),
+            )?;
             if let Some(pat) = parsed {
                 frame.patterns.push(pat);
             }
@@ -666,7 +681,12 @@ impl IgnoreStack {
             .split(|b| *b == b'/')
             .filter(|c| !c.is_empty())
             .count();
-        let frame = IgnoreFrame::parse(&data, IgnoreSource::Gitignore(BString::from(dir)), dir, depth)?;
+        let frame = IgnoreFrame::parse(
+            &data,
+            IgnoreSource::Gitignore(BString::from(dir)),
+            dir,
+            depth,
+        )?;
         self.frames.push(frame);
         Ok(())
     }
@@ -821,7 +841,10 @@ impl IgnoreStack {
             let mut end = bytes.len();
             while let Some(i) = bytes[..end].iter().rposition(|b| *b == b'/') {
                 end = i;
-                if self.check(BStr::new(&bytes[..end]), PathKind::Directory)?.is_ignored() {
+                if self
+                    .check(BStr::new(&bytes[..end]), PathKind::Directory)?
+                    .is_ignored()
+                {
                     return Ok(true);
                 }
             }
@@ -951,7 +974,12 @@ fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
         }
         b'?' => !text.is_empty() && text[0] != b'/' && glob_match(&pattern[1..], &text[1..]),
         b'[' => {
-            let Some(close) = pattern.iter().skip(1).position(|b| *b == b']').map(|p| p + 1) else {
+            let Some(close) = pattern
+                .iter()
+                .skip(1)
+                .position(|b| *b == b']')
+                .map(|p| p + 1)
+            else {
                 return !text.is_empty()
                     && text[0] == b'['
                     && glob_match(&pattern[1..], &text[1..]);

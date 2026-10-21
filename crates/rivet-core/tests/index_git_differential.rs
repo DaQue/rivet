@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use rivet_core::ObjectFormat;
 use rivet_core::index::{Index, IndexEntry, IndexVersion, Stage, compare_entries};
 use rivet_core::object::{ObjectKind, hash_object};
-use rivet_core::ObjectFormat;
 
 static NEXT_DIR: AtomicU32 = AtomicU32::new(0);
 
@@ -37,10 +37,8 @@ fn write_file(dir: &Path, name: &str, body: &str) {
 }
 
 fn parse_entries(data: &[u8], format: ObjectFormat) -> Vec<IndexEntry> {
-    let version = IndexVersion::from_u32(u32::from_be_bytes([
-        data[4], data[5], data[6], data[7],
-    ]))
-    .unwrap();
+    let version =
+        IndexVersion::from_u32(u32::from_be_bytes([data[4], data[5], data[6], data[7]])).unwrap();
     let mut entries = Vec::new();
     let mut pos = 12usize;
     let count = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
@@ -93,13 +91,19 @@ fn v2_entry_bytes_match_git_exactly() {
     let (e, consumed) =
         IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &data[pos0..]).unwrap();
     let slice = entry_slice(&data, pos0, consumed);
-    assert_eq!(e.to_bytes(ObjectFormat::Sha1, IndexVersion::V2).unwrap(), slice);
+    assert_eq!(
+        e.to_bytes(ObjectFormat::Sha1, IndexVersion::V2).unwrap(),
+        slice
+    );
 
     let pos1 = pos0 + consumed;
     let (e, consumed) =
         IndexEntry::parse(ObjectFormat::Sha1, IndexVersion::V2, &data[pos1..]).unwrap();
     let slice = entry_slice(&data, pos1, consumed);
-    assert_eq!(e.to_bytes(ObjectFormat::Sha1, IndexVersion::V2).unwrap(), slice);
+    assert_eq!(
+        e.to_bytes(ObjectFormat::Sha1, IndexVersion::V2).unwrap(),
+        slice
+    );
 }
 
 #[test]
@@ -121,10 +125,8 @@ fn sha256_object_format_entry_width() {
     write_file(&dir, "a", "hi");
 
     let data = std::fs::read(dir.join(".git/index")).unwrap();
-    let version = IndexVersion::from_u32(u32::from_be_bytes([
-        data[4], data[5], data[6], data[7],
-    ]))
-    .unwrap();
+    let version =
+        IndexVersion::from_u32(u32::from_be_bytes([data[4], data[5], data[6], data[7]])).unwrap();
     let (e, consumed) = IndexEntry::parse(ObjectFormat::Sha256, version, &data[12..]).unwrap();
     // A 32-byte oid: fixed 40 + 32 + 2 flags = 74, path "a" + NUL = 1, total 76, padded to 80.
     assert_eq!(e.oid.as_bytes().len(), 32);
@@ -146,10 +148,8 @@ fn extended_word_survives_round_trip() {
     git(&["add", "-N", "three"], &dir);
 
     let data = std::fs::read(dir.join(".git/index")).unwrap();
-    let version = IndexVersion::from_u32(u32::from_be_bytes([
-        data[4], data[5], data[6], data[7],
-    ]))
-    .unwrap();
+    let version =
+        IndexVersion::from_u32(u32::from_be_bytes([data[4], data[5], data[6], data[7]])).unwrap();
     assert_eq!(version, IndexVersion::V3);
     let count = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
     assert_eq!(count, 3);

@@ -18,7 +18,7 @@
 
 use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
-use crate::object::{hash_object, EntryMode, ObjectKind};
+use crate::object::{EntryMode, ObjectKind, hash_object};
 use bstr::BString;
 use std::cmp::Ordering;
 
@@ -143,10 +143,7 @@ impl<'a> Tree<'a> {
             });
             pos = oid_start + hash_len;
         }
-        Ok(Self {
-            data,
-            entries,
-        })
+        Ok(Self { data, entries })
     }
 
     /// Phase 1 — serialise the entries back to the on-disk payload.
@@ -361,10 +358,7 @@ mod tests {
                 oid: dir_oid,
             },
         ];
-        let tree = Tree {
-            data: &[],
-            entries,
-        };
+        let tree = Tree { data: &[], entries };
         let ser = tree.serialize();
         // Build the expected payload directly.
         let mut exp = Vec::new();
@@ -380,7 +374,10 @@ mod tests {
         assert_eq!(parsed.entries[1].mode, EntryMode::Tree);
         assert_eq!(parsed.entries[1].name, BString::new(b"dir".to_vec()));
         // Round-trip: parsing the serialized bytes reproduces them.
-        assert_eq!(Tree::parse(ObjectFormat::Sha1, &ser).unwrap().serialize(), ser);
+        assert_eq!(
+            Tree::parse(ObjectFormat::Sha1, &ser).unwrap().serialize(),
+            ser
+        );
     }
 
     /// Sort order: a directory named `foo` must sort before a file named

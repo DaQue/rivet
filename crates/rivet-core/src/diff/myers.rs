@@ -34,7 +34,6 @@
 //!   kept. Normalising here would make the diff disagree with the blob the id was computed over.
 
 use crate::error::Result;
-use crate::error::Error;
 
 /// Phase 8 — one line of a diff input.
 ///
@@ -53,7 +52,7 @@ use crate::error::Error;
 ///   diff of a text file.
 /// * **A zero-length input has no lines.** An empty file diffs against a one-line file as one
 ///   addition and zero deletions, which is what Git prints.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DiffLine<'a> {
     /// The line's bytes, including the terminator when there is one.
     pub content: &'a [u8],
@@ -172,11 +171,18 @@ pub fn split_lines(data: &[u8]) -> Vec<DiffLine<'_>> {
     let mut start = 0;
     let len = data.len();
     while start < len {
-        let end = data[start..].iter().position(|&b| b == b'\n').map(|i| start + i + 1).unwrap_or(len);
+        let end = data[start..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|i| start + i + 1)
+            .unwrap_or(len);
         let content = &data[start..end];
         // Whether *this* line is terminated, which the final line of a file usually is too.
         let has_newline = content.last() == Some(&b'\n');
-        lines.push(DiffLine { content, has_newline });
+        lines.push(DiffLine {
+            content,
+            has_newline,
+        });
         start = end;
     }
     lines
@@ -340,9 +346,266 @@ pub fn myers_diff<T: PartialEq>(old: &[T], new: &[T]) -> Vec<Edit> {
 ///
 /// # Errors
 ///
-/// [`crate::error::Error::NotImplemented`] always, until the algorithm lands.
-pub fn histogram_diff<T: PartialEq>(_old: &[T], _new: &[T]) -> Result<Vec<Edit>> {
-    Err(Error::NotImplemented { what: "histogram diff" })
+/// Never fails; the `Result` is part of the frozen signature.
+pub fn histogram_diff<T: Eq + std::hash::Hash>(old: &[T], new: &[T]) -> Result<Vec<Edit>> {
+    let (n, m) = (old.len(), new.len());
+    let mut changed_old = vec![false; n];
+    let mut changed_new = vec![false; m];
+    histogram_region(old, new, 0, n, 0, m, &mut changed_old, &mut changed_new);
+    Ok(edits_from_flags(&changed_old, &changed_new))
+}
+
+/// Turn per-line "changed" flags back into the ordered edit script: equal runs, and for each
+/// change the deletions followed by the insertions.
+pub(crate) fn edits_from_flags(changed_old: &[bool], changed_new: &[bool]) -> Vec<Edit> {
+    let (n, m) = (changed_old.len(), changed_new.len());
+    let mut edits = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < n || j < m {
+        let del = i < n && changed_old[i];
+        let ins = j < m && changed_new[j];
+        if !del && !ins {
+            let (start_i, start_j) = (i, j);
+            while i < n && j < m && !changed_old[i] && !changed_new[j] {
+                i += 1;
+                j += 1;
+            }
+            if i > start_i {
+                edits.push(Edit::equal(start_i, start_j, i - start_i));
+            } else {
+                // Unreachable for consistent flags; stop rather than loop forever.
+                break;
+            }
+            continue;
+        }
+        let start_i = i;
+        while i < n && changed_old[i] {
+            i += 1;
+        }
+        if i > start_i {
+            edits.push(Edit {
+                old_index: start_i,
+                old_len: i - start_i,
+                new_index: j,
+                new_len: 0,
+            });
+        }
+        let start_j = j;
+        while j < m && changed_new[j] {
+            j += 1;
+        }
+        if j > start_j {
+            edits.push(Edit {
+                old_index: i,
+                old_len: 0,
+                new_index: start_j,
+                new_len: j - start_j,
+            });
+        }
+    }
+    edits
+}
+
+/// Git's `histogram_diff` on one region: `count1` lines of `old` from `line1` against `count2`
+/// lines of `new` from `line2`, marking the lines that changed.
+#[allow(clippy::too_many_arguments)]
+fn histogram_region<T: Eq + std::hash::Hash>(
+    old: &[T],
+    new: &[T],
+    mut line1: usize,
+    mut count1: usize,
+    mut line2: usize,
+    mut count2: usize,
+    changed_old: &mut [bool],
+    changed_new: &mut [bool],
+) {
+    loop {
+        if count1 == 0 && count2 == 0 {
+            return;
+        }
+        if count1 == 0 {
+            changed_new[line2..line2 + count2].fill(true);
+            return;
+        }
+        if count2 == 0 {
+            changed_old[line1..line1 + count1].fill(true);
+            return;
+        }
+        match find_longest_common_run(old, new, line1, count1, line2, count2) {
+            LcsResult::Fallback => {
+                // Every common line is too frequent to anchor on: plain Myers on this region.
+                let edits = myers_diff(&old[line1..line1 + count1], &new[line2..line2 + count2]);
+                for edit in edits {
+                    if edit.old_len > 0 && edit.new_len == 0 {
+                        changed_old[line1 + edit.old_index..line1 + edit.old_index + edit.old_len]
+                            .fill(true);
+                    } else if edit.new_len > 0 && edit.old_len == 0 {
+                        changed_new[line2 + edit.new_index..line2 + edit.new_index + edit.new_len]
+                            .fill(true);
+                    }
+                }
+                return;
+            }
+            LcsResult::None => {
+                changed_old[line1..line1 + count1].fill(true);
+                changed_new[line2..line2 + count2].fill(true);
+                return;
+            }
+            LcsResult::Found(lcs) => {
+                histogram_region(
+                    old,
+                    new,
+                    line1,
+                    lcs.begin1 - line1,
+                    line2,
+                    lcs.begin2 - line2,
+                    changed_old,
+                    changed_new,
+                );
+                // The tail is handled by looping, as Git does.
+                count1 = line1 + count1 - 1 - lcs.end1;
+                line1 = lcs.end1 + 1;
+                count2 = line2 + count2 - 1 - lcs.end2;
+                line2 = lcs.end2 + 1;
+            }
+        }
+    }
+}
+
+/// An inclusive common run: `old[begin1..=end1] == new[begin2..=end2]`.
+#[derive(Clone, Copy)]
+struct Lcs {
+    begin1: usize,
+    end1: usize,
+    begin2: usize,
+    end2: usize,
+}
+
+enum LcsResult {
+    Found(Lcs),
+    None,
+    Fallback,
+}
+
+/// Git's `find_lcs`: index the left region by line (counting occurrences), then for each right
+/// line extend every occurrence of it into a common run and keep the run whose lines are rarest.
+fn find_longest_common_run<T: Eq + std::hash::Hash>(
+    old: &[T],
+    new: &[T],
+    line1: usize,
+    count1: usize,
+    line2: usize,
+    count2: usize,
+) -> LcsResult {
+    const NONE: usize = usize::MAX;
+    let max_chain: usize = 64;
+    let end1 = line1 + count1 - 1;
+    let end2 = line2 + count2 - 1;
+
+    struct Record {
+        first: usize,
+        count: usize,
+    }
+    let mut records: Vec<Record> = Vec::new();
+    let mut by_line: std::collections::HashMap<&T, usize> = std::collections::HashMap::new();
+    let mut next = vec![NONE; old.len()];
+    let mut line_record = vec![0usize; old.len()];
+    // Scanned from the end so that each record's chain starts at its lowest line.
+    for ptr in (line1..=end1).rev() {
+        match by_line.get(&old[ptr]) {
+            Some(&id) => {
+                next[ptr] = records[id].first;
+                records[id].first = ptr;
+                records[id].count += 1;
+                line_record[ptr] = id;
+            }
+            None => {
+                by_line.insert(&old[ptr], records.len());
+                line_record[ptr] = records.len();
+                records.push(Record {
+                    first: ptr,
+                    count: 1,
+                });
+            }
+        }
+    }
+
+    let mut cnt = max_chain + 1;
+    let mut has_common = false;
+    let mut best: Option<Lcs> = None;
+    let mut b_ptr = line2;
+    while b_ptr <= end2 {
+        let mut b_next = b_ptr + 1;
+        if let Some(&id) = by_line.get(&new[b_ptr]) {
+            let record = &records[id];
+            if record.count > cnt {
+                has_common = true;
+            } else {
+                has_common = true;
+                let mut as_ = record.first;
+                loop {
+                    let mut np = next[as_];
+                    let mut bs = b_ptr;
+                    let mut ae = as_;
+                    let mut be = bs;
+                    let mut rc = record.count;
+                    while line1 < as_ && line2 < bs && old[as_ - 1] == new[bs - 1] {
+                        as_ -= 1;
+                        bs -= 1;
+                        if 1 < rc {
+                            rc = rc.min(records[line_record[as_]].count);
+                        }
+                    }
+                    while ae < end1 && be < end2 && old[ae + 1] == new[be + 1] {
+                        ae += 1;
+                        be += 1;
+                        if 1 < rc {
+                            rc = rc.min(records[line_record[ae]].count);
+                        }
+                    }
+                    if b_next <= be {
+                        b_next = be + 1;
+                    }
+                    let best_len = best.map_or(0, |l| l.end1 - l.begin1);
+                    let accept = best_len < ae - as_ || rc < cnt;
+                    if accept {
+                        best = Some(Lcs {
+                            begin1: as_,
+                            end1: ae,
+                            begin2: bs,
+                            end2: be,
+                        });
+                        cnt = rc;
+                    }
+                    if np == NONE {
+                        break;
+                    }
+                    let mut exhausted = false;
+                    while np <= ae {
+                        np = next[np];
+                        if np == NONE {
+                            exhausted = true;
+                            break;
+                        }
+                    }
+                    if exhausted {
+                        break;
+                    }
+                    as_ = np;
+                }
+            }
+        }
+        b_ptr = b_next;
+    }
+
+    if has_common && max_chain < cnt {
+        LcsResult::Fallback
+    } else {
+        match best {
+            Some(lcs) => LcsResult::Found(lcs),
+            None => LcsResult::None,
+        }
+    }
 }
 
 /// Phase 8 — the number of lines a buffer contains, without allocating or copying.
@@ -372,4 +635,54 @@ pub fn line_count(data: &[u8]) -> usize {
 ///   content holds a `\r`. The marker is about the terminator, not about the CR.
 pub fn needs_newline_marker(data: &[u8]) -> bool {
     !data.is_empty() && !data.ends_with(b"\n")
+}
+
+/// Apply Git's change compaction (with the indent heuristic, on by default in `git diff`) to an
+/// edit script over lines, returning the script with every ambiguous hunk slid into place.
+pub fn compact_edits(old: &[DiffLine<'_>], new: &[DiffLine<'_>], edits: &[Edit]) -> Vec<Edit> {
+    use crate::diff::compact::{Lines, change_compact, indent_of};
+    let mut changed_old = vec![false; old.len()];
+    let mut changed_new = vec![false; new.len()];
+    for edit in edits {
+        if edit.old_len > 0 && edit.new_len == 0 {
+            changed_old[edit.old_index..edit.old_index + edit.old_len].fill(true);
+        } else if edit.new_len > 0 && edit.old_len == 0 {
+            changed_new[edit.new_index..edit.new_index + edit.new_len].fill(true);
+        }
+    }
+    let old_equal = |i: usize, j: usize| old[i] == old[j];
+    let old_indent = |i: usize| indent_of(old[i].content);
+    let new_equal = |i: usize, j: usize| new[i] == new[j];
+    let new_indent = |i: usize| indent_of(new[i].content);
+    let old_lines = Lines {
+        count: old.len(),
+        equal: &old_equal,
+        indent: &old_indent,
+    };
+    let new_lines = Lines {
+        count: new.len(),
+        equal: &new_equal,
+        indent: &new_indent,
+    };
+    change_compact(
+        &old_lines,
+        &mut changed_old,
+        &new_lines,
+        &mut changed_new,
+        true,
+    );
+    change_compact(
+        &new_lines,
+        &mut changed_new,
+        &old_lines,
+        &mut changed_old,
+        true,
+    );
+    edits_from_flags(&changed_old, &changed_new)
+}
+
+/// Git's default diff (`git diff` without `--histogram`): see [`crate::diff::xdiff`].
+pub fn git_diff<T: Eq + std::hash::Hash>(old: &[T], new: &[T]) -> Vec<Edit> {
+    let (changed_old, changed_new) = crate::diff::xdiff::diff_flags(old, new);
+    edits_from_flags(&changed_old, &changed_new)
 }

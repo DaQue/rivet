@@ -64,10 +64,10 @@ use crate::hash::ObjectId;
 use crate::odb::Odb;
 use crate::refs::{RefName, RefStore};
 
+use crate::error::Error;
 use crate::remote::transport::Transport;
 use crate::remote::url::RemoteUrl;
 use crate::remote::{AdvertisedRef, RefAdvertisement};
-use crate::error::Error;
 
 /// Phase 11 — how many objects to put in one `have` line's round.
 ///
@@ -398,7 +398,14 @@ pub fn fetch(
     odb: &mut Odb,
     refs: &RefStore,
 ) -> Result<FetchOutcome> {
-    let negotiation = negotiate(advertisement, spec, &options.capabilities, odb, refs, options.format)?;
+    let negotiation = negotiate(
+        advertisement,
+        spec,
+        &options.capabilities,
+        odb,
+        refs,
+        options.format,
+    )?;
 
     // A dry run stops after the negotiation: the wants are what the caller asked to see, and moving
     // refs or downloading a pack would make it not a dry run.
@@ -482,13 +489,15 @@ fn apply_ref_update(
 
     if !update.force
         && let Some(old) = current
-            && old != update.new && !is_fast_forward(odb, old, update.new)? {
-                return Err(Error::NonFastForward {
-                    name: update.name.clone(),
-                    old,
-                    new: update.new,
-                });
-            }
+        && old != update.new
+        && !is_fast_forward(odb, old, update.new)?
+    {
+        return Err(Error::NonFastForward {
+            name: update.name.clone(),
+            old,
+            new: update.new,
+        });
+    }
 
     // `expect` is the value the caller believes is there; `None` means "I did not look", which the
     // ref lock turns into a plain overwrite rather than a check.
@@ -536,11 +545,7 @@ pub fn negotiate(
     refs: &RefStore,
     format: crate::hash::ObjectFormat,
 ) -> Result<Negotiation> {
-    let advertised_ids: Vec<ObjectId> = advertisement
-    .refs
-    .iter()
-    .map(|r| r.oid)
-    .collect();
+    let advertised_ids: Vec<ObjectId> = advertisement.refs.iter().map(|r| r.oid).collect();
     if !advertised_ids.iter().any(|id| id.format() == format) {
         return Err(Error::ObjectFormatMismatch {
             expected: format,
@@ -607,11 +612,11 @@ pub fn negotiate(
 ///   announced and is not something to want.
 pub fn wants_for_tracking(advertisement: &RefAdvertisement) -> Vec<ObjectId> {
     advertisement
-    .refs
-    .iter()
-    .filter(|r| !r.oid.is_zero())
-    .map(|r| r.peeled.unwrap_or(r.oid))
-    .collect()
+        .refs
+        .iter()
+        .filter(|r| !r.oid.is_zero())
+        .map(|r| r.peeled.unwrap_or(r.oid))
+        .collect()
 }
 
 /// Phase 11 — compute the local refs to offer as `have` lines, newest first.
@@ -636,9 +641,10 @@ pub fn local_haves(odb: &Odb, refs: &RefStore) -> Result<Vec<ObjectId>> {
             continue;
         }
         if let Ok(commit) = refs.peel_oid(oid, odb)
-            && !haves.contains(&commit) {
-                haves.push(commit);
-            }
+            && !haves.contains(&commit)
+        {
+            haves.push(commit);
+        }
     }
     Ok(haves)
 }
@@ -702,15 +708,14 @@ pub fn write_tracking_refs(
         }
 
         let is_tag = advertised_name.starts_with(b"refs/tags/");
-        if is_tag
-            && let Some(old) = current {
-                // Never overwrite a tag: a moved tag is reported, not followed.
-                return Err(Error::NonFastForward {
-                    name: target.clone(),
-                    old,
-                    new: advertised.oid,
-                });
-            }
+        if is_tag && let Some(old) = current {
+            // Never overwrite a tag: a moved tag is reported, not followed.
+            return Err(Error::NonFastForward {
+                name: target.clone(),
+                old,
+                new: advertised.oid,
+            });
+        }
 
         // A fetch decides what the remote has, so the write is unconditional apart from the
         // expected value it just observed.
@@ -740,7 +745,9 @@ pub fn write_tracking_refs(
 ///   [`crate::remote::RemoteUrl::parse`] is where a hostile remote name would be caught. This
 ///   function assumes a name of the shape the config allows.
 pub fn tracking_ref_name(remote: &BStr, advertised: &BStr) -> Option<BString> {
-    let prefix = advertised.strip_prefix(b"refs/heads/").or_else(|| advertised.strip_prefix(b"refs/tags/"))?;
+    let prefix = advertised
+        .strip_prefix(b"refs/heads/")
+        .or_else(|| advertised.strip_prefix(b"refs/tags/"))?;
     let mut name = BString::from("refs/remotes/");
     name.extend_from_slice(remote);
     name.push(b'/');
@@ -768,7 +775,10 @@ pub fn guess_remote_name(url: &RemoteUrl) -> Option<BString> {
         end -= 1;
     }
     let trimmed = &bytes[..end];
-    let start = trimmed.iter().rposition(|b| *b == b'/').map_or(0, |i| i + 1);
+    let start = trimmed
+        .iter()
+        .rposition(|b| *b == b'/')
+        .map_or(0, |i| i + 1);
     let last = &trimmed[start..];
     let name = last.strip_suffix(b".git".as_slice()).unwrap_or(last);
     if name.is_empty() {

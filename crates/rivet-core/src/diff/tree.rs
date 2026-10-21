@@ -116,7 +116,11 @@ impl FileDiff {
     ///   three-variant enum for a case that cannot arise from a tree walk. The implementation
     ///   must not panic on it; see the crate's "never panic on repository data" rule.
     pub fn path(&self) -> &BStr {
-        self.new_path.as_ref().map(|p| BStr::new(&p[..])).or_else(|| self.old_path.as_ref().map(|p| BStr::new(&p[..]))).unwrap_or(BStr::new(&[]))
+        self.new_path
+            .as_ref()
+            .map(|p| BStr::new(&p[..]))
+            .or_else(|| self.old_path.as_ref().map(|p| BStr::new(&p[..])))
+            .unwrap_or(BStr::new(&[]))
     }
 
     /// Phase 8 — whether the change is only a mode change.
@@ -129,9 +133,9 @@ impl FileDiff {
     /// submodule bump instead of the one-line change it is.
     pub fn is_mode_only(&self) -> bool {
         self.old_mode.is_some()
-        && self.new_mode.is_some()
-        && self.old_oid.as_ref() == self.new_oid.as_ref()
-        && self.old_mode != self.new_mode
+            && self.new_mode.is_some()
+            && self.old_oid.as_ref() == self.new_oid.as_ref()
+            && self.old_mode != self.new_mode
     }
 
     /// Phase 8 — whether the file was replaced by something that is not a regular file, or the
@@ -320,8 +324,16 @@ pub fn blob_diff(
     let gitlink = |mode: Option<EntryMode>| mode == Some(EntryMode::Commit);
     if gitlink(old_mode) || gitlink(new_mode) {
         return Ok(FileDiff {
-            old_path: if is_new { None } else { Some(BString::from(path)) },
-            new_path: if is_deleted { None } else { Some(BString::from(path)) },
+            old_path: if is_new {
+                None
+            } else {
+                Some(BString::from(path))
+            },
+            new_path: if is_deleted {
+                None
+            } else {
+                Some(BString::from(path))
+            },
             old_mode,
             new_mode,
             old_oid,
@@ -336,7 +348,9 @@ pub fn blob_diff(
     }
 
     let read_blob = |oid: &ObjectId| -> Result<Vec<u8>> {
-        Ok(odb.read_typed(oid, crate::object::ObjectKind::Blob)?.into_data())
+        Ok(odb
+            .read_typed(oid, crate::object::ObjectKind::Blob)?
+            .into_data())
     };
     let old_data = match old_oid {
         Some(oid) => read_blob(&oid)?,
@@ -381,8 +395,16 @@ fn assemble_bytes(
     };
 
     Ok(FileDiff {
-        old_path: if is_new { None } else { Some(BString::from(path)) },
-        new_path: if is_deleted { None } else { Some(BString::from(path)) },
+        old_path: if is_new {
+            None
+        } else {
+            Some(BString::from(path))
+        },
+        new_path: if is_deleted {
+            None
+        } else {
+            Some(BString::from(path))
+        },
         old_mode,
         new_mode,
         old_oid,
@@ -406,14 +428,15 @@ fn compute_hunks(
     new_data: &[u8],
     options: &crate::diff::DiffOptions,
 ) -> Result<Vec<Hunk>> {
-    use crate::diff::myers::{histogram_diff, myers_diff, split_lines};
+    use crate::diff::myers::{histogram_diff, split_lines};
 
     let old_lines = split_lines(old_data);
     let new_lines = split_lines(new_data);
     let edits = match options.algorithm {
-        crate::diff::DiffAlgorithm::Myers => myers_diff(&old_lines, &new_lines),
+        crate::diff::DiffAlgorithm::Myers => crate::diff::myers::git_diff(&old_lines, &new_lines),
         crate::diff::DiffAlgorithm::Histogram => histogram_diff(&old_lines, &new_lines)?,
     };
+    let edits = crate::diff::myers::compact_edits(&old_lines, &new_lines, &edits);
     Ok(crate::diff::unified::build_hunks(
         old_data,
         new_data,
@@ -459,7 +482,15 @@ pub fn tree_diff(
     options: &crate::diff::DiffOptions,
 ) -> Result<TreeDiff> {
     let mut files = Vec::new();
-    walk_trees(format, Some(&old), Some(&new), BString::new(Vec::new()), odb, options, &mut files)?;
+    walk_trees(
+        format,
+        Some(&old),
+        Some(&new),
+        BString::new(Vec::new()),
+        odb,
+        options,
+        &mut files,
+    )?;
     Ok(tree_diff_from(files))
 }
 
@@ -602,7 +633,10 @@ fn walk_trees(
 }
 
 /// Git's tree ordering: a directory's name sorts as if it ended in `/`.
-fn tree_entry_cmp(a: &crate::object::TreeEntry, b: &crate::object::TreeEntry) -> std::cmp::Ordering {
+fn tree_entry_cmp(
+    a: &crate::object::TreeEntry,
+    b: &crate::object::TreeEntry,
+) -> std::cmp::Ordering {
     fn key(name: &BStr, mode: EntryMode) -> Vec<u8> {
         let mut key = name.to_vec();
         if mode == EntryMode::Tree {
@@ -677,7 +711,10 @@ pub fn index_diff(
     let changes = crate::worktree::status::staged_changes(index, tree, odb)?;
     let mut files = Vec::with_capacity(changes.len());
     for change in changes {
-        if !in_pathspec(BStr::new(&change.path[..]), BStr::new(&options.pathspec[..])) {
+        if !in_pathspec(
+            BStr::new(&change.path[..]),
+            BStr::new(&options.pathspec[..]),
+        ) {
             continue;
         }
         // A conflicted path has three contents and none of them is "the" staged side; `status`
@@ -747,7 +784,10 @@ pub fn work_tree_diff(
         crate::worktree::status::unstaged_changes(worktree, index, odb, false, stat_cache)?;
     let mut files = Vec::with_capacity(changes.len());
     for change in changes {
-        if !in_pathspec(BStr::new(&change.path[..]), BStr::new(&options.pathspec[..])) {
+        if !in_pathspec(
+            BStr::new(&change.path[..]),
+            BStr::new(&options.pathspec[..]),
+        ) {
             continue;
         }
         let new_data = match change.new_oid {
@@ -832,7 +872,14 @@ pub fn entry_diff(
                 // The bytes were readable a moment ago and the file is gone now: report the
                 // deletion rather than an empty file with the index's mode.
                 None => {
-                    return assemble_bytes(BStr::new(&entry.path[..]), old, None, &[], &[], options);
+                    return assemble_bytes(
+                        BStr::new(&entry.path[..]),
+                        old,
+                        None,
+                        &[],
+                        &[],
+                        options,
+                    );
                 }
             };
             Some((id, mode))

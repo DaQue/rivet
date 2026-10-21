@@ -38,12 +38,12 @@
 use std::ops::Range;
 use std::path::Path;
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{Object, ObjectKind};
-use crate::pack::{BaseProvider, PackEntry, PackIndex};
-use crate::error::Error;
 use crate::pack::EntryKind;
+use crate::pack::{BaseProvider, PackEntry, PackIndex};
 
 /// Phase 10 — one packfile, opened over a borrowed buffer.
 ///
@@ -113,10 +113,14 @@ impl<'a> PackFile<'a> {
     ) -> Result<Self> {
         let min_len = 12 + format.len();
         if data.len() < min_len {
-            return Err(Error::CorruptPack { reason: "buffer shorter than header and trailer".to_string() });
+            return Err(Error::CorruptPack {
+                reason: "buffer shorter than header and trailer".to_string(),
+            });
         }
         if &data[0..4] != b"PACK" {
-            return Err(Error::CorruptPack { reason: "bad PACK magic".to_string() });
+            return Err(Error::CorruptPack {
+                reason: "bad PACK magic".to_string(),
+            });
         }
         let version = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
         if version != 2 && version != 3 {
@@ -126,10 +130,17 @@ impl<'a> PackFile<'a> {
         if let Some(idx) = &index {
             let idx_checksum = idx.pack_checksum();
             if idx_checksum.as_bytes() != trailer {
-                return Err(Error::CorruptPack { reason: "trailer does not match index checksum".to_string() });
+                return Err(Error::CorruptPack {
+                    reason: "trailer does not match index checksum".to_string(),
+                });
             }
         }
-        Ok(Self { data, index, format, version })
+        Ok(Self {
+            data,
+            index,
+            format,
+            version,
+        })
     }
 
     /// Phase 10 — open a pack from `.pack` and `.idx` files on disk.
@@ -164,7 +175,7 @@ impl<'a> PackFile<'a> {
                 return Err(Error::IoAtPath {
                     path: index_path.to_string_lossy().into_owned().into(),
                     source: e,
-                })
+                });
             }
         };
         let owned = OwnedPackFile::new(data, index_data, format);
@@ -204,8 +215,7 @@ impl<'a> PackFile<'a> {
     /// [`PackFile::verify_checksum`] is for, and it is linear in the pack's size.
     pub fn checksum(&self) -> ObjectId {
         let start = self.data.len() - self.format.len();
-        ObjectId::from_bytes(self.format, &self.data[start..])
-            .expect("pack was validated at open")
+        ObjectId::from_bytes(self.format, &self.data[start..]).expect("pack was validated at open")
     }
 
     /// Phase 10 — the index beside this pack, if it was opened with one.
@@ -239,7 +249,10 @@ impl<'a> PackFile<'a> {
     /// wrong, but because there is nothing to agree with, and callers that require a trustworthy
     /// pack should check the index is present separately.
     pub fn is_index_consistent(&self) -> bool {
-        self.index.as_ref().map(|index| index.len() == self.object_count() as usize).unwrap_or(false)
+        self.index
+            .as_ref()
+            .map(|index| index.len() == self.object_count() as usize)
+            .unwrap_or(false)
     }
 
     /// Phase 10 — read one object by id, resolving its delta chain.
@@ -272,8 +285,13 @@ impl<'a> PackFile<'a> {
     /// [`crate::error::Error::MissingDeltaBase`] from the resolver; and
     /// [`crate::error::Error::HashMismatch`] when the content does not match the id.
     pub fn get(&self, oid: &ObjectId, bases: Option<&dyn BaseProvider>) -> Result<Object> {
-        let index = self.index.as_ref().ok_or(Error::ObjectNotFound { oid: *oid })?;
-        let entry = index.lookup(oid).ok_or(Error::ObjectNotFound { oid: *oid })?;
+        let index = self
+            .index
+            .as_ref()
+            .ok_or(Error::ObjectNotFound { oid: *oid })?;
+        let entry = index
+            .lookup(oid)
+            .ok_or(Error::ObjectNotFound { oid: *oid })?;
         let (kind, data) = self.get_at_offset(entry.offset, bases)?;
         let object = crate::pack::wrap_object(kind, data);
         let actual = object.id(self.format)?;
@@ -316,7 +334,7 @@ impl<'a> PackFile<'a> {
         offset: u64,
         bases: Option<&dyn BaseProvider>,
     ) -> Result<(ObjectKind, Vec<u8>)> {
-        use crate::pack::{apply_delta, inflate_at, MAX_DELTA_DEPTH};
+        use crate::pack::{MAX_DELTA_DEPTH, apply_delta, inflate_at};
 
         // Chain links are collected top-down, then applied bottom-up: recursion over the pack
         // format would make the depth limit a stack-depth question, which is exactly what the
@@ -376,7 +394,7 @@ impl<'a> PackFile<'a> {
                             return Err(Error::MissingDeltaBase {
                                 oid: ObjectId::zero(self.format),
                                 base: base_oid,
-                            })
+                            });
                         }
                     };
                     for delta in deltas.iter().rev() {
@@ -640,7 +658,11 @@ impl OwnedPackFile {
     /// Whatever [`PackFile::open`] and [`PackIndex::parse`] raise, re-checked on each call because
     /// the borrow cannot be cached in this value.
     pub fn pack(&self) -> Result<PackFile<'_>> {
-        let index = self.index_data.as_ref().map(|data| PackIndex::parse(data, self.format)).transpose()?;
+        let index = self
+            .index_data
+            .as_ref()
+            .map(|data| PackIndex::parse(data, self.format))
+            .transpose()?;
         PackFile::open(&self.data, index, self.format)
     }
 }

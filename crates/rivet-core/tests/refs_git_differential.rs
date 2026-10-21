@@ -136,7 +136,9 @@ fn head_branches_and_tags_match_git_after_pack_refs() {
         oid(&git(dir, &["rev-parse", "refs/tags/ann^{commit}"]))
     );
     assert_eq!(
-        store.peel_to_commit(&name("refs/heads/main"), &odb).unwrap(),
+        store
+            .peel_to_commit(&name("refs/heads/main"), &odb)
+            .unwrap(),
         oid(&git(dir, &["rev-parse", "refs/heads/main^{commit}"]))
     );
 }
@@ -167,7 +169,10 @@ fn a_loose_ref_shadows_the_stale_packed_entry_like_git() {
 
     let store = RefStore::open(&git_dir, ObjectFormat::Sha1).expect("open ref store");
     let expected = oid(&git(dir, &["rev-parse", "refs/heads/other"]));
-    assert_eq!(store.resolve_oid(&name("refs/heads/other")).unwrap(), expected);
+    assert_eq!(
+        store.resolve_oid(&name("refs/heads/other")).unwrap(),
+        expected
+    );
     assert_eq!(store.head_branch().unwrap(), Some(name("refs/heads/main")));
 }
 
@@ -219,14 +224,20 @@ fn refs_rivet_writes_are_exactly_what_git_reads() {
 
     // Create (CAS from absent) and let git confirm the value.
     store.set_direct(&made, first, None).expect("set_direct");
-    assert_eq!(git(dir, &["rev-parse", "refs/heads/rivet-made"]), first.to_hex().to_string());
+    assert_eq!(
+        git(dir, &["rev-parse", "refs/heads/rivet-made"]),
+        first.to_hex().to_string()
+    );
 
     // Compare-and-swap: moving it with the right expectation succeeds, the wrong one is refused
     // and leaves the ref untouched.
     store
         .update(&made, second, Some(first), None)
         .expect("update with correct expectation");
-    assert_eq!(git(dir, &["rev-parse", "refs/heads/rivet-made"]), second.to_hex().to_string());
+    assert_eq!(
+        git(dir, &["rev-parse", "refs/heads/rivet-made"]),
+        second.to_hex().to_string()
+    );
     assert!(
         store.update(&made, first, Some(second), None).is_ok(),
         "second CAS back to the original value"
@@ -235,7 +246,10 @@ fn refs_rivet_writes_are_exactly_what_git_reads() {
         store.update(&made, second, Some(second), None).is_err(),
         "a stale expectation must be refused"
     );
-    assert_eq!(git(dir, &["rev-parse", "refs/heads/rivet-made"]), first.to_hex().to_string());
+    assert_eq!(
+        git(dir, &["rev-parse", "refs/heads/rivet-made"]),
+        first.to_hex().to_string()
+    );
 
     // Deleting removes the file; git then agrees the ref is gone.
     store.delete(&made).expect("delete");
@@ -278,10 +292,15 @@ fn reading_through_a_symbolic_ref_and_list_all_agree_with_git() {
     let head = oid(&git(dir, &["rev-parse", "HEAD"]));
     for (n, o) in &all {
         let full = String::from_utf8(n.as_bytes().to_vec()).unwrap();
-        assert_eq!(*o, oid(&git(dir, &["rev-parse", &full])), "list_all({full})");
+        assert_eq!(
+            *o,
+            oid(&git(dir, &["rev-parse", &full])),
+            "list_all({full})"
+        );
     }
     assert!(
-        all.iter().any(|(n, o)| n.as_bytes() == b"refs/heads/main" && *o == head),
+        all.iter()
+            .any(|(n, o)| n.as_bytes() == b"refs/heads/main" && *o == head),
         "list_all must include the branch git just committed to"
     );
     assert_eq!(

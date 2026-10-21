@@ -64,7 +64,6 @@
 //!
 //! The core has no `async`. Network I/O in `remote` uses blocking transports.
 
-
 pub mod config;
 pub mod diff;
 pub mod error;
@@ -78,8 +77,8 @@ pub mod odb;
 pub mod ops;
 pub mod pack;
 pub mod refs;
-pub mod remote_ops;
 pub mod remote;
+pub mod remote_ops;
 pub mod repo;
 pub mod revparse;
 pub mod revwalk;
@@ -94,9 +93,10 @@ pub use crate::config::{
 };
 pub use crate::diff::{
     DiffAlgorithm, DiffLine, DiffOptions, DiffStat, Edit, FileDiff, Hunk, HunkLine, LineKind,
-    TreeDiff, blob_diff, change_letter, detect_renames, pair_renames, pprint_rename, RenamePair, RenameSide, entry_diff, format_name_status, format_stat, format_stat_sized,
-    format_unified, histogram_diff, index_diff, index_line_abbrev, is_binary, line_count,
-    myers_diff, split_lines, tree_diff, work_tree_diff, write_unified,
+    RenamePair, RenameSide, TreeDiff, blob_diff, change_letter, detect_renames, entry_diff,
+    format_name_status, format_stat, format_stat_sized, format_unified, histogram_diff, index_diff,
+    index_line_abbrev, is_binary, line_count, myers_diff, pair_renames, pprint_rename, split_lines,
+    tree_diff, work_tree_diff, write_unified,
 };
 pub use crate::error::{Error, Result};
 pub use crate::hash::{ObjectFormat, ObjectHasher, ObjectId};

@@ -128,9 +128,11 @@ impl RefTarget {
     ///
     /// [`crate::error::Error::SymbolicRef`] if the target is symbolic.
     pub fn oid(&self) -> Result<ObjectId> {
-                match self {
+        match self {
             RefTarget::Direct(oid) => Ok(*oid),
-            RefTarget::Symbolic(name) => Err(Error::SymbolicRef { name: name_bytes(name) }),
+            RefTarget::Symbolic(name) => Err(Error::SymbolicRef {
+                name: name_bytes(name),
+            }),
         }
     }
 
@@ -142,7 +144,7 @@ impl RefTarget {
     ///
     /// [`crate::error::Error::SymbolicRef`] if the target is direct.
     pub fn symbolic_target(&self) -> Result<&RefName> {
-                match self {
+        match self {
             RefTarget::Symbolic(name) => Ok(name),
             RefTarget::Direct(oid) => Err(Error::SymbolicRef { name: oid.to_hex() }),
         }
@@ -185,7 +187,8 @@ impl RefTarget {
             }
             RefTarget::Direct(id) => {
                 let mut hex = [0u8; 64];
-                id.write_hex(&mut hex[..format.hex_len()]).expect("write hex");
+                id.write_hex(&mut hex[..format.hex_len()])
+                    .expect("write hex");
                 out.extend_from_slice(&hex[..format.hex_len()]);
             }
         }
@@ -251,7 +254,7 @@ impl RefLock {
     /// only way `O_EXCL` fails that this distinguishes, because that is the case the user can act
     /// on. [`crate::error::Error::IoAtPath`] for any other failure to create it.
     pub fn acquire(git_dir: &Path, name: &RefName) -> Result<Self> {
-                Self::acquire_path(&name.file_path(git_dir))
+        Self::acquire_path(&name.file_path(git_dir))
     }
 
     /// Phase 2 — take the lock for an arbitrary path.
@@ -269,7 +272,7 @@ impl RefLock {
     ///
     /// As [`RefLock::acquire`].
     pub fn acquire_path(path: &Path) -> Result<Self> {
-                let mut lock_os = path.as_os_str().to_os_string();
+        let mut lock_os = path.as_os_str().to_os_string();
         lock_os.push(".lock");
         let lock_path = PathBuf::from(lock_os);
         if let Some(parent) = lock_path.parent() {
@@ -326,7 +329,7 @@ impl RefLock {
     /// cleans it up — which means a caller reporting the error must not keep the guard alive
     /// indefinitely, or the user is told to delete a lock file that a still-open process owns.
     pub fn write_and_commit(&mut self, data: &[u8]) -> Result<()> {
-                std::fs::write(&self.path, data).map_err(|e| io_at(&self.path, e))?;
+        std::fs::write(&self.path, data).map_err(|e| io_at(&self.path, e))?;
         self.commit()
     }
 
@@ -346,7 +349,7 @@ impl RefLock {
     ///
     /// [`crate::error::Error::IoAtPath`] if the rename fails.
     pub fn commit(&mut self) -> Result<()> {
-                if !self.armed {
+        if !self.armed {
             return Ok(());
         }
         std::fs::rename(&self.path, &self.target).map_err(|e| io_at(&self.path, e))?;
@@ -370,7 +373,7 @@ impl RefLock {
     ///
     /// [`crate::error::Error::IoAtPath`] if the lock file exists and cannot be removed.
     pub fn release(&mut self) -> Result<()> {
-                if !self.armed {
+        if !self.armed {
             return Ok(());
         }
         self.armed = false;
@@ -436,7 +439,7 @@ impl RefStore {
     /// [`crate::error::Error::IoAtPath`] if it exists and cannot be read, and
     /// [`crate::error::Error::InvalidRefName`] for a line naming an invalid ref.
     pub fn open(git_dir: &Path, format: ObjectFormat) -> Result<Self> {
-                Ok(Self {
+        Ok(Self {
             git_dir: git_dir.to_path_buf(),
             format,
             packed: PackedRefs::load(git_dir, format)?,
@@ -461,7 +464,7 @@ impl RefStore {
     /// Exposed because `Repository` builds every subsystem over the same paths and re-deriving them
     /// in each would be the place two of them disagreed about where `refs/` is.
     pub fn git_dir_paths(&self) -> GitDirPaths {
-                GitDirPaths::new(&self.git_dir)
+        GitDirPaths::new(&self.git_dir)
     }
 
     /// Phase 2 — re-read `packed-refs` and pick up refs that moved since the last read.
@@ -478,7 +481,7 @@ impl RefStore {
     ///
     /// As [`RefStore::open`].
     pub fn refresh(&mut self) -> Result<()> {
-                self.packed = PackedRefs::load(&self.git_dir, self.format)?;
+        self.packed = PackedRefs::load(&self.git_dir, self.format)?;
         Ok(())
     }
 
@@ -500,12 +503,14 @@ impl RefStore {
     /// [`crate::error::Error::RefNotFound`] if neither storage has it, and the parse errors of
     /// [`loose::read`] and [`RefStore::open`].
     pub fn read(&self, name: &RefName) -> Result<RefTarget> {
-                if let Some(target) = loose::try_read(&self.git_dir, name, self.format)? {
+        if let Some(target) = loose::try_read(&self.git_dir, name, self.format)? {
             return Ok(target);
         }
         match self.packed.get(name) {
             Some(oid) => Ok(RefTarget::Direct(oid)),
-            None => Err(Error::RefNotFound { name: name_bytes(name) }),
+            None => Err(Error::RefNotFound {
+                name: name_bytes(name),
+            }),
         }
     }
 
@@ -518,7 +523,7 @@ impl RefStore {
     ///
     /// Everything [`RefStore::read`] raises except [`crate::error::Error::RefNotFound`].
     pub fn try_read(&self, name: &RefName) -> Result<Option<RefTarget>> {
-                match self.read(name) {
+        match self.read(name) {
             Ok(target) => Ok(Some(target)),
             Err(Error::RefNotFound { .. }) => Ok(None),
             Err(e) => Err(e),
@@ -543,7 +548,7 @@ impl RefStore {
     /// [`crate::error::Error::SymbolicRefCycle`] for a cycle or an over-long chain, and the read
     /// errors of [`RefStore::read`].
     pub fn follow(&self, name: &RefName) -> Result<RefName> {
-                let mut current = name.clone();
+        let mut current = name.clone();
         let mut hops = 0usize;
         loop {
             match self.read(&current)? {
@@ -585,7 +590,7 @@ impl RefStore {
     /// start does not exist; [`crate::error::Error::SymbolicRefCycle`] for a cycle; and the parse
     /// errors of [`RefStore::read`].
     pub fn resolve_oid(&self, name: &RefName) -> Result<ObjectId> {
-                let target = self.follow(name)?;
+        let target = self.follow(name)?;
         match self.read(&target)? {
             RefTarget::Direct(oid) => Ok(oid),
             RefTarget::Symbolic(_) => Err(Error::SymbolicRefCycle {
@@ -617,7 +622,7 @@ impl RefStore {
     /// [`crate::error::Error::TagCycle`] and [`crate::error::Error::ObjectNotFound`] from the
     /// object database, and everything [`RefStore::resolve_oid`] raises.
     pub fn peel_to_commit(&self, name: &RefName, odb: &crate::odb::Odb) -> Result<ObjectId> {
-                let oid = self.resolve_oid(name)?;
+        let oid = self.resolve_oid(name)?;
         self.peel_oid(oid, odb)
     }
 
@@ -639,7 +644,7 @@ impl RefStore {
     /// [`crate::error::Error::ObjectNotFound`], and [`crate::error::Error::WrongObjectKind`] for a
     /// malformed tag whose `type` header disagrees with the object it names.
     pub fn peel_oid(&self, oid: ObjectId, odb: &crate::odb::Odb) -> Result<ObjectId> {
-                let mut current = oid;
+        let mut current = oid;
         let mut hops = 0usize;
         loop {
             let object = odb.read(&current)?;
@@ -653,7 +658,11 @@ impl RefStore {
                     let (next, _kind) = self.peel_one(current, odb)?;
                     current = next;
                 }
-                _ => return Err(Error::NotACommit { name: current.to_hex() }),
+                _ => {
+                    return Err(Error::NotACommit {
+                        name: current.to_hex(),
+                    });
+                }
             }
         }
     }
@@ -675,7 +684,7 @@ impl RefStore {
     /// [`crate::error::Error::WrongObjectKind`] if `oid` is not a tag, and the object database's
     /// read errors.
     pub fn peel_one(&self, oid: ObjectId, odb: &crate::odb::Odb) -> Result<(ObjectId, ObjectKind)> {
-                let object = odb.read(&oid)?;
+        let object = odb.read(&oid)?;
         if object.kind() != ObjectKind::Tag {
             return Err(Error::WrongObjectKind {
                 oid: Some(oid),
@@ -711,7 +720,7 @@ impl RefStore {
     /// directory is not a repository; [`crate::error::Error::SymbolicRefCycle`]; and the parse
     /// errors of [`RefStore::read`].
     pub fn head(&self) -> Result<HeadState> {
-                let head = RefName::head();
+        let head = RefName::head();
         match self.read(&head)? {
             RefTarget::Direct(oid) => Ok(HeadState::Detached { oid }),
             RefTarget::Symbolic(branch) => {
@@ -720,7 +729,10 @@ impl RefStore {
                 loop {
                     match self.read(&current) {
                         Ok(RefTarget::Direct(oid)) => {
-                            return Ok(HeadState::Attached { branch: current, oid })
+                            return Ok(HeadState::Attached {
+                                branch: current,
+                                oid,
+                            });
                         }
                         Ok(RefTarget::Symbolic(next)) => {
                             hops += 1;
@@ -733,7 +745,7 @@ impl RefStore {
                             current = next;
                         }
                         Err(Error::RefNotFound { .. }) => {
-                            return Ok(HeadState::Unborn { branch: current })
+                            return Ok(HeadState::Unborn { branch: current });
                         }
                         Err(e) => return Err(e),
                     }
@@ -759,7 +771,7 @@ impl RefStore {
     ///
     /// As [`RefStore::head`].
     pub fn head_branch(&self) -> Result<Option<RefName>> {
-                match self.head()? {
+        match self.head()? {
             HeadState::Attached { branch, .. } => Ok(Some(branch).filter(|name| name.is_branch())),
             _ => Ok(None),
         }
@@ -782,8 +794,10 @@ impl RefStore {
     /// [`crate::error::Error::RefNotFound`] for an unborn branch and for a missing `HEAD`, and
     /// everything [`RefStore::peel_to_commit`] raises.
     pub fn head_commit(&self, odb: &crate::odb::Odb) -> Result<ObjectId> {
-                match self.head()? {
-            HeadState::Attached { oid, .. } | HeadState::Detached { oid } => self.peel_oid(oid, odb),
+        match self.head()? {
+            HeadState::Attached { oid, .. } | HeadState::Detached { oid } => {
+                self.peel_oid(oid, odb)
+            }
             HeadState::Unborn { branch } => Err(Error::RefNotFound {
                 name: name_bytes(&branch),
             }),
@@ -812,7 +826,11 @@ impl RefStore {
     /// [`crate::error::Error::LockHeld`] if `HEAD`'s lock is held, and
     /// [`crate::error::Error::IoAtPath`] if the write fails.
     pub fn set_head(&self, name: &RefName, message: Option<ReflogMessage<'_>>) -> Result<()> {
-                self.write_ref(&RefName::head(), &RefTarget::Symbolic(name.clone()), message)
+        self.write_ref(
+            &RefName::head(),
+            &RefTarget::Symbolic(name.clone()),
+            message,
+        )
     }
 
     /// Phase 2 — point `HEAD` directly at a commit.
@@ -832,7 +850,7 @@ impl RefStore {
     ///
     /// As [`RefStore::set_head`].
     pub fn detach_head(&self, commit: ObjectId, message: Option<ReflogMessage<'_>>) -> Result<()> {
-                self.write_ref(&RefName::head(), &RefTarget::Direct(commit), message)
+        self.write_ref(&RefName::head(), &RefTarget::Direct(commit), message)
     }
 
     /// Phase 2 — set a ref to an object id, with no expectation about its old value.
@@ -858,7 +876,7 @@ impl RefStore {
         oid: ObjectId,
         message: Option<ReflogMessage<'_>>,
     ) -> Result<()> {
-                self.write_ref(name, &RefTarget::Direct(oid), message)
+        self.write_ref(name, &RefTarget::Direct(oid), message)
     }
 
     /// Phase 2 — point a ref at another ref.
@@ -882,7 +900,7 @@ impl RefStore {
         target: &RefName,
         message: Option<ReflogMessage<'_>>,
     ) -> Result<()> {
-                self.write_ref(name, &RefTarget::Symbolic(target.clone()), message)
+        self.write_ref(name, &RefTarget::Symbolic(target.clone()), message)
     }
 
     /// Phase 2 — move a ref, refusing if it is not where the caller expected it.
@@ -925,16 +943,20 @@ impl RefStore {
         expected: Option<ObjectId>,
         message: Option<ReflogMessage<'_>>,
     ) -> Result<()> {
-                let git_dir = self.git_dir();
+        let git_dir = self.git_dir();
         let mut lock = RefLock::acquire(git_dir, name)?;
         let current = self.try_read(name)?;
         match (&expected, &current) {
             (None, None) => {}
             (None, Some(_)) => {
-                return Err(Error::RefNotFound { name: name_bytes(name) });
+                return Err(Error::RefNotFound {
+                    name: name_bytes(name),
+                });
             }
             (Some(_), None) => {
-                return Err(Error::RefNotFound { name: name_bytes(name) });
+                return Err(Error::RefNotFound {
+                    name: name_bytes(name),
+                });
             }
             (Some(want), Some(RefTarget::Direct(found))) => {
                 if found != want {
@@ -946,7 +968,9 @@ impl RefStore {
                 }
             }
             (Some(_), Some(RefTarget::Symbolic(_))) => {
-                return Err(Error::SymbolicRef { name: name_bytes(name) });
+                return Err(Error::SymbolicRef {
+                    name: name_bytes(name),
+                });
             }
         }
         let old = match &current {
@@ -985,14 +1009,18 @@ impl RefStore {
     /// [`crate::error::Error::LockHeld`] for either lock; and
     /// [`crate::error::Error::IoAtPath`] if a file cannot be removed.
     pub fn delete(&self, name: &RefName) -> Result<()> {
-                if name.is_head() {
-            return Err(Error::SymbolicRef { name: name_bytes(name) });
+        if name.is_head() {
+            return Err(Error::SymbolicRef {
+                name: name_bytes(name),
+            });
         }
         let git_dir = self.git_dir();
         let loose_present = loose::exists(git_dir, name);
         let packed_present = self.packed.get(name).is_some();
         if !loose_present && !packed_present {
-            return Err(Error::RefNotFound { name: name_bytes(name) });
+            return Err(Error::RefNotFound {
+                name: name_bytes(name),
+            });
         }
         let _lock = RefLock::acquire(git_dir, name)?;
         if loose_present {
@@ -1030,7 +1058,7 @@ impl RefStore {
     /// [`crate::error::Error::LockHeld`] for either lock; and
     /// [`crate::error::Error::IoAtPath`] if the move fails.
     pub fn rename(&self, from: &RefName, to: &RefName) -> Result<()> {
-                let git_dir = self.git_dir();
+        let git_dir = self.git_dir();
         if self.exists(to) {
             return Err(Error::Message(format!("ref {} already exists", to)));
         }
@@ -1083,7 +1111,7 @@ impl RefStore {
     /// The walk errors of [`loose::list`] and the parse errors of [`RefStore::read`] for a ref that
     /// is present and broken.
     pub fn list(&self, prefix: &[u8]) -> Result<Vec<(RefName, RefTarget)>> {
-                let git_dir = self.git_dir();
+        let git_dir = self.git_dir();
         let mut out: Vec<(RefName, RefTarget)> =
             loose::list(git_dir, BStr::new(prefix), self.format)?;
         for entry in self.packed.iter() {
@@ -1112,7 +1140,7 @@ impl RefStore {
     ///
     /// As [`RefStore::list`], plus the resolution errors of [`RefStore::resolve_oid`].
     pub fn list_branches(&self) -> Result<Vec<(RefName, ObjectId)>> {
-                let mut out = Vec::new();
+        let mut out = Vec::new();
         for (name, _target) in self.list(b"refs/heads/")? {
             let oid = self.resolve_oid(&name)?;
             out.push((name, oid));
@@ -1133,7 +1161,7 @@ impl RefStore {
     ///
     /// As [`RefStore::list`] and [`RefStore::resolve_oid`].
     pub fn list_tags(&self) -> Result<Vec<(RefName, ObjectId)>> {
-                let mut out = Vec::new();
+        let mut out = Vec::new();
         for (name, _target) in self.list(b"refs/tags/")? {
             let oid = self.resolve_oid(&name)?;
             out.push((name, oid));
@@ -1153,7 +1181,7 @@ impl RefStore {
     ///
     /// As [`RefStore::list`] and [`RefStore::resolve_oid`].
     pub fn list_remote(&self) -> Result<Vec<(RefName, ObjectId)>> {
-                let mut out = Vec::new();
+        let mut out = Vec::new();
         for (name, _target) in self.list(b"refs/remotes/")? {
             let oid = self.resolve_oid(&name)?;
             out.push((name, oid));
@@ -1180,7 +1208,7 @@ impl RefStore {
     ///
     /// The walk and resolution errors of [`RefStore::list`]; a per-ref peeling failure is skipped.
     pub fn list_all(&self, odb: &crate::odb::Odb) -> Result<Vec<(RefName, ObjectId)>> {
-                let mut out = Vec::new();
+        let mut out = Vec::new();
         // Only `refs/` holds refs that can be peeled to a commit. Scanning the git directory
         // root would pull in `COMMIT_EDITMSG`, `description` and friends, which are not refs.
         for (name, _target) in self.list(b"refs/")? {
@@ -1216,7 +1244,7 @@ impl RefStore {
     /// packed snapshot is consulted and is broken; it is already parsed, so in practice this is
     /// infallible.
     pub fn location(&self, name: &RefName) -> Option<RefLocation> {
-                let loose_present = loose::exists(&self.git_dir, name);
+        let loose_present = loose::exists(&self.git_dir, name);
         let packed_present = self.packed.get(name).is_some();
         if !loose_present && !packed_present {
             None
@@ -1232,7 +1260,7 @@ impl RefStore {
     /// `true` for a ref whose file is empty or corrupt, matching [`RefStore::location`]'s logic and
     /// Git's own distinction between "no such ref" and "broken ref".
     pub fn exists(&self, name: &RefName) -> bool {
-                self.location(name).is_some()
+        self.location(name).is_some()
     }
 
     /// Phase 2 — the refs currently locked by a stale lock file.
@@ -1249,7 +1277,7 @@ impl RefStore {
     ///
     /// [`crate::error::Error::IoAtPath`] if `refs/` cannot be walked.
     pub fn stale_locks(&self) -> Result<Vec<PathBuf>> {
-                let mut out = Vec::new();
+        let mut out = Vec::new();
         collect_locks(&self.git_dir.join("refs"), &mut out)?;
         for extra in ["HEAD.lock", "packed-refs.lock"] {
             let path = self.git_dir.join(extra);
@@ -1269,7 +1297,7 @@ impl RefStore {
     /// read-modify-write the whole file and would otherwise re-parse it; a caller reading a value
     /// must go through [`RefStore::read`] so that loose shadowing applies.
     pub fn packed(&self) -> &PackedRefs {
-                &self.packed
+        &self.packed
     }
 
     /// Phase 2 — write `packed-refs` from the given set, replacing the file and the snapshot.
@@ -1290,7 +1318,7 @@ impl RefStore {
     ///
     /// [`crate::error::Error::LockHeld`], and [`crate::error::Error::IoAtPath`] if the write fails.
     pub fn write_packed(&mut self, packed: PackedRefs) -> Result<()> {
-                packed.write(&self.git_dir, self.format)?;
+        packed.write(&self.git_dir, self.format)?;
         self.packed = packed;
         Ok(())
     }
@@ -1305,7 +1333,7 @@ impl RefStore {
     ///
     /// [`crate::error::Error::CorruptReflog`] and [`crate::error::Error::IoAtPath`].
     pub fn reflog(&self, name: &RefName) -> Result<Vec<ReflogEntry>> {
-                reflog::read(&self.git_dir, name, self.format)
+        reflog::read(&self.git_dir, name, self.format)
     }
 
     /// Phase 2 — append to a ref's reflog without moving the ref.
@@ -1324,7 +1352,7 @@ impl RefStore {
     ///
     /// [`crate::error::Error::IoAtPath`] if the log cannot be written.
     pub fn append_reflog(&self, name: &RefName, entry: &ReflogEntry) -> Result<()> {
-                reflog::append(&self.git_dir, name, entry)
+        reflog::append(&self.git_dir, name, entry)
     }
 
     /// Phase 2 — decide which namespace an abbreviated name refers to.
@@ -1353,7 +1381,7 @@ impl RefStore {
     /// [`crate::error::Error::InvalidRefName`] if `short` cannot be spelled as a ref name in any of
     /// the candidate namespaces.
     pub fn resolve_short(&self, short: &bstr::BStr) -> Result<RefName> {
-                let short: &[u8] = short.as_ref();
+        let short: &[u8] = short.as_ref();
         let mut candidates: Vec<Vec<u8>> = vec![short.to_vec()];
         candidates.push([b"refs/".as_slice(), short].concat());
         candidates.push([b"refs/tags/".as_slice(), short].concat());
@@ -1425,7 +1453,7 @@ impl HeadState {
     /// "which branch am I on" has an answer in both — a fresh repository is on `main` before `main`
     /// exists. A caller that needs the branch to *resolve* must check for `Attached` specifically.
     pub fn branch(&self) -> Option<&RefName> {
-                match self {
+        match self {
             HeadState::Attached { branch, .. } | HeadState::Unborn { branch } => Some(branch),
             HeadState::Detached { .. } => None,
         }
@@ -1438,7 +1466,7 @@ impl HeadState {
     /// `None` for an unborn branch and for a symbolic `HEAD` that does not resolve — the two cases
     /// where the user has asked "where am I" and the honest answer is "nowhere yet".
     pub fn oid(&self) -> Option<ObjectId> {
-                match self {
+        match self {
             HeadState::Attached { oid, .. } | HeadState::Detached { oid } => Some(*oid),
             HeadState::Unborn { .. } => None,
         }
@@ -1451,12 +1479,12 @@ impl HeadState {
     /// `false` for an unborn branch. That is the right answer for the question this asks, but it is
     /// not "the branch exists", and code that commits or checks out must not read it as such.
     pub const fn is_detached(&self) -> bool {
-                matches!(self, HeadState::Detached { .. })
+        matches!(self, HeadState::Detached { .. })
     }
 
     /// Phase 2 — whether `HEAD` is on a branch that has no commits yet.
     pub const fn is_unborn(&self) -> bool {
-                matches!(self, HeadState::Unborn { .. })
+        matches!(self, HeadState::Unborn { .. })
     }
 }
 
@@ -1492,7 +1520,7 @@ impl GitDirPaths {
     /// creating. That is the point: `init` needs the paths before it has files, and a constructor
     /// that validated would be unusable in the one place it is most needed.
     pub fn new(git_dir: &Path) -> Self {
-                Self {
+        Self {
             git_dir: git_dir.to_path_buf(),
             refs_dir: git_dir.join("refs"),
             logs_dir: git_dir.join("logs"),
@@ -1514,7 +1542,7 @@ impl GitDirPaths {
 /// interpretations to try, and the specific rule that failed is only interesting once the answer is
 /// "this was meant to be a ref". Code that wants the reason uses [`RefName::parse`].
 pub fn is_valid_ref_name(name: &[u8]) -> bool {
-        RefName::from_bytes(name).is_ok()
+    RefName::from_bytes(name).is_ok()
 }
 
 impl RefStore {
@@ -1529,7 +1557,9 @@ impl RefStore {
         message: Option<ReflogMessage<'_>>,
     ) -> Result<()> {
         let git_dir = self.git_dir();
-        let old = self.resolve_oid(name).unwrap_or_else(|_| ObjectId::zero(self.format));
+        let old = self
+            .resolve_oid(name)
+            .unwrap_or_else(|_| ObjectId::zero(self.format));
         let new = match target {
             RefTarget::Direct(oid) => *oid,
             RefTarget::Symbolic(next) => self

@@ -14,9 +14,18 @@ fn replay(old: &[&str], new: &[&str], edits: &[rivet_core::diff::Edit]) -> Vec<S
     let mut ni = 0usize;
     for edit in edits {
         if edit.old_len > 0 && edit.new_len > 0 {
-            assert_eq!(edit.old_len, edit.new_len, "a match run must be equal on both sides");
-            assert_eq!(edit.old_index, oi, "match run starts at the wrong old index");
-            assert_eq!(edit.new_index, ni, "match run starts at the wrong new index");
+            assert_eq!(
+                edit.old_len, edit.new_len,
+                "a match run must be equal on both sides"
+            );
+            assert_eq!(
+                edit.old_index, oi,
+                "match run starts at the wrong old index"
+            );
+            assert_eq!(
+                edit.new_index, ni,
+                "match run starts at the wrong new index"
+            );
             for k in 0..edit.old_len {
                 assert_eq!(old[oi + k], new[ni + k], "a match run paired unequal lines");
                 out.push(old[oi + k].to_string());
@@ -27,7 +36,10 @@ fn replay(old: &[&str], new: &[&str], edits: &[rivet_core::diff::Edit]) -> Vec<S
             assert_eq!(edit.old_index, oi, "deletion starts at the wrong old index");
             oi += edit.old_len;
         } else if edit.new_len > 0 {
-            assert_eq!(edit.new_index, ni, "insertion starts at the wrong new index");
+            assert_eq!(
+                edit.new_index, ni,
+                "insertion starts at the wrong new index"
+            );
             for k in 0..edit.new_len {
                 out.push(new[ni + k].to_string());
             }
@@ -56,10 +68,21 @@ fn lcs_len(a: &[&str], b: &[&str]) -> usize {
 fn check(a: &[&str], b: &[&str]) {
     let edits = myers_diff(a, b);
     let rebuilt = replay(a, b, &edits);
-    assert_eq!(rebuilt, b.to_vec(), "edit script does not reproduce the new sequence");
-    let edits_used: usize = edits.iter().map(|e| e.old_len.max(e.new_len) - e.old_len.min(e.new_len)).sum();
+    assert_eq!(
+        rebuilt,
+        b.to_vec(),
+        "edit script does not reproduce the new sequence"
+    );
+    let edits_used: usize = edits
+        .iter()
+        .map(|e| e.old_len.max(e.new_len) - e.old_len.min(e.new_len))
+        .sum();
     let minimal = a.len() + b.len() - 2 * lcs_len(a, b);
-    assert_eq!(edits_used, minimal, "edit script is not minimal for {:?} -> {:?}", a, b);
+    assert_eq!(
+        edits_used, minimal,
+        "edit script is not minimal for {:?} -> {:?}",
+        a, b
+    );
 }
 
 #[test]

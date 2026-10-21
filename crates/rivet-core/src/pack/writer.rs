@@ -53,11 +53,11 @@
 
 use std::path::Path;
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::Object;
 use crate::pack::PackIndexEntry;
-use crate::error::Error;
 
 /// Phase 10 — what one finished pack contains, for the caller that has to name and place it.
 ///
@@ -212,7 +212,8 @@ impl PackWriter {
         }
         header.push(byte);
 
-        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         std::io::Write::write_all(&mut encoder, data)?;
         let compressed = encoder.finish()?;
 
@@ -325,10 +326,22 @@ impl PackWriter {
         let idx_path = dir.join(format!("pack-{}.idx", stem));
         let pack_tmp = dir.join(format!("pack-{}.pack.tmp", stem));
         let idx_tmp = dir.join(format!("pack-{}.idx.tmp", stem));
-        std::fs::write(&pack_tmp, &pack_bytes).map_err(|e| Error::IoAtPath { path: pack_tmp.to_string_lossy().into_owned().into(), source: e })?;
-        std::fs::write(&idx_tmp, &summary.index).map_err(|e| Error::IoAtPath { path: idx_tmp.to_string_lossy().into_owned().into(), source: e })?;
-        std::fs::rename(&pack_tmp, &pack_path).map_err(|e| Error::IoAtPath { path: pack_path.to_string_lossy().into_owned().into(), source: e })?;
-        std::fs::rename(&idx_tmp, &idx_path).map_err(|e| Error::IoAtPath { path: idx_path.to_string_lossy().into_owned().into(), source: e })?;
+        std::fs::write(&pack_tmp, &pack_bytes).map_err(|e| Error::IoAtPath {
+            path: pack_tmp.to_string_lossy().into_owned().into(),
+            source: e,
+        })?;
+        std::fs::write(&idx_tmp, &summary.index).map_err(|e| Error::IoAtPath {
+            path: idx_tmp.to_string_lossy().into_owned().into(),
+            source: e,
+        })?;
+        std::fs::rename(&pack_tmp, &pack_path).map_err(|e| Error::IoAtPath {
+            path: pack_path.to_string_lossy().into_owned().into(),
+            source: e,
+        })?;
+        std::fs::rename(&idx_tmp, &idx_path).map_err(|e| Error::IoAtPath {
+            path: idx_path.to_string_lossy().into_owned().into(),
+            source: e,
+        })?;
         Ok((pack_path, summary))
     }
 }
@@ -433,11 +446,15 @@ mod tests {
         }
 
         let mut writer = PackWriter::new(ObjectFormat::Sha1);
-        let blob = writer.write_raw(crate::object::ObjectKind::Blob, b"hello\n").unwrap();
+        let blob = writer
+            .write_raw(crate::object::ObjectKind::Blob, b"hello\n")
+            .unwrap();
         let mut tree = Vec::new();
         tree.extend_from_slice(b"100644 hello.txt\0");
         tree.extend_from_slice(blob.as_bytes());
-        let tree_id = writer.write_raw(crate::object::ObjectKind::Tree, &tree).unwrap();
+        let tree_id = writer
+            .write_raw(crate::object::ObjectKind::Tree, &tree)
+            .unwrap();
 
         let mut commit = Vec::new();
         commit.extend_from_slice(b"tree ");
@@ -445,7 +462,9 @@ mod tests {
         commit.extend_from_slice(
             b"\nauthor A <a@example.com> 1 +0000\ncommitter A <a@example.com> 1 +0000\n\ninitial\n",
         );
-        writer.write_raw(crate::object::ObjectKind::Commit, &commit).unwrap();
+        writer
+            .write_raw(crate::object::ObjectKind::Commit, &commit)
+            .unwrap();
 
         let (bytes, summary) = writer.finish().unwrap();
         assert_eq!(summary.entry_count, 3);

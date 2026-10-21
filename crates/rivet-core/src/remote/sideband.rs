@@ -198,16 +198,18 @@ pub fn stream_pack<R: Read, W: Write>(
             None => break,
             Some(packet) => match packet.channel {
                 SidebandKind::Pack => {
-                    out.write_all(&packet.data).map_err(crate::error::Error::Io)?;
+                    out.write_all(&packet.data)
+                        .map_err(crate::error::Error::Io)?;
                     total += packet.data.len();
                 }
                 SidebandKind::Progress => {
                     // `None` means "read and discard", not "stop reading": the server blocks on a
                     // full pipe if its progress is never consumed.
                     if options.want_progress
-                        && let Some(callback) = progress.as_mut() {
-                            (**callback)(&packet.data);
-                        }
+                        && let Some(callback) = progress.as_mut()
+                    {
+                        (**callback)(&packet.data);
+                    }
                 }
                 SidebandKind::Error => error_text.extend_from_slice(&packet.data),
             },
@@ -250,7 +252,11 @@ pub fn store_pack<R: Read>(
 /// without the refresh the objects just installed are invisible to every later read in this
 /// process — a push reports `object not found` for the very pack it wrote, and a fetch drops the
 /// tags whose commits it just downloaded.
-pub fn store_pack_bytes(pack: &[u8], odb: &mut Odb, format: ObjectFormat) -> Result<IndexPackResult> {
+pub fn store_pack_bytes(
+    pack: &[u8],
+    odb: &mut Odb,
+    format: ObjectFormat,
+) -> Result<IndexPackResult> {
     let pack = crate::pack::fix_thin_pack(pack, format, odb)?;
     let result = crate::pack::index_pack(&pack, format, Some(odb))?;
 
@@ -325,9 +331,10 @@ pub fn read_status_stream<R: Read>(
                 SidebandKind::Pack => status.extend_from_slice(&packet.data),
                 SidebandKind::Progress => {
                     if options.want_progress
-                        && let Some(callback) = progress.as_mut() {
-                            (**callback)(&packet.data);
-                        }
+                        && let Some(callback) = progress.as_mut()
+                    {
+                        (**callback)(&packet.data);
+                    }
                 }
                 SidebandKind::Error => error_text.extend_from_slice(&packet.data),
             },

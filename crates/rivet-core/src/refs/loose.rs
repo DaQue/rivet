@@ -73,23 +73,25 @@ pub fn read(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<RefT
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(Error::RefNotFound {
                 name: BString::from(name.as_bytes()),
-            })
+            });
         }
         Err(e) => {
             return Err(Error::IoAtPath {
                 path: path_bytes(&path),
                 source: e,
-            })
+            });
         }
     };
     let mut data = Vec::new();
     {
         use std::io::Read;
         let mut limited = (&mut file).take(MAX_REF_FILE + 1);
-        limited.read_to_end(&mut data).map_err(|e| Error::IoAtPath {
-            path: path_bytes(&path),
-            source: e,
-        })?;
+        limited
+            .read_to_end(&mut data)
+            .map_err(|e| Error::IoAtPath {
+                path: path_bytes(&path),
+                source: e,
+            })?;
     }
     if data.len() as u64 > MAX_REF_FILE {
         return Err(Error::InvalidRefName {
@@ -138,7 +140,7 @@ fn walk_refs(root: &Path, dir: &Path, out: &mut Vec<RefName>) -> Result<()> {
             return Err(Error::IoAtPath {
                 path: path_bytes(dir),
                 source: e,
-            })
+            });
         }
     };
     for entry in entries {
@@ -217,13 +219,13 @@ pub fn read_ids(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Result<
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(Error::RefNotFound {
                 name: BString::from(name.as_bytes()),
-            })
+            });
         }
         Err(e) => {
             return Err(Error::IoAtPath {
                 path: path_bytes(&path),
                 source: e,
-            })
+            });
         }
     };
     let mut out = Vec::new();
@@ -325,7 +327,7 @@ pub fn delete(git_dir: &Path, name: &RefName) -> Result<()> {
             return Err(Error::IoAtPath {
                 path: path_bytes(&path),
                 source: e,
-            })
+            });
         }
     }
     let mut dir = path.parent();

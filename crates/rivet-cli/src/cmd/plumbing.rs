@@ -1235,16 +1235,22 @@ fn symbolic_name(
     let mut candidate = bstr::BString::from(spec);
     if !spec.starts_with("refs/") && !spec.starts_with("HEAD") {
         if let Ok(name) = rivet_core::refs::RefName::from_bytes(&candidate)
-            && repository.refs().read(&name).is_ok() {
-                return spec.to_string();
-            }
+            && repository.refs().read(&name).is_ok()
+        {
+            return spec.to_string();
+        }
         for prefix in ["refs/heads/", "refs/tags/", "refs/remotes/"] {
             candidate = bstr::BString::from(prefix);
             candidate.extend_from_slice(spec.as_bytes());
             if let Ok(name) = rivet_core::refs::RefName::from_bytes(&candidate)
-                && repository.refs().resolve_oid(&name).map(|id| id == oid).unwrap_or(false) {
-                    return candidate.to_string();
-                }
+                && repository
+                    .refs()
+                    .resolve_oid(&name)
+                    .map(|id| id == oid)
+                    .unwrap_or(false)
+            {
+                return candidate.to_string();
+            }
         }
         return spec.to_string();
     }
@@ -1405,12 +1411,18 @@ pub fn run_verify_pack(global: &GlobalArgs, args: &VerifyPackArgs) -> Result<i32
         if verbose || args.stat_only {
             let non_delta = objects.iter().filter(|o| o.depth == 0).count();
             let plural = |n: usize| if n == 1 { "" } else { "s" };
-            out.push_str(&format!("non delta: {non_delta} object{}\n", plural(non_delta)));
+            out.push_str(&format!(
+                "non delta: {non_delta} object{}\n",
+                plural(non_delta)
+            ));
             let max_depth = objects.iter().map(|o| o.depth).max().unwrap_or(0);
             for depth in 1..=max_depth {
                 let count = objects.iter().filter(|o| o.depth == depth).count();
                 if count > 0 {
-                    out.push_str(&format!("chain length = {depth}: {count} object{}\n", plural(count)));
+                    out.push_str(&format!(
+                        "chain length = {depth}: {count} object{}\n",
+                        plural(count)
+                    ));
                 }
             }
         }
@@ -1537,7 +1549,8 @@ fn cat_file_batch(global: &GlobalArgs, args: &CatFileArgs) -> Result<i32> {
         // `--batch-all-objects` alone behaves as `--batch-check`.
         (None, None) => (false, None),
     };
-    let template = template.unwrap_or_else(|| "%(objectname) %(objecttype) %(objectsize)".to_string());
+    let template =
+        template.unwrap_or_else(|| "%(objectname) %(objecttype) %(objectsize)".to_string());
 
     let kind_name = |kind: rivet_core::ObjectKind| match kind {
         rivet_core::ObjectKind::Blob => "blob",
@@ -1545,13 +1558,20 @@ fn cat_file_batch(global: &GlobalArgs, args: &CatFileArgs) -> Result<i32> {
         rivet_core::ObjectKind::Commit => "commit",
         rivet_core::ObjectKind::Tag => "tag",
     };
-    let render = |oid: &rivet_core::ObjectId, kind: rivet_core::ObjectKind, size: u64, rest: &str| -> String {
+    let render = |oid: &rivet_core::ObjectId,
+                  kind: rivet_core::ObjectKind,
+                  size: u64,
+                  rest: &str|
+     -> String {
         template
             .replace("%(objectname)", &oid.to_string())
             .replace("%(objecttype)", kind_name(kind))
             .replace("%(objectsize:disk)", &size.to_string())
             .replace("%(objectsize)", &size.to_string())
-            .replace("%(deltabase)", &rivet_core::ObjectId::zero(format).to_string())
+            .replace(
+                "%(deltabase)",
+                &rivet_core::ObjectId::zero(format).to_string(),
+            )
             .replace("%(rest)", rest)
             .replace("%%", "%")
     };

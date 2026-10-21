@@ -70,11 +70,11 @@
 //! *order* matters — chains are resolved base-first, iteratively, never by recursing on the
 //! pack format's own recursion.
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::ObjectKind;
 use crate::pack::{BaseProvider, PackEntry, PackFile};
-use crate::error::Error;
 
 /// Phase 10 — the two lengths at the head of a delta payload.
 ///
@@ -203,9 +203,12 @@ pub fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
             if copy_len == 0 {
                 copy_len = 0x10000;
             }
-            let copy_end = copy_offset.checked_add(copy_len).ok_or_else(|| Error::CorruptDelta {
-                reason: "copy range overflow".to_string(),
-            })?;
+            let copy_end =
+                copy_offset
+                    .checked_add(copy_len)
+                    .ok_or_else(|| Error::CorruptDelta {
+                        reason: "copy range overflow".to_string(),
+                    })?;
             if copy_end > base.len() as u64 {
                 return Err(Error::CorruptDelta {
                     reason: "copy reaches outside base".to_string(),

@@ -155,7 +155,7 @@ impl PackedRefs {
                 return Err(crate::error::Error::IoAtPath {
                     path: path.to_string_lossy().as_bytes().into(),
                     source: e,
-                })
+                });
             }
         };
         Self::parse(format, &data)
@@ -213,7 +213,7 @@ impl PackedRefs {
                         return Err(Error::CorruptPackedRefs {
                             line: index + 1,
                             reason: "peel line before any ref",
-                        })
+                        });
                     }
                 }
                 continue;
@@ -346,9 +346,7 @@ impl PackedRefs {
     /// is not sorted is corrupt in a way Rivet does not detect, because checking would cost a scan
     /// of every ref on every open — and Git does not check either.
     pub fn is_sorted(&self) -> bool {
-        self.traits
-            .iter()
-            .any(|t| t.as_slice() == traits::SORTED)
+        self.traits.iter().any(|t| t.as_slice() == traits::SORTED)
     }
 
     /// Phase 2 — whether every peelable tag in this file has a peel line.
@@ -495,7 +493,8 @@ impl PackedRefs {
     /// locale's collation. Sorting any other way produces a file whose `sorted` claim is a lie and
     /// whose binary search returns the wrong entry.
     pub fn sort(&mut self) {
-        self.entries.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()))
+        self.entries
+            .sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()))
     }
 }
 

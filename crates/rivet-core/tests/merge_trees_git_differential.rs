@@ -11,7 +11,8 @@ use std::process::Command;
 
 use rivet_core::hash::ObjectFormat;
 use rivet_core::merge::{
-    merge_trees, update_index_after_merge, write_conflict_stages, write_merged_worktree, MergeOptions,
+    MergeOptions, merge_trees, update_index_after_merge, write_conflict_stages,
+    write_merged_worktree,
 };
 use rivet_core::object::Commit;
 use rivet_core::repo::Repository;
@@ -83,13 +84,20 @@ fn snapshot(root: &Path) -> BTreeMap<String, (Vec<u8>, bool)> {
             if name == ".git" {
                 continue;
             }
-            let rel = path.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+            let rel = path
+                .strip_prefix(base)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
             let meta = std::fs::symlink_metadata(&path).unwrap();
             if meta.is_dir() {
                 walk(base, &path, out);
             } else if meta.file_type().is_symlink() {
                 let target = std::fs::read_link(&path).unwrap();
-                out.insert(rel, (target.to_string_lossy().into_owned().into_bytes(), false));
+                out.insert(
+                    rel,
+                    (target.to_string_lossy().into_owned().into_bytes(), false),
+                );
             } else {
                 use std::os::unix::fs::PermissionsExt;
                 let exec = meta.permissions().mode() & 0o111 != 0;
@@ -118,8 +126,11 @@ fn index_entries(dir: &Path) -> Vec<(String, u32, String, u8)> {
 }
 
 fn tree_of(repo: &Repository, commit_hex: &str) -> rivet_core::hash::ObjectId {
-    let oid = rivet_core::hash::ObjectId::from_hex(ObjectFormat::Sha1, bstr::BStr::new(commit_hex.trim().as_bytes()))
-        .unwrap();
+    let oid = rivet_core::hash::ObjectId::from_hex(
+        ObjectFormat::Sha1,
+        bstr::BStr::new(commit_hex.trim().as_bytes()),
+    )
+    .unwrap();
     let object = repo.odb().read(&oid).unwrap();
     let parsed = Commit::parse(repo.odb().format(), object.data()).unwrap();
     parsed.tree
@@ -142,7 +153,10 @@ fn run_scenario(tag: &str, expect_conflicts: bool, build: impl Fn(&Path)) {
 
     // Git's answer.
     let (merged_ok, _) = git(&dir, &["merge", "topic"]);
-    assert_eq!(!merged_ok, expect_conflicts, "git merge conflict state differed");
+    assert_eq!(
+        !merged_ok, expect_conflicts,
+        "git merge conflict state differed"
+    );
     let expected_files = snapshot(&dir);
     let expected_index = index_entries(&dir);
 
@@ -164,15 +178,27 @@ fn run_scenario(tag: &str, expect_conflicts: bool, build: impl Fn(&Path)) {
     let mut options = MergeOptions::new();
     // Git labels the markers with the names the user typed.
     options.labels = (b"HEAD".to_vec().into(), b"topic".to_vec().into());
-    let result = merge_trees(repo.odb(), Some(base_tree), ours_tree, theirs_tree, &options)
-        .expect("merge runs");
+    let result = merge_trees(
+        repo.odb(),
+        Some(base_tree),
+        ours_tree,
+        theirs_tree,
+        &options,
+    )
+    .expect("merge runs");
 
     {
         let mut index = repo.index().clone();
         update_index_after_merge(&mut index, repo.odb(), &result).expect("index");
         write_conflict_stages(&mut index, &result.conflicts).expect("stages");
-        write_merged_worktree(repo.worktree().expect("worktree"), &index, repo.odb(), &result, &options)
-            .expect("worktree");
+        write_merged_worktree(
+            repo.worktree().expect("worktree"),
+            &index,
+            repo.odb(),
+            &result,
+            &options,
+        )
+        .expect("worktree");
         let ours: Vec<(String, u32, String, u8)> = index
             .entries()
             .iter()
@@ -193,7 +219,11 @@ fn run_scenario(tag: &str, expect_conflicts: bool, build: impl Fn(&Path)) {
         assert_eq!(ours, expected_index, "index differs from git for {tag}");
     }
 
-    assert_eq!(snapshot(&dir), expected_files, "work tree differs from git for {tag}");
+    assert_eq!(
+        snapshot(&dir),
+        expected_files,
+        "work tree differs from git for {tag}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

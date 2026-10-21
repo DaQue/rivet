@@ -11,7 +11,7 @@ use std::process::Command;
 
 use rivet_core::hash::ObjectFormat;
 use rivet_core::object::ObjectKind;
-use rivet_core::pack::{index_pack, PackFile};
+use rivet_core::pack::{PackFile, index_pack};
 
 fn git(dir: &Path, args: &[&str]) -> Vec<u8> {
     let output = Command::new("git")
@@ -59,7 +59,10 @@ fn repository_with_pack() -> (tempfile::TempDir, PathBuf) {
         std::fs::write(root.join("big.txt"), text).unwrap();
         std::fs::write(root.join("note.txt"), format!("note {revision}\n")).unwrap();
         git(root, &["add", "."]);
-        git(root, &["commit", "--quiet", "-m", &format!("revision {revision}")]);
+        git(
+            root,
+            &["commit", "--quiet", "-m", &format!("revision {revision}")],
+        );
     }
 
     git(root, &["gc", "--quiet", "--aggressive", "--prune=now"]);
@@ -109,7 +112,11 @@ fn reads_every_object_git_packed() {
         let hex = entry.oid.to_hex();
         let expected = git(
             root,
-            &["cat-file", kind_name(kind), std::str::from_utf8(&hex).unwrap()],
+            &[
+                "cat-file",
+                kind_name(kind),
+                std::str::from_utf8(&hex).unwrap(),
+            ],
         );
         assert_eq!(
             data,

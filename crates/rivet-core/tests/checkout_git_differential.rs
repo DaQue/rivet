@@ -13,8 +13,8 @@ use bstr::BStr;
 
 use rivet_core::hash::ObjectId;
 use rivet_core::repo::Repository;
-use rivet_core::worktree::checkout::{CheckoutOptions, CheckoutPlan};
 use rivet_core::worktree::StatCache;
+use rivet_core::worktree::checkout::{CheckoutOptions, CheckoutPlan};
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -117,11 +117,7 @@ fn repository() -> (tempfile::TempDir, PathBuf) {
     git(&root, &["checkout", "-q", "-b", "other"]);
     write(&root.join("update.txt"), "after\n");
     std::fs::remove_file(root.join("delete.txt")).expect("rm");
-    std::fs::rename(
-        root.join("rename-old.txt"),
-        root.join("rename-new.txt"),
-    )
-    .expect("rename");
+    std::fs::rename(root.join("rename-old.txt"), root.join("rename-new.txt")).expect("rename");
     write_exec(&root.join("mode.txt"), "#!/bin/sh\necho hi\n");
     write(&root.join("created.txt"), "brand new\n");
     write(&root.join("deep/a/b/c.txt"), "three levels down\n");
@@ -155,7 +151,11 @@ fn git_checkout_of_other(root: &Path) -> (tempfile::TempDir, PathBuf) {
         .arg(&dest)
         .output()
         .expect("git clone");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     git(&dest, &["checkout", "-q", "other"]);
     (dir, dest)
 }
@@ -179,7 +179,13 @@ fn rivet_checkout(root: &Path, pathspec: &str) -> Result<(), rivet_core::error::
         options.pathspec(BStr::new(pathspec.as_bytes()));
     }
     let plan = CheckoutPlan::plan(format, from, to, repo.odb(), &options).expect("plan");
-    plan.validate(worktree, repo.index(), repo.odb(), &mut StatCache::new(), &options)?;
+    plan.validate(
+        worktree,
+        repo.index(),
+        repo.odb(),
+        &mut StatCache::new(),
+        &options,
+    )?;
     plan.apply(worktree, repo.odb())?;
     Ok(())
 }
@@ -202,7 +208,11 @@ fn applies_every_action_kind_like_git() {
         "the two checkouts must have the same paths"
     );
     for (path, their) in &theirs {
-        assert_eq!(Some(&their.0), ours.get(path).map(|o| &o.0), "exec bit of {path}");
+        assert_eq!(
+            Some(&their.0),
+            ours.get(path).map(|o| &o.0),
+            "exec bit of {path}"
+        );
         assert_eq!(
             Some(&their.1),
             ours.get(path).map(|o| &o.1),
@@ -273,9 +283,10 @@ fn index_entries_match_the_tree_git_checked_out() {
             | rivet_core::worktree::checkout::CheckoutAction::Create
             | rivet_core::worktree::checkout::CheckoutAction::Update => {
                 if let (Some(oid), Some(mode)) = (entry.oid, entry.mode)
-                    && mode != rivet_core::object::EntryMode::Commit {
-                        ours.insert(entry.path.to_string(), (mode.to_u32(), oid));
-                    }
+                    && mode != rivet_core::object::EntryMode::Commit
+                {
+                    ours.insert(entry.path.to_string(), (mode.to_u32(), oid));
+                }
             }
         }
     }
@@ -364,8 +375,14 @@ fn a_modified_file_is_refused_unless_forced() {
     // `--force` skips the safety check entirely, which is the only way this checkout may run.
     let mut force = CheckoutOptions::new();
     force.force(true);
-    plan.validate(worktree, repo.index(), repo.odb(), &mut StatCache::new(), &force)
-        .expect("force skips the dirty check");
+    plan.validate(
+        worktree,
+        repo.index(),
+        repo.odb(),
+        &mut StatCache::new(),
+        &force,
+    )
+    .expect("force skips the dirty check");
 }
 
 #[test]

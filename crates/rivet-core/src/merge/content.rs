@@ -116,7 +116,9 @@ pub fn merge_content(
     algorithm: crate::diff::DiffAlgorithm,
 ) -> Result<ContentMerge> {
     if algorithm == crate::diff::DiffAlgorithm::Histogram {
-        return Err(crate::error::Error::NotImplemented { what: "histogram merge" });
+        return Err(crate::error::Error::NotImplemented {
+            what: "histogram merge",
+        });
     }
     let base_bytes: &[u8] = base.unwrap_or(&[]);
     let base_lines = lines_keeping_newline(base_bytes);
@@ -149,12 +151,12 @@ pub fn merge_content(
         // lines too, and a section that stopped at the change would leave them out.
         let our_start = our_boundary[cluster.base_start]
             .min(cluster.ours.map(|r| r.side_start).unwrap_or(usize::MAX));
-        let our_end = our_boundary[cluster.base_end]
-            .max(cluster.ours.map(|r| r.side_end).unwrap_or(0));
+        let our_end =
+            our_boundary[cluster.base_end].max(cluster.ours.map(|r| r.side_end).unwrap_or(0));
         let their_start = their_boundary[cluster.base_start]
             .min(cluster.theirs.map(|r| r.side_start).unwrap_or(usize::MAX));
-        let their_end = their_boundary[cluster.base_end]
-            .max(cluster.theirs.map(|r| r.side_end).unwrap_or(0));
+        let their_end =
+            their_boundary[cluster.base_end].max(cluster.theirs.map(|r| r.side_end).unwrap_or(0));
 
         let our_slice = &our_lines[our_start..our_end];
         let their_slice = &their_lines[their_start..their_end];
@@ -174,14 +176,7 @@ pub fn merge_content(
                 out.extend_from_slice(line);
             }
         } else {
-            emit_conflict(
-                &mut out,
-                base_slice,
-                our_slice,
-                their_slice,
-                labels,
-                style,
-            );
+            emit_conflict(&mut out, base_slice, our_slice, their_slice, labels, style);
             hunks.push(ConflictHunk {
                 ours_start: our_start,
                 ours_len: our_end - our_start,
@@ -254,7 +249,9 @@ fn change_regions(base: &[&[u8]], side: &[&[u8]]) -> Vec<Region> {
     let mut regions = Vec::new();
     let mut pending_delete: Option<crate::diff::Edit> = None;
     let mut pending_insert: Option<crate::diff::Edit> = None;
-    let flush = |del: &mut Option<crate::diff::Edit>, ins: &mut Option<crate::diff::Edit>, out: &mut Vec<Region>| {
+    let flush = |del: &mut Option<crate::diff::Edit>,
+                 ins: &mut Option<crate::diff::Edit>,
+                 out: &mut Vec<Region>| {
         if del.is_none() && ins.is_none() {
             return;
         }
@@ -347,27 +344,28 @@ fn cluster_regions(regions: &[(Side, Region)]) -> Vec<Cluster> {
     for (side, region) in regions {
         let mut merged = false;
         if let Some(last) = clusters.last_mut()
-            && regions_overlap(last.base_start, last.base_end, region) {
-                last.base_start = last.base_start.min(region.base_start);
-                last.base_end = last.base_end.max(region.base_end);
-                match side {
-                    Side::Ours => {
-                        let r = last.ours.get_or_insert(*region);
-                        r.base_start = r.base_start.min(region.base_start);
-                        r.base_end = r.base_end.max(region.base_end);
-                        r.side_start = r.side_start.min(region.side_start);
-                        r.side_end = r.side_end.max(region.side_end);
-                    }
-                    Side::Theirs => {
-                        let r = last.theirs.get_or_insert(*region);
-                        r.base_start = r.base_start.min(region.base_start);
-                        r.base_end = r.base_end.max(region.base_end);
-                        r.side_start = r.side_start.min(region.side_start);
-                        r.side_end = r.side_end.max(region.side_end);
-                    }
+            && regions_overlap(last.base_start, last.base_end, region)
+        {
+            last.base_start = last.base_start.min(region.base_start);
+            last.base_end = last.base_end.max(region.base_end);
+            match side {
+                Side::Ours => {
+                    let r = last.ours.get_or_insert(*region);
+                    r.base_start = r.base_start.min(region.base_start);
+                    r.base_end = r.base_end.max(region.base_end);
+                    r.side_start = r.side_start.min(region.side_start);
+                    r.side_end = r.side_end.max(region.side_end);
                 }
-                merged = true;
+                Side::Theirs => {
+                    let r = last.theirs.get_or_insert(*region);
+                    r.base_start = r.base_start.min(region.base_start);
+                    r.base_end = r.base_end.max(region.base_end);
+                    r.side_start = r.side_start.min(region.side_start);
+                    r.side_end = r.side_end.max(region.side_end);
+                }
             }
+            merged = true;
+        }
         if !merged {
             let mut cluster = Cluster {
                 base_start: region.base_start,

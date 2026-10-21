@@ -49,12 +49,12 @@ use std::path::Path;
 
 use bstr::{BStr, BString};
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::ObjectId;
 use crate::index::Index;
 use crate::odb::Odb;
 use crate::worktree::Worktree;
-use crate::error::Error;
 
 /// Phase 9 — the file naming the commit(s) being merged in.
 ///
@@ -265,20 +265,22 @@ pub fn read_merge_state(
     state.merge_head.push(head);
     let orig_head_path = git_dir.join("ORIG_HEAD");
     if orig_head_path.exists() {
-        let orig_content = std::fs::read_to_string(&orig_head_path).map_err(|e| Error::IoAtPath {
-            path: BString::from(orig_head_path.to_string_lossy().into_owned()),
-            source: e,
-        })?;
+        let orig_content =
+            std::fs::read_to_string(&orig_head_path).map_err(|e| Error::IoAtPath {
+                path: BString::from(orig_head_path.to_string_lossy().into_owned()),
+                source: e,
+            })?;
         let orig_line = orig_content.lines().next().unwrap_or("");
         let orig_hex = BStr::new(orig_line.trim().as_bytes());
         state.orig_head = Some(ObjectId::from_hex(format, orig_hex)?);
     }
     let merge_msg_path = git_dir.join("MERGE_MSG");
     if merge_msg_path.exists() {
-        let msg_content = std::fs::read_to_string(&merge_msg_path).map_err(|e| Error::IoAtPath {
-            path: BString::from(merge_msg_path.to_string_lossy().into_owned()),
-            source: e,
-        })?;
+        let msg_content =
+            std::fs::read_to_string(&merge_msg_path).map_err(|e| Error::IoAtPath {
+                path: BString::from(merge_msg_path.to_string_lossy().into_owned()),
+                source: e,
+            })?;
         state.merge_msg = BString::from(msg_content);
     }
     Ok(Some(state))
@@ -303,17 +305,26 @@ pub fn clear_merge_state(git_dir: &Path) -> Result<()> {
     let merge_head = git_dir.join("MERGE_HEAD");
     let merge_msg = git_dir.join("MERGE_MSG");
     if merge_head.exists() {
-        std::fs::remove_file(&merge_head).map_err(|e| crate::error::Error::IoAtPath { path: merge_head.to_string_lossy().into_owned().into(), source: e })?;
+        std::fs::remove_file(&merge_head).map_err(|e| crate::error::Error::IoAtPath {
+            path: merge_head.to_string_lossy().into_owned().into(),
+            source: e,
+        })?;
     }
     if merge_msg.exists() {
-        std::fs::remove_file(&merge_msg).map_err(|e| crate::error::Error::IoAtPath { path: merge_msg.to_string_lossy().into_owned().into(), source: e })?;
+        std::fs::remove_file(&merge_msg).map_err(|e| crate::error::Error::IoAtPath {
+            path: merge_msg.to_string_lossy().into_owned().into(),
+            source: e,
+        })?;
     }
     // Git's companions to `MERGE_HEAD`; leaving them makes the next `git commit` think a merge
     // with the old mode or `AUTO_MERGE` tree is still in progress.
     for name in ["MERGE_MODE", "AUTO_MERGE"] {
         let path = git_dir.join(name);
         if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| crate::error::Error::IoAtPath { path: path.to_string_lossy().into_owned().into(), source: e })?;
+            std::fs::remove_file(&path).map_err(|e| crate::error::Error::IoAtPath {
+                path: path.to_string_lossy().into_owned().into(),
+                source: e,
+            })?;
         }
     }
     Ok(())
@@ -346,7 +357,10 @@ pub fn write_orig_head(git_dir: &Path, oid: ObjectId) -> Result<()> {
     let mut buf = Vec::with_capacity(oid.format().hex_len() + 1);
     buf.extend_from_slice(&oid.to_hex()[..]);
     buf.push(b'\n');
-    std::fs::write(&path, &buf).map_err(|e| crate::error::Error::IoAtPath { path: BString::from(path.to_string_lossy().as_ref()), source: e })
+    std::fs::write(&path, &buf).map_err(|e| crate::error::Error::IoAtPath {
+        path: BString::from(path.to_string_lossy().as_ref()),
+        source: e,
+    })
 }
 
 /// Phase 9 — undo a merge: restore the index and the work tree to before it started.
@@ -413,10 +427,9 @@ pub fn abort_merge(
         let path_ref = BStr::new(&path[..]);
         let target_entry = target.get(&path);
 
-        if target_entry.is_none()
-            && !removals.contains(&path) {
-                removals.push(path.clone());
-            }
+        if target_entry.is_none() && !removals.contains(&path) {
+            removals.push(path.clone());
+        }
         // Only a stage-0 entry describes content the user could have edited; a conflicted path's
         // work tree file is the merge's own marker file, and losing it loses nothing.
         if entry.stage() != crate::index::Stage::Normal {

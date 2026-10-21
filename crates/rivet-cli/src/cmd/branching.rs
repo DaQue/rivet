@@ -479,7 +479,13 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
         let names: Vec<&String> = args.name.iter().chain(args.start_point.iter()).collect();
         let mut code = 0;
         for name in names {
-            code = code.max(delete_branch(&repository, &head, name, force, args.remotes)?);
+            code = code.max(delete_branch(
+                &repository,
+                &head,
+                name,
+                force,
+                args.remotes,
+            )?);
         }
         return Ok(code);
     }
@@ -490,9 +496,9 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
         let (old, new) = match (&args.name, &args.start_point) {
             (Some(old), Some(new)) => (RefName::branch(BStr::new(old.as_bytes()))?, new.clone()),
             (Some(new), None) => (
-                head.branch()
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("cannot rename the current branch while not on any"))?,
+                head.branch().cloned().ok_or_else(|| {
+                    anyhow::anyhow!("cannot rename the current branch while not on any")
+                })?,
                 new.clone(),
             ),
             _ => anyhow::bail!("branch name required"),
@@ -511,7 +517,14 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
     if !listing {
         let name = args.name.as_deref().unwrap_or_default();
         let start = args.start_point.as_deref().unwrap_or("HEAD");
-        let messages = create_branch(&mut repository, &head, name, start, args.force, !args.no_track)?;
+        let messages = create_branch(
+            &mut repository,
+            &head,
+            name,
+            start,
+            args.force,
+            !args.no_track,
+        )?;
         for message in messages {
             println!("{message}");
         }
@@ -524,9 +537,15 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
         _ => args.name.clone(),
     };
     let merged_filter = match &args.merged {
-        Some(spec) => Some((true, super::resolve_commit(&repository, spec.as_deref().unwrap_or("HEAD"))?)),
+        Some(spec) => Some((
+            true,
+            super::resolve_commit(&repository, spec.as_deref().unwrap_or("HEAD"))?,
+        )),
         None => match &args.no_merged {
-            Some(spec) => Some((false, super::resolve_commit(&repository, spec.as_deref().unwrap_or("HEAD"))?)),
+            Some(spec) => Some((
+                false,
+                super::resolve_commit(&repository, spec.as_deref().unwrap_or("HEAD"))?,
+            )),
             None => None,
         },
     };
@@ -543,14 +562,15 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
     }
     let mut rows: Vec<Row> = Vec::new();
     if let HeadState::Detached { oid } = &head
-        && !args.remotes {
-            rows.push(Row {
-                marker: '*',
-                label: format!("(HEAD detached at {})", super::short_oid(oid)),
-                oid: Some(*oid),
-                symref: None,
-            });
-        }
+        && !args.remotes
+    {
+        rows.push(Row {
+            marker: '*',
+            label: format!("(HEAD detached at {})", super::short_oid(oid)),
+            oid: Some(*oid),
+            symref: None,
+        });
+    }
     if !args.remotes {
         for (name, oid) in repository.refs().list_branches()? {
             let current = head.branch() == Some(&name);
@@ -564,19 +584,36 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
     }
     if args.remotes || args.all {
         for (name, target) in repository.refs().list(b"refs/remotes/")? {
-            let short = String::from_utf8_lossy(&name.as_bytes()[b"refs/remotes/".len()..]).into_owned();
-            let label = if args.all { format!("remotes/{short}") } else { short };
+            let short =
+                String::from_utf8_lossy(&name.as_bytes()[b"refs/remotes/".len()..]).into_owned();
+            let label = if args.all {
+                format!("remotes/{short}")
+            } else {
+                short
+            };
             match target {
                 rivet_core::RefTarget::Symbolic(to) => {
                     let to_short = String::from_utf8_lossy(
-                        to.as_bytes().strip_prefix(b"refs/remotes/").unwrap_or(to.as_bytes()),
+                        to.as_bytes()
+                            .strip_prefix(b"refs/remotes/")
+                            .unwrap_or(to.as_bytes()),
                     )
                     .into_owned();
                     let oid = repository.refs().resolve_oid(&to).ok();
-                    rows.push(Row { marker: ' ', label, oid, symref: Some(to_short) });
+                    rows.push(Row {
+                        marker: ' ',
+                        label,
+                        oid,
+                        symref: Some(to_short),
+                    });
                 }
                 rivet_core::RefTarget::Direct(oid) => {
-                    rows.push(Row { marker: ' ', label, oid: Some(oid), symref: None });
+                    rows.push(Row {
+                        marker: ' ',
+                        label,
+                        oid: Some(oid),
+                        symref: None,
+                    });
                 }
             }
         }
@@ -585,9 +622,11 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
     let mut kept = Vec::new();
     for row in rows {
         if let Some(pattern) = &pattern
-            && !glob_match(pattern.as_bytes(), row.label.as_bytes()) && !row.label.starts_with('(') {
-                continue;
-            }
+            && !glob_match(pattern.as_bytes(), row.label.as_bytes())
+            && !row.label.starts_with('(')
+        {
+            continue;
+        }
         if let Some((want_merged, target)) = merged_filter {
             let Some(oid) = row.oid else { continue };
             if repository.is_ancestor(oid, target)? != want_merged {
@@ -595,14 +634,20 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
             }
         }
         if let Some(points_at) = points_at
-            && row.oid != Some(points_at) {
-                continue;
-            }
+            && row.oid != Some(points_at)
+        {
+            continue;
+        }
         kept.push(row);
     }
 
     let verbose = global.verbose && !global.quiet;
-    let width = kept.iter().filter(|r| r.symref.is_none()).map(|r| r.label.chars().count()).max().unwrap_or(0);
+    let width = kept
+        .iter()
+        .filter(|r| r.symref.is_none())
+        .map(|r| r.label.chars().count())
+        .max()
+        .unwrap_or(0);
     for row in &kept {
         match (&row.symref, verbose) {
             (Some(to), _) => println!("{} {} -> {}", row.marker, row.label, to),
@@ -694,19 +739,44 @@ pub fn run_switch(global: &GlobalArgs, args: &SwitchArgs) -> Result<i32> {
 
     if args.detach {
         let oid = super::resolve_commit(&repository, &target)?;
-        return switch_to(&mut repository, Destination::Detached(oid), &target, args.force, global.quiet, false);
+        return switch_to(
+            &mut repository,
+            Destination::Detached(oid),
+            &target,
+            args.force,
+            global.quiet,
+            false,
+        );
     }
 
     let branch = RefName::branch(BStr::new(target.as_bytes())).ok();
     if let Some(branch) = branch.filter(|b| repository.refs().exists(b)) {
-        return switch_to(&mut repository, Destination::Branch(branch), &target, args.force, global.quiet, false);
+        return switch_to(
+            &mut repository,
+            Destination::Branch(branch),
+            &target,
+            args.force,
+            global.quiet,
+            false,
+        );
     }
     if let Some(remote_ref) = guess_remote_branch(&repository, &target)? {
         let start = String::from_utf8_lossy(remote_ref.as_bytes()).into_owned();
-        return checkout_new_branch(&mut repository, &target, &start, false, args.force, true, global.quiet);
+        return checkout_new_branch(
+            &mut repository,
+            &target,
+            &start,
+            false,
+            args.force,
+            true,
+            global.quiet,
+        );
     }
     if super::resolve_commit(&repository, &target).is_ok() {
-        let what = if repository.refs().exists(&RefName::tag(BStr::new(target.as_bytes()))?) {
+        let what = if repository
+            .refs()
+            .exists(&RefName::tag(BStr::new(target.as_bytes()))?)
+        {
             "tag"
         } else {
             "commit"
@@ -804,42 +874,73 @@ pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
 
     let path_mode = !args.paths.is_empty() || first_rev.is_none() || args.source.is_some();
     if path_mode && (first_rev.is_some() || args.source.is_some() || first_rev.is_none()) {
-        let (source_spec, path_args): (Option<String>, Vec<PathBuf>) = match (&args.source, &first_rev) {
-            (Some(source), _) => {
-                let mut paths = vec![PathBuf::from(first)];
-                paths.extend(args.paths.iter().cloned());
-                (Some(source.clone()), paths)
-            }
-            (None, Some(rev)) if !args.paths.is_empty() => (Some(rev.clone()), args.paths.clone()),
-            (None, Some(_)) => (None, Vec::new()),
-            (None, None) => {
-                // A name that is neither a revision nor a tracked path may be a remote branch
-                // to create locally (`git checkout feature` with only `origin/feature`).
-                if args.paths.is_empty()
-                    && let Some(remote_ref) = guess_remote_branch(&repository, first)? {
+        let (source_spec, path_args): (Option<String>, Vec<PathBuf>) =
+            match (&args.source, &first_rev) {
+                (Some(source), _) => {
+                    let mut paths = vec![PathBuf::from(first)];
+                    paths.extend(args.paths.iter().cloned());
+                    (Some(source.clone()), paths)
+                }
+                (None, Some(rev)) if !args.paths.is_empty() => {
+                    (Some(rev.clone()), args.paths.clone())
+                }
+                (None, Some(_)) => (None, Vec::new()),
+                (None, None) => {
+                    // A name that is neither a revision nor a tracked path may be a remote branch
+                    // to create locally (`git checkout feature` with only `origin/feature`).
+                    if args.paths.is_empty()
+                        && let Some(remote_ref) = guess_remote_branch(&repository, first)?
+                    {
                         let start = String::from_utf8_lossy(remote_ref.as_bytes()).into_owned();
-                        return checkout_new_branch(&mut repository, first, &start, false, args.force, true, global.quiet);
+                        return checkout_new_branch(
+                            &mut repository,
+                            first,
+                            &start,
+                            false,
+                            args.force,
+                            true,
+                            global.quiet,
+                        );
                     }
-                let mut paths = vec![PathBuf::from(first)];
-                paths.extend(args.paths.iter().cloned());
-                (None, paths)
-            }
-        };
+                    let mut paths = vec![PathBuf::from(first)];
+                    paths.extend(args.paths.iter().cloned());
+                    (None, paths)
+                }
+            };
         if !path_args.is_empty() {
             // Git counts restored paths only when the command line had no `--`; clap consumes
             // the separator, so the raw arguments are the only place it is still visible.
             let dash_dash = std::env::args().any(|a| a == "--");
-            return checkout_paths(&mut repository, source_spec.as_deref(), &path_args, global.quiet || dash_dash);
+            return checkout_paths(
+                &mut repository,
+                source_spec.as_deref(),
+                &path_args,
+                global.quiet || dash_dash,
+            );
         }
     }
 
     let target = first_rev.expect("a revision was resolved");
     let branch = RefName::branch(BStr::new(target.as_bytes())).ok();
     if let Some(branch) = branch.filter(|b| !args.detach && repository.refs().exists(b)) {
-        return switch_to(&mut repository, Destination::Branch(branch), &target, args.force, global.quiet, false);
+        return switch_to(
+            &mut repository,
+            Destination::Branch(branch),
+            &target,
+            args.force,
+            global.quiet,
+            false,
+        );
     }
     let oid = super::resolve_commit(&repository, &target)?;
-    switch_to(&mut repository, Destination::Detached(oid), &target, args.force, global.quiet, !args.detach)
+    switch_to(
+        &mut repository,
+        Destination::Detached(oid),
+        &target,
+        args.force,
+        global.quiet,
+        !args.detach,
+    )
 }
 
 /// Phase 9 — join development histories together.
@@ -905,7 +1006,12 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         // `merge --abort` is `reset --merge`, and Git logs it as such.
         if let Some(head) = repository.head()?.oid() {
             let who = repository.committer_signature()?;
-            let entry = rivet_core::ReflogEntry::new(head, head, who, BString::from("reset: moving to HEAD"));
+            let entry = rivet_core::ReflogEntry::new(
+                head,
+                head,
+                who,
+                BString::from("reset: moving to HEAD"),
+            );
             repository.refs().append_reflog(&RefName::head(), &entry)?;
         }
         // `abort_merge` restores files and the index; `HEAD` itself never moved during a
@@ -932,7 +1038,11 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         let options = rivet_core::repo::CommitOptions::new(BStr::new(&message));
         let oid = repository.commit(&options)?;
         let branch = super::head_reflog_label(&repository)?;
-        println!("[{branch} {}] {}", super::short_oid(&oid), super::commit_subject(&repository, &oid)?);
+        println!(
+            "[{branch} {}] {}",
+            super::short_oid(&oid),
+            super::commit_subject(&repository, &oid)?
+        );
         return Ok(0);
     }
 
@@ -943,9 +1053,11 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         anyhow::bail!("merge: --verify-signatures is not implemented");
     }
     if let Some(strategy) = &args.strategy
-        && strategy != "ort" && strategy != "recursive" {
-            anyhow::bail!("merge: strategy '{strategy}' is not implemented");
-        }
+        && strategy != "ort"
+        && strategy != "recursive"
+    {
+        anyhow::bail!("merge: strategy '{strategy}' is not implemented");
+    }
     if !args.strategy_option.is_empty() {
         anyhow::bail!("merge: -X strategy options are not implemented");
     }
@@ -978,7 +1090,10 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         _ if args.no_ff => FastForward::Never,
         _ => FastForward::Allow,
     };
-    let message = args.message.clone().unwrap_or_else(|| merge_message(&repository, &spec));
+    let message = args
+        .message
+        .clone()
+        .unwrap_or_else(|| merge_message(&repository, &spec));
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(&repository, "merge.renames");
     if let Some(style) = args.conflict {
@@ -1033,7 +1148,9 @@ fn resolve_previous(repository: &Repository, spec: &str) -> Result<String> {
     let log = repository.refs().reflog(&RefName::head())?;
     let mut seen = 0;
     for entry in log.iter().rev() {
-        let Some(rest) = entry.message.strip_prefix(b"checkout: moving from ") else { continue };
+        let Some(rest) = entry.message.strip_prefix(b"checkout: moving from ") else {
+            continue;
+        };
         seen += 1;
         if seen == n {
             let from = rest.split_str(" to ").next().unwrap_or_default();
@@ -1060,9 +1177,10 @@ fn valid_branch_name(name: &str) -> Result<RefName> {
 /// The start-point name the reflog records: Git spells an attached `HEAD` as its branch.
 fn start_label(repository: &Repository, start: &str) -> Result<String> {
     if start == "HEAD"
-        && let HeadState::Attached { branch, .. } = repository.head()? {
-            return Ok(branch.short_name().to_string());
-        }
+        && let HeadState::Attached { branch, .. } = repository.head()?
+    {
+        return Ok(branch.short_name().to_string());
+    }
     Ok(start.to_string())
 }
 
@@ -1072,26 +1190,37 @@ fn guess_remote_branch(repository: &Repository, name: &str) -> Result<Option<Ref
     for (remote_ref, _) in repository.refs().list_remote()? {
         let short = &remote_ref.as_bytes()[b"refs/remotes/".len()..];
         if let Some(slash) = short.find_byte(b'/')
-            && &short[slash + 1..] == name.as_bytes() {
-                found.push(remote_ref.clone());
-            }
+            && &short[slash + 1..] == name.as_bytes()
+        {
+            found.push(remote_ref.clone());
+        }
     }
     Ok(if found.len() == 1 { found.pop() } else { None })
 }
 
 /// The ref an upstream spec names: a remote-tracking branch, or a local one.
 fn resolve_upstream(repository: &Repository, spec: &str) -> Result<RefName> {
-    for candidate in [format!("refs/remotes/{spec}"), format!("refs/heads/{spec}"), spec.to_string()] {
+    for candidate in [
+        format!("refs/remotes/{spec}"),
+        format!("refs/heads/{spec}"),
+        spec.to_string(),
+    ] {
         if let Ok(name) = RefName::from_bytes(candidate.as_bytes())
-            && repository.refs().exists(&name) && (name.is_remote() || name.is_branch()) {
-                return Ok(name);
-            }
+            && repository.refs().exists(&name)
+            && (name.is_remote() || name.is_branch())
+        {
+            return Ok(name);
+        }
     }
     anyhow::bail!("the requested upstream branch '{spec}' does not exist")
 }
 
 /// Record `upstream` as `branch`'s upstream in the config, returning Git's confirmation line.
-pub fn set_upstream(repository: &mut Repository, branch: &RefName, upstream: &RefName) -> Result<String> {
+pub fn set_upstream(
+    repository: &mut Repository,
+    branch: &RefName,
+    upstream: &RefName,
+) -> Result<String> {
     let (remote, merge, shown) = if upstream.is_remote() {
         let short = &upstream.as_bytes()[b"refs/remotes/".len()..];
         let slash = short.find_byte(b'/').unwrap_or(short.len());
@@ -1111,8 +1240,14 @@ pub fn set_upstream(repository: &mut Repository, branch: &RefName, upstream: &Re
     };
     let short = branch.short_name().to_string();
     let config = repository.config_mut();
-    config.set(BStr::new(format!("branch.{short}.remote").as_bytes()), &remote)?;
-    config.set(BStr::new(format!("branch.{short}.merge").as_bytes()), &merge)?;
+    config.set(
+        BStr::new(format!("branch.{short}.remote").as_bytes()),
+        &remote,
+    )?;
+    config.set(
+        BStr::new(format!("branch.{short}.merge").as_bytes()),
+        &merge,
+    )?;
     repository.write_config()?;
     Ok(format!("branch '{short}' set up to track '{shown}'."))
 }
@@ -1134,7 +1269,10 @@ fn create_branch(
     if exists && head.branch() == Some(&branch) {
         anyhow::bail!(
             "cannot force update the branch '{name}' used by worktree at '{}'",
-            repository.worktree_path().map(|p| p.display().to_string()).unwrap_or_default()
+            repository
+                .worktree_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
         );
     }
     let start_oid = super::resolve_commit(repository, start)
@@ -1160,28 +1298,48 @@ fn create_branch(
     Ok(messages)
 }
 
-fn delete_branch(repository: &Repository, head: &HeadState, name: &str, force: bool, remote: bool) -> Result<i32> {
+fn delete_branch(
+    repository: &Repository,
+    head: &HeadState,
+    name: &str,
+    force: bool,
+    remote: bool,
+) -> Result<i32> {
     let reference = if remote {
         RefName::from_bytes(format!("refs/remotes/{name}").as_bytes())?
     } else {
         RefName::branch(BStr::new(name.as_bytes()))?
     };
-    let Some(oid) = repository.refs().try_read(&reference)?.and_then(|t| t.oid().ok()) else {
-        let what = if remote { "remote-tracking branch" } else { "branch" };
+    let Some(oid) = repository
+        .refs()
+        .try_read(&reference)?
+        .and_then(|t| t.oid().ok())
+    else {
+        let what = if remote {
+            "remote-tracking branch"
+        } else {
+            "branch"
+        };
         eprintln!("error: {what} '{name}' not found");
         return Ok(1);
     };
     if !remote && head.branch() == Some(&reference) {
         eprintln!(
             "error: cannot delete branch '{name}' used by worktree at '{}'",
-            repository.worktree_path().map(|p| p.display().to_string()).unwrap_or_default()
+            repository
+                .worktree_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
         );
         return Ok(1);
     }
     if !force && !remote {
         // Merged into its upstream if it has one, otherwise into HEAD.
         let upstream = branch_upstream(repository, name)?;
-        let against = match upstream.as_ref().and_then(|u| repository.refs().resolve_oid(u).ok()) {
+        let against = match upstream
+            .as_ref()
+            .and_then(|u| repository.refs().resolve_oid(u).ok())
+        {
             Some(oid) => Some(oid),
             None => head.oid(),
         };
@@ -1192,13 +1350,18 @@ fn delete_branch(repository: &Repository, head: &HeadState, name: &str, force: b
         if !merged {
             eprintln!("error: the branch '{name}' is not fully merged");
             eprintln!("hint: If you are sure you want to delete it, run 'git branch -D {name}'");
-            eprintln!("hint: Disable this message with \"git config set advice.forceDeleteBranch false\"");
+            eprintln!(
+                "hint: Disable this message with \"git config set advice.forceDeleteBranch false\""
+            );
             return Ok(1);
         }
     }
     repository.refs().delete(&reference)?;
     if remote {
-        println!("Deleted remote-tracking branch {name} (was {}).", super::short_oid(&oid));
+        println!(
+            "Deleted remote-tracking branch {name} (was {}).",
+            super::short_oid(&oid)
+        );
     } else {
         // The branch's own config section goes with it, as in Git.
         let mut config = rivet_core::Config::load(&repository.git_dir().join("config"))?;
@@ -1212,9 +1375,15 @@ fn delete_branch(repository: &Repository, head: &HeadState, name: &str, force: b
 
 fn branch_upstream(repository: &Repository, name: &str) -> Result<Option<RefName>> {
     let config = repository.config();
-    let remote = config.get(BStr::new(format!("branch.{name}.remote").as_bytes()))?.map(|v| v.to_owned());
-    let merge = config.get(BStr::new(format!("branch.{name}.merge").as_bytes()))?.map(|v| v.to_owned());
-    let (Some(remote), Some(merge)) = (remote, merge) else { return Ok(None) };
+    let remote = config
+        .get(BStr::new(format!("branch.{name}.remote").as_bytes()))?
+        .map(|v| v.to_owned());
+    let merge = config
+        .get(BStr::new(format!("branch.{name}.merge").as_bytes()))?
+        .map(|v| v.to_owned());
+    let (Some(remote), Some(merge)) = (remote, merge) else {
+        return Ok(None);
+    };
     if remote == "." {
         return Ok(RefName::from_bytes(&merge).ok());
     }
@@ -1264,7 +1433,8 @@ fn rename_branch(
         repository.refs().rename(old, new)?;
         let reason = format!("Branch: renamed {} to {}", old, new);
         if repository.should_log_ref(new) {
-            let entry = rivet_core::ReflogEntry::new(oid, oid, who.clone(), BString::from(reason.as_str()));
+            let entry =
+                rivet_core::ReflogEntry::new(oid, oid, who.clone(), BString::from(reason.as_str()));
             repository.refs().append_reflog(new, &entry)?;
         }
         if head.branch() == Some(old) {
@@ -1276,7 +1446,12 @@ fn rename_branch(
         .config()
         .entries()
         .iter()
-        .filter(|e| e.section.eq_ignore_ascii_case(b"branch") && e.subsection.as_ref().is_some_and(|s| s.as_slice() == old_short.as_bytes()))
+        .filter(|e| {
+            e.section.eq_ignore_ascii_case(b"branch")
+                && e.subsection
+                    .as_ref()
+                    .is_some_and(|s| s.as_slice() == old_short.as_bytes())
+        })
         .map(|e| (e.key.clone(), e.value.clone()))
         .collect();
     if !keys.is_empty() {
@@ -1311,7 +1486,9 @@ fn report_checkout_refusal(error: rivet_core::Error, op: &str) -> Result<i32> {
         );
     };
     let untracked_block = |paths: &[bstr::BString]| {
-        eprintln!("error: The following untracked working tree files would be overwritten by {op}:");
+        eprintln!(
+            "error: The following untracked working tree files would be overwritten by {op}:"
+        );
         for path in paths {
             eprintln!("\t{path}");
         }
@@ -1352,7 +1529,8 @@ fn report_checkout_refusal(error: rivet_core::Error, op: &str) -> Result<i32> {
     }
 }
 
-const DETACHED_ADVICE: &str = "\nYou are in 'detached HEAD' state. You can look around, make experimental
+const DETACHED_ADVICE: &str =
+    "\nYou are in 'detached HEAD' state. You can look around, make experimental
 changes and commit them, and you can discard any commits you make in this
 state without impacting any branches by switching back to a branch.
 
@@ -1386,19 +1564,19 @@ fn switch_to(
     };
 
     if let Destination::Branch(branch) = &destination
-        && old_head.branch() == Some(branch) {
-            if force
-                && let Some(commit) = new_commit {
-                    let tree = repository.commit_tree(commit)?;
-                    repository.reset_hard_to_tree(tree)?;
-                }
-            repository.point_head(HeadTarget::Branch(branch), BStr::new(reason.as_bytes()))?;
-            if !quiet {
-                show_local_changes(repository)?;
-                eprintln!("Already on '{}'", branch.short_name());
-            }
-            return Ok(0);
+        && old_head.branch() == Some(branch)
+    {
+        if force && let Some(commit) = new_commit {
+            let tree = repository.commit_tree(commit)?;
+            repository.reset_hard_to_tree(tree)?;
         }
+        repository.point_head(HeadTarget::Branch(branch), BStr::new(reason.as_bytes()))?;
+        if !quiet {
+            show_local_changes(repository)?;
+            eprintln!("Already on '{}'", branch.short_name());
+        }
+        return Ok(0);
+    }
 
     if let Some(commit) = new_commit {
         let tree = repository.commit_tree(commit)?;
@@ -1419,15 +1597,18 @@ fn switch_to(
     if !quiet {
         show_local_changes(repository)?;
         if let HeadState::Detached { oid: old } = &old_head
-            && new_commit != Some(*old) {
-                eprintln!(
-                    "Previous HEAD position was {} {}",
-                    super::short_oid(old),
-                    super::commit_subject(repository, old)?
-                );
-            }
+            && new_commit != Some(*old)
+        {
+            eprintln!(
+                "Previous HEAD position was {} {}",
+                super::short_oid(old),
+                super::commit_subject(repository, old)?
+            );
+        }
         match &destination {
-            Destination::Branch(branch) => eprintln!("Switched to branch '{}'", branch.short_name()),
+            Destination::Branch(branch) => {
+                eprintln!("Switched to branch '{}'", branch.short_name())
+            }
             Destination::Detached(oid) => {
                 if advise && !matches!(old_head, HeadState::Detached { .. }) {
                     eprintln!("Note: switching to '{label}'.");
@@ -1458,8 +1639,9 @@ fn checkout_new_branch(
     if exists && !reset {
         anyhow::bail!("a branch named '{name}' already exists");
     }
-    let start_oid = super::resolve_commit(repository, start)
-        .map_err(|_| anyhow::anyhow!("'{start}' is not a commit and a branch '{name}' cannot be created from it"))?;
+    let start_oid = super::resolve_commit(repository, start).map_err(|_| {
+        anyhow::anyhow!("'{start}' is not a commit and a branch '{name}' cannot be created from it")
+    })?;
     let old_head = repository.head()?;
     let from = super::head_reflog_label(repository)?;
 
@@ -1495,7 +1677,11 @@ fn checkout_new_branch(
         let upstream = RefName::from_bytes(format!("refs/remotes/{start}").as_bytes())
             .ok()
             .filter(|r| repository.refs().exists(r))
-            .or_else(|| RefName::from_bytes(start.as_bytes()).ok().filter(|r| r.is_remote() && repository.refs().exists(r)));
+            .or_else(|| {
+                RefName::from_bytes(start.as_bytes())
+                    .ok()
+                    .filter(|r| r.is_remote() && repository.refs().exists(r))
+            });
         if let Some(upstream) = upstream {
             tracking = Some(set_upstream(repository, &branch, &upstream)?);
         }
@@ -1503,9 +1689,10 @@ fn checkout_new_branch(
     let reason = format!("checkout: moving from {from} to {name}");
     repository.point_head(HeadTarget::Branch(&branch), BStr::new(reason.as_bytes()))?;
     if let Some(message) = tracking
-        && !quiet {
-            println!("{message}");
-        }
+        && !quiet
+    {
+        println!("{message}");
+    }
     if !quiet {
         show_local_changes(repository)?;
         if unborn_same {
@@ -1526,7 +1713,12 @@ fn orphan_branch(repository: &mut Repository, name: &str, quiet: bool) -> Result
     }
     // `switch --orphan` starts from an empty tree: every tracked file goes.
     let root = repository.worktree()?.require_root("switch")?.to_path_buf();
-    let paths: Vec<BString> = repository.index().entries().iter().map(|e| e.path.clone()).collect();
+    let paths: Vec<BString> = repository
+        .index()
+        .entries()
+        .iter()
+        .map(|e| e.path.clone())
+        .collect();
     for path in &paths {
         let path_ref = BStr::new(&path[..]);
         if repository.worktree()?.stat(path_ref)?.is_some() {
@@ -1544,7 +1736,12 @@ fn orphan_branch(repository: &mut Repository, name: &str, quiet: bool) -> Result
     Ok(0)
 }
 
-fn checkout_paths(repository: &mut Repository, source: Option<&str>, paths: &[PathBuf], quiet: bool) -> Result<i32> {
+fn checkout_paths(
+    repository: &mut Repository,
+    source: Option<&str>,
+    paths: &[PathBuf],
+    quiet: bool,
+) -> Result<i32> {
     let mut specs = Vec::with_capacity(paths.len());
     for path in paths {
         specs.push(super::worktree_path(repository, path, "checkout")?);
@@ -1553,7 +1750,10 @@ fn checkout_paths(repository: &mut Repository, source: Option<&str>, paths: &[Pa
         Some(spec) => {
             let oid = super::resolve_rev(repository, spec)?;
             let tree = repository.commit_tree(oid)?;
-            (Some(tree), super::short_oid(&super::resolve_rev(repository, spec)?))
+            (
+                Some(tree),
+                super::short_oid(&super::resolve_rev(repository, spec)?),
+            )
         }
         None => (None, "the index".to_string()),
     };
@@ -1603,7 +1803,10 @@ pub fn merge_message(repository: &Repository, spec: &str) -> String {
         || RefName::from_bytes(format!("refs/remotes/{spec}").as_bytes())
             .is_ok_and(|r| repository.refs().exists(&r))
     {
-        format!("remote-tracking branch '{}'", spec.trim_start_matches("refs/remotes/"))
+        format!(
+            "remote-tracking branch '{}'",
+            spec.trim_start_matches("refs/remotes/")
+        )
     } else if RefName::tag(BStr::new(spec.as_bytes())).is_ok_and(|r| repository.refs().exists(&r)) {
         format!("tag '{spec}'")
     } else {
@@ -1611,7 +1814,9 @@ pub fn merge_message(repository: &Repository, spec: &str) -> String {
     };
     // `merge.suppressDest` defaults to the default branch names; elsewhere Git names the target.
     match current {
-        Some(branch) if branch != "master" && branch != "main" => format!("Merge {what} into {branch}"),
+        Some(branch) if branch != "master" && branch != "main" => {
+            format!("Merge {what} into {branch}")
+        }
         _ => format!("Merge {what}"),
     }
 }
@@ -1656,15 +1861,27 @@ pub fn merge_commit(
 
     if ff != FastForward::Never && repository.is_ancestor(ours, theirs)? {
         if show_stat {
-            println!("Updating {}..{}", super::short_oid(&ours), super::short_oid(&theirs));
+            println!(
+                "Updating {}..{}",
+                super::short_oid(&ours),
+                super::short_oid(&theirs)
+            );
         }
         let old_tree = repository.commit_tree(ours)?;
         let new_tree = repository.commit_tree(theirs)?;
         if let Err(error) = repository.checkout_tree(new_tree, false) {
             return report_checkout_refusal(error, "merge");
         }
-        let note = if explicit_message { "Fast-forward (no commit created; -m option ignored)" } else { "Fast-forward" };
-        let reason = if action.starts_with("pull") { format!("{action}: {note}") } else { format!("{action} {label}: {note}") };
+        let note = if explicit_message {
+            "Fast-forward (no commit created; -m option ignored)"
+        } else {
+            "Fast-forward"
+        };
+        let reason = if action.starts_with("pull") {
+            format!("{action}: {note}")
+        } else {
+            format!("{action} {label}: {note}")
+        };
         repository.move_head(theirs, BStr::new(reason.as_bytes()))?;
         if show_stat {
             println!("Fast-forward");
@@ -1717,9 +1934,16 @@ pub fn merge_commit(
     for conflict in &result.conflicts {
         use rivet_core::ConflictKind;
         match conflict.kind {
-            ConflictKind::Content | ConflictKind::AddAdd | ConflictKind::Mode | ConflictKind::Binary => {
+            ConflictKind::Content
+            | ConflictKind::AddAdd
+            | ConflictKind::Mode
+            | ConflictKind::Binary => {
                 println!("Auto-merging {}", conflict.path);
-                let what = if conflict.kind == ConflictKind::AddAdd { "add/add" } else { "content" };
+                let what = if conflict.kind == ConflictKind::AddAdd {
+                    "add/add"
+                } else {
+                    "content"
+                };
                 println!("CONFLICT ({what}): Merge conflict in {}", conflict.path);
             }
             ConflictKind::ModifyDelete => println!(
@@ -1730,7 +1954,9 @@ pub fn merge_commit(
                 "CONFLICT (modify/delete): {} deleted in HEAD and modified in {label}.  Version {label} of {} left in tree.",
                 conflict.path, conflict.path
             ),
-            ConflictKind::Submodule => println!("CONFLICT (submodule): Merge conflict in {}", conflict.path),
+            ConflictKind::Submodule => {
+                println!("CONFLICT (submodule): Merge conflict in {}", conflict.path)
+            }
             ConflictKind::RenameDelete | ConflictKind::RenameRename => {
                 // Only the entry that carries the message is announced.
                 if let Some(message) = &conflict.message {
@@ -1761,8 +1987,15 @@ pub fn merge_commit(
         };
         rivet_core::write_merge_state(&git_dir, &state)?;
         let mode_path = git_dir.join("MERGE_MODE");
-        std::fs::write(&mode_path, if ff == FastForward::Never { &b"no-ff"[..] } else { &b""[..] })
-            .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", mode_path.display()))?;
+        std::fs::write(
+            &mode_path,
+            if ff == FastForward::Never {
+                &b"no-ff"[..]
+            } else {
+                &b""[..]
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", mode_path.display()))?;
         if !conflicted.is_empty() {
             println!("Automatic merge failed; fix conflicts and then commit the result.");
             return Ok(1);

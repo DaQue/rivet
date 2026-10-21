@@ -80,8 +80,8 @@ pub use state::{
     merge_in_progress, read_merge_state, write_merge_state, write_orig_head,
 };
 pub use tree::{
-    merge_path, merge_trees, merge_worktree_paths, update_index_after_merge,
-    write_conflict_stages, write_merged_worktree,
+    merge_path, merge_trees, merge_worktree_paths, update_index_after_merge, write_conflict_stages,
+    write_merged_worktree,
 };
 
 /// Phase 9 — which side of a merge a value came from.

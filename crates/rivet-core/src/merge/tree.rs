@@ -107,7 +107,13 @@ pub fn merge_trees(
     // Renames first: a file moved on one side and edited on the other has to be merged under its
     // new name, and the cases that cannot be merged become explicit conflicts.
     let (rename_conflicts, rename_removals) = if options.find_renames {
-        apply_renames(odb, &mut base_entries, &mut our_entries, &mut their_entries, options)?
+        apply_renames(
+            odb,
+            &mut base_entries,
+            &mut our_entries,
+            &mut their_entries,
+            options,
+        )?
     } else {
         (Vec::new(), Vec::new())
     };
@@ -134,7 +140,11 @@ pub fn merge_trees(
     }
     // A moved file's old name is gone from the result, wherever the move happened.
     for path in rename_removals {
-        result.paths.push(PathMerge { path, result: None, kind: None });
+        result.paths.push(PathMerge {
+            path,
+            result: None,
+            kind: None,
+        });
     }
 
     for path in paths {
@@ -478,7 +488,8 @@ pub(crate) fn flatten_tree(
 fn has_child(map: &BTreeMap<BString, (EntryMode, ObjectId)>, path: &BStr) -> bool {
     let mut prefix = path.to_owned();
     prefix.push(b'/');
-    map.keys().any(|name: &BString| name.starts_with(&prefix[..]))
+    map.keys()
+        .any(|name: &BString| name.starts_with(&prefix[..]))
 }
 
 /// The three outcomes a content merge has that matter to the tree walk.
@@ -760,10 +771,9 @@ pub fn write_merged_worktree(
                     .unwrap_or(crate::object::EntryMode::Blob);
                 crate::worktree::checkout::write_blob(worktree, path, oid, mode, odb)?;
             }
-            (None, None)
-                if worktree.stat(path)?.is_some() => {
-                    crate::worktree::checkout::remove_path(worktree, path)?;
-                }
+            (None, None) if worktree.stat(path)?.is_some() => {
+                crate::worktree::checkout::remove_path(worktree, path)?;
+            }
             _ => {}
         }
     }
@@ -869,7 +879,9 @@ pub fn update_index_after_merge(
         }
         let previous_mode = index.entry(path).map(|entry| entry.mode);
         index.remove_path(path);
-        let Some(oid) = path_merge.result else { continue };
+        let Some(oid) = path_merge.result else {
+            continue;
+        };
         let mode = modes
             .get(&path_merge.path)
             .map(|(mode, _)| *mode)
@@ -933,21 +945,36 @@ type EntryMap = BTreeMap<BString, (EntryMode, ObjectId)>;
 type RenameConflicts = Vec<(Conflict, PathMerge)>;
 
 /// Pair the files `side` removed from `base` with the files it added.
-fn renames_on_side(odb: &Odb, base: &EntryMap, side: &EntryMap) -> Result<BTreeMap<BString, BString>> {
+fn renames_on_side(
+    odb: &Odb,
+    base: &EntryMap,
+    side: &EntryMap,
+) -> Result<BTreeMap<BString, BString>> {
     use crate::diff::rename::{RenameSide, pair_renames};
     let sources: Vec<RenameSide> = base
         .iter()
         .filter(|(path, _)| !side.contains_key(*path))
-        .map(|(path, (mode, oid))| RenameSide { path: path.clone(), oid: *oid, mode: *mode })
+        .map(|(path, (mode, oid))| RenameSide {
+            path: path.clone(),
+            oid: *oid,
+            mode: *mode,
+        })
         .collect();
     let destinations: Vec<RenameSide> = side
         .iter()
         .filter(|(path, _)| !base.contains_key(*path))
-        .map(|(path, (mode, oid))| RenameSide { path: path.clone(), oid: *oid, mode: *mode })
+        .map(|(path, (mode, oid))| RenameSide {
+            path: path.clone(),
+            oid: *oid,
+            mode: *mode,
+        })
         .collect();
     let mut out = BTreeMap::new();
     for pair in pair_renames(&sources, &destinations, odb)? {
-        out.insert(sources[pair.source].path.clone(), destinations[pair.destination].path.clone());
+        out.insert(
+            sources[pair.source].path.clone(),
+            destinations[pair.destination].path.clone(),
+        );
     }
     Ok(out)
 }
@@ -969,12 +996,18 @@ fn apply_renames(
     let label = |bytes: &BString| String::from_utf8_lossy(bytes).into_owned();
     let (our_label, their_label) = (label(&options.labels.0), label(&options.labels.1));
 
-    let mut sources: Vec<BString> = our_renames.keys().chain(their_renames.keys()).cloned().collect();
+    let mut sources: Vec<BString> = our_renames
+        .keys()
+        .chain(their_renames.keys())
+        .cloned()
+        .collect();
     sources.sort();
     sources.dedup();
 
     for from in sources {
-        let Some(base_entry) = base.get(&from).copied() else { continue };
+        let Some(base_entry) = base.get(&from).copied() else {
+            continue;
+        };
         match (our_renames.get(&from), their_renames.get(&from)) {
             (Some(to_ours), Some(to_theirs)) if to_ours == to_theirs => {
                 // Both moved it to the same place: merge the contents there.
@@ -1001,9 +1034,15 @@ fn apply_renames(
                         hunks: Vec::new(),
                         message: Some(BString::from(message)),
                     },
-                    PathMerge { path: from.clone(), result: None, kind: Some(ConflictKind::RenameRename) },
+                    PathMerge {
+                        path: from.clone(),
+                        result: None,
+                        kind: Some(ConflictKind::RenameRename),
+                    },
                 ));
-                for (path, entry, is_ours) in [(to_ours, our_entry, true), (to_theirs, their_entry, false)] {
+                for (path, entry, is_ours) in
+                    [(to_ours, our_entry, true), (to_theirs, their_entry, false)]
+                {
                     let Some((_, oid)) = entry else { continue };
                     conflicts.push((
                         Conflict {
@@ -1015,19 +1054,41 @@ fn apply_renames(
                             hunks: Vec::new(),
                             message: None,
                         },
-                        PathMerge { path: path.clone(), result: Some(oid), kind: Some(ConflictKind::RenameRename) },
+                        PathMerge {
+                            path: path.clone(),
+                            result: Some(oid),
+                            kind: Some(ConflictKind::RenameRename),
+                        },
                     ));
                 }
             }
             (Some(to_ours), None) => {
                 one_sided_rename(
-                    &from, to_ours, base_entry, base, ours, theirs, true, &our_label, &their_label, &mut conflicts,
+                    &from,
+                    to_ours,
+                    base_entry,
+                    base,
+                    ours,
+                    theirs,
+                    true,
+                    &our_label,
+                    &their_label,
+                    &mut conflicts,
                     &mut removals,
                 );
             }
             (None, Some(to_theirs)) => {
                 one_sided_rename(
-                    &from, to_theirs, base_entry, base, theirs, ours, false, &our_label, &their_label, &mut conflicts,
+                    &from,
+                    to_theirs,
+                    base_entry,
+                    base,
+                    theirs,
+                    ours,
+                    false,
+                    &our_label,
+                    &their_label,
+                    &mut conflicts,
                     &mut removals,
                 );
             }
@@ -1069,9 +1130,15 @@ fn one_sided_rename(
         }
         None => {
             // The other side deleted the file the side renamed.
-            let Some((_, oid)) = side.remove(to) else { return };
+            let Some((_, oid)) = side.remove(to) else {
+                return;
+            };
             base.remove(from);
-            let (renamed_in, deleted_in) = if side_is_ours { (our_label, their_label) } else { (their_label, our_label) };
+            let (renamed_in, deleted_in) = if side_is_ours {
+                (our_label, their_label)
+            } else {
+                (their_label, our_label)
+            };
             let message = format!(
                 "CONFLICT (rename/delete): {from} renamed to {to} in {renamed_in}, but deleted in {deleted_in}."
             );
@@ -1085,7 +1152,11 @@ fn one_sided_rename(
                     hunks: Vec::new(),
                     message: Some(BString::from(message)),
                 },
-                PathMerge { path: to.clone(), result: Some(oid), kind: Some(ConflictKind::RenameDelete) },
+                PathMerge {
+                    path: to.clone(),
+                    result: Some(oid),
+                    kind: Some(ConflictKind::RenameDelete),
+                },
             ));
         }
     }

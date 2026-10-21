@@ -40,7 +40,8 @@ fn have_git() -> bool {
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("rivet-merge-state-{}-{}", tag, std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("rivet-merge-state-{}-{}", tag, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -82,13 +83,21 @@ fn written_state_is_readable_by_git_and_by_rivet() {
     write_merge_state(&git_dir, &state).expect("write state");
 
     // Git reads the same files.
-    assert_eq!(git(&dir, &["rev-parse", "MERGE_HEAD"]).trim(), theirs.trim());
+    assert_eq!(
+        git(&dir, &["rev-parse", "MERGE_HEAD"]).trim(),
+        theirs.trim()
+    );
     assert_eq!(git(&dir, &["rev-parse", "ORIG_HEAD"]).trim(), ours.trim());
     let msg = std::fs::read_to_string(git_dir.join("MERGE_MSG")).expect("MERGE_MSG");
-    assert!(msg.contains("Merge branch 'topic'"), "MERGE_MSG was {msg:?}");
+    assert!(
+        msg.contains("Merge branch 'topic'"),
+        "MERGE_MSG was {msg:?}"
+    );
 
     // And Rivet reads back what it wrote.
-    let read = read_merge_state(&git_dir, format).expect("read").expect("some");
+    let read = read_merge_state(&git_dir, format)
+        .expect("read")
+        .expect("some");
     assert_eq!(read.merge_head, vec![oid(&theirs)]);
     assert_eq!(read.orig_head, Some(oid(&ours)));
     assert!(read.merge_msg.starts_with(b"Merge branch 'topic'"));

@@ -56,7 +56,14 @@ fn round_trip_is_byte_exact_for_every_body_git_accepts() {
 
 #[test]
 fn armour_detection_matches_real_git() {
-    for (case, body) in [("C", BODY_C), ("C3", BODY_C3), ("G", BODY_G), ("N1", BODY_N1), ("N2", BODY_N2), ("N3", BODY_N3)] {
+    for (case, body) in [
+        ("C", BODY_C),
+        ("C3", BODY_C3),
+        ("G", BODY_G),
+        ("N1", BODY_N1),
+        ("N2", BODY_N2),
+        ("N3", BODY_N3),
+    ] {
         let tag = Tag::parse(ObjectFormat::Sha1, body).expect(case);
         assert!(tag.is_signed(), "case {case}: git stores a signature here");
         assert!(
@@ -177,14 +184,20 @@ fn recorded_git_object_ids_are_reproduced() {
         ("N3", BODY_N3),
     ];
     for (case, body) in bodies {
-        let tag = Tag::parse(ObjectFormat::Sha1, body).unwrap_or_else(|e| {
-            panic!("case {case}: rivet must parse this body: {e:?}")
-        });
+        let tag = Tag::parse(ObjectFormat::Sha1, body)
+            .unwrap_or_else(|e| panic!("case {case}: rivet must parse this body: {e:?}"));
         let recorded = recorded_id(EXPECTED, case);
         let expected = ObjectId::from_hex(ObjectFormat::Sha1, BStr::new(recorded.as_bytes()))
-            .unwrap_or_else(|e| panic!("case {case}: recorded id {recorded} is not a valid hex id: {e:?}"));
-        let got = tag.id(ObjectFormat::Sha1).unwrap_or_else(|e| panic!("case {case}: id computation failed: {e:?}"));
-        assert_eq!(got, expected, "case {case}: rivet's object id must match git's recorded id");
+            .unwrap_or_else(|e| {
+                panic!("case {case}: recorded id {recorded} is not a valid hex id: {e:?}")
+            });
+        let got = tag
+            .id(ObjectFormat::Sha1)
+            .unwrap_or_else(|e| panic!("case {case}: id computation failed: {e:?}"));
+        assert_eq!(
+            got, expected,
+            "case {case}: rivet's object id must match git's recorded id"
+        );
     }
     // The four bodies rivet rejects by contract: parse must still error, so changing
     // either side fails loudly.

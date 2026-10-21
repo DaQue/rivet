@@ -793,6 +793,21 @@ s_pack_deltas() {
     vq fsck
 }
 
+s_histogram() {
+    RANDOM=42
+    v init -q repo; cd repo
+    local round i lines alphabet
+    for round in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        alphabet=$((RANDOM % 6 + 2)); lines=$((RANDOM % 40 + 5))
+        : >f; for ((i = 0; i < lines; i++)); do echo "l$((RANDOM % alphabet))" >>f; done
+        v add f; tick; v commit -q -m "a$round"
+        : >f; for ((i = 0; i < lines + RANDOM % 7 - 3; i++)); do echo "l$((RANDOM % alphabet))" >>f; done
+        v add f; tick; v commit -q -m "b$round"
+        v diff HEAD~1 HEAD --diff-algorithm=histogram
+        v diff HEAD~1 HEAD --diff-algorithm=histogram --stat
+    done
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

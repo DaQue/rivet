@@ -198,7 +198,7 @@ impl RefName {
             match byte {
                 b' ' => return Err(invalid("ref name contains a space")),
                 b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\' => {
-                    return Err(invalid("ref name contains one of `~^:?*[\\`"))
+                    return Err(invalid("ref name contains one of `~^:?*[\\`"));
                 }
                 _ => {}
             }

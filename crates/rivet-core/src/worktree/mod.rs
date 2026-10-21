@@ -157,10 +157,18 @@ impl Worktree {
     /// `core.ignorecase` or `core.protectNTFS` that is present and not a boolean.
     pub fn new(root: Option<&Path>, format: ObjectFormat, config: &Config) -> Result<Self> {
         let root = root.map(PathBuf::from);
-        let filemode = config.get_bool(BStr::new(b"core.filemode"))?.unwrap_or(true);
-        let symlinks = config.get_bool(BStr::new(b"core.symlinks"))?.unwrap_or(true);
-        let ignore_case = config.get_bool(BStr::new(b"core.ignorecase"))?.unwrap_or(false);
-        let protect_ntfs = config.get_bool(BStr::new(b"core.protectNTFS"))?.unwrap_or(cfg!(windows));
+        let filemode = config
+            .get_bool(BStr::new(b"core.filemode"))?
+            .unwrap_or(true);
+        let symlinks = config
+            .get_bool(BStr::new(b"core.symlinks"))?
+            .unwrap_or(true);
+        let ignore_case = config
+            .get_bool(BStr::new(b"core.ignorecase"))?
+            .unwrap_or(false);
+        let protect_ntfs = config
+            .get_bool(BStr::new(b"core.protectNTFS"))?
+            .unwrap_or(cfg!(windows));
         Ok(Self {
             root,
             format,
@@ -271,9 +279,9 @@ impl Worktree {
     /// components until something fits.
     pub fn relative_path(&self, path: &Path) -> Result<BString> {
         let root = self.require_root("relative path")?;
-        let rel = path.strip_prefix(root).map_err(|_| {
-            Error::OutsideWorktree(BString::from(path.as_os_str().as_bytes()))
-        })?;
+        let rel = path
+            .strip_prefix(root)
+            .map_err(|_| Error::OutsideWorktree(BString::from(path.as_os_str().as_bytes())))?;
         let mut out: Vec<u8> = Vec::new();
         for comp in rel.components() {
             if !out.is_empty() {
@@ -331,10 +339,7 @@ impl Worktree {
         options: &WorktreeWalkOptions,
         out: &mut Vec<WorktreeEntry>,
     ) -> Result<()> {
-        let depth = dir
-            .split(|b| *b == b'/')
-            .filter(|c| !c.is_empty())
-            .count();
+        let depth = dir.split(|b| *b == b'/').filter(|c| !c.is_empty()).count();
         ignore.push_dir(dir)?;
         let entries = self.walk_dir(dir, ignore)?;
         for entry in entries {
@@ -344,9 +349,8 @@ impl Worktree {
                 continue;
             }
             if is_dir {
-                let descend = !ignored
-                    && options.recursive
-                    && ignore.should_descend(entry.path.as_ref())?;
+                let descend =
+                    !ignored && options.recursive && ignore.should_descend(entry.path.as_ref())?;
                 let path = entry.path.clone();
                 out.push(entry);
                 if descend {
@@ -702,7 +706,8 @@ pub fn check_relative_path(path: &BStr, protect_ntfs: bool) -> Result<()> {
         return Err(Error::InvalidPath(path.to_owned()));
     }
     // An absolute path, POSIX or Windows-style.
-    if bytes[0] == b'/' || (bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()) {
+    if bytes[0] == b'/' || (bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic())
+    {
         return Err(Error::InvalidPath(path.to_owned()));
     }
     let mut components: Vec<&[u8]> = Vec::new();
@@ -723,18 +728,13 @@ pub fn check_relative_path(path: &BStr, protect_ntfs: bool) -> Result<()> {
             if matches!(comp.last(), Some(b'.') | Some(b' ')) {
                 return Err(Error::InvalidPath(path.to_owned()));
             }
-            let stem = comp
-                .split(|b| *b == b'.')
-                .next()
-                .unwrap_or(&[]);
+            let stem = comp.split(|b| *b == b'.').next().unwrap_or(&[]);
             let upper: Vec<u8> = stem.iter().map(|b| b.to_ascii_uppercase()).collect();
-            let reserved = matches!(
-                upper.as_slice(),
-                b"CON" | b"PRN" | b"AUX" | b"NUL"
-            ) || (upper.len() == 4
-                && (upper.starts_with(b"COM") || upper.starts_with(b"LPT"))
-                && upper[3].is_ascii_digit()
-                && upper[3] != b'0');
+            let reserved = matches!(upper.as_slice(), b"CON" | b"PRN" | b"AUX" | b"NUL")
+                || (upper.len() == 4
+                    && (upper.starts_with(b"COM") || upper.starts_with(b"LPT"))
+                    && upper[3].is_ascii_digit()
+                    && upper[3] != b'0');
             if reserved {
                 return Err(Error::InvalidPath(path.to_owned()));
             }

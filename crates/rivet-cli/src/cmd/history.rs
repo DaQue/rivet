@@ -324,14 +324,16 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     if args.all {
         for (_, oid) in repository.refs().list_all(repository.odb())? {
             if let Ok(commit) = repository.refs().peel_oid(oid, repository.odb())
-                && !starts.contains(&commit) {
-                    starts.push(commit);
-                }
+                && !starts.contains(&commit)
+            {
+                starts.push(commit);
+            }
         }
         if let Some(head) = repository.head()?.oid()
-            && !starts.contains(&head) {
-                starts.insert(0, head);
-            }
+            && !starts.contains(&head)
+        {
+            starts.insert(0, head);
+        }
     } else if let Some(negated) = spec.strip_prefix('^') {
         options.exclude(resolve(negated)?);
         starts.push(resolve("HEAD")?);
@@ -394,7 +396,9 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         );
     }
     for path in &args.paths {
-        options.paths.push(super::worktree_path(&repository, path, "log")?);
+        options
+            .paths
+            .push(super::worktree_path(&repository, path, "log")?);
     }
 
     let oids = rivet_core::revwalk::walk_oids(repository.odb(), &starts, &options)?;
@@ -404,7 +408,14 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         let commit = read_commit(&repository, oid)?;
         if args.oneline {
             let subject = subject_of(&commit.message);
-            out.extend_from_slice(format!("{} {}\n", abbrev(&repository, oid, args.no_abbrev_commit), subject).as_bytes());
+            out.extend_from_slice(
+                format!(
+                    "{} {}\n",
+                    abbrev(&repository, oid, args.no_abbrev_commit),
+                    subject
+                )
+                .as_bytes(),
+            );
         } else {
             if position > 0 {
                 out.push(b'\n');
@@ -412,7 +423,12 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
             write_commit_header(&repository, oid, &commit, args.no_abbrev_commit, &mut out);
         }
         if args.patch || args.stat || args.name_status {
-            let diff = commit_diff(&repository, &commit, &diff_options, &args.paths_as_specs(&repository)?)?;
+            let diff = commit_diff(
+                &repository,
+                &commit,
+                &diff_options,
+                &args.paths_as_specs(&repository)?,
+            )?;
             if !diff.is_empty() && commit.parents.len() < 2 {
                 if !args.oneline {
                     out.push(b'\n');
@@ -470,7 +486,11 @@ pub fn run_show(global: &GlobalArgs, args: &ShowArgs) -> Result<i32> {
         repository.odb(),
         BStr::new(spec.as_bytes()),
     )
-    .map_err(|_| anyhow::anyhow!("ambiguous argument '{spec}': unknown revision or path not in the working tree."))?;
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "ambiguous argument '{spec}': unknown revision or path not in the working tree."
+        )
+    })?;
 
     let mut out = Vec::new();
     show_object(&mut repository, &oid, args, &mut out)?;
@@ -552,20 +572,32 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
         specs.push(super::worktree_path(&repository, path, "diff")?);
     }
 
-    let mut diff = if revisions.len() == 2 || (revisions.len() == 1 && revisions[0].contains("..")) {
+    let mut diff = if revisions.len() == 2 || (revisions.len() == 1 && revisions[0].contains(".."))
+    {
         let (left, right) = if revisions.len() == 2 {
             (revisions[0].clone(), revisions[1].clone())
         } else {
             let (l, r) = revisions[0].split_once("..").expect("checked");
             (l.to_string(), r.to_string())
         };
-        let left = repository.commit_tree(super::resolve_rev(&repository, if left.is_empty() { "HEAD" } else { &left })?)?;
-        let right = repository.commit_tree(super::resolve_rev(&repository, if right.is_empty() { "HEAD" } else { &right })?)?;
+        let left = repository.commit_tree(super::resolve_rev(
+            &repository,
+            if left.is_empty() { "HEAD" } else { &left },
+        )?)?;
+        let right = repository.commit_tree(super::resolve_rev(
+            &repository,
+            if right.is_empty() { "HEAD" } else { &right },
+        )?)?;
         rivet_core::tree_diff(format, left, right, repository.odb(), &options)?
     } else if args.cached {
         let tree = match revisions.first() {
             Some(rev) => Some(repository.commit_tree(super::resolve_rev(&repository, rev)?)?),
-            None => repository.head_tree().ok().flatten().map(|_| ()).and(repository.head_tree_oid()?),
+            None => repository
+                .head_tree()
+                .ok()
+                .flatten()
+                .map(|_| ())
+                .and(repository.head_tree_oid()?),
         };
         rivet_core::index_diff(repository.index(), tree, repository.odb(), &options)?
     } else if let Some(rev) = revisions.first() {
@@ -574,19 +606,35 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
     } else {
         let worktree = repository.worktree()?.clone();
         let mut cache = rivet_core::StatCache::new();
-        rivet_core::work_tree_diff(&worktree, repository.index(), &mut cache, repository.odb(), &options)?
+        rivet_core::work_tree_diff(
+            &worktree,
+            repository.index(),
+            &mut cache,
+            repository.odb(),
+            &options,
+        )?
     };
     super::detect_renames(&repository, &mut diff, &options)?;
     if !specs.is_empty() {
         let keep: Vec<bool> = diff
             .files
             .iter()
-            .map(|f| specs.iter().any(|s| rivet_core::ops::pathspec_matches(f.path(), BStr::new(&s[..]))))
+            .map(|f| {
+                specs
+                    .iter()
+                    .any(|s| rivet_core::ops::pathspec_matches(f.path(), BStr::new(&s[..])))
+            })
             .collect();
         let mut index = 0;
-        diff.files.retain(|_| { index += 1; keep[index - 1] });
+        diff.files.retain(|_| {
+            index += 1;
+            keep[index - 1]
+        });
         let mut index = 0;
-        diff.stats.retain(|_| { index += 1; keep[index - 1] });
+        diff.stats.retain(|_| {
+            index += 1;
+            keep[index - 1]
+        });
     }
 
     // Conflicted paths need Git's combined diff (`diff --cc`), which is not implemented; naming
@@ -596,7 +644,10 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
             .index()
             .entries()
             .iter()
-            .filter(|e| e.stage() == rivet_core::index::Stage::Ours || (e.is_unmerged() && e.stage() == rivet_core::index::Stage::Base))
+            .filter(|e| {
+                e.stage() == rivet_core::index::Stage::Ours
+                    || (e.is_unmerged() && e.stage() == rivet_core::index::Stage::Base)
+            })
             .map(|e| e.path.clone())
             .collect()
     } else {
@@ -658,7 +709,9 @@ struct LogCommit {
 }
 
 fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<LogCommit> {
-    let object = repository.odb().read_typed(oid, rivet_core::ObjectKind::Commit)?;
+    let object = repository
+        .odb()
+        .read_typed(oid, rivet_core::ObjectKind::Commit)?;
     let commit = rivet_core::Commit::parse(repository.format(), object.data())?;
     Ok(LogCommit {
         parents: commit.parents.clone(),
@@ -673,7 +726,11 @@ fn subject_of(message: &[u8]) -> String {
     let mut parts = Vec::new();
     for line in message.lines() {
         if line.iter().all(u8::is_ascii_whitespace) {
-            if parts.is_empty() { continue; } else { break; }
+            if parts.is_empty() {
+                continue;
+            } else {
+                break;
+            }
         }
         parts.push(String::from_utf8_lossy(line).trim().to_string());
     }
@@ -682,7 +739,9 @@ fn subject_of(message: &[u8]) -> String {
 
 fn abbrev(repository: &Repository, oid: &ObjectId, full: bool) -> String {
     let hex = oid.to_string();
-    if full { return hex; }
+    if full {
+        return hex;
+    }
     // Seven digits unless that is ambiguous; extend until the prefix is unique.
     let mut length = 7;
     while length < hex.len() {
@@ -690,23 +749,46 @@ fn abbrev(repository: &Repository, oid: &ObjectId, full: bool) -> String {
         let unique = repository
             .odb()
             .oids()
-            .map(|all| all.iter().filter(|o| o.to_string().starts_with(prefix)).count() <= 1)
+            .map(|all| {
+                all.iter()
+                    .filter(|o| o.to_string().starts_with(prefix))
+                    .count()
+                    <= 1
+            })
             .unwrap_or(true);
-        if unique { break; }
+        if unique {
+            break;
+        }
         length += 1;
     }
     hex[..length].to_string()
 }
 
-fn write_commit_header(repository: &Repository, oid: &ObjectId, commit: &LogCommit, full_ids: bool, out: &mut Vec<u8>) {
+fn write_commit_header(
+    repository: &Repository,
+    oid: &ObjectId,
+    commit: &LogCommit,
+    full_ids: bool,
+    out: &mut Vec<u8>,
+) {
     out.extend_from_slice(format!("commit {oid}\n").as_bytes());
     if commit.parents.len() > 1 {
-        let parents: Vec<String> = commit.parents.iter().map(|p| abbrev(repository, p, full_ids)).collect();
+        let parents: Vec<String> = commit
+            .parents
+            .iter()
+            .map(|p| abbrev(repository, p, full_ids))
+            .collect();
         out.extend_from_slice(format!("Merge: {}\n", parents.join(" ")).as_bytes());
     }
-    out.extend_from_slice(format!("Author: {} <{}>\n", commit.author.name, commit.author.email).as_bytes());
     out.extend_from_slice(
-        format!("Date:   {}\n", rivet_core::ops::format_git_date(commit.author.when, commit.author.tz_offset_minutes)).as_bytes(),
+        format!("Author: {} <{}>\n", commit.author.name, commit.author.email).as_bytes(),
+    );
+    out.extend_from_slice(
+        format!(
+            "Date:   {}\n",
+            rivet_core::ops::format_git_date(commit.author.when, commit.author.tz_offset_minutes)
+        )
+        .as_bytes(),
     );
     out.push(b'\n');
     let message = commit.message.trim_end_with(|c| c == '\n');
@@ -738,23 +820,44 @@ fn commit_diff(
         Some(parent) => repository.commit_tree(*parent)?,
         None => super::empty_tree(repository)?,
     };
-    let mut diff = rivet_core::tree_diff(repository.format(), base, commit.tree, repository.odb(), options)?;
+    let mut diff = rivet_core::tree_diff(
+        repository.format(),
+        base,
+        commit.tree,
+        repository.odb(),
+        options,
+    )?;
     super::detect_renames(repository, &mut diff, options)?;
     if !specs.is_empty() {
         let keep: Vec<bool> = diff
             .files
             .iter()
-            .map(|f| specs.iter().any(|s| rivet_core::ops::pathspec_matches(f.path(), BStr::new(&s[..]))))
+            .map(|f| {
+                specs
+                    .iter()
+                    .any(|s| rivet_core::ops::pathspec_matches(f.path(), BStr::new(&s[..])))
+            })
             .collect();
         let mut i = 0;
-        diff.files.retain(|_| { i += 1; keep[i - 1] });
+        diff.files.retain(|_| {
+            i += 1;
+            keep[i - 1]
+        });
         let mut i = 0;
-        diff.stats.retain(|_| { i += 1; keep[i - 1] });
+        diff.stats.retain(|_| {
+            i += 1;
+            keep[i - 1]
+        });
     }
     Ok(diff)
 }
 
-fn show_object(repository: &mut Repository, oid: &ObjectId, args: &ShowArgs, out: &mut Vec<u8>) -> Result<()> {
+fn show_object(
+    repository: &mut Repository,
+    oid: &ObjectId,
+    args: &ShowArgs,
+    out: &mut Vec<u8>,
+) -> Result<()> {
     let object = repository.odb().read(oid)?;
     match object.kind() {
         rivet_core::ObjectKind::Blob => out.extend_from_slice(object.data()),
@@ -772,27 +875,49 @@ fn show_object(repository: &mut Repository, oid: &ObjectId, args: &ShowArgs, out
         rivet_core::ObjectKind::Tag => {
             let tag = rivet_core::Tag::parse(repository.format(), object.data())?;
             out.extend_from_slice(format!("tag {}\n", tag.name).as_bytes());
-            out.extend_from_slice(format!("Tagger: {} <{}>\n", tag.tagger.name, tag.tagger.email).as_bytes());
-            out.extend_from_slice(format!("Date:   {}\n\n", rivet_core::ops::format_git_date(tag.tagger.when, tag.tagger.tz_offset_minutes)).as_bytes());
+            out.extend_from_slice(
+                format!("Tagger: {} <{}>\n", tag.tagger.name, tag.tagger.email).as_bytes(),
+            );
+            out.extend_from_slice(
+                format!(
+                    "Date:   {}\n\n",
+                    rivet_core::ops::format_git_date(tag.tagger.when, tag.tagger.tz_offset_minutes)
+                )
+                .as_bytes(),
+            );
             out.extend_from_slice(tag.message);
-            if !tag.message.ends_with(b"\n") { out.push(b'\n'); }
+            if !tag.message.ends_with(b"\n") {
+                out.push(b'\n');
+            }
             out.push(b'\n');
             let target = tag.object;
             show_object(repository, &target, args, out)?;
         }
         rivet_core::ObjectKind::Commit => {
             let commit = read_commit(repository, oid)?;
-            let oneline = args.pretty.as_deref() == Some("oneline") || args.format.as_deref() == Some("oneline");
+            let oneline = args.pretty.as_deref() == Some("oneline")
+                || args.format.as_deref() == Some("oneline");
             if oneline {
-                out.extend_from_slice(format!("{} {}\n", abbrev(repository, oid, false), subject_of(&commit.message)).as_bytes());
+                out.extend_from_slice(
+                    format!(
+                        "{} {}\n",
+                        abbrev(repository, oid, false),
+                        subject_of(&commit.message)
+                    )
+                    .as_bytes(),
+                );
             } else {
                 write_commit_header(repository, oid, &commit, false, out);
             }
             if !args.no_patch && commit.parents.len() < 2 {
                 let mut options = rivet_core::DiffOptions::new();
-                if let Some(n) = args.context { options.context = n; }
+                if let Some(n) = args.context {
+                    options.context = n;
+                }
                 let mut specs = Vec::new();
-                for path in &args.paths { specs.push(super::worktree_path(repository, path, "show")?); }
+                for path in &args.paths {
+                    specs.push(super::worktree_path(repository, path, "show")?);
+                }
                 let diff = commit_diff(repository, &commit, &options, &specs)?;
                 if !diff.is_empty() {
                     out.push(b'\n');
@@ -826,7 +951,13 @@ fn tree_vs_worktree(
         match (map.get(&path), data) {
             (Some((mode, oid)), data) => {
                 let entry = rivet_core::ops::make_index_entry(path_ref, *mode, *oid, None);
-                let file = rivet_core::entry_diff(worktree, &entry, data.as_deref(), repository.odb(), options)?;
+                let file = rivet_core::entry_diff(
+                    worktree,
+                    &entry,
+                    data.as_deref(),
+                    repository.odb(),
+                    options,
+                )?;
                 if file.old_oid != file.new_oid || file.old_mode != file.new_mode {
                     files.push(file);
                 }

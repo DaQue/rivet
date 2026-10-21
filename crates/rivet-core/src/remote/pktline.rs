@@ -69,8 +69,8 @@
 
 use std::io::Read;
 
-use crate::error::Result;
 use crate::error::Error;
+use crate::error::Result;
 
 /// Phase 11 — how many bytes of payload a pkt-line can carry, at most.
 ///
@@ -310,8 +310,10 @@ impl PktLine {
             return Err(Error::Protocol("truncated pkt-line header".to_string()));
         } else {
             let header = &data[0..4];
-            let hex = std::str::from_utf8(header).map_err(|_| Error::Protocol("non-hex pkt-line header".to_string()))?;
-            u32::from_str_radix(hex, 16).map_err(|_| Error::Protocol("non-hex pkt-line header".to_string()))?
+            let hex = std::str::from_utf8(header)
+                .map_err(|_| Error::Protocol("non-hex pkt-line header".to_string()))?;
+            u32::from_str_radix(hex, 16)
+                .map_err(|_| Error::Protocol("non-hex pkt-line header".to_string()))?
         };
         if len == 3 {
             return Err(Error::Protocol("invalid pkt-line length 0003".to_string()));
@@ -528,9 +530,7 @@ impl SidebandKind {
             1 => Ok(Self::Pack),
             2 => Ok(Self::Progress),
             3 => Ok(Self::Error),
-            _ => Err(Error::Protocol(format!(
-                "unknown sideband channel {byte}"
-            ))),
+            _ => Err(Error::Protocol(format!("unknown sideband channel {byte}"))),
         }
     }
 }
@@ -703,7 +703,9 @@ impl<R: Read> SidebandReader<R> {
             }
         }
         if !error_text.is_empty() {
-            return Err(Error::Protocol(String::from_utf8_lossy(&error_text).into_owned()));
+            return Err(Error::Protocol(
+                String::from_utf8_lossy(&error_text).into_owned(),
+            ));
         }
         Ok(pack)
     }

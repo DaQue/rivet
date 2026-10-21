@@ -259,7 +259,9 @@ pub fn run_init(global: &GlobalArgs, args: &InitArgs) -> Result<i32> {
     if let Some(perm) = &args.shared {
         // Not silently accepted: a user who asked for a shared repository has to know the
         // permissions were not applied. Git's own `--shared` affects umask and group bits only.
-        anyhow::bail!("--shared={perm} is not implemented: rivet does not manage repository permissions");
+        anyhow::bail!(
+            "--shared={perm} is not implemented: rivet does not manage repository permissions"
+        );
     }
 
     let git_dir = if args.bare {
@@ -354,8 +356,12 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
     let name = match &args.directory {
         Some(dir) => dir.clone(),
         None => {
-            let guessed = rivet_core::remote::guess_remote_name(&parsed)
-                .ok_or_else(|| anyhow::anyhow!("could not guess a directory name from '{}'", args.repository))?;
+            let guessed = rivet_core::remote::guess_remote_name(&parsed).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "could not guess a directory name from '{}'",
+                    args.repository
+                )
+            })?;
             let mut text = guessed.to_string();
             if args.bare {
                 text.push_str(".git");
@@ -364,14 +370,28 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
         }
     };
     let base = crate::cmd::base_dir(global)?;
-    let dest = if name.is_absolute() { name.clone() } else { base.join(&name) };
+    let dest = if name.is_absolute() {
+        name.clone()
+    } else {
+        base.join(&name)
+    };
     let pre_existing = dest.exists();
-    if pre_existing && std::fs::read_dir(&dest).map(|mut d| d.next().is_some()).unwrap_or(true) {
-        anyhow::bail!("destination path '{}' already exists and is not an empty directory.", name.display());
+    if pre_existing
+        && std::fs::read_dir(&dest)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(true)
+    {
+        anyhow::bail!(
+            "destination path '{}' already exists and is not an empty directory.",
+            name.display()
+        );
     }
     // A local source that is not a repository is reported before anything is created.
     if parsed.scheme == rivet_core::remote::RemoteScheme::File
-        && rivet_core::Repository::discover(std::path::Path::new(&String::from_utf8_lossy(&parsed.path).into_owned())).is_err()
+        && rivet_core::Repository::discover(std::path::Path::new(
+            &String::from_utf8_lossy(&parsed.path).into_owned(),
+        ))
+        .is_err()
     {
         anyhow::bail!("repository '{}' does not exist", args.repository);
     }
@@ -397,7 +417,11 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
                 if let Ok(entries) = std::fs::read_dir(&dest) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+                        let _ = if path.is_dir() {
+                            std::fs::remove_dir_all(&path)
+                        } else {
+                            std::fs::remove_file(&path)
+                        };
                     }
                 }
             } else {
@@ -448,7 +472,10 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
 ///   and outside this repository's.
 pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
     use rivet_core::ops::{global_config_paths, system_config_path};
-    let scope_count = [args.global, args.local, args.system].iter().filter(|s| **s).count();
+    let scope_count = [args.global, args.local, args.system]
+        .iter()
+        .filter(|s| **s)
+        .count();
     if scope_count > 1 {
         anyhow::bail!("only one config file at a time");
     }
@@ -478,23 +505,31 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
     };
     let write_path = |what: &str| -> Result<std::path::PathBuf> {
         if args.system {
-            anyhow::bail!("could not lock config file {}: refusing to write the system config", system_config_path().map(|p| p.display().to_string()).unwrap_or_default());
+            anyhow::bail!(
+                "could not lock config file {}: refusing to write the system config",
+                system_config_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            );
         }
         if args.global {
-            return global_path.clone().ok_or_else(|| anyhow::anyhow!("$HOME not set"));
+            return global_path
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("$HOME not set"));
         }
         let _ = what;
-        local_path.clone().ok_or_else(|| anyhow::anyhow!("not in a git directory"))
+        local_path
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("not in a git directory"))
     };
     let read_sources = || -> Result<Vec<(String, rivet_core::Config)>> {
         let mut sources = Vec::new();
         let want_system = args.system || scope_count == 0;
         let want_global = args.global || scope_count == 0;
         let want_local = args.local || scope_count == 0;
-        if want_system
-            && let Some(path) = system_config_path().filter(|p| p.is_file()) {
-                sources.push(("system".to_string(), rivet_core::Config::load(&path)?));
-            }
+        if want_system && let Some(path) = system_config_path().filter(|p| p.is_file()) {
+            sources.push(("system".to_string(), rivet_core::Config::load(&path)?));
+        }
         if want_global {
             for path in global_config_paths().into_iter().filter(|p| p.is_file()) {
                 sources.push(("global".to_string(), rivet_core::Config::load(&path)?));
@@ -534,7 +569,9 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
             Some(ConfigTypeArg::Path) => {
                 let text = value.to_string();
                 Ok(match text.strip_prefix("~/") {
-                    Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()).into_bytes(),
+                    Some(rest) => {
+                        format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()).into_bytes()
+                    }
                     None => text.into_bytes(),
                 })
             }
@@ -575,7 +612,10 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
         let path = write_path("remove-section")?;
         let mut config = rivet_core::Config::load(&path)?;
         let (name, sub) = split_section(section);
-        if !config.remove_section(BStr::new(name.as_bytes()), sub.as_deref().map(|s| BStr::new(s.as_bytes()))) {
+        if !config.remove_section(
+            BStr::new(name.as_bytes()),
+            sub.as_deref().map(|s| BStr::new(s.as_bytes())),
+        ) {
             eprintln!("fatal: no such section: {section}");
             return Ok(128);
         }
@@ -597,7 +637,10 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
             eprintln!("fatal: no such section: {old}");
             return Ok(128);
         }
-        config.remove_section(BStr::new(old_name.as_bytes()), old_sub.as_deref().map(|s| BStr::new(s.as_bytes())));
+        config.remove_section(
+            BStr::new(old_name.as_bytes()),
+            old_sub.as_deref().map(|s| BStr::new(s.as_bytes())),
+        );
         for entry in moved {
             let mut flat = new_name.clone();
             if let Some(sub) = &new_sub {
@@ -646,12 +689,18 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut config = if path.is_file() { rivet_core::Config::load(&path)? } else { rivet_core::Config::new() };
+        let mut config = if path.is_file() {
+            rivet_core::Config::load(&path)?
+        } else {
+            rivet_core::Config::new()
+        };
         let stored: Vec<u8> = match args.value_type {
-            Some(ConfigTypeArg::Bool) => match rivet_core::parse_bool(BStr::new(value.as_bytes())) {
-                Ok(b) => b.to_string().into_bytes(),
-                Err(_) => anyhow::bail!("bad boolean config value '{value}' for '{key}'"),
-            },
+            Some(ConfigTypeArg::Bool) => {
+                match rivet_core::parse_bool(BStr::new(value.as_bytes())) {
+                    Ok(b) => b.to_string().into_bytes(),
+                    Err(_) => anyhow::bail!("bad boolean config value '{value}' for '{key}'"),
+                }
+            }
             _ => value.as_bytes().to_vec(),
         };
         if args.add {
@@ -698,7 +747,6 @@ fn split_section(name: &str) -> (String, Option<String>) {
     }
 }
 
-
 fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
     use rivet_core::remote_ops::{FetchRequest, Refspec, TagMode};
     use rivet_core::{HeadState, RefName};
@@ -706,7 +754,10 @@ fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
     let options = InitOptions {
         bare: args.bare,
         initial_branch: rivet_core::ops::default_branch_name()?,
-        format: args.object_format.map(ObjectFormat::from).unwrap_or(ObjectFormat::Sha1),
+        format: args
+            .object_format
+            .map(ObjectFormat::from)
+            .unwrap_or(ObjectFormat::Sha1),
         work_tree: None,
     };
     let mut repository = Repository::init(dest, &options)?;
@@ -714,7 +765,10 @@ fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
     let url = rivet_core::remote_ops::absolutize_url(&args.repository);
 
     let config = repository.config_mut();
-    config.set(BStr::new(format!("remote.{origin}.url").as_bytes()), url.as_bytes())?;
+    config.set(
+        BStr::new(format!("remote.{origin}.url").as_bytes()),
+        url.as_bytes(),
+    )?;
     if !args.bare {
         config.set(
             BStr::new(format!("remote.{origin}.fetch").as_bytes()),
@@ -730,7 +784,11 @@ fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
     };
     let request = FetchRequest {
         refspecs: vec![Refspec::parse(BStr::new(spec.as_bytes()))?],
-        tags: if args.tags || true { TagMode::All } else { TagMode::None },
+        tags: if args.tags || true {
+            TagMode::All
+        } else {
+            TagMode::None
+        },
         prune: false,
         force: true,
         dry_run: false,
@@ -743,14 +801,24 @@ fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
     let reason = format!("clone: from {url}");
 
     let remote_default = rivet_core::remote_ops::remote_head_branch(&report.advertisement);
-    if report.advertisement.refs.iter().all(|r| r.name.as_slice() == b"HEAD") {
+    if report
+        .advertisement
+        .refs
+        .iter()
+        .all(|r| r.name.as_slice() == b"HEAD")
+    {
         eprintln!("warning: You appear to have cloned an empty repository.");
         return Ok(());
     }
     let wanted = match &args.branch {
         Some(branch) => {
             let full = format!("refs/heads/{branch}");
-            if !report.advertisement.refs.iter().any(|r| r.name.as_slice() == full.as_bytes()) {
+            if !report
+                .advertisement
+                .refs
+                .iter()
+                .any(|r| r.name.as_slice() == full.as_bytes())
+            {
                 anyhow::bail!("Remote branch {branch} not found in upstream {origin}");
             }
             Some(bstr::BString::from(full))
@@ -760,14 +828,17 @@ fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
     let Some(wanted) = wanted else {
         return Ok(());
     };
-    let branch_short = String::from_utf8_lossy(wanted.strip_prefix(b"refs/heads/").unwrap_or(&wanted)).into_owned();
+    let branch_short =
+        String::from_utf8_lossy(wanted.strip_prefix(b"refs/heads/").unwrap_or(&wanted))
+            .into_owned();
     let who = who.ok_or_else(|| anyhow::anyhow!("cannot resolve committer identity"))?;
     let branch_ref = RefName::from_bytes(&wanted)?;
 
     let tip = if args.bare {
         repository.refs().resolve_oid(&branch_ref)?
     } else {
-        let tracking = RefName::from_bytes(format!("refs/remotes/{origin}/{branch_short}").as_bytes())?;
+        let tracking =
+            RefName::from_bytes(format!("refs/remotes/{origin}/{branch_short}").as_bytes())?;
         let tip = repository.refs().resolve_oid(&tracking)?;
         repository.set_ref_logged(&branch_ref, tip, &who, BStr::new(reason.as_bytes()))?;
         tip
@@ -787,15 +858,27 @@ fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
 
     if !args.bare {
         if let Some(default) = &remote_default {
-            let default_short = String::from_utf8_lossy(default.strip_prefix(b"refs/heads/").unwrap_or(default)).into_owned();
-            let origin_head = RefName::from_bytes(format!("refs/remotes/{origin}/HEAD").as_bytes())?;
-            let target = RefName::from_bytes(format!("refs/remotes/{origin}/{default_short}").as_bytes())?;
+            let default_short =
+                String::from_utf8_lossy(default.strip_prefix(b"refs/heads/").unwrap_or(default))
+                    .into_owned();
+            let origin_head =
+                RefName::from_bytes(format!("refs/remotes/{origin}/HEAD").as_bytes())?;
+            let target =
+                RefName::from_bytes(format!("refs/remotes/{origin}/{default_short}").as_bytes())?;
             let message = rivet_core::ReflogMessage::new(&who, BStr::new(reason.as_bytes()));
-            repository.refs().set_symbolic(&origin_head, &target, Some(message))?;
+            repository
+                .refs()
+                .set_symbolic(&origin_head, &target, Some(message))?;
         }
         let config = repository.config_mut();
-        config.set(BStr::new(format!("branch.{branch_short}.remote").as_bytes()), origin.as_bytes())?;
-        config.set(BStr::new(format!("branch.{branch_short}.merge").as_bytes()), &wanted)?;
+        config.set(
+            BStr::new(format!("branch.{branch_short}.remote").as_bytes()),
+            origin.as_bytes(),
+        )?;
+        config.set(
+            BStr::new(format!("branch.{branch_short}.merge").as_bytes()),
+            &wanted,
+        )?;
         repository.write_config()?;
         let tree = repository.commit_tree(tip)?;
         repository.reset_hard_to_tree(tree)?;

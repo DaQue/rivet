@@ -72,9 +72,9 @@ use std::path::Path;
 
 use bstr::{BStr, BString};
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::hash::ObjectFormat;
-use crate::error::Error;
 
 /// Phase 2 — one `key = value` entry, as it appears in a file.
 ///
@@ -193,15 +193,24 @@ impl ConfigEntry {
     /// case and is not an error.
     pub fn parse_key(flat: &BStr) -> Result<(BString, Option<BString>, BString)> {
         let Some(first_dot) = flat.iter().position(|b| *b == b'.') else {
-            return Err(Error::ConfigSyntax { line: flat.len(), reason: "no dot in flat key" });
+            return Err(Error::ConfigSyntax {
+                line: flat.len(),
+                reason: "no dot in flat key",
+            });
         };
         let Some(last_dot) = flat.iter().rposition(|b| *b == b'.') else {
-            return Err(Error::ConfigSyntax { line: flat.len(), reason: "no dot in flat key" });
+            return Err(Error::ConfigSyntax {
+                line: flat.len(),
+                reason: "no dot in flat key",
+            });
         };
         let section = BString::from(&flat[..first_dot]);
         let key = BString::from(&flat[last_dot + 1..]);
         if section.is_empty() || key.is_empty() {
-            return Err(Error::ConfigSyntax { line: flat.len(), reason: "empty section or key" });
+            return Err(Error::ConfigSyntax {
+                line: flat.len(),
+                reason: "empty section or key",
+            });
         }
         let subsection = if last_dot > first_dot {
             Some(BString::from(&flat[first_dot + 1..last_dot]))
@@ -288,7 +297,12 @@ impl Config {
         let data = match std::fs::read(path) {
             Ok(d) => d,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::new()),
-            Err(e) => return Err(Error::IoAtPath { path: BString::from(path.as_os_str().as_encoded_bytes()), source: e }),
+            Err(e) => {
+                return Err(Error::IoAtPath {
+                    path: BString::from(path.as_os_str().as_encoded_bytes()),
+                    source: e,
+                });
+            }
         };
         Self::parse(&data)
     }
@@ -336,7 +350,11 @@ impl Config {
             let line = &data[start..j];
             i = if j < n { j + 1 } else { j };
             line_no += 1;
-            let trimmed = line.iter().position(|b| *b != b' ' && *b != b'\t').map(|p| &line[p..]).unwrap_or(&[]);
+            let trimmed = line
+                .iter()
+                .position(|b| *b != b' ' && *b != b'\t')
+                .map(|p| &line[p..])
+                .unwrap_or(&[]);
             if trimmed.is_empty() {
                 continue;
             }
@@ -360,11 +378,21 @@ impl Config {
             logical = trimmed.to_vec();
             let t = &logical[..];
             if t[0] == b'[' {
-                let close = t.iter().position(|b| *b == b']').ok_or(Error::ConfigSyntax { line: line_no, reason: "unterminated section" })?;
+                let close = t
+                    .iter()
+                    .position(|b| *b == b']')
+                    .ok_or(Error::ConfigSyntax {
+                        line: line_no,
+                        reason: "unterminated section",
+                    })?;
                 let raw = &t[1..close];
                 let ws = |b: &u8| *b == b' ' || *b == b'\t';
                 let start = raw.iter().position(|b| !ws(b)).unwrap_or(raw.len());
-                let end = raw.iter().rposition(|b| !ws(b)).map(|p| p + 1).unwrap_or(start);
+                let end = raw
+                    .iter()
+                    .rposition(|b| !ws(b))
+                    .map(|p| p + 1)
+                    .unwrap_or(start);
                 let inner = &raw[start..end];
                 // Two header shapes: `[section "subsection"]` (the modern one) and the legacy
                 // `[section.subsection]`, where git lowercases everything. A header with neither a
@@ -372,7 +400,11 @@ impl Config {
                 // only the legacy form folds it.
                 let (name_bytes, sub): (&[u8], Option<BString>) =
                     if let Some(q) = inner.iter().position(|b| *b == b'"') {
-                        let name_end = inner[..q].iter().rposition(|b| !ws(b)).map(|p| p + 1).unwrap_or(0);
+                        let name_end = inner[..q]
+                            .iter()
+                            .rposition(|b| !ws(b))
+                            .map(|p| p + 1)
+                            .unwrap_or(0);
                         let mut out: Vec<u8> = Vec::new();
                         let mut i = q + 1;
                         let mut closed = false;
@@ -385,7 +417,10 @@ impl Config {
                             }
                             // Inside a quoted subsection only `\"` and `\\` are escapes; any
                             // other backslash is a literal backslash, as in git.
-                            if b == b'\\' && i + 1 < inner.len() && (inner[i + 1] == b'"' || inner[i + 1] == b'\\') {
+                            if b == b'\\'
+                                && i + 1 < inner.len()
+                                && (inner[i + 1] == b'"' || inner[i + 1] == b'\\')
+                            {
                                 out.push(inner[i + 1]);
                                 i += 2;
                                 continue;
@@ -394,41 +429,93 @@ impl Config {
                             i += 1;
                         }
                         if !closed {
-                            return Err(Error::ConfigSyntax { line: line_no, reason: "unterminated subsection" });
+                            return Err(Error::ConfigSyntax {
+                                line: line_no,
+                                reason: "unterminated subsection",
+                            });
                         }
                         if inner[i..].iter().any(|b| !ws(b)) {
-                            return Err(Error::ConfigSyntax { line: line_no, reason: "trailing characters after subsection" });
+                            return Err(Error::ConfigSyntax {
+                                line: line_no,
+                                reason: "trailing characters after subsection",
+                            });
                         }
                         (&inner[..name_end], Some(BString::from(out)))
                     } else if let Some(dot) = inner.iter().position(|b| *b == b'.') {
-                        (&inner[..dot], Some(BString::from(String::from_utf8_lossy(&inner[dot + 1..]).to_ascii_lowercase())))
+                        (
+                            &inner[..dot],
+                            Some(BString::from(
+                                String::from_utf8_lossy(&inner[dot + 1..]).to_ascii_lowercase(),
+                            )),
+                        )
                     } else {
                         (inner, None)
                     };
-                if name_bytes.is_empty() || !name_bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_') {
-                    return Err(Error::ConfigSyntax { line: line_no, reason: "invalid section name" });
+                if name_bytes.is_empty()
+                    || !name_bytes
+                        .iter()
+                        .all(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_')
+                {
+                    return Err(Error::ConfigSyntax {
+                        line: line_no,
+                        reason: "invalid section name",
+                    });
                 }
-                let name_str = String::from_utf8(name_bytes.to_vec()).map_err(|_| Error::InvalidUtf8 { what: "section name" })?;
+                let name_str =
+                    String::from_utf8(name_bytes.to_vec()).map_err(|_| Error::InvalidUtf8 {
+                        what: "section name",
+                    })?;
                 section = Some((BString::from(name_str.to_ascii_lowercase()), sub));
                 continue;
             }
-            let sec = section.as_ref().ok_or(Error::ConfigSyntax { line: line_no, reason: "key before section" })?;
+            let sec = section.as_ref().ok_or(Error::ConfigSyntax {
+                line: line_no,
+                reason: "key before section",
+            })?;
             let eq = t.iter().position(|b| *b == b'=');
             let (key_bytes, value_bytes): (&[u8], &[u8]) = if let Some(eq) = eq {
                 let key = &t[..eq];
-                let key_trim = key.iter().position(|b| *b != b' ' && *b != b'\t').map(|p| &key[p..]).unwrap_or(&[]);
-                let key_trim = key_trim.iter().rev().position(|b| *b != b' ' && *b != b'\t').map(|p| &key_trim[..key_trim.len() - p]).unwrap_or(&[]);
+                let key_trim = key
+                    .iter()
+                    .position(|b| *b != b' ' && *b != b'\t')
+                    .map(|p| &key[p..])
+                    .unwrap_or(&[]);
+                let key_trim = key_trim
+                    .iter()
+                    .rev()
+                    .position(|b| *b != b' ' && *b != b'\t')
+                    .map(|p| &key_trim[..key_trim.len() - p])
+                    .unwrap_or(&[]);
                 let val = &t[eq + 1..];
-                let val_trim = val.iter().position(|b| *b != b' ' && *b != b'\t').map(|p| &val[p..]).unwrap_or(&[]);
-                let val_trim = val_trim.iter().rev().position(|b| *b != b' ' && *b != b'\t').map(|p| &val_trim[..val_trim.len() - p]).unwrap_or(&[]);
+                let val_trim = val
+                    .iter()
+                    .position(|b| *b != b' ' && *b != b'\t')
+                    .map(|p| &val[p..])
+                    .unwrap_or(&[]);
+                let val_trim = val_trim
+                    .iter()
+                    .rev()
+                    .position(|b| *b != b' ' && *b != b'\t')
+                    .map(|p| &val_trim[..val_trim.len() - p])
+                    .unwrap_or(&[]);
                 (key_trim, val_trim)
             } else {
                 let key = t;
-                let key_trim = key.iter().position(|b| *b != b' ' && *b != b'\t').map(|p| &key[p..]).unwrap_or(&[]);
-                let key_trim = key_trim.iter().rev().position(|b| *b != b' ' && *b != b'\t').map(|p| &key_trim[..key_trim.len() - p]).unwrap_or(&[]);
+                let key_trim = key
+                    .iter()
+                    .position(|b| *b != b' ' && *b != b'\t')
+                    .map(|p| &key[p..])
+                    .unwrap_or(&[]);
+                let key_trim = key_trim
+                    .iter()
+                    .rev()
+                    .position(|b| *b != b' ' && *b != b'\t')
+                    .map(|p| &key_trim[..key_trim.len() - p])
+                    .unwrap_or(&[]);
                 (key_trim, &[] as &[u8])
             };
-            let key_str = String::from_utf8(key_bytes.to_vec()).map_err(|_| Error::InvalidUtf8 { what: "key name" })?;
+            let key_str = String::from_utf8(key_bytes.to_vec())
+                .map_err(|_| Error::InvalidUtf8 { what: "key name" })?;
             let key_folded = BString::from(key_str.to_ascii_lowercase());
             let value: BString = if value_bytes.is_empty() {
                 BString::from("true")
@@ -475,7 +562,8 @@ impl Config {
                 BString::from(out)
             };
             let _ = key_folded;
-            let entry = ConfigEntry::new(sec.0.clone(), sec.1.clone(), BString::from(key_str), value);
+            let entry =
+                ConfigEntry::new(sec.0.clone(), sec.1.clone(), BString::from(key_str), value);
             cfg.entries.push(entry);
         }
         Ok(cfg)
@@ -523,8 +611,9 @@ impl Config {
             let value: &[u8] = entry.value.as_ref();
             if !section.is_empty() && header != Some((section, subsection)) {
                 out.push(b'[');
-                let needs_quote =
-                    section.iter().any(|b| *b == b' ' || *b == b'"' || *b == b'#');
+                let needs_quote = section
+                    .iter()
+                    .any(|b| *b == b' ' || *b == b'"' || *b == b'#');
                 if needs_quote {
                     push_quoted(&mut out, section);
                 } else {
@@ -584,7 +673,9 @@ impl Config {
     pub fn write(&self, path: &Path) -> Result<()> {
         let lock = path.with_extension("lock");
         if lock.exists() {
-            return Err(Error::LockHeld { path: path.to_string_lossy().into_owned().into() });
+            return Err(Error::LockHeld {
+                path: path.to_string_lossy().into_owned().into(),
+            });
         }
         let tmp = path.with_extension("tmp");
         let data = self.to_bytes();
@@ -806,7 +897,8 @@ impl Config {
             return Ok(());
         }
         let pos = self.section_end(&section, subsection.as_ref().map(|v| v.as_slice()));
-        self.entries.insert(pos, ConfigEntry::new(section, subsection, key, value));
+        self.entries
+            .insert(pos, ConfigEntry::new(section, subsection, key, value));
         Ok(())
     }
 
@@ -828,7 +920,8 @@ impl Config {
         let (section, subsection, key) = ConfigEntry::parse_key(key)?;
         let value = BString::from(value);
         let pos = self.section_end(&section, subsection.as_ref().map(|v| v.as_slice()));
-        self.entries.insert(pos, ConfigEntry::new(section, subsection, key, value));
+        self.entries
+            .insert(pos, ConfigEntry::new(section, subsection, key, value));
         Ok(())
     }
 
@@ -878,7 +971,8 @@ impl Config {
     /// dotted key that needs parsing.
     pub fn remove_section(&mut self, section: &BStr, subsection: Option<&BStr>) -> bool {
         let before = self.entries.len();
-        self.entries.retain(|e| !e.in_section(section, subsection.map(|v| v.as_ref())));
+        self.entries
+            .retain(|e| !e.in_section(section, subsection.map(|v| v.as_ref())));
         self.entries.len() != before
     }
 
@@ -966,7 +1060,9 @@ impl Config {
                 match n {
                     Some(n) => {
                         if !(0..=1).contains(&n) {
-                            return Err(Error::UnsupportedRepositoryFormatVersion { version: n as u32 });
+                            return Err(Error::UnsupportedRepositoryFormatVersion {
+                                version: n as u32,
+                            });
                         }
                         Ok(n as u32)
                     }
@@ -1110,7 +1206,10 @@ pub fn parse_bool(value: &BStr) -> Result<bool> {
     if v.is_empty() {
         return Ok(false);
     }
-    let lower = v.iter().map(|b| b.to_ascii_lowercase()).collect::<Vec<u8>>();
+    let lower = v
+        .iter()
+        .map(|b| b.to_ascii_lowercase())
+        .collect::<Vec<u8>>();
     let s = BString::from(lower.as_slice());
     if s == "true" || s == "yes" || s == "on" || s == "1" {
         Ok(true)
@@ -1226,11 +1325,13 @@ pub fn parse_int(value: &BStr) -> Result<i64> {
     }
     // `n` fits an `i64` and the suffix multiplies it, so the product can overflow.
     let signed = if neg { -n } else { n };
-    signed.checked_mul(mult).ok_or_else(|| Error::ConfigInvalidValue {
-        key: BString::from(""),
-        value: BString::from(value),
-        expected: "an integer",
-    })
+    signed
+        .checked_mul(mult)
+        .ok_or_else(|| Error::ConfigInvalidValue {
+            key: BString::from(""),
+            value: BString::from(value),
+            expected: "an integer",
+        })
 }
 
 /// Phase 2 — the environment variable that relocates a config file, if set.
@@ -1243,5 +1344,7 @@ pub fn parse_int(value: &BStr) -> Result<i64> {
 /// but note that these are **environment** overrides, not config values, and a parser that looked
 /// for them in a file would never find them.
 pub fn config_env_override(scope: &str) -> Option<BString> {
-    std::env::var(format!("GIT_CONFIG_{}", scope.to_uppercase())).ok().map(BString::from)
+    std::env::var(format!("GIT_CONFIG_{}", scope.to_uppercase()))
+        .ok()
+        .map(BString::from)
 }
