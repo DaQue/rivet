@@ -14,6 +14,10 @@ export GIT_AUTHOR_NAME="A U Thor" GIT_AUTHOR_EMAIL="author@example.com"
 export GIT_COMMITTER_NAME="C O Mitter" GIT_COMMITTER_EMAIL="committer@example.com"
 export GIT_AUTHOR_DATE="1700000000 +0100" GIT_COMMITTER_DATE="1700000000 +0100"
 export GIT_CONFIG_NOSYSTEM=1 TZ=UTC LC_ALL=C GIT_PAGER=cat PAGER=cat
+# Git needs an editor for `rebase --continue`, `commit --amend`, etc. Without one it aborts with
+# "Terminal is dumb, but EDITOR unset" and the scenario compares a git failure against rivet's
+# success, which is an artefact of the harness, not a parity difference.
+export GIT_EDITOR=: EDITOR=: VISUAL=:
 unset GIT_DIR GIT_WORK_TREE
 
 FAILURES=0
