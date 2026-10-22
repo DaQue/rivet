@@ -39,8 +39,8 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    branching, clean, history, ignore, maintenance, mv, plumbing, query, reflog, remote, sequencer,
-    setup, snapshot, stash, tag,
+    branching, clean, history, ignore, maintenance, mv, plumbing, query, rebase, reflog, remote,
+    sequencer, setup, snapshot, stash, tag,
 };
 
 /// The `rivet` command line.
@@ -243,6 +243,9 @@ pub enum Commands {
 
     /// Verify the connectivity and validity of the objects in the repository.
     Fsck(plumbing::FsckArgs),
+
+    /// Reapply commits on top of another base.
+    Rebase(rebase::RebaseArgs),
 
     /// List commits (and with `--objects` the objects they reach).
     #[command(name = "rev-list")]

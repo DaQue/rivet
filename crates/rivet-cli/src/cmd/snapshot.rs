@@ -891,8 +891,11 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    println!("{}", head_line());
-    print_tracking(&tracking_state(&repository, &head)?);
+    let rebase = rebase_progress(&repository);
+    if rebase.is_none() {
+        println!("{}", head_line());
+        print_tracking(&tracking_state(&repository, &head)?);
+    }
     if matches!(head, HeadState::Unborn { .. }) {
         // Git separates the "No commits yet" paragraph from the branch line, and keeps a trailing
         // blank before the first section. When the branch has commits there is no blank at all:
@@ -902,6 +905,10 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         println!();
     }
 
+    if let Some(progress) = &rebase {
+        print!("{}", progress.describe(!unmerged.is_empty()));
+        println!();
+    }
     let picking = [
         ("CHERRY_PICK_HEAD", "cherry-picking", "cherry-pick"),
         ("REVERT_HEAD", "reverting", "revert"),
@@ -1503,4 +1510,97 @@ fn check_rm_safety(repository: &rivet_core::Repository, specs: &[BString]) -> Re
 /// A path as `status` prints it.
 fn q(path: &[u8], quote_space: bool) -> String {
     String::from_utf8_lossy(&rivet_core::ops::quote_path(path, quote_space)).into_owned()
+}
+
+/// A stopped `rebase` as `.git/rebase-merge/` describes it.
+struct RebaseProgress {
+    onto: String,
+    branch: Option<String>,
+    done: Vec<String>,
+    todo: Vec<String>,
+}
+
+fn rebase_progress(repository: &rivet_core::Repository) -> Option<RebaseProgress> {
+    let dir = repository.git_dir().join("rebase-merge");
+    if !dir.is_dir() {
+        return None;
+    }
+    let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+    let short = |text: &str| text.trim().chars().take(7).collect::<String>();
+    let lines = |name: &str| -> Vec<String> {
+        read(name)
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .map(|l| {
+                // `pick <full id> # subject`: the id is shown abbreviated.
+                let mut words = l.splitn(3, ' ');
+                match (words.next(), words.next(), words.next()) {
+                    (Some(cmd), Some(id), Some(rest)) => format!("{cmd} {} {rest}", short(id)),
+                    _ => l.to_string(),
+                }
+            })
+            .collect()
+    };
+    let head_name = read("head-name");
+    Some(RebaseProgress {
+        onto: short(&read("onto")),
+        branch: head_name
+            .trim()
+            .strip_prefix("refs/heads/")
+            .map(str::to_string),
+        done: lines("done"),
+        todo: lines("git-rebase-todo"),
+    })
+}
+
+impl RebaseProgress {
+    fn describe(&self, conflicted: bool) -> String {
+        let mut out = format!("interactive rebase in progress; onto {}\n", self.onto);
+        if !self.done.is_empty() {
+            let n = self.done.len();
+            if n == 1 {
+                out.push_str("Last command done (1 command done):\n");
+            } else {
+                out.push_str(&format!("Last commands done ({n} commands done):\n"));
+            }
+            for line in &self.done[n.saturating_sub(2)..] {
+                out.push_str(&format!("   {line}\n"));
+            }
+            if n > 2 {
+                out.push_str("  (see more in file .git/rebase-merge/done)\n");
+            }
+        }
+        if self.todo.is_empty() {
+            out.push_str("No commands remaining.\n");
+        } else {
+            let n = self.todo.len();
+            if n == 1 {
+                out.push_str("Next command to do (1 remaining command):\n");
+            } else {
+                out.push_str(&format!("Next commands to do ({n} remaining commands):\n"));
+            }
+            for line in self.todo.iter().take(2) {
+                out.push_str(&format!("   {line}\n"));
+            }
+            if n > 2 {
+                out.push_str("  (see more in file .git/rebase-merge/git-rebase-todo)\n");
+            }
+            out.push_str("  (use \"git rebase --edit-todo\" to view and edit)\n");
+        }
+        match &self.branch {
+            Some(branch) => out.push_str(&format!(
+                "You are currently rebasing branch '{branch}' on '{}'.\n",
+                self.onto
+            )),
+            None => out.push_str("You are currently rebasing.\n"),
+        }
+        if conflicted {
+            out.push_str("  (fix conflicts and then run \"git rebase --continue\")\n");
+            out.push_str("  (use \"git rebase --skip\" to skip this patch)\n");
+            out.push_str("  (use \"git rebase --abort\" to check out the original branch)\n");
+        } else {
+            out.push_str("  (all conflicts fixed: run \"git rebase --continue\")\n");
+        }
+        out
+    }
 }

@@ -1948,6 +1948,199 @@ s_shortlog() {
     v shortlog -sce HEAD
 }
 
+rebase_repo() {
+    v init -q repo; cd repo
+    printf 'a1\na2\na3\n' >a; echo f >f; v add .; v commit -q -m A
+    v branch topic
+    tick; echo b >>a; v commit -q -a -m B
+    tick; echo c >>a; v commit -q -a -m C
+    v switch -q topic
+    tick; echo d >d; v add d; v commit -q -m D
+    tick; echo "f topic" >>f; v commit -q -a -m E
+    tick; echo g >g; v add g; v commit -q -m G
+    v switch -q main
+}
+
+s_rebase_basic() {
+    rebase_repo
+    v rebase main topic
+    v log --oneline --all
+    v reflog
+    v reflog topic
+    cat .git/ORIG_HEAD
+    ls .git/rebase-merge
+    v rebase main
+    v rebase main topic
+    v rebase main
+    v switch -q topic
+    v rebase main
+    v rebase topic
+    v switch -q main
+    v rebase topic
+    v log --oneline
+    v reflog
+    v rebase nosuch
+    v rebase
+    v rebase --continue
+    v rebase --abort
+    v rebase --skip
+}
+
+s_rebase_onto() {
+    rebase_repo
+    v switch -q topic
+    v rebase --onto main HEAD~2
+    v log --oneline
+    v reflog
+    v switch -q -c t2 "$(g rev-parse topic@{3})"
+    v log --oneline
+    v rebase --onto main HEAD~1
+    v log --oneline
+    v reflog
+    v switch -q main
+    v branch t3 topic
+    v rebase --onto main~1 main t3
+    v log --oneline t3
+    git checkout -q --detach t3
+    v rebase --onto main t3~1
+    v log --oneline
+    v status --short
+    v reflog
+}
+
+s_rebase_cherry_and_merges() {
+    v init -q repo; cd repo
+    echo 0 >base; v add .; v commit -q -m base
+    v branch topic
+    tick; echo 1 >x; v add x; v commit -q -m "add x"
+    tick; echo main >m; v add m; v commit -q -m "main only"
+    v switch -q topic
+    tick; echo 1 >x; v add x; v commit -q -m "add x (same patch)"
+    tick; echo t >t; v add t; v commit -q -m "topic t"
+    v branch side
+    v switch -q side
+    tick; echo s >s; v add s; v commit -q -m "side s"
+    v switch -q topic
+    tick; echo u >u; v add u; v commit -q -m "topic u"
+    tick; v merge -q --no-ff side -m "merge side" >/dev/null
+    tick; echo v >v; v add v; v commit -q -m "topic v"
+    v log --oneline
+    v rebase main
+    v log --oneline
+    v reflog
+    v ls-files
+}
+
+s_rebase_dirty() {
+    rebase_repo
+    v switch -q topic
+    echo x >>d
+    v rebase main
+    v rebase main topic
+    git add d
+    v rebase main
+    echo y >>d
+    v rebase main
+    git checkout -q -- d; git reset -q --hard
+    echo untracked >g.new
+    v rebase main
+    v log --oneline
+    v switch -q main
+    echo z >>a
+    v rebase topic
+    v rebase main
+}
+
+s_rebase_conflict() {
+    rebase_repo
+    tick; echo "main f" >>f; v commit -q -a -m "main f"
+    v switch -q topic
+    tick; echo "more" >>d; v commit -q -a -m "D2"
+    v rebase main
+    echo "rc=$?"
+    v status
+    v status --short
+    v diff
+    v rebase --continue
+    v rebase main
+    cat f
+    printf 'f\nresolved\n' >f
+    v status
+    v rebase --continue
+    v log --oneline
+    v reflog
+    v status
+    cat .git/ORIG_HEAD
+    ls .git/rebase-merge
+}
+
+s_rebase_skip_abort() {
+    rebase_repo
+    tick; echo "main f" >>f; v commit -q -a -m "main f"
+    v switch -q topic
+    tick; echo "more" >>f; v commit -q -a -m "F2"
+    v rebase main
+    v rebase --skip
+    v log --oneline
+    v reflog
+    v status
+    cat f
+    v reset -q --hard "$(g rev-parse topic@{1})"
+    v rebase main
+    v rebase --abort
+    v log --oneline
+    v status
+    v reflog
+    cat .git/ORIG_HEAD
+    git checkout -q --detach topic
+    v rebase main
+    v rebase --abort
+    v status --short
+    v rebase --abort
+    printf 'f\nresolved\n' >f
+    v rebase main
+    printf 'f\nresolved\n' >f
+    git add f
+    v rebase --continue
+    v log --oneline
+}
+
+s_rebase_multi_conflict() {
+    v init -q repo; cd repo
+    printf '1\n2\n3\n' >f; printf 'x\ny\n' >g; echo k >keep; v add .; v commit -q -m base
+    v branch topic
+    tick; printf '1\nmain2\n3\n' >f; printf 'x\nmainy\n' >g; v commit -q -a -m "main edits"
+    v switch -q topic
+    tick; printf '1\ntopic2\n3\n' >f; v commit -q -a -m "topic f"
+    tick; echo extra >extra; v add extra; v commit -q -m "topic extra"
+    tick; printf 'x\ntopicy\n' >g; v commit -q -a -m "topic g"
+    tick; git rm -q keep; v commit -q -m "topic removes keep"
+    v rebase main
+    v status --short
+    cat f
+    git checkout -q --ours f 2>/dev/null; git add f
+    v rebase --continue
+    v status
+    v diff
+    git checkout -q --theirs g 2>/dev/null; git add g
+    v status --short
+    v rebase --continue
+    v log --oneline
+    v reflog
+    v status
+    ls
+    cat f g
+    # a conflict resolved to the base version leaves nothing to commit
+    v reset -q --hard "$(g rev-parse topic@{5})"
+    v rebase main
+    git checkout -q --ours f; git add f
+    v rebase --continue
+    v rebase --skip
+    v status --short
+    v rebase --skip
+    v log --oneline
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
