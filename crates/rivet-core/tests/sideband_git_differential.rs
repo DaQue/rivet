@@ -329,11 +329,17 @@ fn frames_a_write_the_reader_can_parse() {
 /// good repository. `/tmp` has no such component. The directory deletes itself on drop.
 struct TempDir(PathBuf);
 
+static FIXTURE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 impl TempDir {
     fn new() -> Self {
+        // Two tests in one binary run in parallel threads with the same pid, and the clock can
+        // resolve to the same nanosecond, so the sequence number is what keeps fixtures apart.
+        let seq = FIXTURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let base = Path::new("/tmp").join(format!(
-            "rivet-sideband-{}-{}",
+            "rivet-sideband-{}-{}-{}",
             std::process::id(),
+            seq,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
