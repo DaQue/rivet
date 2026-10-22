@@ -957,6 +957,9 @@ fn three_way_merge(
         let Some(hex) = abbreviation else {
             return Err(lacks());
         };
+        if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(lacks());
+        }
         // `from_hex_prefix` decodes whole bytes: an odd abbreviation loses its last digit.
         let even = hex.len() & !1;
         let Ok(prefix) = ObjectId::from_hex_prefix(format, BStr::new(&hex[..even])) else {

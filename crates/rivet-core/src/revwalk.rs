@@ -551,19 +551,20 @@ pub struct RevRange {
 ///
 /// As [`RevSpec::parse`] for either side.
 pub fn parse_rev_spec(format: ObjectFormat, spec: &BStr, refs: &RefStore) -> Result<RevRange> {
-    let (left, right, symmetric) = if spec.starts_with(b"...") {
-        let rest = &spec[3..];
-        let dot = rest.iter().position(|&b| b == b'.').unwrap_or(rest.len());
-        (Some(&rest[..dot]), Some(&rest[dot + 1..]), true)
-    } else if let Some(dot) = spec.iter().position(|&b| b == b'.') {
-        if dot + 1 < spec.len() && spec[dot + 1] == b'.' {
-            (Some(&spec[..dot]), Some(&spec[dot + 2..]), false)
-        } else {
-            (None, None, false)
-        }
+    let bytes: &[u8] = spec;
+    let find = |needle: &[u8]| bytes.windows(needle.len()).position(|w| w == needle);
+    let (left, right, symmetric) = if let Some(at) = find(b"...") {
+        (Some(&bytes[..at]), Some(&bytes[at + 3..]), true)
+    } else if let Some(at) = find(b"..") {
+        (Some(&bytes[..at]), Some(&bytes[at + 2..]), false)
     } else {
         (None, None, false)
     };
+    // A missing side (`..b`, `a..`) is `None`: the caller decides it means `HEAD`.
+    let (left, right) = (
+        left.filter(|t| !t.is_empty()),
+        right.filter(|t| !t.is_empty()),
+    );
     let from = match left {
         Some(side) => Some(RevSpec::parse(format, BStr::new(side), refs)?),
         None => None,

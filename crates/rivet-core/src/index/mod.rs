@@ -630,14 +630,14 @@ impl IndexEntry {
         }
         let oid = ObjectId::from_bytes(format, &data[FIXED..id_end])?;
 
-        let flags =
-            IndexEntryFlags::from_bits(u16::from_be_bytes([data[id_end], data[id_end + 1]]));
         if data.len() < id_end + 2 {
             return Err(Error::CorruptIndex {
                 offset: id_end + 2,
                 reason: "truncated flags word",
             });
         }
+        let flags =
+            IndexEntryFlags::from_bits(u16::from_be_bytes([data[id_end], data[id_end + 1]]));
         let extended_flags = if flags.is_extended() {
             if !version.has_extended_flags() {
                 return Err(Error::CorruptIndex {

@@ -346,13 +346,11 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     if args.graph {
         anyhow::bail!("log: --graph is not implemented");
     }
-    let format = repository.format();
 
     // Revisions: `A..B`, `A...B`, `^A`, or a single revision; `--all` adds every ref.
     let mut starts: Vec<ObjectId> = Vec::new();
     let mut options = WalkOptions::new();
     let spec = args.revision.as_str();
-    let range = rivet_core::parse_rev_spec(format, BStr::new(spec.as_bytes()), repository.refs());
     let resolve = |text: &str| super::resolve_commit(&repository, text);
     if args.all {
         for (_, oid) in repository.refs().list_all(repository.odb())? {
@@ -383,7 +381,6 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         }
     } else if spec.contains("..") {
         let (left, right) = spec.split_once("..").expect("checked");
-        let _ = &range;
         options.exclude(resolve(if left.is_empty() { "HEAD" } else { left })?);
         starts.push(resolve(if right.is_empty() { "HEAD" } else { right })?);
     } else {

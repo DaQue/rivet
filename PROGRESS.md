@@ -451,3 +451,38 @@ writes unpacked objects back loose with *the time of the write* (as git does) �
 failed on the read-only loose file and was left alone. Found on the way: `rivet stash drop -q` still prints `Dropped refs/stash@{0}
 (<id>)` (git is silent), not touched.
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 144 PASS / `failures: 0`.
+
+### Phase C — completeness proof (landed; tests in `crates/rivet-cli/tests/robustness.rs`)
+* Crate-level `#![allow(dead_code)]` / `#![allow(unused_imports)]` and the "signature-only scaffold" module docs were already gone at
+  the base commit (`git grep` finds neither; the only `allow`s left are nine `clippy::too_many_arguments`/`len_without_is_empty` with
+  reasons). `cargo build`/`clippy -D warnings` report no dead code, so there was nothing to delete.
+* `unwrap()`/`expect()` audit: 46 sites outside test modules. All but the ones below are guarded by a check a few lines earlier
+  (`split_once(..).expect("checked")`, fixed-size `try_into().unwrap()` after a length check, `required[..]` flags in the commit
+  parser, ...) and were left alone. To look for what the audit by reading cannot see, I fuzzed the release of this block with
+  throw-away drivers (kept outside the repo): mutated patches (21 000 runs over `apply --stat/--check/--3way/--reject/-R/--index/
+  --cached/-z` and 7 500 writing runs), mutated repository files (index, loose objects, packs, `.idx`, `.rev`, config, packed-refs,
+  reflogs, refs; ~4 000 runs × 6–8 commands), mutated commit/tree/tag objects (2 900 runs), random revision/pathspec/URL/config
+  arguments to ~100 commands (~9 000 runs), random `.gitignore`/`.gitattributes`/pathspecs (600 runs), mutated mailboxes for
+  `am`/`mailinfo` (400 runs), looking for exit 101 / `panicked`. Three panics, all fixed, each with a test:
+  1. `apply --3way` with a non-ASCII `index` id sliced the string inside a character (`patch.rs`, my own code from this block):
+     `apply_three_way_with_a_garbled_index_id_falls_back_to_a_direct_apply_instead_of_panicking`.
+  2. `IndexEntry::parse` read the flags word before checking that it was there (`index out of bounds` on an index cut inside an
+     entry): `a_truncated_index_entry_is_an_error_not_a_panic_and_the_index_file_is_untouched` (fails on the old code, checked).
+  3. `parse_rev_spec` (`log '...x'`, `log ...<anything without a dot>`) sliced past the end; the split is rewritten to find `...` then
+     `..` in the raw bytes and an empty side is `None` as its docs say. `rivet log` called it and threw the result away — that dead
+     call is removed: `log_with_a_leading_three_dot_spec_naming_nothing_fails_cleanly_and_moves_no_ref` (also checks `...side` against git).
+* One state-asserting test per behaviour added in phases A and B, read back with real git: `apply_stat_summary_and_numstat_leave_the_
+  tree_and_index_alone_until_apply_is_given`, `apply_reject_writes_the_failed_hunk_applies_the_rest_and_leaves_the_index_alone`,
+  `apply_three_way_conflict_leaves_the_three_stages_and_markers`, `apply_refuses_a_binary_patch_without_full_ids_and_applies_none_of_
+  the_patch`, `gc_without_cruft_keeps_the_old_objects_a_young_unreachable_commit_still_needs`, `gc_cruft_packs_the_young_commit_with_
+  its_old_tree_and_blob_and_records_their_ages`.
+* Seen while fuzzing, not panics, not touched: `rivet remote -v` lists a url-less remote as `(fetch)`/`(push)` lines (git prints the
+  bare name), `rivet branch -v` dies on a branch pointing at a missing object (git warns and skips it), `rivet log ...x` says
+  `fatal: not a valid object name: 'x'` (git: `ambiguous argument`).
+Gate: fmt clean, clippy clean, doc clean, 215 tests passed / 0 failed / 0 ignored, `scenarios.sh` 144 PASS / `failures: 0`.
+
+## Summary of block 3
+Landed: `apply` `--stat/--numstat/--summary/-z/--apply`, `--reject`, `--3way`, binary patches with full ids (A); `gc` cruft packs
+with `.mtimes`/`.rev`, `gc.cruftPacks` default true, retention of what young unreachable objects need (B); panic fixes + 9 tests (C).
+Left undone on purpose: `GIT binary patch` data (see Known gaps under A), `gc --max-cruft-size/--expire-to/--keep-largest-pack`,
+`log --graph`, `checkout -m` with paths, `merge.conflictStyle=diff3` markers in `merge`.
