@@ -68,7 +68,7 @@ pub struct ApplyArgs {
     #[arg(short = '3', long = "3way")]
     pub three_way: bool,
 
-    /// Leave rejected hunks in `.rej` files. Not implemented.
+    /// Leave rejected hunks in `.rej` files.
     #[arg(long = "reject")]
     pub reject: bool,
 }
@@ -79,8 +79,8 @@ pub struct ApplyArgs {
 ///
 /// `0` applied (or checks out); `1` the patch does not apply; `128` an unreadable patch.
 pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
-    if args.three_way || args.reject {
-        anyhow::bail!("apply: --3way and --reject are not implemented");
+    if args.three_way {
+        anyhow::bail!("apply: --3way is not implemented");
     }
     let mut repository = super::open(global)?;
     let mut text = Vec::new();
@@ -124,6 +124,7 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
         cached: args.cached,
         check: args.check,
         unidiff_zero: args.unidiff_zero,
+        reject: args.reject,
     };
     let inspect = args.stat || args.numstat || args.summary;
     if inspect {

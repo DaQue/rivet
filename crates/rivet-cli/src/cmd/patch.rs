@@ -11,7 +11,9 @@
 //! * `\ No newline at end of file` decides whether the result ends in a newline.
 //! * A patch is applied to every file or to none.
 //!
-//! Binary patches, `--3way`, whitespace fixing and fuzz are not implemented and are refused.
+//! A binary patch applies only when its `index` line has full ids and the post-image blob is in
+//! the object database; the data of a `GIT binary patch`, `--3way`, whitespace fixing and fuzz are
+//! not implemented and are refused.
 
 use anyhow::{Result, bail};
 
@@ -395,22 +397,27 @@ fn join_content(content: &Content) -> Vec<u8> {
 #[derive(Debug)]
 pub struct HunkFailure {
     pub line: usize,
+    /// The pre-image the hunk was looked for as (what git prints after `while searching for:`).
+    pub searched: Vec<u8>,
+    /// 1-based position of the hunk in its file patch.
+    pub number: usize,
 }
 
-/// Apply `patch`'s hunks to `data`; `reverse` swaps the two sides.
+/// Apply `hunks` to `data`; `reverse` swaps the two sides.
 ///
-/// # Errors
-///
-/// The line number of the first hunk that does not fit.
-pub fn apply_hunks(
+/// Returns the data with every hunk that fit applied, and the hunks that did not. Without
+/// `keep_going` it stops at the first failure (the data is then incomplete). `--reject` goes on.
+pub fn apply_hunks_collect(
     data: &[u8],
     hunks: &[Hunk],
     reverse: bool,
     unidiff_zero: bool,
-) -> std::result::Result<Vec<u8>, HunkFailure> {
+    keep_going: bool,
+) -> (Vec<u8>, Vec<HunkFailure>) {
     let mut content = split_content(data);
     let mut drift: isize = 0;
-    for hunk in hunks {
+    let mut failures = Vec::new();
+    for (number, hunk) in hunks.iter().enumerate() {
         // Pre- and post-image of the hunk (swapped when reversing).
         let (pre_kind, post_kind) = if reverse { (b'+', b'-') } else { (b'-', b'+') };
         let pre: Vec<&[u8]> = hunk
@@ -482,9 +489,23 @@ pub fn apply_hunks(
             }
         }
         let Some(at) = found else {
-            return Err(HunkFailure {
-                line: hunk.old_start.max(1),
+            let mut searched = Vec::new();
+            for line in &pre {
+                searched.extend_from_slice(line);
+                searched.push(b'\n');
+            }
+            if old_no_newline && !pre.is_empty() {
+                searched.pop();
+            }
+            failures.push(HunkFailure {
+                line: old_start.max(1),
+                searched,
+                number: number + 1,
             });
+            if keep_going {
+                continue;
+            }
+            break;
         };
         drift = at as isize - expected;
         let ends_here = at + pre.len() == content.lines.len();
@@ -493,7 +514,7 @@ pub fn apply_hunks(
             content.trailing_newline = !new_no_newline;
         }
     }
-    Ok(join_content(&content))
+    (join_content(&content), failures)
 }
 
 /// What applying a set of patches to a repository needs to know.
@@ -507,11 +528,13 @@ pub struct ApplyOptions {
     /// Check that the patches apply and change nothing.
     pub check: bool,
     pub unidiff_zero: bool,
+    /// Keep going after a hunk that does not fit: write it to `<path>.rej` (`--reject`).
+    pub reject: bool,
 }
 
 use bstr::BStr;
 use rivet_core::object::EntryMode;
-use rivet_core::{ObjectKind, Repository};
+use rivet_core::{ObjectId, ObjectKind, Repository};
 
 /// Apply `patches` to `repository`. On failure nothing has been written and the returned lines
 /// are the diagnostics Git prints (`error: …`).
@@ -520,31 +543,41 @@ pub fn apply_to_repo(
     patches: &[FilePatch],
     options: ApplyOptions,
 ) -> std::result::Result<Vec<String>, Vec<String>> {
-    use rivet_core::IndexExt as _;
     use std::collections::BTreeMap;
     // Pending state per path: `Some((data, mode))` once written, `None` once removed.
     let mut pending: BTreeMap<Vec<u8>, Option<(Vec<u8>, EntryMode)>> = BTreeMap::new();
     let mut errors: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
     let show = |p: &[u8]| String::from_utf8_lossy(p).into_owned();
+    // `--reject`: git narrates every step; `errors` is then the ordered stderr transcript of the
+    // check phase, `soft` counts its lines that only report a rejected hunk, `applied` is what the
+    // apply phase says per patch, `rejects` the `.rej` files to write.
+    let mut soft = 0usize;
+    let mut applied: Vec<String> = Vec::new();
+    let mut rejects: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut rejected_hunks = 0usize;
 
-    for patch in patches {
-        if patch.binary {
-            let name = patch
-                .new_path
-                .as_deref()
-                .or(patch.old_path.as_deref())
-                .unwrap_or_default();
-            if patch.binary_data {
-                errors.push("error: binary patches are not supported".to_string());
-            } else {
-                errors.push(format!(
-                    "error: cannot apply binary patch to '{}' without full index line",
-                    show(name)
-                ));
-                errors.push(format!("error: {}: patch does not apply", show(name)));
-            }
-            continue;
+    // `-R` goes through the patches last to first, as git does.
+    let ordered: Vec<&FilePatch> = if options.reverse {
+        patches.iter().rev().collect()
+    } else {
+        patches.iter().collect()
+    };
+    for patch in ordered {
+        let name = |n: &Option<Vec<u8>>| n.as_deref().map(show);
+        let (said_old, said_new) = if options.reverse {
+            (&patch.new_path, &patch.old_path)
+        } else {
+            (&patch.old_path, &patch.new_path)
+        };
+        let said = match (name(said_old), name(said_new)) {
+            (Some(old), Some(new)) if old != new => format!("{old} => {new}"),
+            (_, Some(new)) => new,
+            (Some(old), None) => old,
+            (None, None) => String::new(),
+        };
+        if options.reject {
+            errors.push(format!("Checking patch {said}..."));
         }
         let (old, new) = if options.reverse {
             (patch.new_path.clone(), patch.old_path.clone())
@@ -643,25 +676,71 @@ pub fn apply_to_repo(
             Some((_, (data, mode))) => (data.clone(), *mode),
             None => (Vec::new(), EntryMode::Blob),
         };
-        let result = match apply_hunks(
-            &base_data,
-            &patch.hunks,
-            options.reverse,
-            options.unidiff_zero,
-        ) {
-            Ok(result) => result,
-            Err(failure) => {
-                errors.push(format!(
-                    "error: patch failed: {}:{}",
-                    show(source.as_ref().map(|s| s.0.as_slice()).unwrap_or(&target)),
-                    failure.line
-                ));
-                errors.push(format!(
-                    "error: {}: patch does not apply",
-                    show(source.as_ref().map(|s| s.0.as_slice()).unwrap_or(&target))
-                ));
-                continue;
+        let (result, failures) = if patch.binary {
+            match binary_result(repository, patch, options.reverse, &base_data) {
+                Ok(data) => (data, Vec::new()),
+                Err(lines) => {
+                    errors.extend(lines);
+                    continue;
+                }
             }
+        } else {
+            apply_hunks_collect(
+                &base_data,
+                &patch.hunks,
+                options.reverse,
+                options.unidiff_zero,
+                options.reject,
+            )
+        };
+        let shown_name = show(source.as_ref().map(|s| s.0.as_slice()).unwrap_or(&target));
+        if !options.reject && !failures.is_empty() {
+            errors.push(format!(
+                "error: patch failed: {shown_name}:{}",
+                failures[0].line
+            ));
+            errors.push(format!("error: {shown_name}: patch does not apply"));
+            continue;
+        }
+        for failure in &failures {
+            errors.push(format!(
+                "error: while searching for:\n{}",
+                String::from_utf8_lossy(&failure.searched)
+            ));
+            errors.push(format!(
+                "error: patch failed: {shown_name}:{}",
+                failure.line
+            ));
+            soft += 2;
+        }
+        let mut narrate = |target: &[u8]| {
+            if !options.reject {
+                return;
+            }
+            if failures.is_empty() {
+                applied.push(format!("Applied patch {said} cleanly."));
+                return;
+            }
+            let count = failures.len();
+            applied.push(format!(
+                "Applying patch {said} with {count} reject{}...",
+                if count == 1 { "" } else { "s" }
+            ));
+            let mut text =
+                format!("diff a/{0} b/{0}\t(rejected hunks)\n", show(target)).into_bytes();
+            for number in 1..=patch.hunks.len() {
+                if failures.iter().any(|f| f.number == number) {
+                    applied.push(format!("Rejected hunk #{number}."));
+                    text.extend_from_slice(&patch.hunks[number - 1].raw);
+                } else {
+                    applied.push(format!("Hunk #{number} applied cleanly."));
+                }
+            }
+            rejected_hunks += count;
+            let mut path = target.to_vec();
+            path.extend_from_slice(b".rej");
+            rejects.retain(|(name, _)| *name != path);
+            rejects.push((path, text));
         };
         if let (Some(expected), Some((_, (_, actual)))) = (old_mode, &source) {
             let actual_bits = actual.to_u32();
@@ -682,6 +761,7 @@ pub fn apply_to_repo(
                 ));
                 continue;
             }
+            narrate(&target);
             pending.insert(target, None);
             continue;
         }
@@ -703,7 +783,28 @@ pub fn apply_to_repo(
         {
             pending.insert(from.clone(), None);
         }
+        narrate(&target);
         pending.insert(target, Some((result, mode)));
+    }
+    if options.reject {
+        // Hunk failures are not errors here: the patch goes in with what fits.
+        let hard = errors
+            .iter()
+            .filter(|line| line.starts_with("error:"))
+            .count()
+            - soft;
+        if options.check {
+            return if hard > 0 { Err(errors) } else { Ok(errors) };
+        }
+        errors.extend(std::mem::take(&mut applied));
+        let failed = hard > 0 || rejected_hunks > 0;
+        // A failed run leaves the index alone (but still writes the files and the `.rej`s).
+        let update_index = !failed && (options.index || options.cached);
+        if let Err(lines) = write_pending(repository, &pending, &rejects, options, update_index) {
+            errors.extend(lines);
+            return Err(errors);
+        }
+        return if failed { Err(errors) } else { Ok(errors) };
     }
     if errors.iter().any(|line| !line.starts_with("warning:")) {
         return Err(errors);
@@ -711,9 +812,93 @@ pub fn apply_to_repo(
     if options.check {
         return Ok(warnings);
     }
+    write_pending(
+        repository,
+        &pending,
+        &rejects,
+        options,
+        options.index || options.cached,
+    )?;
+    Ok(warnings)
+}
+
+/// The post-image of a binary patch. Only a `Binary files … differ` patch whose `index` line
+/// carries full ids can be applied (the post-image blob must already be in the object database);
+/// the data of a `GIT binary patch` (base85, zlib, delta) is not decoded.
+fn binary_result(
+    repository: &Repository,
+    patch: &FilePatch,
+    reverse: bool,
+    current: &[u8],
+) -> std::result::Result<Vec<u8>, Vec<String>> {
+    let (old_path, new_path) = if reverse {
+        (&patch.new_path, &patch.old_path)
+    } else {
+        (&patch.old_path, &patch.new_path)
+    };
+    let name = String::from_utf8_lossy(
+        old_path
+            .as_ref()
+            .or(new_path.as_ref())
+            .map_or(&b""[..], |n| n),
+    )
+    .into_owned();
+    let does_not_apply =
+        |first: String| vec![first, format!("error: {name}: patch does not apply")];
+    if patch.binary_data {
+        return Err(vec!["error: binary patches are not supported".to_string()]);
+    }
+    let format = repository.odb().format();
+    let (pre, post) = if reverse {
+        (&patch.new_oid, &patch.old_oid)
+    } else {
+        (&patch.old_oid, &patch.new_oid)
+    };
+    let full = |id: &Option<String>| {
+        id.as_deref()
+            .and_then(|hex| ObjectId::from_hex(format, BStr::new(hex)).ok())
+    };
+    let (Some(pre), Some(post)) = (full(pre), full(post)) else {
+        return Err(does_not_apply(format!(
+            "error: cannot apply binary patch to '{name}' without full index line"
+        )));
+    };
+    if pre != ObjectId::zero(format) {
+        let (actual, _) = rivet_core::object::hash_object(format, ObjectKind::Blob, current)
+            .map_err(|e| vec![format!("error: {e}")])?;
+        if actual != pre {
+            return Err(does_not_apply(format!(
+                "error: the patch applies to '{name}' ({actual}), which does not match the current contents."
+            )));
+        }
+    }
+    if post == ObjectId::zero(format) {
+        return Ok(Vec::new());
+    }
+    match repository.odb().read_typed(&post, ObjectKind::Blob) {
+        Ok(object) => Ok(object.into_data()),
+        Err(_) => Err(vec![
+            format!("error: missing binary patch data for '{name}'"),
+            format!("error: binary patch does not apply to '{name}'"),
+            format!("error: {name}: patch does not apply"),
+        ]),
+    }
+}
+
+type Pending = std::collections::BTreeMap<Vec<u8>, Option<(Vec<u8>, EntryMode)>>;
+
+/// Write the new state of every touched path (and the `.rej` files) to the work tree and/or index.
+fn write_pending(
+    repository: &mut Repository,
+    pending: &Pending,
+    rejects: &[(Vec<u8>, Vec<u8>)],
+    options: ApplyOptions,
+    update_index: bool,
+) -> std::result::Result<(), Vec<String>> {
+    use rivet_core::IndexExt as _;
 
     let fail = |e: &dyn std::fmt::Display| vec![format!("error: {e}")];
-    for (path, state) in &pending {
+    for (path, state) in pending {
         let path_ref = BStr::new(&path[..]);
         match state {
             None => {
@@ -731,7 +916,7 @@ pub fn apply_to_repo(
                         rivet_core::ops::prune_empty_dirs(&root, path_ref);
                     }
                 }
-                if options.index || options.cached {
+                if update_index {
                     repository.index_mut().remove_path(path_ref);
                 }
             }
@@ -759,7 +944,7 @@ pub fn apply_to_repo(
                         .and_then(|w| w.stat(path_ref))
                         .map_err(|e| fail(&e))?;
                 }
-                if options.index || options.cached {
+                if update_index {
                     let oid = repository
                         .odb()
                         .write_raw(ObjectKind::Blob, data)
@@ -777,9 +962,16 @@ pub fn apply_to_repo(
             }
         }
     }
-    if options.index || options.cached {
+    if update_index {
         repository.index_mut().sort();
         repository.write_index().map_err(|e| fail(&e))?;
     }
-    Ok(warnings)
+    for (path, text) in rejects {
+        let full = repository
+            .worktree()
+            .and_then(|w| w.join(BStr::new(&path[..])))
+            .map_err(|e| fail(&e))?;
+        std::fs::write(&full, text).map_err(|e| fail(&e))?;
+    }
+    Ok(())
 }

@@ -2404,6 +2404,121 @@ s_apply_stat_renames() {
     v apply --numstat ../ren.patch
 }
 
+s_apply_reject() {
+    v init -q repo; cd repo
+    seq 1 60 >a.txt; seq 1 10 >b.txt; echo q >c.txt; printf 'tail one\ntail two' >nonl.txt
+    mkdir d; seq 1 30 >d/e.txt; seq 1 30 >mv.txt
+    v add .; v commit -q -m base
+    sed -i -e '5s/.*/FIVE/' -e '50s/.*/FIFTY/' a.txt; sed -i '3s/.*/three/' b.txt; echo qq >>c.txt
+    printf 'tail one\ntail 2' >nonl.txt; sed -i '10s/.*/TEN/;25s/.*/TWENTY-FIVE/' d/e.txt
+    git mv mv.txt moved.txt; sed -i '28s/.*/edited/' moved.txt
+    git add -A; g diff --cached -M >../rj.patch; g reset -q --hard
+    cp -r ../repo ../clean.copy 2>/dev/null
+    # all hunks fit
+    v apply --reject ../rj.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # the second hunk of a.txt does not fit; the other files still apply
+    sed -i '50s/.*/other/' a.txt
+    v apply --reject ../rj.patch
+    v status --short
+    cat a.txt.rej
+    g reset -q --hard; g clean -fdq
+    # nothing fits
+    echo zzz >a.txt; echo yyy >b.txt; echo xxx >c.txt; printf 'no\nnl' >nonl.txt; echo w >d/e.txt; echo v >mv.txt
+    v apply --reject ../rj.patch
+    v status --short
+    cat a.txt.rej b.txt.rej nonl.txt.rej d/e.txt.rej
+    g reset -q --hard; g clean -fdq
+    # an existing .rej is overwritten
+    sed -i '50s/.*/other/' a.txt; echo PRE >a.txt.rej
+    v apply --reject ../rj.patch
+    cat a.txt.rej
+    g reset -q --hard; g clean -fdq
+    # --check with --reject reports and changes nothing
+    sed -i '50s/.*/other/' a.txt
+    v apply --reject --check ../rj.patch
+    v status --short
+    # a missing file is an error, the others still go in
+    rm b.txt
+    v apply --reject ../rj.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # --index: the work tree file differs from the index
+    sed -i '50s/.*/other/' a.txt
+    v apply --reject --index ../rj.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # reverse
+    v apply --reject -R ../rj.patch
+    v status --short
+    cat a.txt.rej
+    g reset -q --hard; g clean -fdq
+    # without --reject nothing is written, and -R names the line of the reversed hunk
+    sed -i '50s/.*/other/' a.txt
+    v apply ../rj.patch
+    v apply -R ../rj.patch
+    v status --short
+    # the same file twice in one patch: the second reject file replaces the first
+    g reset -q --hard
+    sed -i '50s/.*/other/' a.txt
+    cat ../rj.patch >../dup.patch
+    awk '/^diff --git a\/b.txt/ { exit } { print }' ../rj.patch | sed 's/FIVE/FIVE2/;s/FIFTY/FIFTY2/' >>../dup.patch
+    v apply --reject ../dup.patch
+    cat a.txt.rej
+    v status --short
+}
+
+s_apply_binary() {
+    v init -q repo; cd repo
+    printf '\000\001abc' >bin.dat; seq 1 5 >t.txt; printf '\000gone' >gone.dat
+    v add .; v commit -q -m base
+    printf '\000\002xyz!' >bin.dat; sed -i 3d t.txt; printf '\000new' >newbin.dat; git rm -q -f gone.dat
+    git add -A
+    g diff --cached >../plain.patch
+    g diff --cached --full-index >../full.patch
+    g diff --cached --binary >../gitbin.patch
+    # a post-image blob this repository has never seen
+    g init -q ../other; cp bin.dat ../bin.keep; cp t.txt ../t.keep
+    (cd ../other && cp ../repo/.git/config .git/config 2>/dev/null; printf '\000\001abc' >bin.dat; seq 1 5 >t.txt; printf '\000gone' >gone.dat
+     git add . && git commit -q -m base && printf '\000other post image' >bin.dat && git add -A && git diff --cached --full-index >../foreign.patch)
+    g reset -q --hard; g clean -fdq
+    # no usable index line: refused, nothing silently skipped
+    v apply ../plain.patch
+    v apply --check ../plain.patch
+    v apply --index ../plain.patch
+    v apply --cached ../plain.patch
+    v apply -R ../plain.patch
+    v apply --reject ../plain.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # inspecting binary patches works
+    v apply --stat --numstat --summary ../plain.patch
+    v apply --stat --numstat --summary ../full.patch
+    # full index ids: the post-image comes from the object database
+    v apply --check ../full.patch
+    v apply ../full.patch
+    v status --short
+    cat bin.dat | od -An -c
+    g reset -q --hard; g clean -fdq
+    v apply --index ../full.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    v apply --cached ../full.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    v apply -R ../full.patch
+    # the pre-image is not what the patch was made against
+    printf '\000zzz' >bin.dat
+    v apply ../full.patch
+    v status --short
+    g checkout -q -- bin.dat
+    # the post-image blob is not in this repository
+    v apply ../foreign.patch
+    v apply --reject ../foreign.patch
+    v status --short
+}
+
 s_format_patch() {
     v init -q repo; cd repo
     seq 1 20 >a; printf '#!/bin/sh\n' >run.sh

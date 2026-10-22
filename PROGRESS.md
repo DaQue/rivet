@@ -383,3 +383,24 @@ Verified against `/usr/bin/git` where the brief differed: `--stat` and `--numsta
 only the common *leading* directories factored out; the `mode change` line of a rename carries no name; `-R` lists the patches
 in reverse order but sizes the name column from the unreversed names.
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 139 scenarios / `failures: 0`.
+
+### Phase A.3/A.4 — `apply --reject` and binary patches (landed, scenarios `s_apply_reject`, `s_apply_binary`)
+`--reject` follows git, not `patch(1)`: it turns on the narration (`Checking patch X...` per patch, then `Applied patch X cleanly.`
+or `Applying patch X with N reject(s)...` + `Hunk #i applied cleanly.` / `Rejected hunk #i.`), a hunk that does not fit prints
+`error: while searching for:` + its pre-image + `error: patch failed: f:LINE` (there is no "N out of M hunks failed" in git), the
+other hunks and the other files still go in, `<path>.rej` holds `diff a/<path> b/<path>\t(rejected hunks)` and the rejected hunks
+exactly as the patch has them (`Hunk::raw`); an existing `.rej` is overwritten, and so is the one of an earlier section for the same
+file. Exit 1 when any hunk was rejected or any file errored; then the index is left alone even with `--index`/`--cached`
+(git writes it only after a fully clean run). `--reject --check` reports and exits 0 when only hunks fail. `-R` goes through the
+patches last to first, names the line of the reversed hunk, and `Checking patch new => old...` for renames.
+Binary: `Binary files … differ` without full ids → `cannot apply binary patch to 'f' without full index line` + `f: patch does not
+apply`; with a full `index` line (`diff --full-index`) git applies it from the object database, and so does rivet now: wrong
+pre-image → `the patch applies to 'f' (<oid>), which does not match the current contents.`, post-image blob not in the odb →
+`missing binary patch data for 'f'` / `binary patch does not apply to 'f'` / `f: patch does not apply`. The existence checks
+(`No such file or directory`, `does not match index`) come before the binary refusal, as in git.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 142 PASS / `failures: 0`.
+
+Known gaps (apply): `GIT binary patch` (diff `--binary`) data is **not** decoded — git applies it, rivet prints
+`error: binary patches are not supported` (not git's text) and exits 1 without touching anything. Command:
+`git diff --cached --binary >p; rivet apply p` → git exit 0, rivet exit 1. Decoding needs zlib in rivet-cli (no crate dependency
+change allowed in this block) or a public inflate in rivet-core (API change).
