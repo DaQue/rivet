@@ -39,8 +39,8 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    branching, clean, history, ignore, maintenance, mv, plumbing, query, rebase, reflog, remote,
-    sequencer, setup, snapshot, stash, tag,
+    am, apply, blame, branching, clean, format_patch, grep, history, ignore, maintenance, mv,
+    plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot, stash, tag,
 };
 
 /// The `rivet` command line.
@@ -243,6 +243,23 @@ pub enum Commands {
 
     /// Verify the connectivity and validity of the objects in the repository.
     Fsck(plumbing::FsckArgs),
+
+    /// Apply a series of patches from a mailbox.
+    Am(am::AmArgs),
+
+    /// Apply a unified diff to files and/or the index.
+    Apply(apply::ApplyArgs),
+
+    /// Show which commit last changed each line of a file.
+    Blame(blame::BlameArgs),
+
+    /// Prepare commits as e-mail style patches.
+    #[command(name = "format-patch")]
+    FormatPatch(format_patch::FormatPatchArgs),
+
+    /// Print lines of tracked files that match a pattern.
+    #[command(disable_help_flag = true)]
+    Grep(grep::GrepArgs),
 
     /// Reapply commits on top of another base.
     Rebase(rebase::RebaseArgs),

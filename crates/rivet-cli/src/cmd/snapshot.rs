@@ -905,6 +905,13 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         println!();
     }
 
+    if repository.git_dir().join("rebase-apply/applying").exists() {
+        println!("You are in the middle of an am session.");
+        println!("  (fix conflicts and then run \"git am --continue\")");
+        println!("  (use \"git am --skip\" to skip this patch)");
+        println!("  (use \"git am --abort\" to restore the original branch)");
+        println!();
+    }
     if let Some(progress) = &rebase {
         print!("{}", progress.describe(!unmerged.is_empty()));
         println!();

@@ -30,17 +30,24 @@
 //! directory, which is wrong whenever `--repo` was given. `init` and `clone` are the exceptions —
 //! they have no repository to open yet and create one instead.
 
+pub mod am;
+pub mod apply;
+pub mod blame;
 pub mod branching;
 pub mod clean;
+pub mod format_patch;
+pub mod grep;
 pub mod history;
 pub mod ignore;
 pub mod maintenance;
 pub mod mv;
+pub mod patch;
 pub mod plumbing;
 pub mod pretty;
 pub mod query;
 pub mod rebase;
 pub mod reflog;
+pub mod regex;
 pub mod remote;
 pub mod sequencer;
 pub mod setup;
@@ -121,6 +128,11 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::WriteTree(args) => plumbing::run_write_tree(&global, &args),
         Commands::VerifyPack(args) => plumbing::run_verify_pack(&global, &args),
         Commands::Fsck(args) => plumbing::run_fsck(&global, &args),
+        Commands::Am(args) => am::run_am(&global, &args),
+        Commands::Apply(args) => apply::run_apply(&global, &args),
+        Commands::Blame(args) => blame::run_blame(&global, &args),
+        Commands::FormatPatch(args) => format_patch::run_format_patch(&global, &args),
+        Commands::Grep(args) => grep::run_grep(&global, &args),
         Commands::Rebase(args) => rebase::run_rebase(&global, &args),
         Commands::RevList(args) => query::run_rev_list(&global, &args),
         Commands::ShowRef(args) => query::run_show_ref(&global, &args),

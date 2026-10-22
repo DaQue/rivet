@@ -2141,6 +2141,322 @@ s_rebase_multi_conflict() {
     v log --oneline
 }
 
+s_grep() {
+    v init -q repo; cd repo
+    mkdir -p src docs
+    printf 'alpha beta\nfoo bar baz\nFOO upper\nfoobar\nthe end\n' >a.txt
+    printf 'int main() {\n  return foo(1);\n}\nstatic int foo(int x) { return x*2; }\n' >src/main.c
+    printf 'one\ntwo foo\nthree\nfour\nfive foo\nsix\nseven\neight\nnine foo\n' >docs/notes.md
+    printf 'bin\0foo\n' >blob.bin
+    printf 'no newline foo' >nonl
+    echo untracked foo >untracked
+    v add a.txt src docs blob.bin nonl; v commit -q -m one
+    v grep foo
+    v grep -n foo
+    v grep -in foo
+    v grep -c foo
+    v grep -l foo
+    v grep -L foo
+    v grep -w foo
+    v grep -v -n foo a.txt
+    v grep -F 'x*2'
+    v grep 'x*2'
+    v grep -E 'foo|FOO' a.txt
+    v grep 'foo\|FOO' a.txt
+    v grep -E '^(foo|the)' a.txt
+    v grep '^foo' a.txt
+    v grep -E 'o{2}' a.txt
+    v grep -e alpha -e end a.txt
+    v grep -n -C1 foo docs/notes.md
+    v grep -n -A1 foo docs/notes.md
+    v grep -n -B2 five docs/notes.md
+    v grep -n -e two -e nine -C1 docs/notes.md
+    v grep -h foo a.txt
+    v grep -a foo blob.bin
+    v grep -I foo
+    v grep -q foo
+    v grep -q nonexistent
+    v grep nonexistent
+    v grep 'fo(' a.txt
+    v grep -E 'fo(' a.txt
+    v grep '[[:upper:]]\{3\}' a.txt
+    v grep -- foo src
+    v grep foo -- docs
+    v grep foo HEAD
+    v grep -n foo HEAD -- src
+    echo "foo modified" >>a.txt
+    v grep -n foo a.txt
+    v grep -n --cached foo a.txt
+    rm docs/notes.md
+    v grep -c foo
+    v grep -c --cached foo
+    cd src
+    v grep foo
+    v grep -n foo ../a.txt
+    v grep -n foo -- ../docs
+    cd ..
+    v grep -E
+    v grep
+}
+
+s_blame() {
+    v init -q repo; cd repo
+    printf 'one\ntwo\nthree\nfour\nfive\n' >f.txt
+    v add f.txt; v commit -q -m "root"
+    tick; printf 'one\ntwo\nTHREE\nfour\nfive\nsix\n' >f.txt
+    GIT_AUTHOR_NAME="Bob Longname" GIT_AUTHOR_EMAIL=bob@x v commit -q -a -m "bob edits"
+    v branch side
+    tick; printf 'zero\none\ntwo\nTHREE\nfour\nfive\nsix\n' >f.txt
+    GIT_AUTHOR_NAME="Al" GIT_AUTHOR_EMAIL=al@x v commit -q -a -m "al prepends"
+    v switch -q side
+    tick; printf 'one\ntwo\nTHREE\nfour\nFIVE\nsix\nseven' >f.txt
+    GIT_AUTHOR_NAME="Cy" GIT_AUTHOR_EMAIL=cy@x v commit -q -a -m "cy on side"
+    v switch -q main
+    tick; g merge -q side -m "merge side" >/dev/null 2>&1 || { printf 'zero\none\ntwo\nTHREE\nfour\nFIVE\nsix\nseven' >f.txt; git add f.txt; git commit -qm "merge side"; }
+    v blame f.txt
+    v blame -s f.txt
+    v blame -e f.txt
+    v blame -l f.txt
+    v blame -L 2,4 f.txt
+    v blame -L 3 f.txt
+    v blame -L ,2 f.txt
+    v blame -L 2,+2 f.txt
+    v blame -L 4,-2 f.txt
+    v blame -L 1,2 -L 6,7 f.txt
+    v blame -L 20,30 f.txt
+    v blame HEAD~1 f.txt
+    v blame HEAD~2 -- f.txt
+    v blame side f.txt
+    v blame nosuch.txt
+    v blame HEAD nosuch.txt
+    v blame nosuchrev f.txt
+    # a rename with edits
+    tick; git mv f.txt g.txt; v commit -q -m "rename"
+    tick; sed -i 's/^two$/TWO/' g.txt; GIT_AUTHOR_NAME="Dee" GIT_AUTHOR_EMAIL=dee@x v commit -q -a -m "dee"
+    v blame g.txt
+    v blame -f g.txt
+    mkdir sub; cp g.txt sub/h.txt; v add sub; tick; v commit -q -m "copy to sub"
+    cd sub
+    v blame h.txt
+    v blame ../g.txt
+}
+
+s_blame_edits() {
+    v init -q repo; cd repo
+    awk 'BEGIN { for (i = 1; i <= 40; i++) print "line " (i % 7) " body " int(i / 5) }' >t.txt
+    v add t.txt; v commit -q -m base
+    for n in $(seq 1 14); do
+        tick
+        awk -v n=$n 'BEGIN { srand(n * 31) } { r = int(rand() * 10);
+            if (r == 0) next;
+            if (r == 1) { print $0; print "dup " n " " NR; next }
+            if (r == 2) { print "chg " n " " NR; next }
+            print $0 }' t.txt >t.new && mv t.new t.txt
+        GIT_AUTHOR_NAME="Author $((n % 4))" GIT_AUTHOR_EMAIL="a$((n % 4))@x" v commit -q -a -m "edit $n"
+        if [ $((n % 5)) = 0 ]; then v branch -f keep$n; fi
+    done
+    v blame t.txt
+    v blame keep10 t.txt
+    v blame -L 5,15 keep5 t.txt
+    v blame -s -L 30,+5 t.txt
+}
+
+s_apply() {
+    v init -q repo; cd repo
+    seq 1 30 | sed 's/^/line /' >a.txt
+    printf 'x\ny\nz\n' >b.txt
+    printf 'no newline' >nonl.txt
+    mkdir d; echo d1 >d/f; echo old >old.txt; printf '#!/bin/sh\n' >run.sh
+    v add .; v commit -q -m base
+    # modify, add, delete, rename, mode change, no-newline changes
+    sed -i -e '5s/.*/FIVE/' -e '20s/.*/TWENTY/' a.txt
+    echo "more" >>b.txt
+    printf 'no newline but longer' >nonl.txt
+    echo new >added.txt; mkdir -p d/e; echo deep >d/e/g
+    git rm -q -f old.txt
+    git mv b.txt c.txt; echo "renamed edit" >>c.txt
+    chmod +x run.sh
+    git add -A
+    g diff --cached -M >../full.patch
+    g diff --cached -M --no-prefix >../noprefix.patch
+    g reset -q --hard
+    v apply --check ../full.patch
+    v status --short
+    v apply ../full.patch
+    v status --short
+    cat a.txt | sed -n '5p;20p'; cat c.txt; cat nonl.txt; echo; ls; ls -l run.sh | cut -c1-10
+    v apply ../full.patch
+    v apply -R --check ../full.patch
+    v apply -R ../full.patch
+    v status --short
+    ls
+    v apply -p0 ../noprefix.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    v apply --index ../full.patch
+    v status --short
+    v diff --cached --stat
+    g reset -q --hard; g clean -fdq
+    v apply --cached ../full.patch
+    v status --short
+    v diff --stat
+    g reset -q --hard; g clean -fdq
+    # offsets: lines inserted above the hunks
+    sed -i '1i top1\ntop2\ntop3' a.txt
+    v apply ../full.patch
+    v status --short
+    sed -n '1,3p;8p;23p' a.txt
+    g reset -q --hard; g clean -fdq
+    # context mismatch
+    sed -i '5s/.*/changed/' a.txt
+    v apply ../full.patch
+    v apply --check ../full.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # missing file, existing target
+    git rm -q -f --cached d/f; rm d/f; v apply ../full.patch
+    g reset -q --hard
+    echo present >added.txt
+    v apply ../full.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # stdin and plain diff -u
+    cp a.txt ../a.orig; sed -i '10s/.*/TEN/' a.txt; (cd ..; diff -u a.orig repo/a.txt | sed -e '1s#a.orig#a.txt#' -e '2s#repo/a.txt#a.txt#' >plain.patch); g checkout -q -- a.txt
+    vin "$(cat ../full.patch)"$'\n' apply
+    g reset -q --hard; g clean -fdq
+    v apply -p0 ../plain.patch
+    v status --short
+    g checkout -q -- a.txt
+    v apply nosuch.patch
+    vin '' apply
+    vin $'garbage\n' apply
+}
+
+s_format_patch() {
+    v init -q repo; cd repo
+    seq 1 20 >a; printf '#!/bin/sh\n' >run.sh
+    v add .; v commit -q -m "First: add [a] file
+
+Body paragraph one.
+
+Second paragraph"
+    tick; echo 21 >>a; echo b >b; v add b; v commit -q -a -m "Second commit with a rather long subject line that goes past the sixty-four character mark!"
+    tick; git rm -q b; v commit -q -m "Remove b..."
+    tick; git mv a renamed; echo more >>renamed; chmod +x run.sh; v commit -q -a -m "Rename and chmod
+
+with a body"
+    tick; printf 'no newline' >nonl; git add nonl; v commit -q -m "no newline"
+    tick; printf 'no newline changed' >nonl; v commit -q -a -m "multi
+line
+subject"
+    v branch side HEAD~2
+    v switch -q side
+    tick; echo side >s; v add s; v commit -q -m "side"
+    v switch -q main
+    tick; g merge -q --no-ff side -m "merge side" >/dev/null
+    tick; echo tail >>renamed; v commit -q -a -m "after merge"
+    v format-patch --stdout --no-signature -1
+    v format-patch --stdout --no-signature -2
+    v format-patch --stdout --no-signature --root -n -1 HEAD~4
+    v format-patch --stdout --no-signature HEAD~3
+    v format-patch --stdout --no-signature main~4..main
+    v format-patch --stdout --no-signature HEAD~4..HEAD~2
+    v format-patch --stdout --no-signature -3 HEAD~1
+    v format-patch --stdout --no-signature --start-number 7 -2
+    v format-patch --stdout --no-signature --subject-prefix="RFC PATCH" -2
+    v format-patch --stdout --signature="custom sig" -1
+    v format-patch --stdout --no-signature --no-numbered -2
+    v format-patch --stdout --no-signature --root HEAD~2
+    v format-patch --no-signature HEAD~3
+    cat 0*.patch >>"$TRANSCRIPT"
+    rm -f 0*.patch
+    v format-patch --no-signature -o out HEAD~3
+    v format-patch --no-signature -o out/nested/deeper -2
+    cat out/*.patch >>"$TRANSCRIPT"
+    ls out out/nested/deeper >>"$TRANSCRIPT"
+    v format-patch --root --no-signature -o all HEAD
+    ls all >>"$TRANSCRIPT"
+    v format-patch
+    v format-patch --no-signature nosuch
+}
+
+s_format_patch_wrap() {
+    v init -q repo; cd repo
+    echo 0 >f; v add f; v commit -q -m base
+    for n in $(seq 56 66); do
+        tick; echo "$n" >>f
+        v commit -q -a -m "$(printf 'w%.0s' $(seq 1 30)) $(printf 'x%.0s' $(seq 1 $((n - 31)))) tail words here"
+    done
+    v format-patch --stdout --no-signature -11 | grep -a -A2 '^Subject'
+    tick; echo z >>f; v commit -q -a -m "$(printf 'y%.0s' $(seq 1 100)) short"
+    v format-patch --stdout --no-signature -1 | grep -a -A2 '^Subject'
+}
+
+s_am() {
+    v init -q repo; cd repo
+    seq 1 10 >a; echo x >b; v add .; v commit -q -m base
+    v branch other
+    tick; sed -i 's/^3$/three/' a; v commit -q -a -m "Change three
+
+Longer body.
+
+Signed-off-by: Someone <s@x>"
+    tick; echo more >>b; GIT_AUTHOR_NAME="Other Author" GIT_AUTHOR_EMAIL=oa@x v commit -q -a -m "Edit b"
+    tick; echo n >n; mkdir sub; echo s >sub/s; v add n sub; v commit -q -m "Add n and sub"
+    tick; git rm -q -f b; printf 'nonl' >nl; git add nl; chmod +x n; v commit -q -a -m "Remove b, add nl, chmod n"
+    cd ..; g -C repo format-patch --no-signature -o ../patches -4 >/dev/null; cd repo
+    cp ../patches/0001-Change-three.patch ../patches/c1.patch
+    g -C repo format-patch --no-signature -o ../p1 -1 >/dev/null 2>&1
+    v switch -q other
+    tick; sed -i 's/^3$/THREE/' a; v commit -q -a -m "Conflicting three"
+    v am ../patches/0001-Change-three.patch
+    v status
+    v status --short
+    cat .git/ORIG_HEAD
+    v am ../patches/0002-Edit-b.patch
+    v am --continue
+    v am --skip
+    v log --oneline
+    v am ../patches/0002-Edit-b.patch ../patches/0003-Add-n-and-sub.patch ../patches/0004-Remove-b-add-nl-chmod-n.patch
+    v log --oneline
+    v log -3 --format='%an <%ae> %ad | %cn | %s'
+    v reflog
+    v show --stat HEAD~1
+    ls -l n | cut -c1-10
+    cat nl; echo
+    v am --abort
+    v am --skip
+    v am --continue
+    v reset -q --hard "$(g rev-parse HEAD~3)"
+    v am ../patches/0001-Change-three.patch
+    v am --abort
+    v log --oneline
+    v reflog
+    v status --short
+    cat .git/ORIG_HEAD
+    v reset -q --hard "$(g rev-parse HEAD~0)"
+    v am ../patches/0001-Change-three.patch
+    printf '1\n2\nTHREE\n4\n5\n6\n7\n8\n9\n10\n' >a; sed -i 's/THREE/three/' a
+    v add a
+    v am --continue
+    v log --oneline
+    v am nosuch.mbox
+    echo x >>a; v am ../patches/0002-Edit-b.patch
+    git checkout -q -- a
+    v am ../patches/0002-Edit-b.patch ../patches/0001-Change-three.patch
+    v status --short
+    v am --skip
+    v log --oneline
+    # an unborn branch
+    cd ..; v init -q fresh; cd fresh
+    v am ../patches/0001-Change-three.patch
+    v am --abort
+    v am ../patches/0003-Add-n-and-sub.patch
+    v status --short
+    v log --oneline
+    v reflog
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

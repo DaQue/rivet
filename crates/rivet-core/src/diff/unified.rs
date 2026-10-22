@@ -830,11 +830,20 @@ pub fn format_stat_sized(
     out: &mut impl Write,
 ) -> Result<()> {
     // Git's `show_stats` with the non-terminal width of 80 columns.
+    format_stat_width(diff, odb, 80, out)
+}
+
+/// [`format_stat_sized`] for a total width of `width` columns; `format-patch` uses 72.
+pub fn format_stat_width(
+    diff: &crate::diff::TreeDiff,
+    odb: Option<&crate::odb::Odb>,
+    width: usize,
+    out: &mut impl Write,
+) -> Result<()> {
     // Git prints nothing at all for an empty diff, not a `0 files changed` line.
     if diff.stats.is_empty() {
         return Ok(());
     }
-    const WIDTH: usize = 80;
     let decimal_width = |n: usize| n.to_string().len();
     let size_of = |oid: Option<crate::hash::ObjectId>| -> usize {
         match (oid, odb) {
@@ -865,15 +874,15 @@ pub fn format_stat_sized(
     }
     number_width = number_width.max(decimal_width(max_change));
     let mut graph_width = max_change;
-    if name_width + number_width + 6 + graph_width > WIDTH {
-        let limit = (WIDTH * 3 / 8).saturating_sub(number_width + 6);
+    if name_width + number_width + 6 + graph_width > width {
+        let limit = (width * 3 / 8).saturating_sub(number_width + 6);
         if graph_width > limit {
             graph_width = limit.max(6);
         }
-        if name_width > WIDTH.saturating_sub(number_width + 6 + graph_width) {
-            name_width = WIDTH.saturating_sub(number_width + 6 + graph_width);
+        if name_width > width.saturating_sub(number_width + 6 + graph_width) {
+            name_width = width.saturating_sub(number_width + 6 + graph_width);
         } else {
-            graph_width = WIDTH - number_width - 6 - name_width;
+            graph_width = width - number_width - 6 - name_width;
         }
     }
     // Git's `scale_linear`: a non-zero count always gets at least one mark.

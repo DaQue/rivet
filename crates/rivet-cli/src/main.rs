@@ -49,13 +49,14 @@ use clap::Parser;
 use crate::cli::Cli;
 
 /// Git's `log -<N>` shorthand for `-n <N>`: clap cannot declare a numeric short flag, so the
-/// argument vector is rewritten before parsing. Only `log` and `reflog` arguments before `--` are touched.
+/// argument vector is rewritten before parsing. Only `log` and `reflog` arguments before `--` are touched; for `format-patch` the same shorthand becomes `--max-count=<N>`.
 fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
     let mut out = Vec::with_capacity(args.len());
     let mut iter = args.into_iter();
     out.extend(iter.next()); // argv[0]
     let mut command_seen = false;
     let mut in_log = false;
+    let mut in_format_patch = false;
     let mut after_dashes = false;
     while let Some(arg) = iter.next() {
         let text = arg.to_string_lossy().into_owned();
@@ -68,6 +69,17 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
             if !text.starts_with('-') {
                 command_seen = true;
                 in_log = text == "log" || text == "reflog";
+                in_format_patch = text == "format-patch";
+            }
+        } else if in_format_patch && !after_dashes {
+            if text == "--" {
+                after_dashes = true;
+            } else if text.len() > 1
+                && text.starts_with('-')
+                && text[1..].bytes().all(|b| b.is_ascii_digit())
+            {
+                out.push(format!("--max-count={}", &text[1..]).into());
+                continue;
             }
         } else if in_log && !after_dashes {
             if text == "--" {
