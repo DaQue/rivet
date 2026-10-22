@@ -1626,6 +1626,62 @@ s_stash_index() {
     v stash apply --index
 }
 
+s_clean_interactive() {
+    v init -q repo; cd repo
+    echo k >keep; v add keep; v commit -q -m base
+    vin $'q\n' clean -i
+    echo 1 >u1; echo 2 >u2; echo 4 >u4.txt; echo 5 >v5; mkdir dd; echo 3 >dd/f
+    vin $'q\n' clean -i
+    vin $'q\n' clean -i -d
+    vin '' clean -i -d
+    vin $'h\nq\n' clean -i
+    vin $'zz\n\n?\nquit\n' clean -i
+    vin $'2\nu*\n\nq\n' clean -i -d
+    vin $'3\n1,3\n\nq\n' clean -i -d
+    vin $'3\n1-2\n*\n-1\n9\nx\n\n5\n' clean -i -d
+    vin $'3\n\n' clean -i -d
+    vin $'2\n*\n' clean -i -d
+    vin $'4\ny\nn\nYES\n' clean -i
+    ls
+    vin $'4\ny\n' clean -i -d
+    ls
+    for i in $(seq 1 23); do echo x >file_$i.txt; done
+    vin $'q\n' clean -i
+    vin $'3\n1,4,7\n\nq\n' clean -i
+    COLUMNS=40 vin $'q\n' clean -i
+    vin $'cl\n' clean -n -i
+    ls | wc -l
+    vin $'c\n' clean -i -q
+    ls
+    echo 1 >a.log; echo 2 >b.txt; mkdir sub; echo 3 >sub/c.txt
+    cd sub
+    vin $'c\n' clean -i
+    cd ..
+    ls
+}
+
+s_clean_exclude() {
+    v init -q repo; cd repo
+    printf '*.o\nbuild/\n' >.gitignore; echo k >keep; v add keep .gitignore; v commit -q -m base
+    echo 1 >a.log; echo 2 >b.txt; echo 3 >skip.log; echo 4 >x.o; mkdir build logs keepdir; echo 5 >build/out; echo 6 >logs/l.log; echo 7 >logs/m.txt; echo 8 >keepdir/z.txt
+    v clean -n -e '*.log'
+    v clean -n -e '*.log' -e 'keepdir/'
+    v clean -n -d -e '*.log'
+    v clean -n -d -e 'logs'
+    v clean -n -x -e 'skip*'
+    v clean -n -dx -e 'build/' -e 'x.o'
+    v clean -n -X -e 'skip*'
+    v clean -n -dX -e 'b*'
+    v clean -n -d --exclude='keepdir' --exclude='*.txt'
+    v clean -f -e '*.log'
+    ls
+    v clean -fd -e 'logs/'
+    ls
+    ls logs
+    v clean -fdx -e 'skip.log'
+    ls
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
