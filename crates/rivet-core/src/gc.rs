@@ -215,8 +215,7 @@ fn recency_order(
     let mut seen: HashSet<ObjectId> = HashSet::new();
 
     let mut commit_tips: Vec<ObjectId> = Vec::new();
-    for (name, mut oid) in tips {
-        let mut label = name;
+    for (_, mut oid) in tips {
         loop {
             if !odb.contains(&oid) {
                 break;
@@ -224,11 +223,12 @@ fn recency_order(
             let object = odb.read(&oid)?;
             match object.kind() {
                 ObjectKind::Tag => {
+                    // Git names a tag object by the `tag` header it carries.
+                    let tag = Tag::parse(format, object.data())?;
                     if seen.insert(oid) && wanted.contains(&oid) {
-                        out.push((oid, pack_name_hash(&label)));
+                        out.push((oid, pack_name_hash(tag.name)));
                     }
-                    label = Vec::new();
-                    oid = Tag::parse(format, object.data())?.object;
+                    oid = tag.object;
                 }
                 ObjectKind::Commit => {
                     commit_tips.push(oid);

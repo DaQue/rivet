@@ -38,6 +38,7 @@ pub mod maintenance;
 pub mod mv;
 pub mod plumbing;
 pub mod pretty;
+pub mod query;
 pub mod reflog;
 pub mod remote;
 pub mod sequencer;
@@ -119,6 +120,12 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::WriteTree(args) => plumbing::run_write_tree(&global, &args),
         Commands::VerifyPack(args) => plumbing::run_verify_pack(&global, &args),
         Commands::Fsck(args) => plumbing::run_fsck(&global, &args),
+        Commands::RevList(args) => query::run_rev_list(&global, &args),
+        Commands::ShowRef(args) => query::run_show_ref(&global, &args),
+        Commands::ForEachRef(args) => query::run_for_each_ref(&global, &args),
+        Commands::MergeBase(args) => query::run_merge_base(&global, &args),
+        Commands::Describe(args) => query::run_describe(&global, &args),
+        Commands::Shortlog(args) => query::run_shortlog(&global, &args),
     }
 }
 

@@ -39,8 +39,8 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    branching, clean, history, ignore, maintenance, mv, plumbing, reflog, remote, sequencer, setup,
-    snapshot, stash, tag,
+    branching, clean, history, ignore, maintenance, mv, plumbing, query, reflog, remote, sequencer,
+    setup, snapshot, stash, tag,
 };
 
 /// The `rivet` command line.
@@ -243,6 +243,28 @@ pub enum Commands {
 
     /// Verify the connectivity and validity of the objects in the repository.
     Fsck(plumbing::FsckArgs),
+
+    /// List commits (and with `--objects` the objects they reach).
+    #[command(name = "rev-list")]
+    RevList(query::RevListArgs),
+
+    /// List the refs in the local repository.
+    #[command(name = "show-ref")]
+    ShowRef(query::ShowRefArgs),
+
+    /// Output information on each ref.
+    #[command(name = "for-each-ref")]
+    ForEachRef(query::ForEachRefArgs),
+
+    /// Find the best common ancestor of two commits.
+    #[command(name = "merge-base")]
+    MergeBase(query::MergeBaseArgs),
+
+    /// Name a commit after the nearest tag.
+    Describe(query::DescribeArgs),
+
+    /// Summarise `log` output by author.
+    Shortlog(query::ShortlogArgs),
 }
 
 /// The object format a repository is created with, or expects.

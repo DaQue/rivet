@@ -1748,6 +1748,206 @@ s_gc_delta_shapes() {
     v log --oneline --all | head -3
 }
 
+# A history with branches, merges, tags (annotated, lightweight, nested) and several authors.
+query_repo() {
+    v init -q repo; cd repo
+    echo 1 >a; mkdir d; echo 1 >d/b; v add .; v commit -q -m "one"
+    tick; echo 2 >>a; v commit -q -a -m "two"; v tag light1
+    tick; echo 3 >>a; v commit -q -a -m "three"; v tag -a -m "ann one" v1.0
+    v branch side
+    tick; echo 4 >>a; GIT_AUTHOR_NAME="Zed Z" GIT_AUTHOR_EMAIL=z@x v commit -q -a -m "four"
+    v switch -q side
+    tick; echo s1 >s; v add s; GIT_AUTHOR_NAME="Amy A" GIT_AUTHOR_EMAIL=amy@x v commit -q -m "side one"
+    tick; echo s2 >>s; v commit -q -a -m "side two"; v tag -a -m "side tag" side-ann
+    v switch -q main
+    tick; v merge -q --no-ff side -m "merge side" >/dev/null
+    tick; echo 5 >>a; GIT_AUTHOR_NAME="Zed Z" GIT_AUTHOR_EMAIL=z@x v commit -q -a -m "five"
+    v tag light-latest
+    tick; echo 6 >>d/b; v commit -q -a -m "six"
+}
+
+s_rev_list() {
+    query_repo
+    v rev-list HEAD
+    v rev-list --count HEAD
+    v rev-list --max-count=3 HEAD
+    v rev-list -n 2 --reverse HEAD
+    v rev-list --reverse HEAD
+    v rev-list main..side
+    v rev-list side..main
+    v rev-list v1.0..HEAD
+    v rev-list HEAD ^side
+    v rev-list --count main...side
+    v rev-list main...side
+    v rev-list --all
+    v rev-list --all --count
+    v rev-list --first-parent HEAD
+    v rev-list --objects HEAD
+    v rev-list --objects v1.0..HEAD
+    v rev-list --objects --all
+    v rev-list --objects --count HEAD
+    v rev-list --objects -n 2 HEAD
+    v rev-list --objects --reverse -n 3 HEAD
+    v rev-list nosuch
+    v rev-list light1 v1.0
+    v rev-list --count side-ann
+}
+
+s_show_ref() {
+    query_repo
+    v branch other side
+    v show-ref
+    v show-ref --heads
+    v show-ref --tags
+    v show-ref -d
+    v show-ref -d --tags
+    v show-ref --head
+    v show-ref main
+    v show-ref heads/main
+    v show-ref refs/heads/main
+    v show-ref v1.0 light1
+    v show-ref nosuch
+    v show-ref -s main
+    v show-ref -d -s --tags
+    v show-ref --verify refs/heads/main
+    v show-ref --verify refs/heads/main refs/tags/v1.0
+    v show-ref --verify -d refs/tags/v1.0
+    v show-ref --verify main
+    v show-ref --verify refs/heads/nosuch
+    v show-ref --verify
+    v show-ref --verify HEAD
+    v show-ref --quiet --verify refs/heads/nosuch
+    v show-ref --quiet --verify refs/heads/main
+    v show-ref --quiet main
+    g pack-refs --all
+    v show-ref -d
+}
+
+s_for_each_ref() {
+    query_repo
+    v branch other side; v tag same-name; v branch same-name
+    v for-each-ref
+    v for-each-ref refs/heads
+    v for-each-ref refs/tags/
+    v for-each-ref 'refs/heads/s*'
+    v for-each-ref --format='%(refname)'
+    v for-each-ref --format='%(refname:short)'
+    v for-each-ref --format='%(objectname) %(objectname:short) %(objectname:short=10) %(objecttype) %(objectsize)'
+    v for-each-ref --format='%(refname:short) -> %(*objectname) %(*objecttype)' refs/tags
+    v for-each-ref --format='%(refname:lstrip=2)|%(refname:strip=1)|%(refname:rstrip=1)'
+    v for-each-ref --format='%(HEAD) %(refname:short) 100%%'
+    v for-each-ref --count=2
+    v for-each-ref --sort=-refname --format='%(refname)'
+    v for-each-ref --sort=objectname --format='%(objectname) %(refname)'
+    v for-each-ref --format='%(bogus)'
+    v for-each-ref --sort=bogus
+    git symbolic-ref refs/remotes/origin/HEAD refs/heads/main 2>/dev/null
+    git update-ref refs/remotes/origin/main HEAD
+    git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+    v for-each-ref --format='%(refname) %(objectname:short) [%(symref)]' refs/remotes
+    v for-each-ref --format='%(refname:short)' refs/remotes
+    g pack-refs --all
+    v for-each-ref --format='%(refname:short) %(objecttype)'
+}
+
+s_merge_base() {
+    query_repo
+    v merge-base main side
+    v merge-base side main
+    v merge-base --all main side
+    v merge-base HEAD v1.0
+    v merge-base --is-ancestor v1.0 HEAD
+    echo "rc=$?"
+    v merge-base --is-ancestor HEAD v1.0
+    echo "rc=$?"
+    v merge-base --is-ancestor HEAD HEAD
+    v merge-base HEAD~1 HEAD
+    v merge-base nosuch HEAD
+    vq merge-base HEAD
+    # unrelated histories and criss-cross merges
+    git checkout -q --orphan lone; git rm -rfq . ; echo x >x; git add x; tick; git commit -qm lone
+    v merge-base main lone
+    v merge-base --is-ancestor main lone
+    git checkout -q main
+    git checkout -q -b x1 v1.0; echo x1 >x1; git add x1; tick; git commit -qm x1
+    git checkout -q -b y1 v1.0; echo y1 >y1; git add y1; tick; git commit -qm y1
+    git checkout -q x1; tick; git merge -q --no-edit y1 -m mx >/dev/null
+    git checkout -q y1; tick; git merge -q --no-edit x1~0 -m my >/dev/null 2>&1
+    git checkout -q -b x2 x1; echo x2 >x2; git add x2; tick; git commit -qm x2
+    git checkout -q -b y2 y1; echo y2 >y2; git add y2; tick; git commit -qm y2
+    git checkout -q x2; git merge -q --no-edit y1 >/dev/null 2>&1
+    git checkout -q y2; git merge -q --no-edit x1 >/dev/null 2>&1
+    v merge-base x2 y2
+    v merge-base --all x2 y2
+}
+
+s_describe() {
+    query_repo
+    v describe
+    v describe --tags
+    v describe --long
+    v describe --tags --long
+    v describe --always
+    v describe v1.0
+    v describe --long v1.0
+    v describe v1.0~1
+    v describe --tags v1.0~1
+    v describe --tags v1.0~2
+    v describe --always v1.0~2
+    v describe v1.0~2
+    v describe --exact-match v1.0
+    v describe --exact-match HEAD
+    v describe --tags --exact-match light1
+    v describe --abbrev=10 --tags
+    v describe --abbrev=4
+    v describe side
+    v describe --tags side
+    v describe side~1
+    v describe light-latest
+    v describe --tags light-latest
+    v describe nosuch
+    # several tags on one commit: annotated beats lightweight, newer annotated beats older
+    v tag -a -m "x" ann-a "v1.0^{commit}"
+    tick; v tag -a -m "y" ann-b "v1.0^{commit}"
+    v tag zlight v1.0
+    v describe v1.0
+    v describe --tags v1.0
+    v describe --tags v1.0~0
+    v describe main~3
+    v describe --tags main~3
+    # a repository with no tags
+    cd ..; v init -q plain; cd plain; echo x >x; v add x; v commit -q -m x
+    v describe
+    v describe --tags
+    v describe --always
+    v tag lw
+    v describe
+    v describe --tags
+}
+
+s_shortlog() {
+    query_repo
+    v shortlog HEAD
+    v shortlog -s HEAD
+    v shortlog -n HEAD
+    v shortlog -sn HEAD
+    v shortlog -sne HEAD
+    v shortlog -e HEAD
+    v shortlog -s -n -e HEAD
+    v shortlog -sc HEAD
+    v shortlog -s side
+    v shortlog -s main~2
+    v shortlog -s nosuch
+    GIT_AUTHOR_NAME="Amy A" GIT_AUTHOR_EMAIL=other@x tick
+    echo 7 >>a; GIT_AUTHOR_NAME="Amy A" GIT_AUTHOR_EMAIL=other@x v commit -q -a -m "seven"
+    v shortlog -se HEAD
+    v shortlog -s HEAD
+    v shortlog -sn HEAD
+    GIT_COMMITTER_NAME="Other C" GIT_COMMITTER_EMAIL=oc@x v commit -q --allow-empty -m "empty by other"
+    v shortlog -sc HEAD
+    v shortlog -sce HEAD
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
