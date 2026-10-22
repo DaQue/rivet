@@ -1470,7 +1470,7 @@ fn rename_branch(
 }
 
 /// Report a refused checkout the way Git does and return its exit status.
-fn report_checkout_refusal(error: rivet_core::Error, op: &str) -> Result<i32> {
+pub(super) fn report_checkout_refusal(error: rivet_core::Error, op: &str) -> Result<i32> {
     let dirty_block = |paths: &[bstr::BString]| {
         eprintln!("error: Your local changes to the following files would be overwritten by {op}:");
         for path in paths {
@@ -1775,7 +1775,7 @@ fn checkout_paths(
 }
 
 /// `MERGE_MSG` without the `#` comment lines Git adds for the editor.
-fn strip_comment_lines(message: &[u8]) -> Vec<u8> {
+pub(super) fn strip_comment_lines(message: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     for line in message.lines_with_terminator() {
         if !line.starts_with(b"#") {
@@ -1922,50 +1922,7 @@ pub fn merge_commit(
         Err(error) => return report_checkout_refusal(error, "merge"),
     };
 
-    for path in &result.paths {
-        if result.conflicts.iter().any(|c| c.path == path.path) {
-            continue;
-        }
-        if path.kind.is_some() {
-            println!("Auto-merging {}", path.path);
-        }
-    }
-    let mut conflicted = Vec::new();
-    for conflict in &result.conflicts {
-        use rivet_core::ConflictKind;
-        match conflict.kind {
-            ConflictKind::Content
-            | ConflictKind::AddAdd
-            | ConflictKind::Mode
-            | ConflictKind::Binary => {
-                println!("Auto-merging {}", conflict.path);
-                let what = if conflict.kind == ConflictKind::AddAdd {
-                    "add/add"
-                } else {
-                    "content"
-                };
-                println!("CONFLICT ({what}): Merge conflict in {}", conflict.path);
-            }
-            ConflictKind::ModifyDelete => println!(
-                "CONFLICT (modify/delete): {} deleted in {label} and modified in HEAD.  Version HEAD of {} left in tree.",
-                conflict.path, conflict.path
-            ),
-            ConflictKind::DeleteModify => println!(
-                "CONFLICT (modify/delete): {} deleted in HEAD and modified in {label}.  Version {label} of {} left in tree.",
-                conflict.path, conflict.path
-            ),
-            ConflictKind::Submodule => {
-                println!("CONFLICT (submodule): Merge conflict in {}", conflict.path)
-            }
-            ConflictKind::RenameDelete | ConflictKind::RenameRename => {
-                // Only the entry that carries the message is announced.
-                if let Some(message) = &conflict.message {
-                    println!("{message}");
-                }
-            }
-        }
-        conflicted.push(conflict.path.clone());
-    }
+    let conflicted = print_merge_report(&result, label);
 
     if !conflicted.is_empty() || no_commit {
         let mut merge_msg = BString::from(message);
@@ -2022,6 +1979,56 @@ pub fn merge_commit(
         super::print_diffstat(repository, Some(old_tree), tree)?;
     }
     Ok(0)
+}
+
+/// Print the `Auto-merging` / `CONFLICT` lines of a finished tree merge and return the
+/// conflicted paths. `label` names the incoming side in the modify/delete wording.
+pub(super) fn print_merge_report(result: &rivet_core::TreeMerge, label: &str) -> Vec<BString> {
+    for path in &result.paths {
+        if result.conflicts.iter().any(|c| c.path == path.path) {
+            continue;
+        }
+        if path.kind.is_some() {
+            println!("Auto-merging {}", path.path);
+        }
+    }
+    let mut conflicted = Vec::new();
+    for conflict in &result.conflicts {
+        use rivet_core::ConflictKind;
+        match conflict.kind {
+            ConflictKind::Content
+            | ConflictKind::AddAdd
+            | ConflictKind::Mode
+            | ConflictKind::Binary => {
+                println!("Auto-merging {}", conflict.path);
+                let what = if conflict.kind == ConflictKind::AddAdd {
+                    "add/add"
+                } else {
+                    "content"
+                };
+                println!("CONFLICT ({what}): Merge conflict in {}", conflict.path);
+            }
+            ConflictKind::ModifyDelete => println!(
+                "CONFLICT (modify/delete): {} deleted in {label} and modified in HEAD.  Version HEAD of {} left in tree.",
+                conflict.path, conflict.path
+            ),
+            ConflictKind::DeleteModify => println!(
+                "CONFLICT (modify/delete): {} deleted in HEAD and modified in {label}.  Version {label} of {} left in tree.",
+                conflict.path, conflict.path
+            ),
+            ConflictKind::Submodule => {
+                println!("CONFLICT (submodule): Merge conflict in {}", conflict.path)
+            }
+            ConflictKind::RenameDelete | ConflictKind::RenameRename => {
+                // Only the entry that carries the message is announced.
+                if let Some(message) = &conflict.message {
+                    println!("{message}");
+                }
+            }
+        }
+        conflicted.push(conflict.path.clone());
+    }
+    conflicted
 }
 
 /// Shell-style glob over branch and tag names: `*`, `?` and literal bytes.

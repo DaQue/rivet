@@ -36,6 +36,7 @@ pub mod ignore;
 pub mod plumbing;
 pub mod pretty;
 pub mod remote;
+pub mod sequencer;
 pub mod setup;
 pub mod snapshot;
 pub mod tag;
@@ -91,6 +92,8 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Switch(args) => branching::run_switch(&global, &args),
         Commands::Checkout(args) => branching::run_checkout(&global, &args),
         Commands::Merge(args) => branching::run_merge(&global, &args),
+        Commands::CherryPick(args) => sequencer::run_cherry_pick(&global, &args),
+        Commands::Revert(args) => sequencer::run_revert(&global, &args),
         Commands::Tag(args) => tag::run_tag(&global, &args),
         Commands::CheckIgnore(args) => ignore::run_check_ignore(&global, &args),
         Commands::Remote(args) => remote::run_remote(&global, &args),

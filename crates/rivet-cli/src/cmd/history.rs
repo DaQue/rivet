@@ -781,7 +781,7 @@ fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<LogCommit> {
     })
 }
 
-fn abbrev(repository: &Repository, oid: &ObjectId, full: bool) -> String {
+pub(super) fn abbrev(repository: &Repository, oid: &ObjectId, full: bool) -> String {
     let hex = oid.to_string();
     if full {
         return hex;

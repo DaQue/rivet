@@ -875,6 +875,163 @@ s_verify_pack_v() {
     v verify-pack "$idx"
 }
 
+seq_setup() {
+    v init -q repo; cd repo
+    printf '1\n2\n3\n4\n5\n' >f; echo base >g; v add f g; v commit -q -m base
+    v branch topic
+    tick; echo m >m; v add m; v commit -q -m "main adds m"
+    v switch -q topic
+    tick; echo b >b; v add b; v commit -q -m "topic adds b"
+    tick; printf '1\n2\n3\n4\n5\nsix\n' >f; v commit -q -a -m "topic edits f" -m "with a body"
+    tick; echo c >c; mkdir d; echo deep >d/e; v add c d; chmod +x c; v add c; v commit -q -m "topic adds c and d/e"
+    tick; printf 'ONE\n2\n3\n4\n5\nsix\n' >f; v commit -q -a -m "topic edits line one"
+    v switch -q main
+}
+
+s_cherry_pick() {
+    seq_setup
+    tick; v cherry-pick topic~3
+    tick; v cherry-pick topic~2
+    v log --format='%H %an <%ae> %ad|%cn %cd|%s|%b'
+    v show --stat HEAD
+    tick; v cherry-pick topic~1 topic
+    v log --oneline
+    v diff topic HEAD --stat
+    v cherry-pick topic~9
+    vq cherry-pick
+    v cherry-pick --continue
+    v cherry-pick --abort
+}
+
+s_cherry_pick_options() {
+    seq_setup
+    tick; v cherry-pick -n topic~2
+    v status --short
+    tick; v commit -q -m "manual commit"
+    tick; v cherry-pick -n topic~3 topic~1
+    v status --short
+    tick; v commit -q -m "manual commit 2"
+    v reset -q --hard main~2
+    tick; v cherry-pick topic~3..topic
+    v log --oneline
+    echo dirty >>f
+    vq cherry-pick topic~3
+    v status --short
+    tick; vq cherry-pick topic~9..topic~8
+    v checkout -- f
+    v switch -q --detach topic~3
+    tick; v cherry-pick topic~2
+    v log --oneline
+}
+
+s_cherry_pick_conflict() {
+    seq_setup
+    tick; printf 'main-one\n2\n3\n4\n5\n' >f; v commit -q -a -m "main edits f"
+    tick; v cherry-pick topic
+    v status
+    cat f
+    v cherry-pick --continue
+    v cherry-pick topic~1
+    v cherry-pick --abort
+    v status --short
+    cat f
+    tick; v cherry-pick topic
+    printf 'resolved\n2\n3\n4\n5\nsix\n' >f
+    v add f
+    tick; v cherry-pick --continue
+    v log --format='%H|%an|%cn|%s|%P' -3
+    v status
+    v cherry-pick --continue
+    v cherry-pick --abort
+}
+
+s_cherry_pick_conflict_nocommit() {
+    seq_setup
+    tick; printf 'main-one\n2\n3\n4\n5\n' >f; v commit -q -a -m "main edits f"
+    v cherry-pick -n topic
+    v status --short
+    cat f
+    v cherry-pick topic~1
+}
+
+s_cherry_pick_delete_conflict() {
+    v init -q repo; cd repo
+    echo a >a; echo b >b; v add a b; v commit -q -m base
+    v branch topic
+    tick; v rm -q b; v commit -q -m "main deletes b"
+    v switch -q topic
+    tick; echo bb >b; v commit -q -a -m "topic edits b"
+    tick; echo aa >a; v commit -q -a -m "topic edits a"
+    v switch -q main
+    tick; v cherry-pick topic~1
+    v status --short
+    ls
+    v cherry-pick --abort
+    v status --short
+    tick; v cherry-pick topic
+    v status --short
+}
+
+s_cherry_pick_empty_and_merge() {
+    seq_setup
+    tick; v cherry-pick topic~3
+    v branch side
+    v switch -q side
+    tick; echo s >s; v add s; v commit -q -m side
+    v switch -q main
+    tick; v merge -q --no-ff side -m "merge side"
+    v cherry-pick HEAD
+    v cherry-pick nonexistent
+    v status --short
+}
+
+s_revert() {
+    seq_setup
+    tick; v cherry-pick topic~3 topic~2 topic~1
+    v log --oneline
+    tick; v revert --no-edit HEAD
+    v log --format='%H|%an|%cn|%s|%b'
+    tick; v revert --no-edit HEAD
+    v log -1 --format=%B
+    tick; v revert --no-edit HEAD~3
+    v status
+    v revert HEAD
+    vq revert
+    v revert --continue
+    v revert --abort
+}
+
+s_revert_options() {
+    seq_setup
+    tick; v cherry-pick topic~3 topic~2 topic~1
+    v revert -n --no-edit HEAD~1
+    v status --short
+    tick; v commit -q -m "manual"
+    v revert --no-edit HEAD~1 HEAD
+    v revert --no-edit main~100
+    tick; v revert --no-edit HEAD~0
+    v log --oneline
+}
+
+s_revert_conflict() {
+    seq_setup
+    tick; v cherry-pick topic~3 topic~2
+    tick; printf '1\n2\n3\n4\nfive\nsix\n' >f; v commit -q -a -m "main edits f again"
+    tick; v revert --no-edit HEAD~1
+    v status
+    cat f
+    v revert --continue
+    v revert --abort
+    v status --short
+    cat f
+    tick; v revert --no-edit HEAD~1
+    printf '1\n2\n3\n4\nfive\n' >f
+    v add f
+    tick; v revert --continue
+    v log --format='%H|%an|%cn|%s|%b' -2
+    v status --short
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

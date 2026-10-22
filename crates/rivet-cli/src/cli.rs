@@ -38,7 +38,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use crate::cmd::{branching, history, ignore, plumbing, remote, setup, snapshot, tag};
+use crate::cmd::{branching, history, ignore, plumbing, remote, sequencer, setup, snapshot, tag};
 
 /// The `rivet` command line.
 ///
@@ -164,6 +164,13 @@ pub enum Commands {
 
     /// Join development histories together.
     Merge(branching::MergeArgs),
+
+    /// Apply the changes introduced by existing commits.
+    #[command(name = "cherry-pick")]
+    CherryPick(sequencer::CherryPickArgs),
+
+    /// Record new commits that undo existing ones.
+    Revert(sequencer::RevertArgs),
 
     /// List, create, verify and delete tags.
     Tag(tag::TagArgs),

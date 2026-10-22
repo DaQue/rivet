@@ -77,7 +77,7 @@ pub use base::{MAX_MERGE_BASE_STEPS, MergeBase, merge_base, merge_bases};
 pub use content::{ContentMerge, merge_content};
 pub use state::{
     MERGE_HEAD, MERGE_MSG, MergeState, ORIG_HEAD, abort_merge, clear_merge_state,
-    merge_in_progress, read_merge_state, write_merge_state, write_orig_head,
+    merge_in_progress, read_merge_state, restore_to_commit, write_merge_state, write_orig_head,
 };
 pub use tree::{
     merge_path, merge_trees, merge_worktree_paths, update_index_after_merge, write_conflict_stages,

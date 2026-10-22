@@ -397,8 +397,6 @@ pub fn abort_merge(
     odb: &Odb,
     git_dir: &Path,
 ) -> Result<()> {
-    use crate::object::{Commit, ObjectKind};
-
     let state = match read_merge_state(git_dir, worktree.format())? {
         Some(state) => state,
         None => return Err(Error::NoMergeInProgress),
@@ -407,6 +405,30 @@ pub fn abort_merge(
         Some(orig) => orig,
         None => return Err(Error::NoMergeInProgress),
     };
+    restore_to_commit(worktree, index, odb, git_dir, orig)?;
+
+    // The state files go last: a failure above leaves the merge on disk and aborts can be retried.
+    clear_merge_state(git_dir)?;
+    Ok(())
+}
+
+/// Put the index and work tree back to `orig`'s tree after a stopped operation (a conflicted
+/// merge, cherry-pick or revert), refusing when that would overwrite work the operation did not
+/// make. The shared core of [`abort_merge`] and `cherry-pick --abort` / `revert --abort`.
+///
+/// # Errors
+///
+/// [`crate::error::Error::DirtyWorktree`], [`crate::error::Error::BareRepository`] and the I/O
+/// errors of the checkout it performs.
+pub fn restore_to_commit(
+    worktree: &Worktree,
+    index: &mut Index,
+    odb: &Odb,
+    git_dir: &Path,
+    orig: crate::hash::ObjectId,
+) -> Result<()> {
+    use crate::object::{Commit, ObjectKind};
+
     worktree.require_root("merge --abort")?;
 
     let commit_tree = |oid: crate::hash::ObjectId| -> Result<crate::hash::ObjectId> {
@@ -488,8 +510,5 @@ pub fn abort_merge(
     }
     *index = restored;
     index.write(&git_dir.join("index"), worktree.format())?;
-
-    // The state files go last: a failure above leaves the merge on disk and aborts can be retried.
-    clear_merge_state(git_dir)?;
     Ok(())
 }

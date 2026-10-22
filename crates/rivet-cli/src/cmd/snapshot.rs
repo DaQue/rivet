@@ -902,7 +902,30 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         println!();
     }
 
-    if !unmerged.is_empty() {
+    let picking = [
+        ("CHERRY_PICK_HEAD", "cherry-picking", "cherry-pick"),
+        ("REVERT_HEAD", "reverting", "revert"),
+    ]
+    .into_iter()
+    .find_map(|(file, gerund, name)| {
+        let text = std::fs::read_to_string(repository.git_dir().join(file)).ok()?;
+        Some((
+            text.trim().chars().take(7).collect::<String>(),
+            gerund,
+            name,
+        ))
+    });
+    if let Some((short, gerund, name)) = &picking {
+        println!("You are currently {gerund} commit {short}.");
+        if unmerged.is_empty() {
+            println!("  (all conflicts fixed: run \"git {name} --continue\")");
+        } else {
+            println!("  (fix conflicts and run \"git {name} --continue\")");
+        }
+        println!("  (use \"git {name} --skip\" to skip this patch)");
+        println!("  (use \"git {name} --abort\" to cancel the {name} operation)");
+        println!();
+    } else if !unmerged.is_empty() {
         println!("You have unmerged paths.");
         println!("  (fix conflicts and run \"git commit\")");
         println!("  (use \"git merge --abort\" to abort the merge)");
@@ -937,6 +960,12 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             println!();
         }
         println!("Unmerged paths:");
+        if picking
+            .as_ref()
+            .is_some_and(|(_, _, name)| *name == "revert")
+        {
+            println!("  (use \"git restore --staged <file>...\" to unstage)");
+        }
         println!("  (use \"git add <file>...\" to mark resolution)");
         for (path, _, label) in &unmerged {
             println!("\t{:<17}{}", label, path);
