@@ -255,48 +255,7 @@ pub fn run_clean(global: &GlobalArgs, args: &CleanArgs) -> Result<i32> {
         });
     }
 
-    let mut options = rivet_core::StatusOptions::new();
-    options.untracked_files = UntrackedMode::All;
-    options.ignored = true;
-    options.refresh = false;
-    let status = repository.status(&options)?;
-    let mut ignored_files = BTreeSet::new();
-    let mut ignored_dirs = Vec::new();
-    for path in &status.ignored {
-        if path.ends_with(b"/") {
-            ignored_dirs.push(path.clone());
-        } else {
-            ignored_files.insert(path.clone());
-        }
-    }
-    let mut tracked_files = BTreeSet::new();
-    let mut tracked_dirs = BTreeSet::new();
-    for entry in repository.index().entries() {
-        tracked_files.insert(entry.path.clone());
-        let mut end = 0;
-        while let Some(slash) = entry.path[end..].find_byte(b'/') {
-            end += slash;
-            tracked_dirs.insert(BString::from(&entry.path[..end]));
-            end += 1;
-        }
-    }
-
-    let mut plan = Plan {
-        repository: &repository,
-        root: root.clone(),
-        untracked: status.untracked.iter().cloned().collect(),
-        ignored_files,
-        ignored_dirs,
-        tracked_files,
-        tracked_dirs,
-        specs,
-        args,
-        found: Vec::new(),
-    };
-    let _ = (&plan.repository, &plan.root);
-    plan.walk(&root.clone(), BStr::new(""), false)?;
-
-    let mut found = std::mem::take(&mut plan.found);
+    let mut found = plan_found(&mut repository, args, specs)?;
     found.sort_by_key(display_key);
 
     use std::io::Write as _;
@@ -339,6 +298,144 @@ pub fn run_clean(global: &GlobalArgs, args: &CleanArgs) -> Result<i32> {
     }
     std::io::stdout().write_all(&out)?;
     Ok(if failed { 1 } else { 0 })
+}
+
+/// The paths `clean` would remove for `args`, limited to the work-tree relative `specs`.
+fn plan_found(
+    repository: &mut Repository,
+    args: &CleanArgs,
+    specs: Vec<BString>,
+) -> Result<Vec<(BString, bool)>> {
+    let root = repository
+        .worktree()?
+        .root()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| anyhow::anyhow!("clean: this operation must be run in a work tree"))?;
+    let mut options = rivet_core::StatusOptions::new();
+    options.untracked_files = UntrackedMode::All;
+    options.ignored = true;
+    options.refresh = false;
+    let status = repository.status(&options)?;
+    let mut ignored_files = BTreeSet::new();
+    let mut ignored_dirs = Vec::new();
+    for path in &status.ignored {
+        if path.ends_with(b"/") {
+            ignored_dirs.push(path.clone());
+        } else {
+            ignored_files.insert(path.clone());
+        }
+    }
+    let mut tracked_files = BTreeSet::new();
+    let mut tracked_dirs = BTreeSet::new();
+    for entry in repository.index().entries() {
+        tracked_files.insert(entry.path.clone());
+        let mut end = 0;
+        while let Some(slash) = entry.path[end..].find_byte(b'/') {
+            end += slash;
+            tracked_dirs.insert(BString::from(&entry.path[..end]));
+            end += 1;
+        }
+    }
+
+    let repository: &Repository = repository;
+    let mut plan = Plan {
+        repository,
+        root: root.clone(),
+        untracked: status.untracked.iter().cloned().collect(),
+        ignored_files,
+        ignored_dirs,
+        tracked_files,
+        tracked_dirs,
+        specs,
+        args,
+        found: Vec::new(),
+    };
+    let _ = (&plan.repository, &plan.root);
+    plan.walk(&root, BStr::new(""), false)?;
+    Ok(std::mem::take(&mut plan.found))
+}
+
+fn stash_clean_args(include_ignored: bool) -> CleanArgs {
+    CleanArgs {
+        paths: Vec::new(),
+        dry_run: false,
+        force: 1,
+        directories: true,
+        ignored_too: include_ignored,
+        ignored_only: false,
+        interactive: false,
+    }
+}
+
+fn root_specs(repository: &Repository, paths: &[PathBuf]) -> Result<Vec<BString>> {
+    let mut specs = Vec::new();
+    for path in paths {
+        specs.push(super::worktree_path(repository, path, "stash")?);
+    }
+    if specs.is_empty() {
+        specs.push(BString::from("."));
+    }
+    Ok(specs)
+}
+
+/// What `git clean -d [-x]` would remove for `stash -u/-a`, limited to `paths` (default: the
+/// whole work tree); directories are reported whole.
+pub(super) fn untracked_candidates(
+    repository: &mut Repository,
+    paths: &[PathBuf],
+    include_ignored: bool,
+) -> Result<Vec<(BString, bool)>> {
+    let specs = root_specs(repository, paths)?;
+    plan_found(repository, &stash_clean_args(include_ignored), specs)
+}
+
+/// Every file below the work-tree directory `dir`, appended to `out`.
+pub(super) fn files_under(
+    repository: &Repository,
+    dir: &BString,
+    out: &mut Vec<BString>,
+) -> Result<()> {
+    let root = repository
+        .worktree()?
+        .root()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| anyhow::anyhow!("this operation must be run in a work tree"))?;
+    let mut stack = vec![dir.clone()];
+    while let Some(current) = stack.pop() {
+        let full = root.join(std::ffi::OsStr::from_bytes(&current));
+        for entry in std::fs::read_dir(&full)? {
+            let entry = entry?;
+            let child = join(BStr::new(&current[..]), entry.file_name().as_bytes());
+            if entry.file_type()?.is_dir() {
+                stack.push(child);
+            } else {
+                out.push(child);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Remove what [`untracked_candidates`] reports (`stash -u/-a` after saving).
+pub(super) fn remove_untracked(
+    repository: &mut Repository,
+    paths: &[PathBuf],
+    include_ignored: bool,
+) -> Result<()> {
+    let root = repository
+        .worktree()?
+        .root()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| anyhow::anyhow!("this operation must be run in a work tree"))?;
+    for (path, dir) in untracked_candidates(repository, paths, include_ignored)? {
+        let target = root.join(std::ffi::OsStr::from_bytes(&path));
+        if dir {
+            std::fs::remove_dir_all(&target)?;
+        } else {
+            std::fs::remove_file(&target)?;
+        }
+    }
+    Ok(())
 }
 
 fn display_key(item: &(BString, bool)) -> Vec<u8> {

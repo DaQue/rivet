@@ -1514,6 +1514,118 @@ s_diff_conflict_shapes() {
     v diff f
 }
 
+s_stash_untracked() {
+    v init -q repo; cd repo
+    echo base >a; echo base >b; mkdir d; echo base >d/x; printf '*.o\nbuild/\n' >.gitignore
+    v add .; v commit -q -m base
+    echo mod >>a; echo u >untr; mkdir -p ud/deep; echo ud >ud/deep/f; echo o >skip.o; mkdir build; echo b >build/out
+    v stash push -u
+    ls; v status --short --ignored
+    v stash list
+    v cat-file -p stash
+    v cat-file -p 'stash^3'
+    v ls-tree -r 'stash^3'
+    v stash pop
+    v status --short --ignored
+    ls
+    tick; echo mod2 >>b; v stash push -a -m "with ignored"
+    ls; v status --short --ignored
+    v ls-tree -r 'stash^3'
+    echo existing >untr
+    v stash apply
+    ls
+    rm untr
+    v stash apply
+    v status --short --ignored
+    v stash drop
+    v stash -u
+    v stash -u
+    echo only-untracked >lonely
+    v stash push -u -m lonely
+    ls
+    v stash pop
+    ls
+}
+
+s_stash_keep_index() {
+    v init -q repo; cd repo
+    echo base >a; echo base >b; echo base >c; v add .; v commit -q -m base
+    echo a2 >>a; v add a; echo a3 >>a; echo b2 >>b; echo new >n; v add n
+    v stash push -k
+    v status --short
+    cat a; cat b
+    v stash list
+    v cat-file -p 'stash^2'
+    v ls-tree -r stash
+    v reflog
+    v stash drop
+    v stash push --keep-index -m kept
+    v stash push -u -k
+    echo u >untr
+    v stash push -u -k
+    ls
+    v status --short
+    v stash list
+}
+
+s_stash_pathspec() {
+    v init -q repo; cd repo
+    echo base >a; echo base >b; echo base >c; mkdir d; echo base >d/x; echo base >d/y; v add .; v commit -q -m base
+    echo a2 >>a; v add a; echo a3 >>a; echo b2 >>b; echo c2 >>c; v add c; echo x2 >>d/x; echo y2 >>d/y
+    echo u >untr; echo u >d/untr
+    v stash push -- a
+    v status --short; cat a
+    v ls-tree -r 'stash^2'; v ls-tree -r stash
+    v cat-file -p stash
+    v stash push -m "dir" -- d
+    v status --short
+    v stash list
+    v stash push -- nosuch
+    v stash push -m none -- d
+    v stash show -p
+    v stash show -p 'stash@{1}'
+    v stash pop
+    v status --short
+    v stash push -u -- untr
+    ls; v status --short
+    v stash push -- b c
+    v status --short
+    v stash push d/untr
+    v stash pop --index
+    v status --short
+    v reflog
+    cd d
+    echo y3 >>y
+    v stash push -- y
+    v status --porcelain
+    v stash push -- ../b
+}
+
+s_stash_index() {
+    v init -q repo; cd repo
+    echo base >a; echo base >b; echo base >c; v add .; v commit -q -m base
+    echo a2 >>a; v add a; echo a3 >>a; echo b2 >>b; echo new >n; v add n; rm c
+    v stash push
+    v status --short
+    v stash apply
+    v status --short
+    v reset -q --hard
+    v stash apply --index
+    v status --short
+    cat a; cat n
+    v diff --cached
+    v reset -q --hard
+    echo conflicting >>a; v add a
+    vq stash apply --index
+    v status --short
+    v reset -q --hard
+    v stash pop --index
+    v status --short
+    v stash list
+    git checkout -q -- . 
+    v stash apply --index
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

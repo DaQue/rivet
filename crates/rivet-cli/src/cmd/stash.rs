@@ -3,8 +3,10 @@
 //! A stash is a commit `W` (message `WIP on <branch>: <abbrev> <subject>` or `On <branch>: <msg>`)
 //! whose tree is the work tree's tracked state and whose parents are `HEAD` and an index commit
 //! `I`. `refs/stash` points at the newest `W` and its reflog is the stack, so `git stash list`
-//! reads Rivet's stashes and the reverse. Untracked files (`-u`/`-a`), `--keep-index`, pathspecs
-//! and `apply --index` are not implemented and are refused rather than ignored.
+//! reads Rivet's stashes and the reverse. With `-u`/`-a` a third parent `U` (no parents, message
+//! `untracked files on <branch>: …`) holds the untracked (and ignored) files. A pathspec limits
+//! the work tree changes taken to matching tracked paths. `branch/create/store/save` are not
+//! implemented.
 
 use anyhow::Result;
 use bstr::{BStr, BString};
@@ -52,20 +54,20 @@ pub struct PushArgs {
     #[arg(short = 'm', long = "message", value_name = "MESSAGE")]
     pub message: Option<String>,
 
-    /// Also stash untracked files. Not implemented.
+    /// Also stash untracked files.
     #[arg(short = 'u', long = "include-untracked")]
     pub include_untracked: bool,
 
-    /// Also stash ignored files. Not implemented.
+    /// Also stash ignored files.
     #[arg(short = 'a', long = "all")]
     pub all: bool,
 
-    /// Leave the index as it is. Not implemented.
+    /// Leave the index as it is.
     #[arg(short = 'k', long = "keep-index")]
     pub keep_index: bool,
 
-    /// Limit the stash to these paths. Not implemented.
-    #[arg(last = true, value_name = "PATHSPEC")]
+    /// Limit the stash to these paths.
+    #[arg(value_name = "PATHSPEC")]
     pub paths: Vec<std::path::PathBuf>,
 }
 
@@ -76,7 +78,7 @@ pub struct RefArgs {
     #[arg(value_name = "STASH")]
     pub stash: Option<String>,
 
-    /// Restore the index too. Not implemented.
+    /// Restore the index too.
     #[arg(long = "index")]
     pub index: bool,
 }
@@ -119,8 +121,17 @@ fn stash_ref() -> RefName {
 pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
     let mut repository = super::open(global)?;
     match &args.command {
-        None => push(&mut repository, &args.push, global.quiet),
-        Some(StashCommand::Push(push_args)) => push(&mut repository, push_args, global.quiet),
+        None => {
+            if !args.push.paths.is_empty() && !std::env::args().any(|a| a == "--") {
+                eprintln!(
+                    "error: unknown subcommand: `{}`",
+                    args.push.paths[0].display()
+                );
+                return Ok(129);
+            }
+            push(global, &mut repository, &args.push)
+        }
+        Some(StashCommand::Push(push_args)) => push(global, &mut repository, push_args),
         Some(StashCommand::List) => list(&repository),
         Some(StashCommand::Show(show_args)) => show(&repository, show_args),
         Some(StashCommand::Apply(r)) => apply(global, &mut repository, r, false),
@@ -142,11 +153,37 @@ fn clear(repository: &Repository) -> Result<()> {
     Ok(())
 }
 
-fn push(repository: &mut Repository, args: &PushArgs, quiet: bool) -> Result<i32> {
-    if args.include_untracked || args.all || args.keep_index || !args.paths.is_empty() {
-        anyhow::bail!(
-            "stash: --include-untracked, --all, --keep-index and pathspecs are not implemented"
-        );
+fn matches(specs: &[BString], path: &BString) -> bool {
+    specs.is_empty()
+        || specs.iter().any(|spec| {
+            rivet_core::ops::pathspec_matches(BStr::new(&path[..]), BStr::new(&spec[..]))
+        })
+}
+
+/// A tree object holding `files` (path to mode and blob).
+fn tree_of(
+    repository: &Repository,
+    files: &std::collections::BTreeMap<BString, (rivet_core::object::EntryMode, ObjectId)>,
+) -> Result<ObjectId> {
+    use rivet_core::IndexExt as _;
+    let mut index = rivet_core::Index::new();
+    for (path, (mode, oid)) in files {
+        index.insert(rivet_core::ops::make_index_entry(
+            BStr::new(&path[..]),
+            *mode,
+            *oid,
+            None,
+        ));
+    }
+    index.sort();
+    Ok(index.write_tree(repository.odb())?)
+}
+
+fn push(global: &GlobalArgs, repository: &mut Repository, args: &PushArgs) -> Result<i32> {
+    let quiet = global.quiet;
+    let mut specs = Vec::new();
+    for path in &args.paths {
+        specs.push(super::worktree_path(repository, path, "stash")?);
     }
     let head = repository.head()?;
     let Some(head_oid) = head.oid() else {
@@ -159,8 +196,66 @@ fn push(repository: &mut Repository, args: &PushArgs, quiet: bool) -> Result<i32
     }
     let head_tree = repository.commit_tree(head_oid)?;
     let index_tree = repository.write_tree()?;
-    let work_tree = repository.worktree_tree()?;
-    if index_tree == head_tree && work_tree == head_tree {
+    let full_work_tree = repository.worktree_tree()?;
+
+    if !specs.is_empty() {
+        let tracked = rivet_core::ops::flatten_tree(repository.odb(), index_tree)?;
+        let known_untracked = args.include_untracked || args.all;
+        if !known_untracked
+            && let Some(spec) = specs.iter().find(|s| {
+                !tracked.keys().any(|p| {
+                    rivet_core::ops::pathspec_matches(BStr::new(&p[..]), BStr::new(&s[..]))
+                })
+            })
+        {
+            eprintln!("error: pathspec ':(prefix:0){spec}' did not match any file(s) known to git");
+            eprintln!("Did you forget to 'git add'?");
+            return Ok(128);
+        }
+    }
+
+    let (work_tree, has_tracked_changes) = if specs.is_empty() {
+        (
+            full_work_tree,
+            index_tree != head_tree || full_work_tree != head_tree,
+        )
+    } else {
+        let odb = repository.odb();
+        let head_map = rivet_core::ops::flatten_tree(odb, head_tree)?;
+        let index_map = rivet_core::ops::flatten_tree(odb, index_tree)?;
+        let work_map = rivet_core::ops::flatten_tree(odb, full_work_tree)?;
+        let mut merged = index_map.clone();
+        for path in index_map.keys().filter(|p| matches(&specs, p)) {
+            match work_map.get(path) {
+                Some(entry) => {
+                    merged.insert(path.clone(), *entry);
+                }
+                None => {
+                    merged.remove(path);
+                }
+            }
+        }
+        let changed = head_map
+            .keys()
+            .chain(index_map.keys())
+            .filter(|p| matches(&specs, p))
+            .any(|p| head_map.get(p) != index_map.get(p) || index_map.get(p) != work_map.get(p));
+        (tree_of(repository, &merged)?, changed)
+    };
+
+    // Untracked (and, with -a, ignored) files, found the way `clean -d` would find them.
+    let mut untracked_files: Vec<BString> = Vec::new();
+    if args.include_untracked || args.all {
+        for (path, dir) in super::clean::untracked_candidates(repository, &args.paths, args.all)? {
+            if dir {
+                super::clean::files_under(repository, &path, &mut untracked_files)?;
+            } else {
+                untracked_files.push(path);
+            }
+        }
+        untracked_files.sort();
+    }
+    if !has_tracked_changes && untracked_files.is_empty() {
         println!("No local changes to save");
         return Ok(0);
     }
@@ -183,7 +278,23 @@ fn push(repository: &mut Repository, args: &PushArgs, quiet: bool) -> Result<i32
     };
 
     let index_commit = commit_object(repository, index_tree, &[head_oid], &index_message)?;
-    let stash_commit = commit_object(repository, work_tree, &[head_oid, index_commit], &message)?;
+    let mut parents = vec![head_oid, index_commit];
+    if args.include_untracked || args.all {
+        let mut files = std::collections::BTreeMap::new();
+        for path in &untracked_files {
+            let worktree = repository.worktree()?;
+            let Some(stat) = worktree.stat(BStr::new(&path[..]))? else {
+                continue;
+            };
+            let data = worktree.read_file(BStr::new(&path[..]))?;
+            let oid = repository.odb().write_raw(ObjectKind::Blob, &data)?;
+            files.insert(path.clone(), (stat.mode, oid));
+        }
+        let tree = tree_of(repository, &files)?;
+        let untracked_message = format!("untracked files on {base}\n");
+        parents.push(commit_object(repository, tree, &[], &untracked_message)?);
+    }
+    let stash_commit = commit_object(repository, work_tree, &parents, &message)?;
 
     let name = stash_ref();
     let old = repository
@@ -197,23 +308,54 @@ fn push(repository: &mut Repository, args: &PushArgs, quiet: bool) -> Result<i32
     let entry = ReflogEntry::new(old, stash_commit, who, BString::from(message.as_str()));
     repository.refs().append_reflog(&name, &entry)?;
 
-    repository.reset_hard_to_tree(head_tree)?;
-    // `git stash` resets with `git reset --hard`, which logs to HEAD and records ORIG_HEAD.
-    rivet_core::write_orig_head(repository.git_dir(), head_oid)?;
-    if head.branch().is_some() {
-        let who = repository.committer_signature()?;
-        let reset = ReflogEntry::new(
-            head_oid,
-            head_oid,
-            who,
-            BString::from("reset: moving to HEAD"),
-        );
-        repository.refs().append_reflog(&RefName::head(), &reset)?;
+    if !untracked_files.is_empty() {
+        super::clean::remove_untracked(repository, &args.paths, args.all)?;
+    }
+    if !specs.is_empty() {
+        let tracked = specs_tracked(repository, &specs)?;
+        if !tracked.is_empty() {
+            repository.restore_paths(Some(head_tree), &tracked, true, true, false)?;
+        }
+    } else {
+        repository.reset_hard_to_tree(head_tree)?;
+        // `git stash` resets with `git reset --hard`, which logs to HEAD and records ORIG_HEAD.
+        rivet_core::write_orig_head(repository.git_dir(), head_oid)?;
+        if head.branch().is_some() {
+            let who = repository.committer_signature()?;
+            let reset = ReflogEntry::new(
+                head_oid,
+                head_oid,
+                who,
+                BString::from("reset: moving to HEAD"),
+            );
+            repository.refs().append_reflog(&RefName::head(), &reset)?;
+        }
+        if args.keep_index {
+            repository.reset_hard_to_tree(index_tree)?;
+        }
     }
     if !quiet {
         println!("Saved working directory and index state {message}");
     }
     Ok(0)
+}
+
+/// The tracked paths (index or `HEAD`) the pathspecs select, as exact specs.
+fn specs_tracked(repository: &Repository, specs: &[BString]) -> Result<Vec<BString>> {
+    let mut out = std::collections::BTreeSet::new();
+    for entry in repository.index().entries() {
+        if matches(specs, &entry.path) {
+            out.insert(entry.path.clone());
+        }
+    }
+    if let Some(tree) = repository.head_tree_oid()? {
+        for path in rivet_core::ops::flatten_tree(repository.odb(), tree)?.into_keys() {
+            if matches(specs, &path) {
+                out.insert(path);
+            }
+        }
+    }
+    Ok(out.into_iter().collect())
 }
 
 fn commit_object(
@@ -339,9 +481,6 @@ fn apply(
     args: &RefArgs,
     drop_after: bool,
 ) -> Result<i32> {
-    if args.index {
-        anyhow::bail!("stash: --index is not implemented");
-    }
     let Picked::Found(position, stash) = pick(repository, args.stash.as_deref())? else {
         return Ok(128);
     };
@@ -362,48 +501,143 @@ fn apply(
         anyhow::bail!("stash: cannot apply on an unborn branch");
     };
     let parents = repository.commit_parents(stash)?;
-    let head_tree = repository.commit_tree(head)?;
 
+    // `--index`: replay the staged part of the stash onto the current index first, remembering
+    // the resulting tree to put the index back to after the work tree merge.
+    let mut index_target: Option<ObjectId> = None;
+    let mut index_patched = false;
+    if args.index {
+        let base_tree = repository.commit_tree(parents[0])?;
+        let stash_index_tree = repository.commit_tree(parents[1])?;
+        let current = repository.write_tree()?;
+        if base_tree != stash_index_tree && current != stash_index_tree {
+            let odb = repository.odb();
+            let base_map = rivet_core::ops::flatten_tree(odb, base_tree)?;
+            let want_map = rivet_core::ops::flatten_tree(odb, stash_index_tree)?;
+            let mut have_map = rivet_core::ops::flatten_tree(odb, current)?;
+            let mut clash: Option<BString> = None;
+            let paths: std::collections::BTreeSet<&BString> =
+                base_map.keys().chain(want_map.keys()).collect();
+            for path in paths {
+                if base_map.get(path) == want_map.get(path) {
+                    continue;
+                }
+                if have_map.get(path) != base_map.get(path) {
+                    clash = Some(path.clone());
+                    break;
+                }
+                match want_map.get(path) {
+                    Some(entry) => {
+                        have_map.insert(path.clone(), *entry);
+                    }
+                    None => {
+                        have_map.remove(path);
+                    }
+                }
+            }
+            if let Some(path) = clash {
+                eprintln!("error: {path}: patch does not apply");
+                eprintln!("error: conflicts in index. Try without --index.");
+                return Ok(128);
+            }
+            index_target = Some(tree_of(repository, &have_map)?);
+            index_patched = true;
+        } else {
+            index_target = Some(current);
+        }
+    }
+
+    let index_before = repository.write_tree()?;
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(repository, "merge.renames");
     options.labels = (
         BString::from("Updated upstream"),
         BString::from("Stashed changes"),
     );
-    let result = match repository.merge_into_worktree(Some(parents[0]), stash, &options) {
-        Ok(result) => result,
-        Err(error) => {
-            let code = super::branching::report_checkout_refusal(error, "merge")?;
-            if !global.quiet {
-                print_status(global)?;
+    let nothing_tracked = repository.commit_tree(parents[0])? == repository.commit_tree(stash)?;
+    let mut refused: Option<i32> = None;
+    let mut conflicted = false;
+    if nothing_tracked {
+        println!("Already up to date.");
+    } else {
+        match repository.merge_into_worktree(Some(parents[0]), stash, &options) {
+            Ok(result) => {
+                conflicted =
+                    !super::branching::print_merge_report(&result, "Stashed changes").is_empty();
             }
-            if drop_after {
-                println!("The stash entry is kept in case you need it again.");
+            Err(error) => {
+                let code = super::branching::report_checkout_refusal(error, "merge")?;
+                refused = Some(if code == 1 { 128 } else { code });
             }
-            return Ok(if code == 1 { 128 } else { code });
         }
+    }
+    // Untracked files come back after the merge; those whose path is taken are reported and the
+    // rest are still restored.
+    let untracked_failed = match parents.get(2) {
+        Some(untracked) => restore_untracked(repository, *untracked)?,
+        None => false,
     };
-    let conflicted = super::branching::print_merge_report(&result, "Stashed changes");
-    if !conflicted.is_empty() {
+    if let Some(code) = refused {
+        if !global.quiet {
+            print_status(global)?;
+        }
+        if drop_after {
+            println!("The stash entry is kept in case you need it again.");
+        }
+        if untracked_failed {
+            eprintln!("error: could not restore untracked files from stash");
+        }
+        return Ok(code);
+    }
+    if conflicted {
         if !global.quiet {
             print_status(global)?;
         }
         if drop_after {
             eprintln!("The stash entry is kept in case you need it again.");
         }
+        if untracked_failed {
+            eprintln!("error: could not restore untracked files from stash");
+            return Ok(128);
+        }
         return Ok(1);
     }
 
-    // Changes come back unstaged; only files the stash adds stay staged.
-    let head_map = rivet_core::ops::flatten_tree(repository.odb(), head_tree)?;
+    if let Some(tree) = index_target {
+        repository.reset_index_to_tree(Some(tree))?;
+        // After patching the index git runs `git reset`, which leaves a reflog line and ORIG_HEAD.
+        if index_patched {
+            rivet_core::write_orig_head(repository.git_dir(), head)?;
+        }
+        if index_patched && repository.head()?.branch().is_some() {
+            let who = repository.committer_signature()?;
+            let reset = ReflogEntry::new(head, head, who, BString::from("reset: moving to HEAD"));
+            repository.refs().append_reflog(&RefName::head(), &reset)?;
+        }
+        if !global.quiet {
+            print_status(global)?;
+        }
+        if untracked_failed {
+            eprintln!("error: could not restore untracked files from stash");
+            return Ok(128);
+        }
+        if drop_after {
+            drop_at(repository, position, args.stash.as_deref())?;
+        }
+        return Ok(0);
+    }
+
+    // Changes come back unstaged: the index goes back to what it was, plus the files the stash
+    // adds.
+    let before_map = rivet_core::ops::flatten_tree(repository.odb(), index_before)?;
     let added: Vec<_> = repository
         .index()
         .entries()
         .iter()
-        .filter(|e| !head_map.contains_key(&e.path))
+        .filter(|e| !before_map.contains_key(&e.path))
         .cloned()
         .collect();
-    repository.reset_index_to_tree(Some(head_tree))?;
+    repository.reset_index_to_tree(Some(index_before))?;
     for entry in added {
         repository.index_mut().insert(entry);
     }
@@ -413,10 +647,60 @@ fn apply(
     if !global.quiet {
         print_status(global)?;
     }
+    if untracked_failed {
+        eprintln!("error: could not restore untracked files from stash");
+        return Ok(128);
+    }
     if drop_after {
         drop_at(repository, position, args.stash.as_deref())?;
     }
     Ok(0)
+}
+
+/// Restore the files of a stash's untracked commit; returns whether any path was already taken.
+fn restore_untracked(repository: &Repository, untracked: ObjectId) -> Result<bool> {
+    let tree = repository.commit_tree(untracked)?;
+    let files = rivet_core::ops::flatten_tree(repository.odb(), tree)?;
+    let mut failed = false;
+    for (path, (mode, oid)) in &files {
+        let taken = repository.worktree()?.stat(BStr::new(&path[..]))?.is_some();
+        if taken {
+            eprintln!("{path} already exists, no checkout");
+            failed = true;
+        } else {
+            write_untracked(repository, path, *mode, *oid)?;
+        }
+    }
+    Ok(failed)
+}
+
+/// Write one file of the untracked tree of a stash into the work tree.
+fn write_untracked(
+    repository: &Repository,
+    path: &BString,
+    mode: rivet_core::object::EntryMode,
+    oid: ObjectId,
+) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let worktree = repository.worktree()?;
+    let full = worktree.join(BStr::new(&path[..]))?;
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let data = repository
+        .odb()
+        .read_typed(&oid, ObjectKind::Blob)?
+        .into_data();
+    if mode == rivet_core::object::EntryMode::Link {
+        std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(&data), &full)?;
+    } else {
+        std::fs::write(&full, &data)?;
+        if mode == rivet_core::object::EntryMode::BlobExecutable {
+            std::fs::set_permissions(&full, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    Ok(())
 }
 
 fn drop_one(repository: &Repository, args: &RefArgs) -> Result<i32> {

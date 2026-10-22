@@ -767,6 +767,25 @@ impl Repository {
             let path_ref = BStr::new(&path[..]);
             let head_entry = ours_map.get(path);
             let index_entry = self.index().entry(path_ref).cloned();
+            // Local work that already equals what the merge would write is not at risk.
+            if !result.conflicts.iter().any(|c| c.path == *path)
+                && let Some(merged) = result.paths.iter().find(|p| p.path == *path)
+            {
+                let on_disk = self.worktree()?.stat(path_ref)?.is_some();
+                let same = match (&index_entry, merged.result) {
+                    (Some(entry), Some(oid)) => {
+                        on_disk
+                            && entry.stage() == Stage::Normal
+                            && entry.oid == oid
+                            && self.worktree()?.hash_file(path_ref)? == oid
+                    }
+                    (None, None) => !on_disk,
+                    _ => false,
+                };
+                if same {
+                    continue;
+                }
+            }
             match (&index_entry, head_entry) {
                 (None, None) => {
                     if self.worktree()?.stat(path_ref)?.is_some() {
