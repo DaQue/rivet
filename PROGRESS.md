@@ -231,3 +231,17 @@ CLI: `resolve_rev`, `rev-parse`, `reset`, `branch`, `switch -c`/`checkout -b` le
 their generic wording (`rev_error` in `cmd/mod.rs`). Base: every `@{N}` spec failed as "ambiguous argument".
 Not implemented (still invalid revision, as before): date selectors (`main@{yesterday}`), `@{upstream}`/`@{u}`/`@{push}`.
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 114 PASS / `failures: 0`.
+
+### Phase 1.5 — `HEAD detached at <name>` (landed, scenario `s_status_detached_name`)
+`cmd::detached_description` follows git's `wt_status_get_detached_from`: newest `checkout: moving from X to <name>` entry
+of the HEAD reflog; `<name>` expanded like a ref name; kept as `refs/heads/…` for branches, `refs/tags/` and
+`refs/remotes/` stripped, pseudo-refs (`HEAD`) and non-ref specs (`main~1`, shas) fall back to the short id; the word is
+`at` only while HEAD still equals the id that checkout produced, otherwise `from`. Used by `status` (long format) and
+`branch` (`* (HEAD detached at …)`). Scenario covers branch, `refs/heads/`, `heads/`, tag, annotated tag, remote ref,
+`main~1`, `topic^0`, `HEAD`, short and full sha, `@{-1}`, then commits/reset after detaching (`from`).
+Two further real divergences found by the scenario and fixed with it:
+- **Odd-length abbreviated ids never resolved** (`rev-parse 2461a6d` → unknown revision, base commit too; only even
+  lengths worked, git's default abbrev is 7). Fixed in `revparse::resolve_base` by matching the odd last nibble against
+  each id's hex text; own scenario `s_abbrev_odd_lengths` (lengths 4–12, 39, 40, uppercase, no-match).
+- `switch --detach <x>` while already detached at that commit wrote a reflog entry; git writes none.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 116 PASS / `failures: 0`.

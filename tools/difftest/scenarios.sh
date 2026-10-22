@@ -2663,6 +2663,54 @@ s_reflog_selector() {
     v rev-parse topic@{3} topic@{4} topic@{5}
 }
 
+# `HEAD detached at <name>` uses the name the detaching checkout was given (branches keep
+# `refs/heads/`, tags and remote branches lose their namespace, other specs fall back to the short
+# id) and becomes `detached from` once HEAD has moved on (git 2.56).
+s_status_detached_name() {
+    v init -q repo; cd repo
+    echo 1 >f; v add f; tick; v commit -q -m c1
+    echo 2 >f; tick; v commit -q -a -m c2
+    v branch topic; v tag light; v tag -a -m ann annot
+    g update-ref refs/remotes/origin/side HEAD
+    for spec in topic refs/heads/topic heads/topic light annot origin/side main~1 'topic^0' HEAD \
+                "$(g rev-parse --short HEAD)" "$(g rev-parse HEAD)" '@{-1}'; do
+        v switch -q main
+        v switch -q --detach "$spec"
+        echo "== $spec"
+        v status
+        v status -sb
+        v branch
+    done
+    v switch -q main
+    v checkout -q topic
+    v checkout -q --detach topic
+    echo 3 >f; tick; v commit -q -a -m c3
+    v status
+    v branch
+    v reset -q --hard topic
+    v status
+    v switch -q --detach annot
+    tick; v commit -q --allow-empty -m empty
+    v status
+}
+
+# Abbreviated ids of every length from 4 up resolve, odd lengths included (git's default abbrev is
+# 7). A prefix that matches nothing is "unknown revision".
+s_abbrev_odd_lengths() {
+    v init -q repo; cd repo
+    echo 1 >f; v add f; tick; v commit -q -m c1
+    echo 2 >f; tick; v commit -q -a -m c2
+    local full; full=$(g rev-parse HEAD)
+    for n in 4 5 6 7 8 9 10 11 12 39 40; do
+        v rev-parse "${full:0:$n}"
+        v cat-file -t "${full:0:$n}"
+    done
+    v rev-parse "$(echo "${full:0:7}" | tr a-f A-F)"
+    v rev-parse --verify "${full:0:7}^{tree}"
+    v log -1 --format=%s "${full:0:7}"
+    v rev-parse 0000000 1234567x
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

@@ -167,6 +167,27 @@ fn resolve_base(format: ObjectFormat, refs: &RefStore, odb: &Odb, base: &BStr) -
         if base.len() == hex_len {
             return ObjectId::from_hex(format, base);
         }
+        if base.len() >= 4 && base.len() % 2 == 1 {
+            // An `ObjectId` prefix holds whole bytes only, so the odd last nibble is matched
+            // against the hex text of every id instead (`git log 2461a6d` is the common case).
+            let wanted = base.to_ascii_lowercase();
+            let mut found = Vec::new();
+            for id in odb.oids()? {
+                if id.to_hex().starts_with(&wanted) && !found.contains(&id) {
+                    found.push(id);
+                }
+            }
+            return match found.len() {
+                1 => Ok(found[0]),
+                0 => Err(Error::ObjectNotFound {
+                    oid: ObjectId::from_hex_prefix(format, BStr::new(&base[..base.len() - 1]))?,
+                }),
+                n => Err(Error::AmbiguousPrefix {
+                    prefix: base.to_owned(),
+                    candidates: n,
+                }),
+            };
+        }
         if base.len() >= 4 {
             let prefix = ObjectId::from_hex_prefix(format, base)?;
             return odb.resolve_prefix(&prefix);

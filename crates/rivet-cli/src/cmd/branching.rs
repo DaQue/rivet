@@ -566,7 +566,7 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
     {
         rows.push(Row {
             marker: '*',
-            label: format!("(HEAD detached at {})", super::short_oid(oid)),
+            label: format!("({})", super::detached_description(&repository, oid)),
             oid: Some(*oid),
             symref: None,
         });
@@ -1590,6 +1590,9 @@ fn switch_to(
         Destination::Branch(branch) => {
             repository.point_head(HeadTarget::Branch(branch), BStr::new(reason.as_bytes()))?
         }
+        // Git writes nothing (no reflog entry either) when a detached HEAD "moves" to where it is.
+        Destination::Detached(oid) if matches!(old_head, HeadState::Detached { oid: old } if old == *oid) =>
+            {}
         Destination::Detached(oid) => {
             repository.point_head(HeadTarget::Detached(*oid), BStr::new(reason.as_bytes()))?
         }

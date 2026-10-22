@@ -835,9 +835,7 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             HeadState::Unborn { branch } => {
                 format!("On branch {}", branch.short_name())
             }
-            HeadState::Detached { oid } => {
-                format!("HEAD detached at {}", short_oid(oid))
-            }
+            HeadState::Detached { oid } => super::detached_description(&repository, oid),
         }
     };
 

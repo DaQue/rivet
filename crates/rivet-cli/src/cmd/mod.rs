@@ -273,6 +273,61 @@ pub fn short_oid(oid: &rivet_core::ObjectId) -> String {
     oid.to_string().chars().take(7).collect()
 }
 
+/// What a detached `HEAD` is described as: `HEAD detached at <name>` while it still sits where the
+/// last checkout put it, `HEAD detached from <name>` once it has moved on.
+///
+/// Git takes `<name>` from the newest `checkout: moving from X to <name>` entry of the `HEAD`
+/// reflog: a name that expands to a ref (minus `refs/tags/` and `refs/remotes/`) pointing at the
+/// checked-out commit is kept as written by that expansion, anything else is the short id.
+pub fn detached_description(repository: &Repository, head: &rivet_core::ObjectId) -> String {
+    let refs = repository.refs();
+    let short = short_oid(head);
+    let entry = refs
+        .reflog(&rivet_core::RefName::head())
+        .ok()
+        .and_then(|log| {
+            log.into_iter()
+                .rev()
+                .find(|e| e.message.starts_with(b"checkout: moving from "))
+        });
+    let Some(entry) = entry else {
+        return format!("HEAD detached at {short}");
+    };
+    let at_or_from = if entry.new == *head { "at" } else { "from" };
+    let message = entry.message.to_string();
+    let target = message.split_once(" to ").map_or("", |(_, to)| to);
+    let mut name = None;
+    if !target.is_empty() {
+        let mut candidates = vec![target.to_string()];
+        for prefix in ["refs/", "refs/tags/", "refs/heads/", "refs/remotes/"] {
+            candidates.push(format!("{prefix}{target}"));
+        }
+        candidates.push(format!("refs/remotes/{target}/HEAD"));
+        for candidate in candidates {
+            // Pseudo-refs such as `HEAD` never name a detach; git falls back to the short id.
+            if !candidate.starts_with("refs/") {
+                continue;
+            }
+            let Ok(refname) = rivet_core::RefName::from_bytes(candidate.as_bytes()) else {
+                continue;
+            };
+            let Ok(oid) = refs.resolve_oid(&refname) else {
+                continue;
+            };
+            if oid == entry.new || refs.peel_oid(oid, repository.odb()).ok() == Some(entry.new) {
+                let full = candidate.as_str();
+                let shown = full
+                    .strip_prefix("refs/tags/")
+                    .or_else(|| full.strip_prefix("refs/remotes/"))
+                    .unwrap_or(full);
+                name = Some(shown.to_string());
+            }
+            break;
+        }
+    }
+    format!("HEAD detached {at_or_from} {}", name.unwrap_or(short))
+}
+
 /// `error` itself when it is the fatal the revision parser dies with for `<ref>@{N}` past the end
 /// of a reflog, otherwise the command's own wording from `fallback`.
 pub fn rev_error(error: anyhow::Error, fallback: impl FnOnce() -> anyhow::Error) -> anyhow::Error {
