@@ -2875,6 +2875,150 @@ s_switch_merge_refused() {
     # --merge together with --create / --conflict is not implemented here (git supports them)
 }
 
+# A merge-heavy history with several authors, a skewed clock and author dates unlike committer
+# dates, shared by the rev-list scenarios below.
+rl_t=1700000000
+rl_commit() {
+    rl_t=$((rl_t + ${4:-60}))
+    GIT_AUTHOR_NAME="$1" GIT_AUTHOR_EMAIL="$2" GIT_AUTHOR_DATE="$((rl_t - ${5:-0})) +0000" \
+        GIT_COMMITTER_NAME=C GIT_COMMITTER_EMAIL=c@e GIT_COMMITTER_DATE="$rl_t +0000" \
+        v commit -q --allow-empty -m "$3"
+}
+rl_merge() {
+    rl_t=$((rl_t + 60))
+    GIT_AUTHOR_NAME=Merger GIT_AUTHOR_EMAIL=m@e GIT_AUTHOR_DATE="$rl_t +0000" \
+        GIT_COMMITTER_NAME=C GIT_COMMITTER_EMAIL=c@e GIT_COMMITTER_DATE="$rl_t +0000" \
+        v merge -q --no-ff -m "$2" "$1"
+}
+rl_repo() {
+    rl_t=1700000000
+    v init -q repo; cd repo
+    rl_commit Alice alice@x.org "root: first"
+    rl_commit Bob bob@x.org "second line fix" 60 30
+    v switch -q -c side1; rl_commit Carol carol@y.com "side1 a"; rl_commit Carol carol@y.com "side1 b: Fixes #12"
+    v switch -q main; rl_commit Alice alice@x.org "main c"
+    v switch -q -c side2; rl_commit Bob bob@x.org "side2 a" 5 900; rl_commit Dave dave@z.net "side2 b" 5
+    v switch -q main; rl_merge side1 "Merge side1"; rl_commit Alice alice@x.org "main d: fix typo"
+    rl_merge side2 "Merge side2"
+    v switch -q -c side3 main~2; rl_commit Erin erin@y.com "side3 a (skewed clock)" -5000; rl_commit Erin erin@y.com "side3 b" 10
+    v switch -q main; rl_commit Alice alice@x.org "main e"; rl_merge side3 "Merge side3"
+    rl_commit Bob bob@x.org "final: FIX everything
+Body line one
+second body line: fixes" 
+    v tag v1 main~3; v tag -a -m rel v2 main~1
+}
+
+s_rev_list_filters() {
+    rl_repo
+    v rev-list main
+    v rev-list --all
+    v rev-list --count main
+    v rev-list --parents main
+    v rev-list --parents main~3..main
+    v rev-list --parents --first-parent main
+    v rev-list --parents ^v1 main side3
+    v rev-list --no-merges main
+    v rev-list --merges main
+    v rev-list --min-parents=2 main
+    v rev-list --max-parents=1 main
+    v rev-list --max-parents=0 main
+    v rev-list --min-parents=1 --max-parents=1 main
+    v rev-list --no-merges --count main
+    v rev-list --since=1700000200 main
+    v rev-list --until=1700000300 main
+    v rev-list --since=1700000200 --until=1700000400 main
+    v rev-list --after=1700000200 --before=1700000400 main
+    v rev-list --since='2023-11-14 22:16:40 +0000' main
+    v rev-list --until='2023-11-14 22:18:20 +0000' main
+    v rev-list --since='2030-01-01 00:00:00 +0000' main
+    v rev-list --since='1700000200 +0100' main
+    v rev-list --author=Alice main
+    v rev-list --author='<bob@' main
+    v rev-list --author=Alice --author=Bob main
+    v rev-list --author=alice@x.org main
+    v rev-list --author='x.org>' main
+    v rev-list --author=1700 main
+    v rev-list --author=nobody main
+    v rev-list --committer=C main
+    v rev-list --committer=Alice main
+    v rev-list --grep=fix main
+    v rev-list --grep=Fixes --grep=typo main
+    v rev-list --grep=fix -i main
+    v rev-list --grep=fix --regexp-ignore-case main
+    v rev-list --grep=FIX --invert-grep main
+    v rev-list --grep=fix --grep=typo --all-match main
+    v rev-list --grep='fix(es)?' -E main
+    v rev-list --grep='fix\(es\)\?' main
+    v rev-list --grep='^Body' main
+    v rev-list --grep='Fixes #[0-9]' main
+    v rev-list --grep=zzz main
+    v rev-list --author=Alice --grep=fix main
+    v rev-list --author=Bob --grep=fix --no-merges main
+    v rev-list --author=Alice --since=1700000200 --parents main
+    v rev-list --author=Alice --max-count=2 main
+    v rev-list --grep=fix --reverse main
+    v rev-list --grep=fix --count main
+    v rev-list -F --grep='main d' main
+    v rev-list --fixed-strings --grep='fix (' main
+}
+
+s_rev_list_abbrev() {
+    rl_repo
+    v rev-list --abbrev-commit main
+    v rev-list --abbrev-commit --parents main
+    v rev-list --abbrev=10 --abbrev-commit main
+    v rev-list --abbrev=4 --abbrev-commit main
+    v rev-list --abbrev-commit --no-abbrev-commit main
+    v rev-list --abbrev=12 main
+    v rev-list --abbrev-commit --abbrev=40 main
+    v rev-list --abbrev-commit --boundary main~3..main
+}
+
+s_rev_list_order() {
+    rl_repo
+    for order in "" --date-order --topo-order --author-date-order; do
+        v rev-list $order main
+        v rev-list $order --all
+        v rev-list $order --parents main
+        v rev-list $order main side3 side1
+        v rev-list $order ^v1 main
+        v rev-list $order v1...main
+        v rev-list $order side3..main
+        v rev-list $order --reverse main
+        v rev-list $order -n4 main
+        v rev-list $order --first-parent main
+        v rev-list $order --no-merges main
+        v rev-list $order --since=1700000200 main
+        v rev-list $order --author=Alice main
+        v rev-list $order side2 side1 main~4
+    done
+}
+
+s_rev_list_boundary() {
+    rl_repo
+    v rev-list --boundary main~3..main
+    v rev-list --boundary v1..main
+    v rev-list --boundary --parents v1..main
+    v rev-list --boundary --topo-order v1..main
+    v rev-list --boundary --date-order v1..main
+    v rev-list --boundary side3..main
+    v rev-list --boundary main..side3
+    v rev-list --boundary ^side1 main side2
+    v rev-list --boundary main~1..main
+    v rev-list --boundary main
+    v rev-list --boundary -n2 main
+    v rev-list --boundary -n2 v1..main
+    v rev-list --boundary --no-merges v1..main
+    v rev-list --boundary --first-parent v1..main
+    v rev-list --boundary --reverse v1..main
+    v rev-list --boundary --count v1..main
+    v rev-list --boundary --abbrev-commit v1..main
+    v rev-list --boundary --author=Alice v1..main
+    v rev-list --boundary v1...main
+    v rev-list --boundary side1..side2
+    v rev-list --boundary --all ^v1
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

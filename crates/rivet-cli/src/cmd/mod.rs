@@ -36,6 +36,7 @@ pub mod blame;
 pub mod branching;
 pub mod clean;
 pub mod format_patch;
+mod gitwalk;
 pub mod grep;
 pub mod history;
 pub mod ignore;

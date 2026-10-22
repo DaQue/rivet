@@ -298,3 +298,28 @@ Not implemented (refused with a message, never silently different): `--conflict`
 doc comments are frozen.
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 123 PASS / `failures: 0`.
 `log --graph` and `checkout -m` with paths were not attempted (brief: leave `log --graph` for another block).
+
+### Phase 2.1 — `rev-list` flags (landed, scenarios `s_rev_list_filters`, `s_rev_list_abbrev`, `s_rev_list_order`, `s_rev_list_boundary`)
+New flags: `--parents`, `--no-merges`, `--merges`, `--min-parents/--max-parents`, `--since/--after`, `--until/--before`,
+`--author`, `--committer`, `--grep` (+ `-i`, `-E`, `-F`, `--all-match`, `--invert-grep`), `--abbrev-commit`,
+`--no-abbrev-commit`, `--abbrev[=N]`, `--topo-order`, `--date-order`, `--author-date-order`, `--boundary`.
+Ordering is now a port of git's own algorithm (`cmd/gitwalk.rs`), not a sort of the reachable set: date-sorted work list with
+`commit_list_insert_by_date` tie rules, `limit_list` with its 5-commit clock-skew slop (ranges, topo orders), plain walk
+that stops *behind* a too-old commit for `--since`, `sort_in_topological_order` (LIFO / committer-date / author-date queue),
+`--all` = refs in name order then HEAD. `log` still uses the old core walk (not touched).
+Verified-against-git details worth keeping: `--parents` prints *all* parents even with `--first-parent`, and never abbreviates
+them; `--abbrev=N` without `--abbrev-commit` prints full ids; auto abbreviation length follows `find_unique_abbrev`
+(`ceil(bits(objects)/2)`, min 7); `--author`/`--committer` match `Name <email>` (not the date); `--boundary` candidates are the
+not-yet-shown parents of each shown commit (any parent, not only excluded ones), pushed on the front of a list that is then
+topologically sorted with the active order (graph order by default) — and a commit never parsed (second parent under
+`--first-parent`) sorts as dated 0 with no parents, but keeps its author date.
+Besides the scenarios (fixed history with a skewed clock, merges, 5 authors, distinct author/committer dates; ~170 commands
+compared in full) a throwaway fuzzer (130 random merge-heavy repos × ~90 flag combinations, git vs rivet, outputs
+identical) was used to find and close the ordering corner cases above; it is not in the tree.
+Also fixed in core because `--since` exposed it: `parse_approxidate`/`parse_git_date` mis-parsed `YYYY-MM-DD HH:MM:SS +ZZZZ`
+(a space before the offset; a date with dashes was taken for an epoch) and a bare `YYYY-MM-DD` was midnight where git uses
+the current time of day (checked: `--since=2023-11-14` at 18:13 excludes an 18:00 commit). Shared with `log --since`.
+Not implemented: `--skip`, `--max-age/--min-age`, `--left-right`, `--cherry-pick`, `--ancestry-path`, `--children`,
+`--stdin`, pathspec limiting, `--format`/`--header`, relative dates (`2.days.ago`) — unknown flags are clap errors, relative dates
+an "invalid date format" error.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 127 PASS / `failures: 0`.

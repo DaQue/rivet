@@ -109,6 +109,94 @@ pub struct RevListArgs {
     /// Follow only the first parent of each commit.
     #[arg(long = "first-parent")]
     pub first_parent: bool,
+
+    /// Print each commit's parents after its id.
+    #[arg(long = "parents")]
+    pub parents: bool,
+
+    /// Skip merge commits.
+    #[arg(long = "no-merges")]
+    pub no_merges: bool,
+
+    /// Show only merge commits.
+    #[arg(long = "merges")]
+    pub merges: bool,
+
+    /// Show only commits with at least this many parents.
+    #[arg(long = "min-parents", value_name = "N")]
+    pub min_parents: Option<usize>,
+
+    /// Show only commits with at most this many parents.
+    #[arg(long = "max-parents", value_name = "N")]
+    pub max_parents: Option<usize>,
+
+    /// Show only commits made after this date.
+    #[arg(long = "since", alias = "after", value_name = "DATE")]
+    pub since: Option<String>,
+
+    /// Show only commits made before this date.
+    #[arg(long = "until", alias = "before", value_name = "DATE")]
+    pub until: Option<String>,
+
+    /// Show only commits whose author matches the pattern (repeatable, any of them).
+    #[arg(long = "author", value_name = "PATTERN")]
+    pub author: Vec<String>,
+
+    /// Show only commits whose committer matches the pattern (repeatable, any of them).
+    #[arg(long = "committer", value_name = "PATTERN")]
+    pub committer: Vec<String>,
+
+    /// Show only commits whose message matches the pattern (repeatable, any of them).
+    #[arg(long = "grep", value_name = "PATTERN")]
+    pub grep: Vec<String>,
+
+    /// Match every `--grep` pattern, not any of them.
+    #[arg(long = "all-match")]
+    pub all_match: bool,
+
+    /// Show the commits whose message does *not* match `--grep`.
+    #[arg(long = "invert-grep")]
+    pub invert_grep: bool,
+
+    /// Ignore case in `--author`, `--committer` and `--grep` patterns.
+    #[arg(short = 'i', long = "regexp-ignore-case")]
+    pub ignore_case: bool,
+
+    /// Patterns are extended regular expressions.
+    #[arg(short = 'E', long = "extended-regexp")]
+    pub extended: bool,
+
+    /// Patterns are fixed strings.
+    #[arg(short = 'F', long = "fixed-strings")]
+    pub fixed: bool,
+
+    /// Print abbreviated object names.
+    #[arg(long = "abbrev-commit")]
+    pub abbrev_commit: bool,
+
+    /// Print full object names.
+    #[arg(long = "no-abbrev-commit")]
+    pub no_abbrev_commit: bool,
+
+    /// Abbreviate to at least this many digits (`--abbrev-commit` makes it show).
+    #[arg(long = "abbrev", value_name = "N", num_args = 0..=1, require_equals = true, default_missing_value = "0")]
+    pub abbrev: Option<usize>,
+
+    /// Show commits in the order of the graph, no parent before all its children.
+    #[arg(long = "topo-order")]
+    pub topo_order: bool,
+
+    /// Like `--topo-order`, but by committer date wherever the graph allows.
+    #[arg(long = "date-order")]
+    pub date_order: bool,
+
+    /// Like `--topo-order`, but by author date wherever the graph allows.
+    #[arg(long = "author-date-order")]
+    pub author_date_order: bool,
+
+    /// Also print the commits that bound a range, prefixed with `-`.
+    #[arg(long = "boundary")]
+    pub boundary: bool,
 }
 
 fn mark_tree(repository: &Repository, tree: ObjectId, seen: &mut HashSet<ObjectId>) -> Result<()> {
@@ -177,8 +265,7 @@ fn list_tree(
 /// `0` on success; `128` for an unknown revision.
 pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     let repository = super::open(global)?;
-    let mut options = WalkOptions::new();
-    let mut starts: Vec<ObjectId> = Vec::new();
+    let mut tips: Vec<(ObjectId, bool)> = Vec::new();
     let mut pending_tags: Vec<ObjectId> = Vec::new();
     let mut excluded_tips: Vec<ObjectId> = Vec::new();
     let note_tips = |repository: &Repository, oid: ObjectId, tags: &mut Vec<ObjectId>| {
@@ -203,65 +290,166 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
         return Ok(129);
     }
     if args.all {
-        if let Some(head) = repository.head()?.oid() {
-            starts.push(head);
-        }
+        // Git adds the refs in name order first and `HEAD` last; the order only shows in ties.
         for (_, oid) in refs_sorted(&repository)? {
             note_tips(&repository, oid, &mut pending_tags);
             if let Ok(commit) = repository.refs().peel_oid(oid, repository.odb())
-                && !starts.contains(&commit)
+                && !tips.contains(&(commit, false))
                 && repository
                     .odb()
                     .read(&commit)
                     .is_ok_and(|o| o.kind() == ObjectKind::Commit)
             {
-                starts.push(commit);
+                tips.push((commit, false));
             }
+        }
+        if let Some(head) = repository.head()?.oid()
+            && !tips.contains(&(head, false))
+        {
+            tips.push((head, false));
         }
     }
     for spec in &args.revs {
         if let Some(negated) = spec.strip_prefix('^') {
             let oid = bad_rev(peel(negated), negated)?;
-            options.exclude(oid);
+            tips.push((oid, true));
             excluded_tips.push(oid);
         } else if let Some((left, right)) = spec.split_once("...") {
             let left = peel(if left.is_empty() { "HEAD" } else { left })?;
             let right = peel(if right.is_empty() { "HEAD" } else { right })?;
-            starts.push(left);
-            starts.push(right);
+            tips.push((left, false));
+            tips.push((right, false));
             for base in rivet_core::merge_bases(repository.odb(), left, right).unwrap_or_default() {
-                options.exclude(base);
+                tips.push((base, true));
                 excluded_tips.push(base);
             }
         } else if let Some((left, right)) = spec.split_once("..") {
             let left = bad_rev(peel(if left.is_empty() { "HEAD" } else { left }), spec)?;
-            options.exclude(left);
+            tips.push((left, true));
             excluded_tips.push(left);
-            starts.push(bad_rev(
-                peel(if right.is_empty() { "HEAD" } else { right }),
-                spec,
-            )?);
+            tips.push((
+                bad_rev(peel(if right.is_empty() { "HEAD" } else { right }), spec)?,
+                false,
+            ));
         } else {
             if let Ok(raw) = super::resolve_rev(&repository, spec) {
                 note_tips(&repository, raw, &mut pending_tags);
             }
-            starts.push(bad_rev(peel(spec), spec)?);
+            tips.push((bad_rev(peel(spec), spec)?, false));
         }
     }
-    options.first_parent(args.first_parent);
-    if let Some(n) = args.max_count {
-        options.max_count(n);
+    let mut spec = super::gitwalk::WalkSpec {
+        first_parent: args.first_parent,
+        ..Default::default()
+    };
+    spec.tips = tips;
+    spec.topo = if args.author_date_order {
+        Some(super::gitwalk::TopoOrder::AuthorDate)
+    } else if args.date_order {
+        Some(super::gitwalk::TopoOrder::CommitDate)
+    } else if args.topo_order {
+        Some(super::gitwalk::TopoOrder::Graph)
+    } else {
+        None
+    };
+    let parse_date = |text: &str| -> Result<i64> {
+        rivet_core::ops::parse_approxidate(text)
+            .ok_or_else(|| anyhow::anyhow!("invalid date format: {text}"))
+    };
+    spec.max_age = args.since.as_deref().map(parse_date).transpose()?;
+    spec.min_age = args.until.as_deref().map(parse_date).transpose()?;
+    let walked = super::gitwalk::walk(&repository, &spec)?;
+
+    let matcher = CommitMatcher::new(args)?;
+    let min_parents = args
+        .min_parents
+        .unwrap_or(0)
+        .max(if args.merges { 2 } else { 0 });
+    let max_parents = match (args.max_parents, args.no_merges) {
+        (Some(n), true) => Some(n.min(1)),
+        (None, true) => Some(1),
+        (n, false) => n,
+    };
+    let mut commits: Vec<ObjectId> = Vec::new();
+    for oid in &walked.commits {
+        let parent_count = walked.parents[oid].len();
+        if parent_count < min_parents || max_parents.is_some_and(|max| parent_count > max) {
+            continue;
+        }
+        if !matcher.is_empty() && !matcher.matches(&repository, oid)? {
+            continue;
+        }
+        commits.push(*oid);
+        if args.max_count.is_some_and(|n| commits.len() >= n) {
+            break;
+        }
     }
-    options.sort(SortOrder::Date);
-    let mut commits = rivet_core::revwalk::walk_oids(repository.odb(), &starts, &options)?;
+    if args.max_count == Some(0) {
+        commits.clear();
+    }
+    // `--boundary`, as `get_revision_internal` does it: while a commit is returned its parents that
+    // are not shown yet become candidates (once each); when the commits run out, the candidates
+    // that never got shown follow, most recently discovered first.
+    let mut boundary: Vec<ObjectId> = Vec::new();
+    if args.boundary {
+        let mut shown: HashSet<ObjectId> = HashSet::new();
+        let mut candidates: Vec<ObjectId> = Vec::new();
+        let mut child_shown: HashSet<ObjectId> = HashSet::new();
+        for oid in &commits {
+            shown.insert(*oid);
+            for parent in commit_facts(&repository, oid)?.parents {
+                if shown.contains(&parent) || !child_shown.insert(parent) {
+                    continue;
+                }
+                candidates.push(parent);
+            }
+        }
+        // The list is built by pushing each candidate on the front, then sorted topologically
+        // with the walk's own order (the graph order when none was asked for).
+        let pending: Vec<ObjectId> = candidates
+            .into_iter()
+            .rev()
+            .filter(|oid| !shown.contains(oid))
+            .collect();
+        boundary = super::gitwalk::sort_topologically(
+            &repository,
+            pending,
+            spec.topo.unwrap_or(super::gitwalk::TopoOrder::Graph),
+            &walked.parsed,
+        )?;
+    }
+    commits.extend(boundary.iter().copied());
     if args.reverse {
         commits.reverse();
     }
+    let boundary: HashSet<ObjectId> = boundary.into_iter().collect();
 
+    let abbreviate = args.abbrev_commit && !args.no_abbrev_commit;
+    let abbreviator = if abbreviate {
+        Some(Abbreviator::new(&repository, args.abbrev)?)
+    } else {
+        None
+    };
+    let name = |oid: &ObjectId| -> String {
+        match &abbreviator {
+            Some(abbreviator) => abbreviator.abbreviate(oid),
+            None => oid.to_string(),
+        }
+    };
     let mut out = Vec::new();
     let mut lines = 0usize;
     for oid in &commits {
-        out.extend_from_slice(oid.to_string().as_bytes());
+        if boundary.contains(oid) {
+            out.push(b'-');
+        }
+        out.extend_from_slice(name(oid).as_bytes());
+        if args.parents {
+            // Parents are listed in full, all of them, whatever `--first-parent` walked.
+            for parent in commit_facts(&repository, oid)?.parents {
+                out.push(b' ');
+                out.extend_from_slice(parent.to_string().as_bytes());
+            }
+        }
         out.push(b'\n');
         lines += 1;
     }
@@ -311,6 +499,145 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
         write_stdout(&out)?;
     }
     Ok(0)
+}
+
+/// `--author` / `--committer` / `--grep` filtering of rev-list, with git's grouping: a commit
+/// passes when each non-empty group has a matching pattern (every pattern with `--all-match`).
+struct CommitMatcher {
+    authors: Vec<super::regex::Regex>,
+    committers: Vec<super::regex::Regex>,
+    greps: Vec<super::regex::Regex>,
+    all_match: bool,
+    invert: bool,
+}
+
+impl CommitMatcher {
+    fn new(args: &RevListArgs) -> Result<Self> {
+        let compile = |patterns: &[String]| -> Result<Vec<super::regex::Regex>> {
+            patterns
+                .iter()
+                .map(|pattern| {
+                    if args.fixed {
+                        Ok(super::regex::Regex::literal(
+                            pattern.as_bytes(),
+                            args.ignore_case,
+                        ))
+                    } else {
+                        super::regex::Regex::new(
+                            pattern.as_bytes(),
+                            args.extended,
+                            args.ignore_case,
+                        )
+                    }
+                })
+                .collect()
+        };
+        Ok(CommitMatcher {
+            authors: compile(&args.author)?,
+            committers: compile(&args.committer)?,
+            greps: compile(&args.grep)?,
+            all_match: args.all_match,
+            invert: args.invert_grep,
+        })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.authors.is_empty() && self.committers.is_empty() && self.greps.is_empty()
+    }
+
+    fn matches(&self, repository: &Repository, oid: &ObjectId) -> Result<bool> {
+        let object = repository.odb().read_typed(oid, ObjectKind::Commit)?;
+        let commit = Commit::parse(repository.format(), object.data())?;
+        let ident = |who: &rivet_core::object::Signature| -> Vec<u8> {
+            let mut line = who.name.to_vec();
+            line.extend_from_slice(b" <");
+            line.extend_from_slice(&who.email);
+            line.push(b'>');
+            line
+        };
+        let any = |patterns: &[super::regex::Regex], lines: &[&[u8]]| {
+            patterns
+                .iter()
+                .any(|p| lines.iter().any(|line| p.is_match(line, false)))
+        };
+        let author = ident(&commit.author);
+        let committer = ident(&commit.committer);
+        let body: Vec<&[u8]> = commit.message.split(|b| *b == b'\n').collect();
+        let mut passed = true;
+        if !self.authors.is_empty() {
+            passed &= any(&self.authors, &[&author[..]]);
+        }
+        if !self.committers.is_empty() {
+            passed &= any(&self.committers, &[&committer[..]]);
+        }
+        if !self.greps.is_empty() {
+            let grepped = if self.all_match {
+                self.greps
+                    .iter()
+                    .all(|p| body.iter().any(|line| p.is_match(line, false)))
+            } else {
+                any(&self.greps, &body)
+            };
+            passed &= grepped != self.invert;
+        } else if self.invert {
+            passed = passed && !self.is_empty();
+        }
+        Ok(passed)
+    }
+}
+
+/// Git's shortest-unique object name abbreviation over every object in the database.
+struct Abbreviator {
+    sorted: Vec<String>,
+    minimum: usize,
+}
+
+impl Abbreviator {
+    fn new(repository: &Repository, requested: Option<usize>) -> Result<Self> {
+        let mut sorted: Vec<String> = repository
+            .odb()
+            .oids()?
+            .iter()
+            .map(|oid| oid.to_string())
+            .collect();
+        sorted.sort();
+        sorted.dedup();
+        let hex_len = repository.format().hex_len();
+        let minimum = match requested {
+            Some(n) if n > 0 => n.clamp(4, hex_len),
+            _ => {
+                // `find_unique_abbrev`'s default: enough digits for about 2^(bits/2) objects.
+                let count = sorted.len().max(1);
+                let bits = (usize::BITS - count.leading_zeros()) as usize;
+                bits.div_ceil(2).clamp(7, hex_len)
+            }
+        };
+        Ok(Abbreviator { sorted, minimum })
+    }
+
+    fn abbreviate(&self, oid: &ObjectId) -> String {
+        let hex = oid.to_string();
+        let at = self.sorted.binary_search(&hex).unwrap_or_else(|at| at);
+        let shared = |other: &String| {
+            hex.bytes()
+                .zip(other.bytes())
+                .take_while(|(a, b)| a == b)
+                .count()
+        };
+        let mut need = self.minimum;
+        if at > 0 {
+            need = need.max(shared(&self.sorted[at - 1]) + 1);
+        }
+        let after = if self.sorted.get(at) == Some(&hex) {
+            at + 1
+        } else {
+            at
+        };
+        if let Some(next) = self.sorted.get(after) {
+            need = need.max(shared(next) + 1);
+        }
+        hex[..need.min(hex.len())].to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

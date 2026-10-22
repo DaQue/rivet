@@ -784,7 +784,13 @@ pub fn parse_git_date(value: &BStr) -> Option<(i64, i32)> {
     // Raw epoch: `<seconds>` optionally followed by an offset.
     let mut fields = text.split_whitespace();
     let first = fields.next()?;
-    if !first.is_empty() && first.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+    if !first.is_empty()
+        && first
+            .strip_prefix('-')
+            .unwrap_or(first)
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+    {
         let when: i64 = first.parse().ok()?;
         let offset = match fields.next() {
             Some(offset) => parse_tz_offset(offset.as_bytes())?,
@@ -794,7 +800,17 @@ pub fn parse_git_date(value: &BStr) -> Option<(i64, i32)> {
     }
 
     // ISO 8601. `jiff` wants RFC 3339, so the separator and the offset are normalised first.
-    let mut body = text.replace(' ', "T");
+    // `2023-11-14 22:16:40 +0000`: only the first space is the date/time separator, a second one
+    // precedes the offset.
+    let mut pieces = text.split_whitespace();
+    let mut body = pieces.next()?.to_string();
+    if let Some(time) = pieces.next() {
+        body.push('T');
+        body.push_str(time);
+        if let Some(offset) = pieces.next() {
+            body.push_str(offset);
+        }
+    }
     if body.len() == 10 {
         body.push_str("T00:00:00");
     }

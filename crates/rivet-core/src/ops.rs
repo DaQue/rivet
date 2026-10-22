@@ -1005,6 +1005,17 @@ pub fn parse_approxidate(text: &str) -> Option<i64> {
     {
         return Some(n);
     }
+    // A bare date means that day at the current time of day, as in Git's `approxidate`.
+    if text.len() == 10
+        && let Ok(date) = text.parse::<jiff::civil::Date>()
+    {
+        let now = jiff::Zoned::now();
+        let stamp = date
+            .to_datetime(now.time())
+            .to_zoned(jiff::tz::TimeZone::system())
+            .ok()?;
+        return Some(stamp.timestamp().as_second());
+    }
     crate::object::commit::parse_git_date(BStr::new(text.as_bytes())).map(|(when, _)| when)
 }
 
