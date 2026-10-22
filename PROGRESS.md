@@ -21,7 +21,7 @@ rev-parse peeling (`^{}`, `^{commit}`); mode-only change reported as typechange 
 `ls-files -u`; `status` upstream tracking, unmerged section, `add/rm` hint; worktree config parse panics.
 
 ## Known gaps (documented, bail with a message)
-commit -S/-C/-c/--author/--dry-run; log --graph; merge --squash/octopus/-X; pull --rebase; switch/checkout --merge;
+commit -S/-C/-c/--author/--dry-run; log --graph; merge --squash/octopus/-X; pull --rebase; switch/checkout --merge (landed 2026-10-22, see below);
 reset --keep/--merge; push --mirror/--force-with-lease/--atomic; clone --mirror/--depth; fetch --depth.
 `diff` of conflicted paths prints only `* Unmerged path` (no `diff --cc` combined diff).
 Frozen-grammar gaps (the scaffold's flag set differs from git's): several `rev-parse`/`ls-tree`/`cat-file` flags.
@@ -272,3 +272,29 @@ drop the whole extension (valid, just recomputed by readers), so index *bytes* d
 Harness: new `vg` helper in `tools/difftest/lib.sh` — runs real git and records its output/exit code in the transcript, so
 what git reads out of a rivet-edited repository is compared (the old `g` helper discards output).
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 118 PASS / `failures: 0`.
+
+### Phase 1.8 — `switch --merge` / `checkout -m` (landed, scenarios `s_switch_merge`, `s_switch_merge_states`, `s_switch_merge_detached`, `s_checkout_merge`, `s_switch_merge_refused`)
+Git 2.56 does not do the old two-tree merge for this: it is an **autostash**. Verified behaviour, now implemented:
+- the plain switch is tried first; only a refusal for tracked local changes (`DirtyWorktree`) starts the autostash, so a
+  clean tree, a switch that does not overlap the changes, and an untracked-file collision (same error as without `-m`)
+  never stash anything;
+- stash = `git stash create`+`store` shape: commit `On <branch|(no branch)>: autostash while switching to '<target>'`
+  (target as typed), index commit as `stash push`, reflog message *without* the `On …:` prefix, then reset to HEAD with
+  **no** reflog line and no ORIG_HEAD; then the normal switch (`checkout: moving from X to Y`);
+- apply = merge of the stash on top of the new HEAD, markers `<<<<<<< <target>` … `>>>>>>> local`. Clean: stderr
+  `Applied autostash.`, entry dropped silently, everything unstaged. Conflicts: stderr 5-line "Your local changes are
+  stashed…" block, entry kept, **exit 0**, stages 1/2/3 in the index, cleanly merged paths staged, a blank line before
+  `Switched to …`/`HEAD is now at …`, even with `-q`;
+- stdout after an autostash: `The following paths have local changes:` then `M/A/D<TAB>path` lines (unmerged paths print `M`).
+Code: `stash::autostash_save/autostash_apply` (+ `remove_entry`, the silent half of `drop_at`), `switch_to(..., merge)`.
+Also fixed because the scenarios exposed them (plain commands, no `-m`): `switch <tag|rev-expression>` now prints git's
+`fatal: a branch is expected, got …` plus the `hint: If you want to detach HEAD…` line (rivet crashed on `topic~0` with an
+invalid-ref-name error and never printed the hint); a detached HEAD "moving" to where it already is (`reset --hard`)
+writes no reflog entry (`ops::move_head`).
+Not implemented (refused with a message, never silently different): `--conflict` (needs a base label in `MergeOptions`;
+`merge.conflictStyle=diff3` is also ignored by rivet's `merge`, separate divergence: git prints `||||||| <short id>`),
+`switch -m -c/-C/--orphan`, `checkout -m` with paths (`checkout -m -- f` re-creating conflicts), `-m` combined with
+`--force`. The `run_switch` `///` text still describes the pre-2.56 model ("merge in progress"); it was left alone because
+doc comments are frozen.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 123 PASS / `failures: 0`.
+`log --graph` and `checkout -m` with paths were not attempted (brief: leave `log --graph` for another block).

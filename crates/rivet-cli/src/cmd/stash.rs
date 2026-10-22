@@ -711,8 +711,9 @@ fn drop_one(repository: &Repository, args: &RefArgs) -> Result<i32> {
     Ok(0)
 }
 
-/// Remove the stash at `position` (0 = newest), keeping the reflog chain consistent.
-fn drop_at(repository: &Repository, position: usize, spec: Option<&str>) -> Result<()> {
+/// Remove the stash at `position` (0 = newest), keeping the reflog chain consistent. Returns the
+/// stash commit that was removed.
+fn remove_entry(repository: &Repository, position: usize) -> Result<ObjectId> {
     let name = stash_ref();
     let mut stack = repository.refs().reflog(&name)?;
     let index = stack.len() - 1 - position;
@@ -732,6 +733,12 @@ fn drop_at(repository: &Repository, position: usize, spec: Option<&str>) -> Resu
             .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", path.display()))?;
         repository.refs().set_direct(&name, previous, None)?;
     }
+    Ok(removed.new)
+}
+
+/// [`remove_entry`], then Git's `Dropped <ref> (<id>)` line.
+fn drop_at(repository: &Repository, position: usize, spec: Option<&str>) -> Result<()> {
+    let removed = remove_entry(repository, position)?;
     let label = match spec {
         None => format!("refs/stash@{{{position}}}"),
         Some(text) if text.starts_with("stash@{") || text.starts_with("refs/stash@{") => {
@@ -739,6 +746,98 @@ fn drop_at(repository: &Repository, position: usize, spec: Option<&str>) -> Resu
         }
         Some(_) => format!("refs/stash@{{{position}}}"),
     };
-    println!("Dropped {label} ({})", removed.new);
+    println!("Dropped {label} ({removed})");
     Ok(())
+}
+
+/// `switch --merge`'s first half: save the tracked local changes as a stash entry the way
+/// `git stash create` + `git stash store` do (commit message `On <branch>: <text>`, reflog message
+/// just `<text>`), then reset the index and work tree to `HEAD` without touching any reflog.
+/// Returns the stash commit.
+pub(super) fn autostash_save(repository: &mut Repository, text: &str) -> Result<ObjectId> {
+    let head = repository.head()?;
+    let Some(head_oid) = head.oid() else {
+        anyhow::bail!("stash: cannot stash on an unborn branch");
+    };
+    let head_tree = repository.commit_tree(head_oid)?;
+    let index_tree = repository.write_tree()?;
+    let work_tree = repository.worktree_tree()?;
+
+    let branch = match head.branch() {
+        Some(branch) => branch.short_name().to_string(),
+        None => "(no branch)".to_string(),
+    };
+    let abbreviated = super::history::abbrev(repository, &head_oid, false);
+    let subject = {
+        let object = repository.odb().read_typed(&head_oid, ObjectKind::Commit)?;
+        let commit = rivet_core::Commit::parse(repository.format(), object.data())?;
+        String::from_utf8_lossy(&pretty::subject(commit.message)).into_owned()
+    };
+    let base = format!("{branch}: {abbreviated} {subject}");
+    let index_commit = commit_object(
+        repository,
+        index_tree,
+        &[head_oid],
+        &format!("index on {base}\n"),
+    )?;
+    let stash_commit = commit_object(
+        repository,
+        work_tree,
+        &[head_oid, index_commit],
+        &format!("On {branch}: {text}"),
+    )?;
+
+    let name = stash_ref();
+    let old = repository
+        .refs()
+        .try_read(&name)?
+        .map(|_| repository.refs().resolve_oid(&name))
+        .transpose()?
+        .unwrap_or_else(|| ObjectId::zero(repository.format()));
+    repository.refs().set_direct(&name, stash_commit, None)?;
+    let who = repository.committer_signature()?;
+    let entry = ReflogEntry::new(old, stash_commit, who, BString::from(text));
+    repository.refs().append_reflog(&name, &entry)?;
+
+    repository.reset_hard_to_tree(head_tree)?;
+    Ok(stash_commit)
+}
+
+/// `switch --merge`'s second half: merge the autostash `stash` (taken on top of `base`) into the
+/// freshly switched work tree. Markers are labelled `<ours>` and `local`. On a clean merge the
+/// changes come back unstaged, as `stash apply` leaves them, and the entry is dropped; with
+/// conflicts the entry is kept and the conflict stages stay in the index. Returns whether it
+/// conflicted. Nothing is printed here.
+pub(super) fn autostash_apply(
+    repository: &mut Repository,
+    stash: ObjectId,
+    base: ObjectId,
+    ours: &str,
+) -> Result<bool> {
+    let mut options = rivet_core::MergeOptions::new();
+    options.find_renames = super::renames_enabled(repository, "merge.renames");
+    options.labels = (BString::from(ours), BString::from("local"));
+    let index_before = repository.write_tree()?;
+    let result = repository.merge_into_worktree(Some(base), stash, &options)?;
+    if !result.conflicts.is_empty() {
+        return Ok(true);
+    }
+    // The changes come back unstaged: the index goes back to what it was, plus the files the
+    // stash adds.
+    let before_map = rivet_core::ops::flatten_tree(repository.odb(), index_before)?;
+    let added: Vec<_> = repository
+        .index()
+        .entries()
+        .iter()
+        .filter(|e| !before_map.contains_key(&e.path))
+        .cloned()
+        .collect();
+    repository.reset_index_to_tree(Some(index_before))?;
+    for entry in added {
+        repository.index_mut().insert(entry);
+    }
+    repository.index_mut().sort();
+    repository.write_index()?;
+    remove_entry(repository, 0)?;
+    Ok(false)
 }

@@ -286,6 +286,10 @@ impl Repository {
         // A move to where the branch already is leaves its own log alone, but `HEAD`'s log
         // still records that the command ran.
         if head.oid() == Some(new) {
+            // A detached HEAD "moving" to where it already is writes nothing at all in Git.
+            if matches!(head, HeadState::Detached { .. }) {
+                return Ok(());
+            }
             let head_name = RefName::head();
             if self.should_log_ref(&head_name) {
                 let entry = ReflogEntry::new(new, new, who, BString::from(reason));

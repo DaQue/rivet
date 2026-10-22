@@ -703,8 +703,12 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
 ///   makes a reflog searchable. `switch` writes the same message Git's `checkout` does, because
 ///   a user reading `git reflog` cannot tell which binary wrote it and should not have to.
 pub fn run_switch(global: &GlobalArgs, args: &SwitchArgs) -> Result<i32> {
-    if args.merge || args.conflict.is_some() {
-        anyhow::bail!("switch: --merge is not implemented");
+    if args.conflict.is_some() {
+        anyhow::bail!("switch: --conflict is not implemented");
+    }
+    if args.merge && (args.create.is_some() || args.force_create.is_some() || args.orphan.is_some())
+    {
+        anyhow::bail!("switch: --merge with --create/--force-create/--orphan is not implemented");
     }
     if args.dry_run {
         anyhow::bail!("switch: --dry-run is not implemented");
@@ -746,6 +750,7 @@ pub fn run_switch(global: &GlobalArgs, args: &SwitchArgs) -> Result<i32> {
             args.force,
             global.quiet,
             false,
+            args.merge,
         );
     }
 
@@ -758,6 +763,7 @@ pub fn run_switch(global: &GlobalArgs, args: &SwitchArgs) -> Result<i32> {
             args.force,
             global.quiet,
             false,
+            args.merge,
         );
     }
     if let Some(remote_ref) = guess_remote_branch(&repository, &target)? {
@@ -773,15 +779,14 @@ pub fn run_switch(global: &GlobalArgs, args: &SwitchArgs) -> Result<i32> {
         );
     }
     if super::resolve_commit(&repository, &target).is_ok() {
-        let what = if repository
-            .refs()
-            .exists(&RefName::tag(BStr::new(target.as_bytes()))?)
-        {
-            "tag"
-        } else {
-            "commit"
-        };
-        anyhow::bail!("a branch is expected, got {what} '{target}'");
+        let is_tag = RefName::tag(BStr::new(target.as_bytes()))
+            .is_ok_and(|tag| repository.refs().exists(&tag));
+        let what = if is_tag { "tag" } else { "commit" };
+        eprintln!("fatal: a branch is expected, got {what} '{target}'");
+        eprintln!(
+            "hint: If you want to detach HEAD at the commit, try again with the --detach option."
+        );
+        return Ok(128);
     }
     anyhow::bail!("invalid reference: {target}")
 }
@@ -826,8 +831,9 @@ pub fn run_switch(global: &GlobalArgs, args: &SwitchArgs) -> Result<i32> {
 ///   must be reported as a collision naming both paths rather than as an I/O error on the
 ///   second write. See `rivet_core::worktree::paths_collide`.
 pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
-    if args.merge {
-        anyhow::bail!("checkout: --merge is not implemented");
+    if args.merge && (args.create.is_some() || args.force_create.is_some() || args.orphan.is_some())
+    {
+        anyhow::bail!("checkout: --merge with --create/--force-create/--orphan is not implemented");
     }
     if args.ours || args.theirs {
         anyhow::bail!("checkout: --ours/--theirs are not implemented");
@@ -908,6 +914,9 @@ pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
                 }
             };
         if !path_args.is_empty() {
+            if args.merge {
+                anyhow::bail!("checkout: --merge with paths is not implemented");
+            }
             // Git counts restored paths only when the command line had no `--`; clap consumes
             // the separator, so the raw arguments are the only place it is still visible.
             let dash_dash = std::env::args().any(|a| a == "--");
@@ -930,6 +939,7 @@ pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
             args.force,
             global.quiet,
             false,
+            args.merge,
         );
     }
     let oid = super::resolve_commit(&repository, &target)?;
@@ -940,6 +950,7 @@ pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
         args.force,
         global.quiet,
         !args.detach,
+        args.merge,
     )
 }
 
@@ -1554,6 +1565,7 @@ fn switch_to(
     force: bool,
     quiet: bool,
     advise: bool,
+    merge: bool,
 ) -> Result<i32> {
     let old_head = repository.head()?;
     let from = super::head_reflog_label(repository)?;
@@ -1579,10 +1591,24 @@ fn switch_to(
         return Ok(0);
     }
 
+    // `--merge`: when the plain switch would overwrite tracked local changes, git stashes them,
+    // switches, and applies the stash on top of the new branch.
+    let mut autostash: Option<(ObjectId, ObjectId)> = None;
     if let Some(commit) = new_commit {
         let tree = repository.commit_tree(commit)?;
         if let Err(error) = repository.checkout_tree(tree, force) {
-            return report_checkout_refusal(error, "checkout");
+            let base = old_head.oid();
+            match (error, base) {
+                (rivet_core::Error::DirtyWorktree { .. }, Some(base)) if merge => {
+                    let text = format!("autostash while switching to '{label}'");
+                    let stash = super::stash::autostash_save(repository, &text)?;
+                    autostash = Some((stash, base));
+                    if let Err(error) = repository.checkout_tree(tree, force) {
+                        return report_checkout_refusal(error, "checkout");
+                    }
+                }
+                (error, _) => return report_checkout_refusal(error, "checkout"),
+            }
         }
     }
 
@@ -1598,7 +1624,24 @@ fn switch_to(
         }
     }
 
+    let mut conflicted = false;
+    if let Some((stash, base)) = autostash {
+        conflicted = super::stash::autostash_apply(repository, stash, base, label)?;
+        if conflicted {
+            eprintln!("Your local changes are stashed, however applying them");
+            eprintln!("resulted in conflicts.  You can either resolve the conflicts");
+            eprintln!("and then discard the stash with \"git stash drop\", or, if you");
+            eprintln!("do not want to resolve them now, run \"git reset --hard\" and");
+            eprintln!("apply the local changes later by running \"git stash pop\".");
+        } else {
+            eprintln!("Applied autostash.");
+        }
+    }
+
     if !quiet {
+        if autostash.is_some() {
+            println!("The following paths have local changes:");
+        }
         show_local_changes(repository)?;
         if let HeadState::Detached { oid: old } = &old_head
             && new_commit != Some(*old)
@@ -1608,6 +1651,9 @@ fn switch_to(
                 super::short_oid(old),
                 super::commit_subject(repository, old)?
             );
+        }
+        if conflicted {
+            eprintln!();
         }
         match &destination {
             Destination::Branch(branch) => {
@@ -2154,8 +2200,8 @@ fn show_local_changes(repository: &mut Repository) -> Result<()> {
             ChangeKind::Added => 'A',
             ChangeKind::Deleted => 'D',
             ChangeKind::TypeChanged => 'T',
-            ChangeKind::Unmerged => 'U',
-            ChangeKind::Modified => 'M',
+            // Git lists a conflicted path as modified in this report.
+            ChangeKind::Unmerged | ChangeKind::Modified => 'M',
         };
         changes
             .entry(entry.path.clone())

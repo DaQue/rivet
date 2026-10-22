@@ -2769,6 +2769,112 @@ s_index_cache_tree() {
     v status -s
 }
 
+# `switch --merge` / `checkout -m` (git 2.56): when the plain switch would overwrite tracked local
+# changes, they are stashed ("autostash while switching to '<target>'"), the switch happens, and the
+# stash is applied on top with markers labelled `<target>`/`local`: clean -> "Applied autostash." and
+# the entry is dropped (changes unstaged); conflicts -> the entry stays, exit 0, stages in the index.
+switch_merge_repo() {
+    v init -q repo; cd repo
+    printf '1\n2\n3\n4\n5\n6\n7\n8\n9\n' >f; echo g >g; echo h >h
+    v add .; tick; v commit -q -m base
+    v branch topic; v branch same
+    printf '1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\n' >f; echo gm >g
+    tick; v commit -q -a -m main
+    v switch -q same; tick; v commit -q --allow-empty -m same2
+    v switch -q topic
+    printf '1\nONE-topic\n3\n4\n5\n6\n7\n8\n9\n' >f; echo gt >g; echo ht >h
+    tick; v commit -q -a -m topic
+    v switch -q main
+}
+
+switch_merge_check() {
+    vg status -s
+    vg stash list
+    vg ls-files -s
+    vg diff --stat
+}
+
+s_switch_merge() {
+    switch_merge_repo
+    # no local changes: nothing to stash
+    tick; v switch -m topic
+    v switch -q main
+    # plain switch is possible: no stash even with -m
+    echo more >>f; tick; v switch -m same; switch_merge_check
+    v reset -q --hard; v switch -q main
+    # local edit merges cleanly: Applied autostash, changes come back unstaged
+    printf 'zero\n1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\n' >f; tick; v switch -m topic
+    switch_merge_check; cat f
+    v reset -q --hard; v switch -q main
+    # conflicting edit: stash kept, markers, stages
+    printf '1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\nlocal-tail\n' >f; tick; v switch -m topic
+    switch_merge_check; cat f
+    vg cat-file -p 'stash@{0}'
+    vg cat-file -p 'stash@{0}^2'
+    vg reflog show stash
+    vg reflog -3
+    # resolve by hand, finish, drop the stash
+    printf 'resolved\n' >f; v add f; tick; v commit -q -m resolved; v stash drop
+    v switch -q main
+}
+
+s_switch_merge_states() {
+    switch_merge_repo
+    # staged + modified + untracked: the staged edit conflicts, the untracked file stays
+    printf '1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\nB\n' >f; v add f; echo g2 >>g; echo u >untracked
+    tick; v switch -m topic; switch_merge_check; cat f g
+    v reset -q --hard; rm -f untracked; v stash clear; v switch -q main
+    # added, deleted and conflicting paths together
+    printf '1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\nlocal-tail\n' >f; echo new >newf; v add newf; v rm -q -f h; echo more >>g
+    tick; v switch -m topic; switch_merge_check
+    v reset -q --hard; v stash clear; v switch -q main
+    # a merge that is clean for f but conflicts for h: the clean part is staged
+    echo new >newf; v add newf; v rm -q -f h; printf 'zero\n1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\n' >f
+    tick; v switch -m topic; switch_merge_check
+    v reset -q --hard; v stash clear; v switch -q main
+    # -q keeps the autostash notices
+    printf '1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\nlocal-tail\n' >f; tick; v switch -q -m topic; switch_merge_check
+    v reset -q --hard; v stash clear; v switch -q main
+    printf 'zero\n1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\n' >f; tick; v switch -q -m topic; switch_merge_check
+    v reset -q --hard; v switch -q main
+}
+
+s_switch_merge_detached() {
+    switch_merge_repo
+    printf '1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\nlocal-tail\n' >f; tick; v switch -m --detach topic
+    switch_merge_check; cat f
+    v reset -q --hard; v stash clear; v switch -q main
+    # from a detached HEAD
+    v switch -q --detach main
+    printf '1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\nlocal-tail\n' >f; tick; v switch -m topic
+    switch_merge_check; cat f; v status
+    v reset -q --hard; v stash clear; v switch -q main
+    printf 'zero\n1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\n' >f; tick; v switch -m --detach topic; switch_merge_check
+}
+
+s_checkout_merge() {
+    switch_merge_repo
+    printf '1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\nlocal-tail\n' >f; tick; v checkout -m topic
+    switch_merge_check; cat f
+    v reset -q --hard; v stash clear; v checkout -q main
+    printf 'zero\n1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\n' >f; tick; v checkout -m topic; switch_merge_check
+    v reset -q --hard; v checkout -q main
+    printf 'zero\n1\n2\n3\n4\n5\n6\n7\n8\nNINE-main\n' >f; tick; v checkout --merge --detach topic; switch_merge_check
+}
+
+s_switch_merge_refused() {
+    switch_merge_repo
+    # an untracked file in the way is refused exactly like a plain switch; nothing is stashed
+    echo hi >newfile; v add newfile; tick; v commit -q -m addnew; v switch -q topic
+    echo collide >newfile
+    v switch -m main; switch_merge_check
+    rm newfile
+    # unknown targets fail like a plain switch
+    v switch -q main; echo x >>f
+    v switch -m nosuch; v switch -m topic~0; switch_merge_check
+    # --merge together with --create / --conflict is not implemented here (git supports them)
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
