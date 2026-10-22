@@ -35,6 +35,7 @@ pub mod history;
 pub mod ignore;
 pub mod plumbing;
 pub mod pretty;
+pub mod reflog;
 pub mod remote;
 pub mod sequencer;
 pub mod setup;
@@ -86,6 +87,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Restore(args) => snapshot::run_restore(&global, &args),
         Commands::Reset(args) => snapshot::run_reset(&global, &args),
         Commands::Log(args) => history::run_log(&global, &args),
+        Commands::Reflog(args) => reflog::run_reflog(&global, &args),
         Commands::Show(args) => history::run_show(&global, &args),
         Commands::Diff(args) => history::run_diff(&global, &args),
         Commands::Branch(args) => branching::run_branch(&global, &args),

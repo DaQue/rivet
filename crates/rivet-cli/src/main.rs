@@ -49,7 +49,7 @@ use clap::Parser;
 use crate::cli::Cli;
 
 /// Git's `log -<N>` shorthand for `-n <N>`: clap cannot declare a numeric short flag, so the
-/// argument vector is rewritten before parsing. Only `log` arguments before `--` are touched.
+/// argument vector is rewritten before parsing. Only `log` and `reflog` arguments before `--` are touched.
 fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
     let mut out = Vec::with_capacity(args.len());
     let mut iter = args.into_iter();
@@ -67,7 +67,7 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
             }
             if !text.starts_with('-') {
                 command_seen = true;
-                in_log = text == "log";
+                in_log = text == "log" || text == "reflog";
             }
         } else if in_log && !after_dashes {
             if text == "--" {

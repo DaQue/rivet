@@ -1032,6 +1032,38 @@ s_revert_conflict() {
     v status --short
 }
 
+s_reflog() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    tick; echo b >>a; v commit -q -a -m two
+    v branch topic
+    v switch -q topic
+    tick; echo c >>a; v commit -q -a -m "three on topic"
+    v switch -q main
+    tick; v merge -q --no-ff topic -m "merge topic"
+    v reset -q --hard HEAD~1
+    v switch -q --detach topic
+    v switch -q main
+    v reflog
+    v reflog show
+    v reflog show HEAD
+    v reflog --oneline
+    v reflog -n 2
+    v reflog -2
+    v reflog show -n1
+    v reflog main
+    v reflog show main -n 3
+    v reflog refs/heads/main -n 2
+    v reflog topic
+    v reflog show topic --oneline
+    v reflog nonexistent
+    v branch empty
+    v reflog empty
+    v branch -m topic renamed
+    v reflog renamed
+    v reflog show HEAD -n 0
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
