@@ -2596,6 +2596,36 @@ s_status_subdir() {
     ( cd other; v status -s )
 }
 
+# `add <path>` after the file was deleted during a conflict stages the removal: every stage of the
+# path goes, exit 0 (git 2.56). Other conflicted paths keep their stages.
+s_add_deleted_unmerged() {
+    v init -q repo; cd repo
+    printf '1\n2\n3\n' >f; echo k >k; echo g >g; echo h >h; v add .; v commit -q -m base
+    v branch topic
+    tick; printf '1\nm\n3\n' >f; echo m >k; v rm -q g; echo m >h; v commit -q -a -m main
+    v switch -q topic
+    tick; printf '1\nt\n3\n' >f; v rm -q k; echo t >g; v rm -q h; v commit -q -a -m topic
+    v switch -q main
+    v merge topic
+    v ls-files -s
+    rm f
+    v add f
+    v ls-files -s
+    v status -s
+    rm h
+    v add h
+    v ls-files -s
+    v add nosuchfile
+    rm k
+    v add k
+    v add g
+    v ls-files -s
+    v status -s
+    v commit -q -m resolved
+    v ls-tree -r HEAD
+    v status -s
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

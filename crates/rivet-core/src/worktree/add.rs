@@ -309,11 +309,9 @@ pub fn add_paths(
             None => {
                 // Missing on disk: either a tracked path whose deletion is being staged, or a
                 // path Git never heard of. A directory that is gone entirely has no stat either,
-                // so the children are consulted before declaring it unknown.
-                let tracked_children = index
-                    .entries()
-                    .iter()
-                    .any(|e| e.stage() == Stage::Normal && is_under(&e.path, spec));
+                // so the children are consulted before declaring it unknown. Conflict stages
+                // count: `add` of a deleted unmerged path stages its removal.
+                let tracked_children = index.entries().iter().any(|e| is_under(&e.path, spec));
                 if !tracked_children && !options.update {
                     return Err(Error::PathNotFound(spec.clone()));
                 }

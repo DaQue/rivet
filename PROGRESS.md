@@ -210,3 +210,11 @@ their trailing slash); `--porcelain` stays root-relative. Checked `-uall`, `-uno
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 112 PASS / `failures: 0`.
 Found, not fixed (separate divergence, not in the brief): `status <pathspec>` (e.g. `status -s other`) filters only the
 untracked list; tracked staged/unstaged changes outside the pathspec are still printed. Git limits all of them.
+
+### Phase 1.3 — `add` of a deleted, unmerged path (landed, scenario `s_add_deleted_unmerged`)
+`add_paths` only counted stage-0 entries when deciding whether a path missing on disk was "known", so a path that
+exists only as conflict stages 1–3 was rejected with `pathspec … did not match`. The check now counts any stage; the
+existing deletion pass already drops every stage (`remove_path`), matching git (`D  f`, other conflicts untouched).
+Scenario covers UU/DU/UD files, a nonexistent path, and finishing the merge with `commit`; it failed on the base commit
+(`fatal: pathspec 'f' did not match any files`, exit 128 vs git's 0) and passes now.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 113 PASS / `failures: 0`.
