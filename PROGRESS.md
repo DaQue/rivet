@@ -398,9 +398,24 @@ apply`; with a full `index` line (`diff --full-index`) git applies it from the o
 pre-image → `the patch applies to 'f' (<oid>), which does not match the current contents.`, post-image blob not in the odb →
 `missing binary patch data for 'f'` / `binary patch does not apply to 'f'` / `f: patch does not apply`. The existence checks
 (`No such file or directory`, `does not match index`) come before the binary refusal, as in git.
-Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 142 PASS / `failures: 0`.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 141 PASS / `failures: 0`.
 
 Known gaps (apply): `GIT binary patch` (diff `--binary`) data is **not** decoded — git applies it, rivet prints
 `error: binary patches are not supported` (not git's text) and exits 1 without touching anything. Command:
 `git diff --cached --binary >p; rivet apply p` → git exit 0, rivet exit 1. Decoding needs zlib in rivet-cli (no crate dependency
 change allowed in this block) or a public inflate in rivet-core (API change).
+
+### Phase A.2 — `apply --3way` (landed, scenario `s_apply_three_way`)
+`--3way` implies `--index` (unless `--cached`) and is tried **first** for every patch, as in git's `apply_data`: the pre-image is the
+blob named by the (abbreviated) `index <old>` id, the post-image is the patch applied to that blob, and the post-image is merged into the
+current content with `merge_content` (labels `ours`/`theirs`, base text not printed). Messages: `Applied patch to 'f' cleanly.` /
+`... with conflicts.`; when the blob is missing or the `index` line absent `error: repository lacks the necessary blob to perform
+3-way merge.` + `Falling back to direct application...` (then an ordinary direct apply, which may still fail); a pre-image the hunks do
+not fit prints `error: patch failed: f:N` before the fallback; deletions, and creations of a file that does not exist, fall back silently;
+creating a file that already exists is not an error with `--3way` — `Performing three-way merge...` with an empty base. A conflicted path
+leaves the merged text with markers in the work tree, stages 1/2/3 in the index (stage 1 absent for a creation), `U <path>` on **stderr**,
+exit 1; the other patches still go in. `--check` reports the same lines, writes nothing and exits 0 on conflicts. `--3way --reject` is
+`error: options '--reject' and '--3way' cannot be used together`, exit 128. The empty blob and the post-image/"ours" blobs are written to
+the odb exactly as git does (the `fsck` dangling list of the scenario compares them).
+Not covered: `--ours`/`--theirs`/`--union`, `-v`, `core.autocrlf` effects on the merge.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 142 PASS / `failures: 0`.

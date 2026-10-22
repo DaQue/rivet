@@ -12,8 +12,8 @@
 //! * A patch is applied to every file or to none.
 //!
 //! A binary patch applies only when its `index` line has full ids and the post-image blob is in
-//! the object database; the data of a `GIT binary patch`, `--3way`, whitespace fixing and fuzz are
-//! not implemented and are refused.
+//! the object database; the data of a `GIT binary patch`, whitespace fixing and fuzz are not
+//! implemented and are refused.
 
 use anyhow::{Result, bail};
 
@@ -530,9 +530,11 @@ pub struct ApplyOptions {
     pub unidiff_zero: bool,
     /// Keep going after a hunk that does not fit: write it to `<path>.rej` (`--reject`).
     pub reject: bool,
+    /// Merge the patch into the current content when it does not apply by content (`--3way`).
+    pub three_way: bool,
 }
 
-use bstr::BStr;
+use bstr::{BStr, BString};
 use rivet_core::object::EntryMode;
 use rivet_core::{ObjectId, ObjectKind, Repository};
 
@@ -556,6 +558,7 @@ pub fn apply_to_repo(
     let mut applied: Vec<String> = Vec::new();
     let mut rejects: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     let mut rejected_hunks = 0usize;
+    let mut conflicts: Vec<(Vec<u8>, ThreeWayMerge)> = Vec::new();
 
     // `-R` goes through the patches last to first, as git does.
     let ordered: Vec<&FilePatch> = if options.reverse {
@@ -660,30 +663,74 @@ pub fn apply_to_repo(
             errors.push("error: patch without a file name".to_string());
             continue;
         };
-        if is_new && read(repository, &pending, &target).is_some() {
-            errors.push(format!(
-                "error: {}: already exists in {}",
-                show(&target),
-                if options.cached {
-                    "index"
-                } else {
-                    "working directory"
-                }
-            ));
-            continue;
+        // With `--3way`, creating a file that exists is not an error: the existing content is
+        // merged with the new file as if both had been added.
+        let mut existing: Option<Vec<u8>> = None;
+        if is_new && let Some((data, _)) = read(repository, &pending, &target) {
+            if options.three_way {
+                existing = Some(data);
+            } else {
+                errors.push(format!(
+                    "error: {}: already exists in {}",
+                    show(&target),
+                    if options.cached {
+                        "index"
+                    } else {
+                        "working directory"
+                    }
+                ));
+                continue;
+            }
         }
-        let (base_data, base_mode) = match &source {
-            Some((_, (data, mode))) => (data.clone(), *mode),
-            None => (Vec::new(), EntryMode::Blob),
+        let direct_to_threeway = existing.is_some();
+        let (base_data, base_mode) = match (&source, existing) {
+            (Some((_, (data, mode))), _) => (data.clone(), *mode),
+            (None, Some(data)) => (data, EntryMode::Blob),
+            (None, None) => (Vec::new(), EntryMode::Blob),
         };
-        let (result, failures) = if patch.binary {
+        let mut merged: Option<ThreeWayMerge> = None;
+        let mut direct = None;
+        if patch.binary {
             match binary_result(repository, patch, options.reverse, &base_data) {
-                Ok(data) => (data, Vec::new()),
+                Ok(data) => direct = Some((data, Vec::new())),
                 Err(lines) => {
                     errors.extend(lines);
                     continue;
                 }
             }
+        } else if options.three_way {
+            if direct_to_threeway {
+                errors.push("Performing three-way merge...".to_string());
+            }
+            match three_way_merge(
+                repository,
+                patch,
+                options,
+                (is_new, is_delete, direct_to_threeway),
+                &base_data,
+            ) {
+                Ok(done) => {
+                    errors.push(if done.conflict {
+                        format!("Applied patch to '{}' with conflicts.", show(&target))
+                    } else {
+                        format!("Applied patch to '{}' cleanly.", show(&target))
+                    });
+                    merged = Some(done);
+                }
+                Err(message) => {
+                    // Git reports these with `error:` but goes on with a direct application.
+                    soft += message.len();
+                    errors.extend(message);
+                    if !direct_to_threeway {
+                        errors.push("Falling back to direct application...".to_string());
+                    }
+                }
+            }
+        }
+        let (result, failures) = if let Some(done) = &merged {
+            (done.data.clone(), Vec::new())
+        } else if let Some(done) = direct {
+            done
         } else {
             apply_hunks_collect(
                 &base_data,
@@ -784,6 +831,11 @@ pub fn apply_to_repo(
             pending.insert(from.clone(), None);
         }
         narrate(&target);
+        if let Some(done) = merged
+            && done.conflict
+        {
+            conflicts.push((target.clone(), done));
+        }
         pending.insert(target, Some((result, mode)));
     }
     if options.reject {
@@ -800,11 +852,51 @@ pub fn apply_to_repo(
         let failed = hard > 0 || rejected_hunks > 0;
         // A failed run leaves the index alone (but still writes the files and the `.rej`s).
         let update_index = !failed && (options.index || options.cached);
-        if let Err(lines) = write_pending(repository, &pending, &rejects, options, update_index) {
+        if let Err(lines) = write_pending(
+            repository,
+            &pending,
+            &conflicts,
+            &rejects,
+            options,
+            update_index,
+        ) {
             errors.extend(lines);
             return Err(errors);
         }
         return if failed { Err(errors) } else { Ok(errors) };
+    }
+    if options.three_way {
+        // Only real errors stop the run; a conflict is written to the work tree and the index.
+        let hard = errors
+            .iter()
+            .filter(|line| line.starts_with("error:"))
+            .count()
+            .saturating_sub(soft);
+        if hard > 0 {
+            return Err(errors);
+        }
+        if options.check {
+            return Ok(errors);
+        }
+        for (path, _) in &conflicts {
+            errors.push(format!("U {}", show(path)));
+        }
+        if let Err(lines) = write_pending(
+            repository,
+            &pending,
+            &conflicts,
+            &rejects,
+            options,
+            options.index || options.cached,
+        ) {
+            errors.extend(lines);
+            return Err(errors);
+        }
+        return if conflicts.is_empty() {
+            Ok(errors)
+        } else {
+            Err(errors)
+        };
     }
     if errors.iter().any(|line| !line.starts_with("warning:")) {
         return Err(errors);
@@ -815,11 +907,111 @@ pub fn apply_to_repo(
     write_pending(
         repository,
         &pending,
+        &conflicts,
         &rejects,
         options,
         options.index || options.cached,
     )?;
     Ok(warnings)
+}
+
+/// The outcome of merging a patch into the current content (`--3way`).
+struct ThreeWayMerge {
+    data: Vec<u8>,
+    conflict: bool,
+    /// Stage 1 (absent for a new file), stage 2 (the current content), stage 3 (the post-image).
+    base: Option<ObjectId>,
+    ours: ObjectId,
+    theirs: ObjectId,
+}
+
+/// Git's `try_threeway`: build the pre-image from the `index` line, apply the patch to it, and
+/// merge that post-image into `current`. `Err` carries the diagnostics before the fallback to
+/// direct application (none when git falls back silently).
+fn three_way_merge(
+    repository: &Repository,
+    patch: &FilePatch,
+    options: ApplyOptions,
+    (is_new, is_delete, direct): (bool, bool, bool),
+    current: &[u8],
+) -> std::result::Result<ThreeWayMerge, Vec<String>> {
+    // Nothing to merge a deletion into, and a creation only merges into a file that exists.
+    if is_delete || (is_new && !direct) {
+        return Err(Vec::new());
+    }
+    let lacks =
+        || vec!["error: repository lacks the necessary blob to perform 3-way merge.".to_string()];
+    let odb = repository.odb();
+    let format = odb.format();
+    let abbreviation = if options.reverse {
+        &patch.new_oid
+    } else {
+        &patch.old_oid
+    };
+    let (base, pre) = if is_new {
+        // Git stores the empty blob it merges from.
+        odb.write_raw(ObjectKind::Blob, b"")
+            .map_err(|e| vec![format!("error: {e}")])?;
+        (None, Vec::new())
+    } else {
+        let Some(hex) = abbreviation else {
+            return Err(lacks());
+        };
+        // `from_hex_prefix` decodes whole bytes: an odd abbreviation loses its last digit.
+        let even = hex.len() & !1;
+        let Ok(prefix) = ObjectId::from_hex_prefix(format, BStr::new(&hex[..even])) else {
+            return Err(lacks());
+        };
+        let Ok(oid) = odb.resolve_prefix(&prefix) else {
+            return Err(lacks());
+        };
+        let Ok(object) = odb.read_typed(&oid, ObjectKind::Blob) else {
+            return Err(lacks());
+        };
+        (Some(oid), object.into_data())
+    };
+    let (post, failures) = apply_hunks_collect(
+        &pre,
+        &patch.hunks,
+        options.reverse,
+        options.unidiff_zero,
+        false,
+    );
+    if let Some(failure) = failures.first() {
+        let (old_path, new_path) = if options.reverse {
+            (&patch.new_path, &patch.old_path)
+        } else {
+            (&patch.old_path, &patch.new_path)
+        };
+        let name = old_path.as_ref().or(new_path.as_ref());
+        return Err(vec![format!(
+            "error: patch failed: {}:{}",
+            String::from_utf8_lossy(name.map_or(&b""[..], |n| n)),
+            failure.line
+        )]);
+    }
+    let ours = odb
+        .write_raw(ObjectKind::Blob, current)
+        .map_err(|e| vec![format!("error: {e}")])?;
+    let theirs = odb
+        .write_raw(ObjectKind::Blob, &post)
+        .map_err(|e| vec![format!("error: {e}")])?;
+    let merged = rivet_core::merge::merge_content(
+        Some(&pre),
+        current,
+        &post,
+        ("ours", "theirs"),
+        rivet_core::merge::ConflictStyle::Merge,
+        rivet_core::diff::DiffAlgorithm::Myers,
+    )
+    .map_err(|e| vec![format!("error: {e}")])?;
+    Ok(ThreeWayMerge {
+        data: merged.data.to_vec(),
+        conflict: merged.conflict,
+        base,
+        ours,
+        theirs,
+    })
 }
 
 /// The post-image of a binary patch. Only a `Binary files … differ` patch whose `index` line
@@ -891,6 +1083,7 @@ type Pending = std::collections::BTreeMap<Vec<u8>, Option<(Vec<u8>, EntryMode)>>
 fn write_pending(
     repository: &mut Repository,
     pending: &Pending,
+    conflicts: &[(Vec<u8>, ThreeWayMerge)],
     rejects: &[(Vec<u8>, Vec<u8>)],
     options: ApplyOptions,
     update_index: bool,
@@ -944,7 +1137,8 @@ fn write_pending(
                         .and_then(|w| w.stat(path_ref))
                         .map_err(|e| fail(&e))?;
                 }
-                if update_index {
+                // A conflicted path gets its stages below, not a stage-0 entry.
+                if update_index && !conflicts.iter().any(|(conflicted, _)| conflicted == path) {
                     let oid = repository
                         .odb()
                         .write_raw(ObjectKind::Blob, data)
@@ -963,6 +1157,19 @@ fn write_pending(
         }
     }
     if update_index {
+        for (path, done) in conflicts {
+            let conflict = rivet_core::merge::Conflict {
+                path: BString::from(path.clone()),
+                kind: rivet_core::merge::ConflictKind::Content,
+                base: done.base,
+                ours: Some(done.ours),
+                theirs: Some(done.theirs),
+                hunks: Vec::new(),
+                message: None,
+            };
+            rivet_core::merge::write_conflict_stages(repository.index_mut(), &[conflict])
+                .map_err(|e| fail(&e))?;
+        }
         repository.index_mut().sort();
         repository.write_index().map_err(|e| fail(&e))?;
     }

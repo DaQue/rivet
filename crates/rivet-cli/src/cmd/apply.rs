@@ -2,8 +2,8 @@
 //!
 //! The patch comes from the named files or standard input. It is applied to every file or to
 //! none. `--stat`, `--numstat` and `--summary` print and leave the tree alone unless `--apply` is
-//! given. `--3way`, `--reject`, whitespace handling and binary patches are not implemented and
-//! are refused rather than ignored.
+//! given. `--3way` and `--reject` are supported; whitespace handling and the data of a `GIT binary
+//! patch` are not, and are refused rather than ignored.
 
 use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
@@ -64,7 +64,7 @@ pub struct ApplyArgs {
     #[arg(short = 'z')]
     pub nul: bool,
 
-    /// Fall back on a three-way merge. Not implemented.
+    /// Merge the patch into the current content when it does not apply by content.
     #[arg(short = '3', long = "3way")]
     pub three_way: bool,
 
@@ -79,8 +79,9 @@ pub struct ApplyArgs {
 ///
 /// `0` applied (or checks out); `1` the patch does not apply; `128` an unreadable patch.
 pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
-    if args.three_way {
-        anyhow::bail!("apply: --3way is not implemented");
+    if args.three_way && args.reject {
+        eprintln!("error: options '--reject' and '--3way' cannot be used together");
+        return Ok(128);
     }
     let mut repository = super::open(global)?;
     let mut text = Vec::new();
@@ -120,11 +121,13 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
     }
     let options = ApplyOptions {
         reverse: args.reverse,
-        index: args.index,
+        // `--3way` stages what it merges, like `--index`.
+        index: args.index || (args.three_way && !args.cached),
         cached: args.cached,
         check: args.check,
         unidiff_zero: args.unidiff_zero,
         reject: args.reject,
+        three_way: args.three_way,
     };
     let inspect = args.stat || args.numstat || args.summary;
     if inspect {

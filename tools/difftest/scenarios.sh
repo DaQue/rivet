@@ -2519,6 +2519,65 @@ s_apply_binary() {
     v status --short
 }
 
+s_apply_three_way() {
+    v init -q repo; cd repo
+    seq 1 20 >a.txt; seq 1 10 >b.txt; seq 1 12 >c.txt; seq 1 8 >d.txt; seq 1 9 >gone.txt; seq 1 15 >mv.txt
+    v add .; v commit -q -m base
+    sed -i '5s/.*/FIVE/' a.txt; sed -i '3s/.*/three/' b.txt; sed -i '6s/.*/six/' c.txt; sed -i '2s/.*/two/' d.txt
+    echo brand >new.txt; git rm -q gone.txt; git mv mv.txt moved.txt; sed -i '10s/.*/ten/' moved.txt
+    git add -A
+    g diff --cached -M >../tw.patch
+    sed '/^index /d' ../tw.patch >../noidx.patch
+    sed 's/^index [0-9a-f]*\.\./index 1234567../' ../tw.patch >../badblob.patch
+    g reset -q --hard; g clean -fdq
+    # untouched tree: git merges instead of applying directly, and says so
+    v apply --3way ../tw.patch
+    v status --short
+    v ls-files -s
+    g reset -q --hard; g clean -fdq
+    # local commit that conflicts in a.txt, merges in b.txt and moved.txt, leaves the rest alone
+    tick; sed -i '1s/.*/ONE/;5s/.*/five-local/' a.txt; sed -i '9s/.*/nine/' b.txt; sed -i '1s/.*/uno/' mv.txt
+    v commit -q -a -m local
+    v apply --3way ../tw.patch
+    v status --short
+    v ls-files -s
+    cat a.txt | sed -n 1,9p; sed -n 1,4p b.txt; sed -n 1,3p moved.txt; sed -n 10p moved.txt; ls
+    g reset -q --hard; g clean -fdq
+    v apply --3way --check ../tw.patch
+    v status --short
+    v apply --3way --cached ../tw.patch
+    v status --short
+    v ls-files -s
+    g reset -q --hard; g clean -fdq
+    v apply --3way --stat ../tw.patch
+    v apply -R --3way ../tw.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # without index lines or blobs there is nothing to merge: fall back to direct application
+    v apply --3way ../noidx.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    v apply --3way ../badblob.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # the work tree does not match the index
+    echo dirty >>b.txt
+    v apply --3way ../tw.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # a patch that applies directly at the preimage, as a plain diff (no index line) still works
+    g checkout -q HEAD~1
+    v apply --3way ../noidx.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    v apply --3way --reject ../tw.patch
+    # the index line names a blob the hunks were not made against
+    oth=$(g rev-parse --short=7 :b.txt); old=$(g rev-parse --short=7 :a.txt)
+    sed "s/^index $old/index $oth/" ../tw.patch >../wrongblob.patch
+    v apply --3way ../wrongblob.patch
+    v status --short
+}
+
 s_format_patch() {
     v init -q repo; cd repo
     seq 1 20 >a; printf '#!/bin/sh\n' >run.sh
