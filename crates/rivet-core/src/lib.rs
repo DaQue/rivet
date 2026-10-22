@@ -25,6 +25,25 @@
 //! `Repository::init` and `Repository::open` are the two entry points; everything else hangs off
 //! the returned `Repository` or off free functions in the modules below.
 //!
+//! # Quick start
+//!
+//! Write a blob into a fresh repository and read it back — the object id is the same one `git
+//! hash-object` computes, because this is a real repository:
+//!
+//! ```
+//! use rivet_core::{InitOptions, ObjectKind, Repository};
+//!
+//! let dir = tempfile::tempdir().unwrap();
+//! let repo = Repository::init(dir.path(), &InitOptions::new())?;
+//!
+//! let oid = repo.odb().write_raw(ObjectKind::Blob, b"hello, world\n")?;
+//! assert_eq!(oid.to_string(), "4b5fa63702dd96796042e92787f464e28f09f17d");
+//!
+//! let object = repo.odb().read(&oid)?;
+//! assert_eq!(object.data(), b"hello, world\n");
+//! # Ok::<(), rivet_core::Error>(())
+//! ```
+//!
 //! # Layout
 //!
 //! * [`object`] — blob, tree, commit and tag: parsing, serialising, hashing.
@@ -50,7 +69,7 @@
 //! # Object formats
 //!
 //! SHA-1 is the default, because GitHub only accepts SHA-1 publicly today; SHA-256 is
-//! supported end to end (see the plan, §2.1). No code in this crate may hard-code 20 bytes or
+//! supported end to end. No code in this crate may hard-code 20 bytes or
 //! 40 hex characters — always go through [`ObjectFormat`] and [`ObjectId`]. Retrofitting
 //! format-genericity later is the expensive part, so it is baked in from the first signature.
 //!
@@ -63,6 +82,14 @@
 //! # Synchronous by design
 //!
 //! The core has no `async`. Network I/O in `remote` uses blocking transports.
+//!
+//! # Stability
+//!
+//! Pre-1.0: items may move or change between minor versions. What is stable is the part that
+//! has to be — Git's on-disk and on-the-wire formats, which are the compatibility contract
+//! described above, not this crate's API.
+
+#![warn(missing_docs)]
 
 pub mod config;
 pub mod diff;

@@ -620,6 +620,22 @@ pub struct CommitWalker<'a> {
 impl<'a> CommitWalker<'a> {
     /// Phase 4 — a walker starting from the given commits.
     ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rivet_core::{CommitWalker, Repository, WalkOptions};
+    ///
+    /// let repo = Repository::open()?;
+    /// let head = repo.head_commit()?.expect("repository has a commit");
+    /// let mut options = WalkOptions::new();
+    /// options.max_count(10);
+    ///
+    /// for oid in CommitWalker::new(repo.odb(), &[head], options)?.into_oids()? {
+    ///     println!("{oid}");
+    /// }
+    /// # Ok::<(), rivet_core::Error>(())
+    /// ```
+    ///
     /// # Caveats
     ///
     /// * **The starting points are the walk's roots**, and their ancestors are reached in the

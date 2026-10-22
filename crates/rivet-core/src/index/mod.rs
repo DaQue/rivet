@@ -1011,6 +1011,18 @@ impl Index {
 
     /// Phase 3 — read and verify `path`.
     ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use std::path::Path;
+    ///
+    /// use rivet_core::{Index, ObjectFormat};
+    ///
+    /// let index = Index::load(Path::new(".git/index"), ObjectFormat::Sha1)?;
+    /// println!("{} entries at version {:?}", index.len(), index.version());
+    /// # Ok::<(), rivet_core::Error>(())
+    /// ```
+    ///
     /// # Caveats
     ///
     /// **A missing file is an empty index, not an error.** Nearly every repository starts that way,

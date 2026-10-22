@@ -55,7 +55,8 @@ which follow Git's, because scripts branch on them.
 
 * [`docs/SCAFFOLD-BRIEF.md`](docs/SCAFFOLD-BRIEF.md) — the design brief the implementation follows.
 * [`docs/IMPL-ORDER.md`](docs/IMPL-ORDER.md) — what is implemented, in what order, and what is next.
-* API documentation: `cargo doc --workspace --no-deps --open`, or docs.rs once published.
+* API documentation: **<https://docs.rs/rivet-core>** once published (the crate-level docs are
+  the front page there), or locally with `cargo doc --workspace --no-deps --open`.
 
 ## License
 

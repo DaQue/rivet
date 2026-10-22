@@ -347,6 +347,18 @@ impl Odb {
     /// * **Read the object you asked for, not what it points at.** Nothing here peels tags or walks
     ///   parents; that is revision parsing.
     ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rivet_core::Repository;
+    ///
+    /// let repo = Repository::open()?;
+    /// let head = repo.head_commit()?.expect("repository has a commit");
+    /// let object = repo.odb().read(&head)?;
+    /// println!("{:?}, {} bytes", object.kind(), object.data().len());
+    /// # Ok::<(), rivet_core::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// [`crate::error::Error::ObjectNotFound`] if no store has it;

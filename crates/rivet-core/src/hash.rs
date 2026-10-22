@@ -231,6 +231,20 @@ impl ObjectId {
 
     /// Phase 1 — parse a **full-length** hex id.
     ///
+    /// # Example
+    ///
+    /// ```
+    /// use bstr::BStr;
+    /// use rivet_core::{ObjectFormat, ObjectId};
+    ///
+    /// let id = ObjectId::from_hex(
+    ///     ObjectFormat::Sha1,
+    ///     BStr::new("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"),
+    /// )?;
+    /// assert_eq!(id.to_string(), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+    /// # Ok::<(), rivet_core::Error>(())
+    /// ```
+    ///
     /// # Caveats
     ///
     /// Accepts both cases and no separators; Git writes lowercase, so that is what serialisation

@@ -1,5 +1,7 @@
 # rivet-core
 
+[![docs.rs](https://docs.rs/rivet-core/badge.svg)](https://docs.rs/rivet-core)
+
 The library behind [`rivet`](https://github.com/DaQue/rivet), a Git-compatible version
 control system.
 
@@ -34,7 +36,12 @@ Pre-1.0: the API is not stable yet, and items may move between minor versions.
 
 ## Documentation
 
-`cargo doc -p rivet-core --no-deps --open`.
+The API reference is at **<https://docs.rs/rivet-core>**, built from the crate's
+documentation comments — it is the same text that `cargo doc` renders locally.
+
+```sh
+cargo doc -p rivet-core --no-deps --open
+```
 
 ## License
 

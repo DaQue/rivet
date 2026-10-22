@@ -621,6 +621,17 @@ impl Repository {
 
     /// Phase 4 — create a repository.
     ///
+    /// # Example
+    ///
+    /// ```
+    /// use rivet_core::{InitOptions, Repository};
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let repo = Repository::init(dir.path(), &InitOptions::new())?;
+    /// assert!(repo.head_commit()?.is_none());
+    /// # Ok::<(), rivet_core::Error>(())
+    /// ```
+    ///
     /// # Caveats
     ///
     /// * **The git directory is the path given**, and for a non-bare initialisation that means the
