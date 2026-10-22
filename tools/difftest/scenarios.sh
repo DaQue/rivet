@@ -1221,6 +1221,52 @@ s_clean_edge() {
     ls
 }
 
+s_mv() {
+    v init -q repo; cd repo
+    echo a >a; echo b >b; mkdir d e; echo db >d/b; echo dc >d/c; mkdir d/sub; echo s >d/sub/s
+    echo x >e/x; echo u >untracked; ln -s a link; chmod +x b
+    v add a b d e link; v commit -q -m base
+    v mv nosuch x
+    v mv untracked x
+    v mv a b
+    v mv a nodir/a
+    v mv a a2
+    v status --short
+    v mv a2 a
+    v mv -n a z
+    v mv -v a z
+    v mv z e
+    v status --short
+    ls e
+    v mv e/z .
+    v mv a b e
+    v mv -f a e/b
+    v mv d d/sub
+    v mv -n d f
+    v mv -v d f
+    v status --short
+    ls f f/sub
+    v mv f/sub top
+    echo extra >f/extra
+    v mv f g
+    ls g
+    v status --short
+    v mv link link2
+    v mv b link2 d
+    v mv -k nosuch link2 e
+    v mv -k nosuch link2
+    vq mv
+    vq mv a
+    v mv x y z
+    mkdir -p deep/dir; echo q >deep/dir/q; v add deep; v commit -q -m deep
+    cd deep
+    v mv dir/q ../qq
+    v mv dir ../ddir
+    cd ..
+    v status --short
+    v diff --stat HEAD
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
