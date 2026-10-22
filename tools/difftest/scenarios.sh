@@ -1163,6 +1163,64 @@ s_stash_conflict() {
     v stash pop
 }
 
+s_clean() {
+    v init -q repo; cd repo
+    mkdir tdir; echo t >tdir/t; echo k >keep; v add tdir keep; v commit -q -m x
+    printf 'ign*\nidir/\n*.o\n' >.gitignore
+    mkdir udir idir tdir/sub empty a a-b; echo u >udir/u; echo i >udir/ign1; echo x >idir/x
+    echo o >tdir/a.o; echo u2 >tdir/u2; echo n >tdir/ign3; echo top >top; echo topo >top.o
+    echo s >tdir/sub/s; echo z >a/z; echo ab >a-b/f; echo f >a.c; echo "sp ace" >"sp ace"
+    mkdir -p deep/er/est; echo d >deep/er/est/f
+    mkdir -p mixed/inner; echo m >mixed/inner/m; echo ig >mixed/ignored.o
+    v clean
+    v clean -d
+    v clean -n
+    v clean -n -d
+    v clean -n -x
+    v clean -n -d -x
+    v clean -n -X
+    v clean -n -d -X
+    v clean -n -dx tdir
+    v clean -n -d udir a
+    v clean -n -d tdir/sub top
+    cd tdir
+    v clean -n
+    v clean -n -d
+    v clean -n -dx
+    v clean -n -d ../a ../udir
+    cd ..
+    v clean -f -q
+    ls
+    v status --short
+    v clean -fd
+    ls
+    v status --short --ignored
+    v clean -fdx
+    ls
+    v status --short --ignored
+    v clean -fdx
+}
+
+s_clean_edge() {
+    v init -q repo; cd repo
+    echo k >keep; v add keep; v commit -q -m x
+    mkdir nested; git init -q nested; echo n >nested/n
+    echo u >u
+    v clean -n -d
+    v clean -fd
+    ls
+    v clean -fdff -n
+    git config clean.requireForce false
+    v clean -n
+    v clean
+    ls
+    git config --unset clean.requireForce
+    echo again >again
+    v clean -x -X
+    v clean -d -f again
+    ls
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

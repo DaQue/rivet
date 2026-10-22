@@ -31,6 +31,7 @@
 //! they have no repository to open yet and create one instead.
 
 pub mod branching;
+pub mod clean;
 pub mod history;
 pub mod ignore;
 pub mod plumbing;
@@ -88,6 +89,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Restore(args) => snapshot::run_restore(&global, &args),
         Commands::Reset(args) => snapshot::run_reset(&global, &args),
         Commands::Log(args) => history::run_log(&global, &args),
+        Commands::Clean(args) => clean::run_clean(&global, &args),
         Commands::Stash(args) => stash::run_stash(&global, &args),
         Commands::Reflog(args) => reflog::run_reflog(&global, &args),
         Commands::Show(args) => history::run_show(&global, &args),
