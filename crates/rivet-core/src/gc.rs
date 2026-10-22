@@ -4,7 +4,12 @@
 //! aborts the run before anything is touched; the new pack is written, renamed into place and
 //! verified before an old pack or a loose object is removed; unreachable objects that are not yet
 //! old enough to prune survive (loose ones stay, ones inside a pack that is being replaced are
-//! written back out loose, keeping the pack's age).
+//! written back out loose, keeping the pack's age). Objects an unreachable object that is still
+//! young needs are kept too, as `git prune` does.
+//!
+//! With [`GcOptions::cruft`] the young unreachable objects go into a cruft pack of their own
+//! instead: `pack-<id>.pack` with a `.mtimes` file holding each object's age, written in the order
+//! `git repack --cruft` uses, with the objects a young one reaches (their age set to the cutoff).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -33,16 +38,20 @@ pub struct GcOptions {
     /// Drop reflog entries older than this whose commits are no longer reachable from the ref
     /// (`gc.reflogExpireUnreachable`); `None` keeps them.
     pub reflog_expire_unreachable: Option<i64>,
+    /// Keep unreachable objects younger than `prune_before` in a separate cruft pack (with a
+    /// `.mtimes` file recording each object's age) instead of leaving them loose.
+    pub cruft: bool,
 }
 
 impl GcOptions {
-    /// Prune nothing, pack refs.
+    /// Prune nothing, pack refs, no cruft pack.
     pub fn new() -> Self {
         Self {
             prune_before: None,
             pack_refs: true,
             reflog_expire: None,
             reflog_expire_unreachable: None,
+            cruft: false,
         }
     }
 }
@@ -70,6 +79,8 @@ pub struct GcReport {
     pub objects_unpacked: usize,
     /// Unreachable objects deleted.
     pub objects_pruned: usize,
+    /// Objects in the new cruft pack (0 when none was written).
+    pub cruft_objects: usize,
 }
 
 fn io_error(path: &Path, source: std::io::Error) -> Error {
@@ -204,6 +215,7 @@ fn recency_order(
     repo: &Repository,
     wanted: &HashSet<ObjectId>,
     tips: Vec<(Vec<u8>, ObjectId)>,
+    root_trees: &[ObjectId],
 ) -> Result<Vec<(ObjectId, u32)>> {
     use crate::object::{Commit, Tree};
     use crate::pack::deltify::pack_name_hash;
@@ -246,7 +258,7 @@ fn recency_order(
     let mut sequence = 0usize;
     let mut push =
         |heap: &mut BinaryHeap<Entry>, oid: ObjectId, sequence: &mut usize| -> Result<()> {
-            if !queued.insert(oid) {
+            if !queued.insert(oid) || !odb.contains(&oid) {
                 return Ok(());
             }
             let object = odb.read(&oid)?;
@@ -309,6 +321,12 @@ fn recency_order(
         }
         Ok(())
     }
+    // Trees named directly come first, as git's pending list has them before any commit's tree.
+    for tree in root_trees {
+        if odb.contains(tree) {
+            walk(repo, *tree, &mut Vec::new(), wanted, &mut seen, &mut out)?;
+        }
+    }
     for (_, tree) in &commits {
         walk(repo, *tree, &mut Vec::new(), wanted, &mut seen, &mut out)?;
     }
@@ -324,20 +342,28 @@ fn recency_order(
     Ok(out)
 }
 
-/// Write `to_pack` as one pack, deltified the way `git pack-objects` would: returns the pack's
+/// The order objects are written to a pack in.
+#[derive(Clone, Copy)]
+enum Layout {
+    /// Commits and tags, then trees, then blobs (the pack of reachable objects).
+    ByType,
+    /// The order given, a delta's base written just before it (a cruft pack).
+    AsListed,
+}
+
+/// Write `order` as one pack, deltified the way `git pack-objects` would: returns the pack's
 /// summary. `reusable` maps an object to the delta it is already stored as in a pack that is
 /// being replaced.
 fn write_deltified(
     repo: &Repository,
-    to_pack: &HashSet<ObjectId>,
+    order: Vec<(ObjectId, u32)>,
     reusable: &HashMap<ObjectId, (ObjectId, Vec<u8>)>,
-    tips: Vec<(Vec<u8>, ObjectId)>,
     pack_dir: &Path,
+    layout: Layout,
 ) -> Result<crate::pack::writer::PackWriteSummary> {
     use crate::pack::deltify::{DeltaInput, search_deltas};
 
     let odb = repo.odb();
-    let order = recency_order(repo, to_pack, tips)?;
     let position: HashMap<ObjectId, usize> = order
         .iter()
         .enumerate()
@@ -383,18 +409,24 @@ fn write_deltified(
         )?
     };
 
-    // Commits and tags first, then trees, then blobs; a delta only after its base.
     let mut sequence: Vec<usize> = Vec::with_capacity(order.len());
-    for rank in [
-        [ObjectKind::Tag, ObjectKind::Commit].as_slice(),
-        [ObjectKind::Tree].as_slice(),
-        [ObjectKind::Blob].as_slice(),
-    ] {
-        for (i, input) in inputs.iter().enumerate() {
-            if rank.contains(&input.kind) {
-                sequence.push(i);
+    match layout {
+        // Commits and tags first, then trees, then blobs; a delta only after its base.
+        Layout::ByType => {
+            for rank in [
+                [ObjectKind::Tag, ObjectKind::Commit].as_slice(),
+                [ObjectKind::Tree].as_slice(),
+                [ObjectKind::Blob].as_slice(),
+            ] {
+                for (i, input) in inputs.iter().enumerate() {
+                    if rank.contains(&input.kind) {
+                        sequence.push(i);
+                    }
+                }
             }
         }
+        // In the order given; `emit` writes a delta's base first, wherever the base is listed.
+        Layout::AsListed => sequence.extend(0..order.len()),
     }
     let mut writer = PackWriter::new(repo.format());
     let mut offsets: Vec<Option<u64>> = vec![None; order.len()];
@@ -440,7 +472,185 @@ fn write_deltified(
         )?;
     }
     let (_, summary) = writer.finish_to_path(pack_dir)?;
+    write_rev(pack_dir, repo.format(), &summary)?;
     Ok(summary)
+}
+
+/// The objects of `candidates` that something in `from` reaches (and `from` itself is not).
+///
+/// `git prune` and `repack --cruft` both keep an old unreachable object that a newer unreachable
+/// one still needs, so that the newer one stays complete.
+fn reached_from(
+    repo: &Repository,
+    candidates: &HashMap<ObjectId, i64>,
+    from: &[ObjectId],
+) -> HashSet<ObjectId> {
+    use crate::object::{Commit, EntryMode, Tree};
+
+    let odb = repo.odb();
+    let format = repo.format();
+    let mut retained: HashSet<ObjectId> = HashSet::new();
+    let mut seen: HashSet<ObjectId> = from.iter().copied().collect();
+    let mut stack: Vec<ObjectId> = from.to_vec();
+    while let Some(oid) = stack.pop() {
+        let Ok(object) = odb.read(&oid) else {
+            continue;
+        };
+        let mut children: Vec<ObjectId> = Vec::new();
+        match object.kind() {
+            ObjectKind::Commit => {
+                if let Ok(commit) = Commit::parse(format, object.data()) {
+                    children.push(commit.tree);
+                    children.extend(commit.parents.iter().copied());
+                }
+            }
+            ObjectKind::Tree => {
+                if let Ok(tree) = Tree::parse(format, object.data()) {
+                    children.extend(
+                        tree.entries
+                            .iter()
+                            .filter(|e| e.mode != EntryMode::Commit)
+                            .map(|e| e.oid),
+                    );
+                }
+            }
+            ObjectKind::Tag => {
+                if let Ok(tag) = Tag::parse(format, object.data()) {
+                    children.push(tag.object);
+                }
+            }
+            ObjectKind::Blob => {}
+        }
+        for child in children {
+            if candidates.contains_key(&child) && seen.insert(child) {
+                retained.insert(child);
+                stack.push(child);
+            }
+        }
+    }
+    retained
+}
+
+/// The unreachable objects a cruft pack will hold, in pack order, with the age recorded for each.
+struct CruftPlan {
+    order: Vec<(ObjectId, u32)>,
+    mtimes: HashMap<ObjectId, i64>,
+}
+
+/// Decide what the cruft pack keeps, as `git pack-objects --cruft --cruft-expiration` does.
+///
+/// `listed` has every unreachable object with its age, in the order git finds them: loose objects
+/// by id, then each pack's objects in pack order, newest pack first. An object is kept when it is
+/// newer than `cutoff`, and so is everything such an object reaches, however old (those are
+/// recorded with the cutoff as their age). The newer ones are written in that order, then the ones
+/// kept for connectivity in the order a walk from the newer commits finds them.
+fn plan_cruft(
+    repo: &Repository,
+    listed: &[(ObjectId, i64)],
+    cutoff: Option<i64>,
+) -> Result<CruftPlan> {
+    let odb = repo.odb();
+    let expired = |when: i64| cutoff.is_some_and(|c| when <= c);
+    let candidates: HashMap<ObjectId, i64> = listed.iter().copied().collect();
+    let recent: Vec<ObjectId> = listed
+        .iter()
+        .filter(|(_, when)| !expired(*when))
+        .map(|(oid, _)| *oid)
+        .collect();
+    let mut mtimes: HashMap<ObjectId, i64> = recent.iter().map(|o| (*o, candidates[o])).collect();
+    let mut order: Vec<(ObjectId, u32)> = recent.iter().map(|oid| (*oid, 0)).collect();
+
+    let Some(cutoff) = cutoff else {
+        return Ok(CruftPlan { order, mtimes });
+    };
+    // Everything a newer object reaches among the old unreachable ones.
+    let retained = reached_from(repo, &candidates, &recent);
+    if retained.is_empty() {
+        return Ok(CruftPlan { order, mtimes });
+    }
+    let mut tips: Vec<(Vec<u8>, ObjectId)> = Vec::new();
+    let mut root_trees: Vec<ObjectId> = Vec::new();
+    for oid in &recent {
+        match odb.read_header(oid) {
+            Ok((ObjectKind::Commit | ObjectKind::Tag, _)) => tips.push((Vec::new(), *oid)),
+            Ok((ObjectKind::Tree, _)) => root_trees.push(*oid),
+            _ => {}
+        }
+    }
+    for (oid, hash) in recency_order(repo, &retained, tips, &root_trees)? {
+        mtimes.insert(oid, cutoff);
+        order.push((oid, hash));
+    }
+    Ok(CruftPlan { order, mtimes })
+}
+
+/// Write `pack-<checksum>.rev`, the reverse index git writes beside every pack: `RIDX`, version 1,
+/// the hash id, for each object in pack order its position in the `.idx`, then the pack's checksum
+/// and the file's own.
+fn write_rev(
+    pack_dir: &Path,
+    format: crate::hash::ObjectFormat,
+    summary: &crate::pack::writer::PackWriteSummary,
+) -> Result<()> {
+    let index = crate::pack::index::PackIndex::parse(&summary.index, format)?;
+    let mut by_offset: Vec<(u64, u32)> = (0..index.len())
+        .filter_map(|i| index.entry(i).map(|entry| (entry.offset, i as u32)))
+        .collect();
+    by_offset.sort();
+    let mut data: Vec<u8> = b"RIDX".to_vec();
+    data.extend_from_slice(&1u32.to_be_bytes());
+    data.extend_from_slice(
+        &(match format {
+            crate::hash::ObjectFormat::Sha1 => 1u32,
+            crate::hash::ObjectFormat::Sha256 => 2u32,
+        })
+        .to_be_bytes(),
+    );
+    for (_, position) in &by_offset {
+        data.extend_from_slice(&position.to_be_bytes());
+    }
+    data.extend_from_slice(summary.checksum.as_bytes());
+    let mut hasher = format.hasher();
+    hasher.update(&data);
+    data.extend_from_slice(hasher.finish()?.as_bytes());
+    let path = pack_dir.join(format!("pack-{}.rev", summary.checksum.to_hex()));
+    std::fs::write(&path, data).map_err(|e| io_error(&path, e))
+}
+
+/// Write `pack-<checksum>.mtimes`: `MTME`, version 1, the hash id, one big-endian age per object
+/// in index order, then the pack's checksum and the file's own.
+fn write_mtimes(
+    pack_dir: &Path,
+    format: crate::hash::ObjectFormat,
+    pack_checksum: ObjectId,
+    mtimes: &HashMap<ObjectId, i64>,
+    members: &[ObjectId],
+) -> Result<()> {
+    let mut sorted: Vec<ObjectId> = members.to_vec();
+    sorted.sort();
+    let mut data: Vec<u8> = b"MTME".to_vec();
+    data.extend_from_slice(&1u32.to_be_bytes());
+    data.extend_from_slice(
+        &(match format {
+            crate::hash::ObjectFormat::Sha1 => 1u32,
+            crate::hash::ObjectFormat::Sha256 => 2u32,
+        })
+        .to_be_bytes(),
+    );
+    for oid in &sorted {
+        let when = mtimes
+            .get(oid)
+            .copied()
+            .unwrap_or(0)
+            .clamp(0, i64::from(u32::MAX));
+        data.extend_from_slice(&(when as u32).to_be_bytes());
+    }
+    data.extend_from_slice(pack_checksum.as_bytes());
+    let mut hasher = format.hasher();
+    hasher.update(&data);
+    data.extend_from_slice(hasher.finish()?.as_bytes());
+    let path = pack_dir.join(format!("pack-{}.mtimes", pack_checksum.to_hex()));
+    std::fs::write(&path, data).map_err(|e| io_error(&path, e))
 }
 
 /// Collect the names of every reflog under `logs/`.
@@ -627,6 +837,7 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
     let mut keep_objects: HashSet<ObjectId> = HashSet::new();
     let mut removable: Vec<(PathBuf, ObjectId, Vec<ObjectId>, i64)> = Vec::new();
     let mut cruft: HashMap<ObjectId, i64> = HashMap::new();
+    let mut cruft_packs: HashSet<ObjectId> = HashSet::new();
     for pack in odb.packs() {
         let stem = format!("pack-{}", pack.checksum());
         let pack_path = pack_dir.join(format!("{stem}.pack"));
@@ -637,6 +848,9 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
             let mtime = mtime_seconds(&pack_path)?;
             // A cruft pack (written by Git) records each object's own mtime beside it.
             let own = cruft_mtimes(&pack_dir.join(format!("{stem}.mtimes")), &oids);
+            if pack_dir.join(format!("{stem}.mtimes")).exists() {
+                cruft_packs.insert(pack.checksum());
+            }
             for (oid, when) in own {
                 cruft.insert(oid, when);
             }
@@ -652,15 +866,25 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
         .collect();
     to_pack.sort();
 
-    // Already one pack holding exactly the reachable objects, and nothing loose is reachable.
-    let already_packed = removable.len() == 1
+    // Already one pack holding exactly the reachable objects, and nothing loose is reachable. With
+    // cruft packs the old ones are inputs to the new cruft pack, not part of the comparison.
+    let regular: Vec<&(PathBuf, ObjectId, Vec<ObjectId>, i64)> = removable
+        .iter()
+        .filter(|(_, checksum, _, _)| !(options.cruft && cruft_packs.contains(checksum)))
+        .collect();
+    let already_packed = regular.len() == 1
         && loose_ids.iter().all(|oid| !reachable.contains(oid))
-        && removable[0].2.len() == to_pack.len()
-        && removable[0].2.iter().all(|oid| reachable.contains(oid));
+        && regular[0].2.len() == to_pack.len()
+        && regular[0].2.iter().all(|oid| reachable.contains(oid));
+    let kept_pack = if options.cruft && already_packed {
+        Some(regular[0].1)
+    } else {
+        None
+    };
 
     // Objects that live only in packs about to disappear and are not reachable.
     let mut unreachable_packed: BTreeMap<ObjectId, i64> = BTreeMap::new();
-    if !already_packed {
+    if !already_packed && !options.cruft {
         for (_, _, oids, mtime) in &removable {
             for oid in oids {
                 if !reachable.contains(oid) {
@@ -695,7 +919,8 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
                 }
             }
         }
-        let summary = write_deltified(repo, &wanted, &reusable, tips, &pack_dir)?;
+        let order = recency_order(repo, &wanted, tips, &[])?;
+        let summary = write_deltified(repo, order, &reusable, &pack_dir, Layout::ByType)?;
         new_checksum = Some(summary.checksum);
         report.objects_packed = to_pack.len();
 
@@ -716,13 +941,131 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
         }
     }
 
-    if already_packed {
+    if already_packed && !options.cruft {
         return finish_loose(repo, options, &reachable, &mut report);
     }
 
-    // Unreachable objects young enough to survive are written back out as loose objects.
+    // The unreachable objects that are young enough, in a pack of their own.
+    let mut new_cruft: Option<ObjectId> = None;
+    let mut cruft_members: HashSet<ObjectId> = HashSet::new();
+    if options.cruft {
+        let mut listed: Vec<(ObjectId, i64)> = Vec::new();
+        let mut position: HashMap<ObjectId, usize> = HashMap::new();
+        let mut note = |oid: ObjectId, when: i64| match position.get(&oid) {
+            Some(at) => listed[*at].1 = listed[*at].1.max(when),
+            None => {
+                position.insert(oid, listed.len());
+                listed.push((oid, when));
+            }
+        };
+        let mut loose_sorted = loose_ids.clone();
+        loose_sorted.sort();
+        let mut doomed: Vec<(&PathBuf, ObjectId, i64)> = removable
+            .iter()
+            .map(|(stem, checksum, _, mtime)| (stem, *checksum, *mtime))
+            .collect();
+        // Newest pack first; git lists equally old packs by descending name.
+        doomed.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| b.0.cmp(a.0)));
+        // With an expiry git looks at loose objects before packs, without one after them.
+        for loose_pass in [
+            options.prune_before.is_some(),
+            options.prune_before.is_none(),
+        ] {
+            if loose_pass {
+                for oid in &loose_sorted {
+                    if !reachable.contains(oid) && !keep_objects.contains(oid) {
+                        note(*oid, mtime_seconds(&odb.loose().path_for(oid))?);
+                    }
+                }
+                continue;
+            }
+            for (_, checksum, mtime) in &doomed {
+                let Some(pack) = odb.packs().iter().find(|p| p.checksum() == *checksum) else {
+                    continue;
+                };
+                let mut in_pack_order: Vec<(u64, ObjectId)> =
+                    pack.oids_by_offset().into_iter().collect();
+                in_pack_order.sort();
+                for (_, oid) in in_pack_order {
+                    if !reachable.contains(&oid) && !keep_objects.contains(&oid) {
+                        note(oid, cruft.get(&oid).copied().unwrap_or(*mtime));
+                    }
+                }
+            }
+        }
+        let plan = plan_cruft(repo, &listed, options.prune_before)?;
+        if !plan.order.is_empty() {
+            let wanted: HashSet<ObjectId> = plan.order.iter().map(|(oid, _)| *oid).collect();
+            let mut reusable: HashMap<ObjectId, (ObjectId, Vec<u8>)> = HashMap::new();
+            for pack in odb.packs() {
+                if !removable
+                    .iter()
+                    .any(|(_, checksum, _, _)| *checksum == pack.checksum())
+                {
+                    continue;
+                }
+                let by_offset = pack.oids_by_offset();
+                for oid in pack.oids()? {
+                    if wanted.contains(&oid)
+                        && !reusable.contains_key(&oid)
+                        && let Some((base, delta)) = pack.stored_delta(&oid, &by_offset)?
+                        && wanted.contains(&base)
+                    {
+                        reusable.insert(oid, (base, delta));
+                    }
+                }
+            }
+            let members: Vec<ObjectId> = plan.order.iter().map(|(oid, _)| *oid).collect();
+            let summary =
+                write_deltified(repo, plan.order, &reusable, &pack_dir, Layout::AsListed)?;
+            write_mtimes(&pack_dir, format, summary.checksum, &plan.mtimes, &members)?;
+            let check = crate::odb::Odb::open(git_dir, format)?;
+            let store = check
+                .packs()
+                .iter()
+                .find(|p| p.checksum() == summary.checksum)
+                .ok_or_else(|| {
+                    Error::Message("gc: the new cruft pack was not found after writing".into())
+                })?;
+            store.verify_checksum()?;
+            for oid in &members {
+                if !store.contains(oid) {
+                    return Err(Error::Message(format!(
+                        "gc: object {oid} is missing from the new cruft pack"
+                    )));
+                }
+            }
+            report.cruft_objects = members.len();
+            cruft_members = members.into_iter().collect();
+            new_cruft = Some(summary.checksum);
+        }
+    }
+
+    // Unreachable objects young enough to survive are written back out as loose objects, and so
+    // are the old ones a young one still needs.
+    let mut needed: HashSet<ObjectId> = HashSet::new();
+    if let Some(cutoff) = options.prune_before
+        && !options.cruft
+    {
+        let mut ages: HashMap<ObjectId, i64> = unreachable_packed
+            .iter()
+            .map(|(oid, when)| (*oid, *when))
+            .collect();
+        for oid in loose_ids.iter().filter(|oid| !reachable.contains(oid)) {
+            let when = mtime_seconds(&odb.loose().path_for(oid))?;
+            let entry = ages.entry(*oid).or_insert(when);
+            *entry = (*entry).max(when);
+        }
+        let recent: Vec<ObjectId> = ages
+            .iter()
+            .filter(|(_, when)| **when > cutoff)
+            .map(|(oid, _)| *oid)
+            .collect();
+        needed = reached_from(repo, &ages, &recent);
+    }
     for (oid, mtime) in &unreachable_packed {
-        let expired = options.prune_before.is_some_and(|cutoff| *mtime <= cutoff);
+        let expired =
+            options.prune_before.is_some_and(|cutoff| *mtime <= cutoff) && !needed.contains(oid);
         if expired || odb.loose().contains(oid) {
             continue;
         }
@@ -739,7 +1082,10 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
 
     // Only now are the replaced packs and the packed loose objects dropped.
     for (stem, checksum, _, _) in &removable {
-        if Some(*checksum) == new_checksum {
+        if Some(*checksum) == new_checksum
+            || Some(*checksum) == new_cruft
+            || Some(*checksum) == kept_pack
+        {
             continue;
         }
         for extension in ["pack", "idx", "rev", "bitmap", "mtimes"] {
@@ -751,7 +1097,7 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
         report.packs_removed += 1;
     }
     for oid in &loose_ids {
-        if reachable.contains(oid) {
+        if reachable.contains(oid) || cruft_members.contains(oid) {
             odb.loose().remove(oid)?;
             report.loose_removed += 1;
         }
@@ -775,8 +1121,14 @@ fn finish_loose(
                 ages.insert(oid, mtime_seconds(&loose.path_for(&oid))?);
             }
         }
+        let recent: Vec<ObjectId> = ages
+            .iter()
+            .filter(|(_, when)| **when > cutoff)
+            .map(|(oid, _)| *oid)
+            .collect();
+        let needed = reached_from(repo, &ages, &recent);
         for (oid, mtime) in ages {
-            if mtime <= cutoff {
+            if mtime <= cutoff && !needed.contains(&oid) {
                 loose.remove(&oid)?;
                 report.objects_pruned += 1;
             }

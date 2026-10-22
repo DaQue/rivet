@@ -419,3 +419,35 @@ exit 1; the other patches still go in. `--check` reports the same lines, writes 
 the odb exactly as git does (the `fsck` dangling list of the scenario compares them).
 Not covered: `--ours`/`--theirs`/`--union`, `-v`, `core.autocrlf` effects on the merge.
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 142 PASS / `failures: 0`.
+
+### Phase B — `gc` cruft packs, write side (landed, scenarios `s_gc_cruft`, `s_gc_cruft_expire`; `s_gc_after_cruft` tightened)
+Verified against git 2.56 on identical fixtures (absolute mtimes set with `touch -d`, absolute `--prune=` dates): `gc --cruft` /
+`--no-cruft`, `gc.cruftPacks` (**default true** — git 2.56's default, so a plain `rivet gc` now writes a cruft pack; the older
+`s_gc*` scenarios pin `gc.cruftPacks=false`), `--prune=<date|now|never>`, `--no-prune`, `gc.pruneExpire`.
+* Reachable objects → the main pack as before; every other object (loose, or in a pack that is being replaced, old cruft packs
+  included) is a candidate. Age: loose file mtime, the pack's mtime, or the age in an old cruft pack's `.mtimes`; the newest wins.
+* Expired = age **<=** the cutoff (an object exactly at the cutoff is gone). Everything an unexpired candidate reaches is kept even if
+  expired, and recorded with the cutoff as its age (`reached_from`). `--prune=now` therefore writes no cruft pack; no expiry keeps all.
+* Cruft pack layout, as `git pack-objects --cruft` writes it: the unexpired objects first — with an expiry loose objects (by id)
+  then each old pack's objects in pack order, newest pack first (equally old: descending name); without an expiry the packs first,
+  then the loose ones — then the objects kept for connectivity in walk order (commits newest first, then each commit's trees and
+  blobs, trees named directly before those). Deltas are searched like the main pack (name hash 0 for the first group); a delta's base is
+  written right before it. `pack-<id>.mtimes` = `MTME`, 1, hash id, one big-endian u32 per object in `.idx` order, pack checksum,
+  file checksum. `pack-<id>.rev` is now written for every pack gc writes (git does; `s_gc_cruft*` compare the file list).
+* Old cruft packs and the loose copies of packed objects are removed only after the new packs verify; a cruft pack whose bytes did not
+  change keeps its name.
+* Non-cruft pruning now keeps the old objects a young unreachable object needs, as `git prune` / `repack -A --unpack-unreachable`
+  do (found by the `--no-cruft --prune=<date>` rows of the fixture matrix: git kept 3 loose objects, rivet 1).
+Differences from the brief, git being the oracle: `git gc` has **no** `--cruft-expiration` (that is `git repack`; `gc` uses `--prune` /
+`gc.pruneExpire` for it, so `s_gc_cruft_expire` drives expiry through those), no `--cruft-expiration` was added to `rivet gc`.
+Compared (via real git reading rivet's repository): `verify-pack -v` shape in pack order for the cruft pack (type, size, delta base —
+not compressed sizes or offsets, which depend on the zlib build: git stores a 90-byte tree in 92 bytes, rivet in 103), the age table
+of the `.mtimes`, `cat-file --batch-all-objects --batch-check`, loose leftovers, pack file extensions, `fsck`, `count-objects -v`.
+Known gaps (gc): the main pack's *write order* is commits, trees, blobs while git writes commits, blobs, trees for an untagged
+repository (its `to_pack` order, trees after their entries) — object set and delta shapes match, so `s_gc*` compare it sorted;
+`rivet fsck` lists dangling objects in a different order than git once a cruft pack exists (the scenarios sort it with `vs`);
+`--max-cruft-size`, `--expire-to`, `--keep-largest-pack`, `gc.bigPackThreshold` are not implemented (clap refuses them); `--no-cruft`
+writes unpacked objects back loose with *the time of the write* (as git does) — the old attempt to restore the pack's age silently
+failed on the read-only loose file and was left alone. Found on the way: `rivet stash drop -q` still prints `Dropped refs/stash@{0}
+(<id>)` (git is silent), not touched.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 144 PASS / `failures: 0`.

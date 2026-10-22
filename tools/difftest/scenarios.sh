@@ -1393,6 +1393,141 @@ s_gc_reflog() {
     objset
 }
 
+# The cruft pack(s), as real git reads them: objects in pack order ("<id> <type> <size> [<depth>
+# <base>]", no compressed sizes or offsets) and the age recorded for each id.
+cruftshape() {
+    echo "## cruftshape" >>"$TRANSCRIPT"
+    local idx m n
+    for idx in .git/objects/pack/*.idx; do
+        [ -e "$idx" ] || continue
+        m=${idx%.idx}.mtimes
+        [ -f "$m" ] || continue
+        echo "# cruft pack" >>"$TRANSCRIPT"
+        g verify-pack -v "$idx" | awk 'NF == 5 && $1 ~ /^[0-9a-f]+$/ { print $1, $2, $3 } NF == 7 && $1 ~ /^[0-9a-f]+$/ { print $1, $2, $3, $6, $7 }' >>"$TRANSCRIPT"
+        n=$(g show-index <"$idx" | wc -l)
+        echo "mtimes header: $(od -An -tx1 -N12 "$m" | tr -d ' \n')" >>"$TRANSCRIPT"
+        paste <(g show-index <"$idx" | awk '{print $2}' | sort) <(od -An -tu4 --endian=big -j12 -N$((n * 4)) -v "$m" | tr -s ' ' '\n' | grep .) >>"$TRANSCRIPT"
+    done
+}
+
+# Every object git can find (reachable or not) and the loose files left behind.
+allobjects() {
+    echo "## all objects" >>"$TRANSCRIPT"
+    g cat-file --batch-all-objects --batch-check | sort >>"$TRANSCRIPT"
+    echo "## loose" >>"$TRANSCRIPT"
+    (cd .git/objects && find . -type f -path './??/*' | sort) >>"$TRANSCRIPT"
+    echo "## pack files" >>"$TRANSCRIPT"
+    (cd .git/objects/pack 2>/dev/null && ls | sed 's/^pack-[0-9a-f]*//' | sort | uniq -c) >>"$TRANSCRIPT"
+}
+
+# Give every unreachable object (or the ones named) the modification time "$1".
+age_unreachable() {
+    local when=$1 oid
+    for oid in $(g fsck --unreachable --no-reflogs --no-progress 2>/dev/null | awk '{print $3}'); do
+        touch -d "$when" ".git/objects/${oid:0:2}/${oid:2}" 2>/dev/null
+    done
+}
+age() { touch -d "$2" ".git/objects/${1:0:2}/${1:2}"; }
+
+s_gc_cruft() {
+    OLD='2026-09-01 00:00:00'; NEW='2026-10-20 00:00:00'; CUT=2026-10-05T00:00:00Z
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    tick; echo b >b; v add b; v commit -q -m two
+    v switch -q -c topic; tick; echo t >t; v add t; v commit -q -m topic; v switch -q main
+    v branch -D topic
+    tick; echo stash-me >>a; v stash -q
+    g stash drop -q
+    echo loose-new | g hash-object -w --stdin >/dev/null
+    echo loose-old | g hash-object -w --stdin >/dev/null
+    age_unreachable "$NEW"
+    age "$(echo loose-old | g hash-object --stdin)" "$OLD"
+    # default: unreachable objects go to a cruft pack, the reflogs are expired first
+    v gc --prune=$CUT
+    cruftshape; packshape; allobjects
+    vs fsck
+    DROP_OUT='^size-pack' v count-objects -v
+    # nothing changed: the same cruft pack again
+    v gc --prune=$CUT
+    cruftshape; allobjects
+    # a new loose object joins it; one object of the pack becomes reachable again
+    echo loose-newer | g hash-object -w --stdin >/dev/null
+    age "$(echo loose-newer | g hash-object --stdin)" "$NEW"
+    pick=$(g cat-file --batch-all-objects --batch-check | awk '$2 == "commit" { print $1 }' | while read -r c; do g merge-base --is-ancestor "$c" HEAD 2>/dev/null || echo "$c"; done | head -1)
+    g branch resurrected "$pick"
+    v gc --prune=$CUT
+    cruftshape; packshape; allobjects
+    vs fsck
+    v log --oneline resurrected
+    # the other direction: --no-cruft explodes the cruft pack into loose objects again
+    g branch -D resurrected -q
+    g reflog expire --expire=now --all
+    v gc --no-cruft --prune=$CUT
+    age_unreachable "$NEW"
+    cruftshape; allobjects
+    vs fsck
+    # and back, then everything goes
+    v gc --cruft --prune=$CUT
+    cruftshape; allobjects
+    v gc --cruft --prune=now
+    cruftshape; allobjects
+    vs fsck
+    v log --oneline
+}
+
+s_gc_cruft_expire() {
+    OLD='2026-09-01 00:00:00'; MID='2026-10-10 00:00:00'; NEW='2026-10-20 00:00:00'; CUT=2026-10-05T00:00:00Z
+    g config --global gc.reflogExpire never
+    g config --global gc.reflogExpireUnreachable never
+    v init -q repo; cd repo
+    for i in 1 2 3; do echo $i >f$i; v add f$i; tick; v commit -q -m "c$i"; done
+    mkt() { rm -f .git/ti; GIT_INDEX_FILE=.git/ti g update-index --add --cacheinfo "100644,$1,$2" >&2; GIT_INDEX_FILE=.git/ti g write-tree; rm -f .git/ti; }
+    blob() { local o; o=$(echo "$1" | g hash-object -w --stdin); age "$o" "$2"; echo "$o"; }
+    # a chain of old commits, a newer commit on top of the end of it, one with its own old tree
+    b1=$(blob b1 "$OLD"); t1=$(mkt "$b1" n1); age "$t1" "$OLD"
+    o1=$(g commit-tree "$t1" -m o1); age "$o1" "$OLD"
+    b2=$(blob b2 "$OLD"); t2=$(mkt "$b2" n2); age "$t2" "$OLD"
+    o2=$(g commit-tree "$t2" -p "$o1" -m o2); age "$o2" "$OLD"
+    b3=$(blob b3 "$OLD"); t3=$(mkt "$b3" n3); age "$t3" "$OLD"
+    f1=$(g commit-tree "$t3" -p "$o2" -m f1); age "$f1" "$NEW"
+    b4=$(blob b4 "$OLD"); t4=$(mkt "$b4" n4); age "$t4" "$OLD"
+    f2=$(g commit-tree "$t4" -m f2); age "$f2" "$MID"
+    # lone blobs: old, exactly at the cutoff, just after it, and a tag over an old commit
+    blob lone-old "$OLD" >/dev/null
+    blob lone-at "2026-10-05 00:00:00" >/dev/null
+    blob lone-after "2026-10-05 00:00:01" >/dev/null
+    seq 1 2000 >big1; (seq 1 2000; echo extra) >big2
+    bb=$(g hash-object -w big1); age "$bb" "$NEW"; bb=$(g hash-object -w big2); age "$bb" "$MID"
+    rm -f big1 big2
+    g tag -a oldtag -m "old tag" "$o1"; g tag -d oldtag >/dev/null
+    tg=$(g fsck --unreachable --no-reflogs --no-progress 2>/dev/null | awk '$2 == "tag" { print $3 }'); [ -n "$tg" ] && age "$tg" "$MID"
+    v gc --prune=$CUT
+    cruftshape; packshape; allobjects
+    vs fsck
+    # a later cutoff expires the middle-aged ones; what the newest still reaches stays
+    v gc --prune=2026-10-15T00:00:00Z
+    cruftshape; allobjects
+    # no expiry at all, and never
+    v gc --no-prune
+    cruftshape; allobjects
+    v gc --prune=never
+    cruftshape; allobjects
+    # gc.pruneExpire and gc.cruftPacks
+    echo cfg-blob | g hash-object -w --stdin >/dev/null; age_unreachable "$NEW"
+    g config gc.pruneExpire 2026-10-12T00:00:00Z
+    v gc
+    cruftshape; allobjects
+    g config gc.cruftPacks false
+    v gc
+    cruftshape; allobjects
+    v gc --cruft
+    cruftshape; allobjects
+    g config gc.cruftPacks true
+    v gc --no-cruft
+    cruftshape; allobjects
+    vs fsck
+}
+
 s_gc_after_cruft() {
     g init -q repo; cd repo
     echo a >a; g add a; g commit -qm one
@@ -1406,8 +1541,8 @@ s_gc_after_cruft() {
     DROP_OUT='^size-pack' v count-objects -v
     objset
     v gc
-    # Git keeps young unreachable objects in a cruft pack; Rivet leaves them loose.
-    DROP_OUT='^(size|count|in-pack|packs|prune-packable|size-pack)' v count-objects -v
+    # Young unreachable objects stay in a cruft pack, as in git.
+    DROP_OUT='^size-pack' v count-objects -v
     objset
     v fsck
     v gc --prune=now

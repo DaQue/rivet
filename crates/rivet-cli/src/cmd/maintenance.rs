@@ -30,6 +30,14 @@ pub struct GcArgs {
     /// Accepted for compatibility.
     #[arg(long = "force")]
     pub force: bool,
+
+    /// Pack unreachable objects that are not old enough to prune into a cruft pack.
+    #[arg(long = "cruft", overrides_with = "no_cruft")]
+    pub cruft: bool,
+
+    /// Leave such objects loose instead.
+    #[arg(long = "no-cruft", overrides_with = "cruft")]
+    pub no_cruft: bool,
 }
 
 /// Arguments to `rivet count-objects`.
@@ -133,6 +141,16 @@ pub fn run_gc(global: &GlobalArgs, args: &GcArgs) -> Result<i32> {
             .map(|v| String::from_utf8_lossy(&v).into_owned())
             .unwrap_or_else(|| default.to_string());
         parse_expiry(&text)
+    };
+    // `gc.cruftPacks` defaults to true, as in git 2.56; the flags win over the setting.
+    options.cruft = if args.cruft {
+        true
+    } else if args.no_cruft {
+        false
+    } else {
+        get("gc.cruftPacks")
+            .and_then(|v| rivet_core::config::parse_bool(BStr::new(&v[..])).ok())
+            .unwrap_or(true)
     };
     options.reflog_expire = reflog_setting("gc.reflogExpire", "90.days")?;
     options.reflog_expire_unreachable = reflog_setting("gc.reflogExpireUnreachable", "30.days")?;
