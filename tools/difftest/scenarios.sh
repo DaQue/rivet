@@ -3019,6 +3019,250 @@ s_rev_list_boundary() {
     v rev-list --boundary --all ^v1
 }
 
+# History with several authors and time zones, annotated/nested/blob/tree tags, remote-tracking refs and
+# branch upstreams (ahead, behind, gone, local), built by real git in both twins so only the
+# for-each-ref queries differ between the runs.
+fer_t=1700000000
+fer_commit() {
+    fer_t=$((fer_t + ${5:-100}))
+    GIT_AUTHOR_NAME="$1" GIT_AUTHOR_EMAIL="$2" GIT_AUTHOR_DATE="$fer_t $3" \
+        GIT_COMMITTER_NAME=Comm GIT_COMMITTER_EMAIL=comm@e.org GIT_COMMITTER_DATE="$((fer_t + 7)) +0000" \
+        g commit -q --allow-empty -m "$4"
+}
+fer_tag() { # name date tz message [object]
+    GIT_COMMITTER_NAME=Tagger GIT_COMMITTER_EMAIL=tag@e.org GIT_COMMITTER_DATE="$2 $3" g tag -a -m "$4" "$1" ${5:-}
+}
+fer_repo() {
+    fer_t=1700000000
+    g init -q repo; cd repo
+    fer_commit "Alice Ay" alice@x.org +0100 "root commit"
+    fer_commit "Bob Bee" bob@y.net -0500 "second: a subject
+that wraps onto a second line
+
+Body paragraph one.
+Body line two.
+
+Signed-off-by: Bob Bee <bob@y.net>"
+    g switch -q -c topic; fer_commit "Carol Cee" carol@z.com +0530 "topic work"; fer_commit "Alice Ay" alice@x.org +0100 "topic more"
+    g switch -q main; fer_commit "Bob Bee" bob@y.net -0500 "main three"
+    g switch -q -c feat main~1; fer_commit "Dave Dee" dave@w.io +0000 "feat only" 5
+    g switch -q main
+    fer_t=$((fer_t + 60))
+    GIT_AUTHOR_NAME=Merger GIT_AUTHOR_EMAIL=m@e.org GIT_AUTHOR_DATE="$fer_t +0200" GIT_COMMITTER_NAME=Comm \
+        GIT_COMMITTER_EMAIL=comm@e.org GIT_COMMITTER_DATE="$fer_t +0000" g merge -q --no-ff -m "Merge topic" topic
+    fer_commit "Alice Ay" alice@x.org +0100 "main five"
+    g tag light main~2
+    fer_tag v1 1700000900 -0700 "Release one
+second line of tag
+
+third paragraph" main~1
+    GIT_COMMITTER_NAME=Tagger2 GIT_COMMITTER_EMAIL=tag2@e.org GIT_COMMITTER_DATE="1700000950 +0900" g tag -a -m "tag of a tag" v1-wrap v1 2>/dev/null
+    fer_tag v2 1700001000 +0000 "tag of topic" topic
+    g update-ref refs/tags/blobtag "$(echo blob | g hash-object -w --stdin)"
+    g update-ref refs/tags/treetag "$(g rev-parse 'main^{tree}')"
+    g remote add origin https://example.invalid/r.git
+    g update-ref refs/remotes/origin/main main~2
+    g update-ref refs/remotes/origin/topic topic
+    g update-ref refs/remotes/origin/feat feat^
+    g config branch.main.remote origin; g config branch.main.merge refs/heads/main
+    g config branch.topic.remote origin; g config branch.topic.merge refs/heads/topic
+    g config branch.feat.remote origin; g config branch.feat.merge refs/heads/gone
+    g branch loc main~3; g config branch.loc.remote .; g config branch.loc.merge refs/heads/feat
+    g branch nouplink main~1
+}
+
+s_for_each_ref_atoms() {
+    fer_repo
+    v for-each-ref
+    v for-each-ref --format='%(refname)|%(refname:short)|%(refname:lstrip=1)|%(refname:lstrip=2)|%(refname:rstrip=1)|%(refname:strip=2)|%(refname:lstrip=-1)|%(refname:rstrip=-1)|%(refname:rstrip=-2)'
+    v for-each-ref --format='%(objectname) %(objectname:short) %(objectname:short=10) %(objecttype) %(objectsize)'
+    v for-each-ref --format='%(refname) tree=%(tree) parent=%(parent) n=%(numparent)'
+    v for-each-ref --format='%(refname) object=%(object) type=%(type) tag=%(tag)'
+    v for-each-ref --format='%(refname) *%(*objectname) *%(*objecttype) *%(*objectsize) *%(*tree) *%(*authorname) *%(*subject) *%(*numparent)'
+    v for-each-ref --format='%(refname) %(author)|%(committer)|%(tagger)|%(creator)'
+    v for-each-ref --format='%(refname) %(authorname)|%(authoremail)|%(authoremail:trim)|%(authoremail:localpart)'
+    v for-each-ref --format='%(refname) %(committername)|%(committeremail)|%(taggername)|%(taggeremail)'
+    v for-each-ref --format='%(refname) %(*taggername) %(*committername) %(*authorname)' refs/tags
+}
+
+s_for_each_ref_dates() {
+    fer_repo
+    for style in default iso iso8601 iso-strict short raw unix rfc rfc2822; do
+        v for-each-ref --format="%(refname:short) %(authordate:$style)|%(committerdate:$style)|%(taggerdate:$style)|%(creatordate:$style)"
+    done
+    v for-each-ref --format='%(refname:short) %(authordate)|%(committerdate)|%(taggerdate)|%(creatordate)'
+    v for-each-ref --format='%(refname:short) %(authordate:format:%Y-%m-%d %H:%M:%S %z)|%(creatordate:format:%a %b %e %j %I%p %A %B %y %u %w %s %%)' refs/heads refs/tags/v1
+    v for-each-ref --format='%(refname:short) %(*creatordate:iso)|%(*authordate:short)' refs/tags
+    v for-each-ref --format='%(authordate:bogus)' refs/heads/main
+}
+
+s_for_each_ref_contents() {
+    fer_repo
+    v for-each-ref --format='[%(refname:short)] [%(subject)] [%(body)]'
+    v for-each-ref --format='[%(refname:short)] [%(contents)]'
+    v for-each-ref --format='[%(refname:short)] [%(contents:subject)] [%(contents:body)] [%(contents:signature)]'
+    v for-each-ref --format='[%(refname:short)] [%(contents:lines=1)] [%(contents:lines=2)] [%(contents:lines=9)]'
+    v for-each-ref --format='[%(refname:short)] [%(*subject)] [%(*body)] [%(*contents)]' refs/tags
+    v for-each-ref --format='%(contents:bogus)' refs/heads/main
+}
+
+s_for_each_ref_upstream() {
+    fer_repo
+    v for-each-ref --format='%(refname:short) up=%(upstream) short=%(upstream:short) track=%(upstream:track) ts=%(upstream:trackshort) nb=%(upstream:track,nobracket) rn=%(upstream:remotename) rr=%(upstream:remoteref)' refs/heads
+    v for-each-ref --format='%(refname:short) [%(upstream)] [%(upstream:track)]' refs/remotes refs/tags
+    v for-each-ref --format='%(refname:short) push=%(push) pushshort=%(push:short) rn=%(push:remotename)' refs/heads
+    g config remote.pushDefault origin; g config branch.loc.pushRemote origin
+    v for-each-ref --format='%(refname:short) push=%(push) pushshort=%(push:short)' refs/heads
+    v for-each-ref --format='%(upstream:bogus)' refs/heads/main
+    v for-each-ref --format='%(HEAD) %(refname:short)' refs/heads
+    g switch -q topic
+    v for-each-ref --format='%(HEAD) %(refname:short)' refs/heads
+}
+
+s_for_each_ref_if() {
+    fer_repo
+    v for-each-ref --format='%(refname:short): %(if)%(upstream)%(then)tracks %(upstream:short)%(else)no upstream%(end)' refs/heads
+    v for-each-ref --format='%(refname:short): %(if:equals=refs/heads/main)%(refname)%(then)MAIN%(else)other%(end)' refs/heads
+    v for-each-ref --format='%(refname:short): %(if:notequals=refs/heads/main)%(refname)%(then)not-main%(end)' refs/heads
+    v for-each-ref --format='%(refname:short): %(if)%(HEAD)%(then)head%(else)tail%(end)' refs/heads
+    v for-each-ref --format='%(refname:short): %(if)%(*objectname)%(then)annotated%(else)plain%(end)' refs/tags
+    v for-each-ref --format='%(refname:short): %(if)%(upstream)%(then)%(if:equals=[behind 1])%(upstream:track)%(then)B%(else)T%(end)%(else)N%(end)!' refs/heads
+    v for-each-ref --format='%(if)%(authorname)%(then)%(authorname)%(else)(none)%(end) %(refname:short)' refs/tags
+    v for-each-ref --format='%(if)%(refname:short)%(then)%(end)x'
+    v for-each-ref --format='%(if: )%(upstream:track)%(then)T%(else)E%(end)' refs/heads
+    v for-each-ref --format='%(then)x'
+    v for-each-ref --format='%(if)x%(then)y'
+    v for-each-ref --format='%(if)x%(end)'
+    v for-each-ref --format='%(else)x%(end)'
+    v for-each-ref --format='%(end)'
+    v for-each-ref --format='%(if)x%(then)a%(else)b%(else)c%(end)'
+    v for-each-ref --format='%(align:12)%(refname:short)%(end)|%(align:12,right)%(refname:short)%(end)|%(align:12,middle)%(refname:short)%(end)|%(align:4)%(refname:short)%(end)|' refs/heads
+    v for-each-ref --format='%(align:width=14,position=right)%(refname:short)%(end)|' refs/heads
+    v for-each-ref --format='%(align:6)%(end)|%(align)x%(end)' refs/heads/main
+    v for-each-ref --format='%(color:red)%(refname:short)%(color:reset) %(color:bold blue)%(color:green)x%(color:reset)' refs/heads
+    v for-each-ref --format='%(refname:short)%x09%(objecttype)%0a%25 %%%(objecttype)' refs/heads/main
+    # colours are only emitted when colour is on
+    g config color.ui always
+    v for-each-ref --color --format='%(color:red)%(refname:short)%(color:reset)|%(color:bold blue)x|%(color:green)y|%(color:ul)z|%(color:red blue)w|%(color:bold)v|%(color:normal)u|%(color:dim italic strike)t|%(color:reverse blink yellow)s%(color:reset)' refs/heads/main
+    v for-each-ref --format='%(color:bogus)' refs/heads/main
+    v for-each-ref --format='%(color)' refs/heads/main
+    v for-each-ref --color=always --format='%(color:magenta)%(refname:short)%(color:reset)' refs/heads/main
+    v for-each-ref --color=never --format='%(color:magenta)%(refname:short)%(color:reset)' refs/heads/main
+    v for-each-ref --color=auto --format='%(color:magenta)%(refname:short)%(color:reset)' refs/heads/main
+    g config color.ui never
+    v for-each-ref --format='%(color:red)%(refname:short)%(color:reset)' refs/heads/main
+    v for-each-ref --format='%(color:bogus)' refs/heads/main
+    v for-each-ref --format='%(refname:short) %(bogus)' refs/heads/main
+    v for-each-ref --format='%(if)%(bogus)%(then)a%(end)' refs/heads/main
+    v for-each-ref --format='%(if:equals)%(refname)%(then)a%(end)' refs/heads/main
+    v for-each-ref --format='%(if:bogus=1)%(refname)%(then)a%(end)' refs/heads/main
+    v for-each-ref --format='%(refname' refs/heads/main
+    v for-each-ref --format='' refs/heads/main
+    v for-each-ref --format='no placeholders' refs/heads/main refs/heads/loc
+}
+
+s_for_each_ref_sort() {
+    fer_repo
+    for key in refname -refname objectname -objectname objecttype -objecttype objectsize -objectsize \
+               authordate -authordate committerdate -committerdate taggerdate -taggerdate creatordate -creatordate \
+               authorname -authorname committername taggername subject -subject numparent -numparent \
+               refname:short -refname:short upstream -upstream upstream:track '*objectname' -'*objectname' tree parent; do
+        v for-each-ref --sort="$key" --format="$key %(refname)"
+    done
+    v for-each-ref --sort=authorname --sort=-refname --format='%(authorname) %(refname)'
+    v for-each-ref --sort=-refname --sort=authorname --format='%(authorname) %(refname)'
+    v for-each-ref --sort=objecttype --sort=-creatordate --format='%(objecttype) %(refname) %(creatordate:unix)'
+    v for-each-ref --sort=bogus
+    v for-each-ref --sort=-committerdate --count=3 --format='%(refname)'
+    v for-each-ref --sort=refname --count=0
+    v for-each-ref --sort=-refname --ignore-case --format='%(refname)' refs/heads
+}
+
+s_for_each_ref_filters() {
+    fer_repo
+    for spec in "--merged main" "--no-merged main" "--merged topic" "--no-merged topic" "--merged=feat" "--no-merged=feat" \
+                "--contains main~3" "--no-contains main~3" "--contains topic" "--no-contains topic" "--contains feat" \
+                "--contains v1" "--merged v1" "--no-merged v1" "--contains light" "--merged origin/main" \
+                "--merged main --no-merged topic" "--merged main --merged feat" "--contains topic --contains feat" \
+                "--no-contains topic --no-contains feat" "--contains main~3 --merged main" \
+                "--points-at main" "--points-at topic" "--points-at v1" "--points-at v1^{commit}" "--points-at light" \
+                "--points-at main~1" "--points-at v1-wrap" "--points-at topic --points-at feat" \
+                "--points-at main --contains main~3"; do
+        v for-each-ref $spec --format='%(refname)'
+    done
+    v for-each-ref --format='%(refname)' --merged
+    g switch -q feat
+    v for-each-ref --format='%(refname)' --merged
+    v for-each-ref --format='%(refname)' --no-merged
+    v for-each-ref --format='%(refname)' --contains
+    v for-each-ref --format='%(refname)' --no-contains
+    v for-each-ref --merged --format='%(refname)'
+    v for-each-ref --contains --format='%(refname)'
+    v for-each-ref --merged refs/heads --format='%(refname)'
+    v for-each-ref --merged main refs/heads/f* --format='%(refname)'
+    v for-each-ref --merged nosuch --format='%(refname)'
+    v for-each-ref --contains nosuch --format='%(refname)'
+    v for-each-ref --points-at nosuch --format='%(refname)'
+    v for-each-ref --exclude='refs/tags/*' --format='%(refname)'
+    v for-each-ref --exclude=refs/heads --format='%(refname)' refs/heads refs/remotes
+    v for-each-ref --exclude=refs/remotes/origin/main --exclude='refs/tags/v*' --format='%(refname)'
+    v for-each-ref --omit-empty --format='%(upstream)'
+    v for-each-ref --format='%(upstream)' refs/heads
+    v for-each-ref --count=2 --format='%(refname)'
+    v for-each-ref --count=2 --sort=-refname --merged main --format='%(refname)'
+}
+
+s_for_each_ref_messages() {
+    g init -q repo; cd repo
+    local tree; tree=$(g hash-object -t tree -w /dev/null)
+    local n=0 text
+    for text in "" "
+" "only subject" "no trailing newline" "
+
+leading blank lines
+
+then body" "subject
+
+body
+
+" "subj line one
+subj line two
+
+para one
+para one b
+
+para two
+" "	tab subject
+
+	tab body" "a
+
+b
+
+c
+
+d" "trailing spaces   
+
+body   
+"; do
+        n=$((n + 1))
+        tick
+        printf '%s' "$text" | g commit-tree "$tree" >"../c$n"
+        g update-ref "refs/heads/m$n" "$(cat ../c$n)"
+    done
+    for n in 3 7; do tick; g tag -a -m "tag $n
+second
+  indented
+
+last" "t$n" "m$n"; done
+    v for-each-ref --format='[%(refname:short)] [%(subject)] [%(body)]' refs/heads refs/tags
+    v for-each-ref --format='[%(refname:short)] [%(contents)]' refs/heads refs/tags
+    v for-each-ref --format='[%(refname:short)] [%(contents:subject)] [%(contents:body)] [%(contents:signature)]' refs/heads refs/tags
+    v for-each-ref --format='[%(refname:short)] [%(contents:lines=1)] [%(contents:lines=3)] [%(contents:lines=0)]' refs/heads refs/tags
+    v for-each-ref --sort=subject --format='%(refname:short) [%(subject)]' refs/heads
+    v for-each-ref --sort=-body --format='%(refname:short) [%(body)]' refs/heads
+    v for-each-ref --sort=contents:subject --format='%(refname:short)' refs/heads
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

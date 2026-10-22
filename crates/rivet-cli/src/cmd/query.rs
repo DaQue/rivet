@@ -26,7 +26,7 @@ fn write_stdout(bytes: &[u8]) -> Result<()> {
 }
 
 /// Every ref under `refs/` with the object it ends at, sorted by name.
-fn refs_sorted(repository: &Repository) -> Result<Vec<(String, ObjectId)>> {
+pub(super) fn refs_sorted(repository: &Repository) -> Result<Vec<(String, ObjectId)>> {
     let mut out = Vec::new();
     for (name, target) in repository.refs().list(b"refs/")? {
         let oid = match target {
@@ -64,15 +64,6 @@ fn ambiguous(spec: &str) -> anyhow::Error {
 
 fn not_valid(spec: &str) -> anyhow::Error {
     anyhow::anyhow!("Not a valid object name {spec}")
-}
-
-fn kind_name(kind: ObjectKind) -> &'static str {
-    match kind {
-        ObjectKind::Blob => "blob",
-        ObjectKind::Tree => "tree",
-        ObjectKind::Commit => "commit",
-        ObjectKind::Tag => "tag",
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -778,13 +769,49 @@ pub struct ForEachRefArgs {
     #[arg(long = "count", value_name = "N")]
     pub count: Option<usize>,
 
-    /// Sort key: `refname`, `-refname`, `objectname`, `-objectname`.
+    /// Sort key: any atom, `-` for descending; the last key given is the primary one.
     #[arg(long = "sort", value_name = "KEY")]
     pub sort: Vec<String>,
+
+    /// Only refs whose tip is reachable from the commit (default `HEAD`).
+    #[arg(long = "merged", value_name = "COMMIT", num_args = 0..=1, default_missing_value = "HEAD", allow_hyphen_values = true)]
+    pub merged: Vec<String>,
+
+    /// Only refs whose tip is not reachable from the commit (default `HEAD`).
+    #[arg(long = "no-merged", value_name = "COMMIT", num_args = 0..=1, default_missing_value = "HEAD", allow_hyphen_values = true)]
+    pub no_merged: Vec<String>,
+
+    /// Only refs that contain the commit (default `HEAD`).
+    #[arg(long = "contains", value_name = "COMMIT", num_args = 0..=1, default_missing_value = "HEAD", allow_hyphen_values = true)]
+    pub contains: Vec<String>,
+
+    /// Only refs that do not contain the commit (default `HEAD`).
+    #[arg(long = "no-contains", value_name = "COMMIT", num_args = 0..=1, default_missing_value = "HEAD", allow_hyphen_values = true)]
+    pub no_contains: Vec<String>,
+
+    /// Only refs pointing at the object (or at a tag whose target it is).
+    #[arg(long = "points-at", value_name = "OBJECT")]
+    pub points_at: Vec<String>,
+
+    /// Leave out refs matching this pattern.
+    #[arg(long = "exclude", value_name = "PATTERN")]
+    pub exclude: Vec<String>,
+
+    /// Sort case-insensitively.
+    #[arg(long = "ignore-case")]
+    pub ignore_case: bool,
+
+    /// Respect `%(color:…)` in the format: `always`, `auto` or `never` (default `always` when given).
+    #[arg(long = "color", value_name = "WHEN", num_args = 0..=1, require_equals = true, default_missing_value = "always")]
+    pub color: Option<String>,
+
+    /// Do not print a line when the format expands to nothing.
+    #[arg(long = "omit-empty")]
+    pub omit_empty: bool,
 }
 
 /// Git's `shorten_unambiguous_ref` for `refname:short`.
-fn shorten(name: &str, all: &HashSet<&str>) -> String {
+pub(super) fn shorten(name: &str, all: &HashSet<&str>) -> String {
     // (prefix, suffix) of the rules, most general first.
     let rules: [(&str, &str); 6] = [
         ("", ""),
@@ -829,7 +856,7 @@ fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
     }
 }
 
-fn ref_pattern_matches(pattern: &str, name: &str) -> bool {
+pub(super) fn ref_pattern_matches(pattern: &str, name: &str) -> bool {
     if pattern.contains(['*', '?', '[']) {
         glob_match(pattern.as_bytes(), name.as_bytes())
     } else {
@@ -845,165 +872,7 @@ fn ref_pattern_matches(pattern: &str, name: &str) -> bool {
 ///
 /// `0`; `128` for an unknown field name or sort key.
 pub fn run_for_each_ref(global: &GlobalArgs, args: &ForEachRefArgs) -> Result<i32> {
-    let repository = super::open(global)?;
-    let mut refs = refs_sorted(&repository)?;
-    refs.retain(|(name, _)| {
-        args.patterns.is_empty() || args.patterns.iter().any(|p| ref_pattern_matches(p, name))
-    });
-    for key in args.sort.iter().rev() {
-        let (descending, field) = match key.strip_prefix('-') {
-            Some(rest) => (true, rest),
-            None => (false, key.as_str()),
-        };
-        match field {
-            "refname" => refs.sort_by(|a, b| a.0.cmp(&b.0)),
-            "objectname" => refs.sort_by_key(|entry| entry.1),
-            other => {
-                eprintln!("fatal: unknown field name: {other}");
-                return Ok(128);
-            }
-        }
-        if descending {
-            refs.reverse();
-        }
-    }
-    if let Some(n) = args.count {
-        refs.truncate(n);
-    }
-    let format = args
-        .format
-        .clone()
-        .unwrap_or_else(|| "%(objectname) %(objecttype)\t%(refname)".to_string());
-
-    let all_names: Vec<String> = refs_sorted(&repository)?
-        .into_iter()
-        .map(|(n, _)| n)
-        .collect();
-    let all: HashSet<&str> = all_names.iter().map(String::as_str).collect();
-    let head_ref = repository.head()?.branch().map(|b| b.to_string());
-    let mut out = Vec::new();
-    for (name, oid) in &refs {
-        let object = repository.odb().read(oid)?;
-        let mut rest = format.as_str();
-        while let Some(at) = rest.find('%') {
-            out.extend_from_slice(&rest.as_bytes()[..at]);
-            rest = &rest[at + 1..];
-            if let Some(after) = rest.strip_prefix('%') {
-                out.push(b'%');
-                rest = after;
-                continue;
-            }
-            let Some(inner) = rest.strip_prefix('(') else {
-                out.push(b'%');
-                continue;
-            };
-            let Some(end) = inner.find(')') else {
-                eprintln!("fatal: malformed format string %({inner}");
-                return Ok(128);
-            };
-            let atom = &inner[..end];
-            rest = &inner[end + 1..];
-            let (peeled, base) = match atom.strip_prefix('*') {
-                Some(base) => (true, base),
-                None => (false, atom),
-            };
-            let (field, modifier) = match base.split_once(':') {
-                Some((f, m)) => (f, Some(m)),
-                None => (base, None),
-            };
-            let (target_oid, target_kind, target_size) = if peeled {
-                if object.kind() == ObjectKind::Tag {
-                    let tag = Tag::parse(repository.format(), object.data())?;
-                    let peeled_oid = tag.object;
-                    let inner_object = repository.odb().read(&peeled_oid)?;
-                    (
-                        Some(peeled_oid),
-                        kind_name(inner_object.kind()),
-                        inner_object.data().len(),
-                    )
-                } else {
-                    (None, "", 0)
-                }
-            } else {
-                (Some(*oid), kind_name(object.kind()), object.data().len())
-            };
-            let text: String = match field {
-                "refname" => match modifier {
-                    None => name.clone(),
-                    Some("short") => shorten(name, &all),
-                    Some(m) if m.starts_with("lstrip=") || m.starts_with("strip=") => {
-                        let n: usize = m
-                            .split_once('=')
-                            .and_then(|(_, n)| n.parse().ok())
-                            .unwrap_or(0);
-                        name.split('/').skip(n).collect::<Vec<_>>().join("/")
-                    }
-                    Some(m) if m.starts_with("rstrip=") => {
-                        let n: usize = m
-                            .split_once('=')
-                            .and_then(|(_, n)| n.parse().ok())
-                            .unwrap_or(0);
-                        let parts: Vec<&str> = name.split('/').collect();
-                        parts[..parts.len().saturating_sub(n)].join("/")
-                    }
-                    Some(m) => {
-                        eprintln!("fatal: unrecognized %(refname) argument: {m}");
-                        return Ok(128);
-                    }
-                },
-                "objectname" => match (target_oid, modifier) {
-                    (None, _) => String::new(),
-                    (Some(id), None) => id.to_string(),
-                    (Some(id), Some("short")) => super::short_oid(&id),
-                    (Some(id), Some(m)) if m.starts_with("short=") => {
-                        let n: usize = m[6..].parse().unwrap_or(7);
-                        id.to_string().chars().take(n.max(4)).collect()
-                    }
-                    (_, Some(m)) => {
-                        eprintln!("fatal: unrecognized %(objectname) argument: {m}");
-                        return Ok(128);
-                    }
-                },
-                "objecttype" => target_kind.to_string(),
-                "objectsize" => {
-                    if target_oid.is_some() {
-                        target_size.to_string()
-                    } else {
-                        String::new()
-                    }
-                }
-                "symref" => {
-                    match repository
-                        .refs()
-                        .list(b"refs/")?
-                        .into_iter()
-                        .find(|(n, _)| n.as_bytes() == name.as_bytes())
-                    {
-                        Some((_, RefTarget::Symbolic(target))) => {
-                            String::from_utf8_lossy(target.as_bytes()).into_owned()
-                        }
-                        _ => String::new(),
-                    }
-                }
-                "HEAD" => {
-                    if head_ref.as_deref() == Some(name.as_str()) {
-                        "*".to_string()
-                    } else {
-                        " ".to_string()
-                    }
-                }
-                other => {
-                    eprintln!("fatal: unknown field name: {other}");
-                    return Ok(128);
-                }
-            };
-            out.extend_from_slice(text.as_bytes());
-        }
-        out.extend_from_slice(rest.as_bytes());
-        out.push(b'\n');
-    }
-    write_stdout(&out)?;
-    Ok(0)
+    super::foreachref::run(global, args)
 }
 
 // ---------------------------------------------------------------------------------------------

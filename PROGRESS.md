@@ -323,3 +323,27 @@ Not implemented: `--skip`, `--max-age/--min-age`, `--left-right`, `--cherry-pick
 `--stdin`, pathspec limiting, `--format`/`--header`, relative dates (`2.days.ago`) — unknown flags are clap errors, relative dates
 an "invalid date format" error.
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 127 PASS / `failures: 0`.
+
+### Phase 2.2 — `for-each-ref` atoms, sorting, filters (landed, scenarios `s_for_each_ref_atoms`, `_dates`, `_contents`, `_messages`, `_upstream`, `_if`, `_sort`, `_filters`; old `s_for_each_ref` unchanged and green)
+New module `cmd/foreachref.rs` replaces the five-atom evaluator. Format language: `%%`, `%NN` (hex byte; a lone `%` or `%x09` is literal),
+`%(if)`/`%(if:equals=)`/`%(if:notequals=)` … `%(then)` … `%(else)` … `%(end)` (nested), `%(align:W[,left|middle|right])`,
+`%(color:…)` (only with `--color[=always|auto|never]`; `color.ui` does not enable it, as in git), git's error texts for
+mismatched `then/else/end`, `malformed format string` (usage text, exit 129).
+Atoms: `refname[:short|lstrip=N|rstrip=N|strip=N]`, `objecttype`, `objectsize`, `objectname[:short[=N]]`, `tree`, `parent`,
+`numparent`, `object`, `type`, `tag`, `author|committer|tagger|creator`, `…name`, `…email[:trim|:localpart]`,
+`…date[:default|iso|iso-strict|short|raw|unix|rfc|rfc2822|relative|format:<strftime>]`, `subject`, `body`,
+`contents[:subject|:body|:signature|:lines=N]`, `upstream[:short|:track|:trackshort|:remotename|:remoteref][,nobracket]`,
+`push[:short|:remotename]` (push.default simple/current/nothing), `symref`, `HEAD`; `*atom` dereferences annotated tags down to the
+first non-tag. Sorting: any atom, `-` prefix, last `--sort` is primary (the old code made the first primary), refname ascending as the
+final tie-break, numeric for dates/sizes/numparent, `--ignore-case`, `--count` (0 = all). Filters: `--merged`, `--no-merged`,
+`--contains`, `--no-contains` (optional value, default HEAD, and — as in git — they swallow the next argument even if it starts with
+`-`), `--points-at` (any level of a tag chain), `--exclude`, `--omit-empty`.
+Verified-against-git details: `refname:dirname/basename` and `creatorname/creatoremail` do not exist in git 2.56 (unknown field /
+unrecognized argument); `contents:lines=N` indents continuation lines by four spaces; `subject` joins the first paragraph with
+spaces and drops its trailing newline; `contents` skips leading blank lines; `push` is empty unless the upstream branch has the
+branch's own name; `%(color)` attributes come out in git's fixed order (bold, dim, ul, blink, reverse, italic, strike); bad
+`--merged`/`--contains` values print `malformed object name X` (fatal/128 vs error/129), `--points-at` prints it quoted, exit 129.
+Not implemented: `--shell/--perl/--python/--tcl`, `--stdin`, `--start-after`, `--include-root-refs`, `version:`/`v:` sort,
+`%(trailers)`, `%(contents:trailers)`, `%(rest)`, `%(worktreepath)`, `%(deltabase)`, `%(objectsize:disk)`, `%(ahead-behind:…)`,
+`%(authordate:local|human)`, `%(refname:short)` strictness options, commit `gpgsig` in `contents:signature` (tag signatures only).
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 135 PASS / `failures: 0`.

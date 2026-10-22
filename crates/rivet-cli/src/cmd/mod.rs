@@ -35,6 +35,7 @@ pub mod apply;
 pub mod blame;
 pub mod branching;
 pub mod clean;
+mod foreachref;
 pub mod format_patch;
 mod gitwalk;
 pub mod grep;
