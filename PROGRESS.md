@@ -459,11 +459,11 @@ Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenario
 * `unwrap()`/`expect()` audit: 46 sites outside test modules. All but the ones below are guarded by a check a few lines earlier
   (`split_once(..).expect("checked")`, fixed-size `try_into().unwrap()` after a length check, `required[..]` flags in the commit
   parser, ...) and were left alone. To look for what the audit by reading cannot see, I fuzzed the release of this block with
-  throw-away drivers (kept outside the repo): mutated patches (21 000 runs over `apply --stat/--check/--3way/--reject/-R/--index/
+  throw-away drivers (kept outside the repo): mutated patches (15 000 runs over `apply --stat/--check/--3way/--reject/-R/--index/
   --cached/-z` and 7 500 writing runs), mutated repository files (index, loose objects, packs, `.idx`, `.rev`, config, packed-refs,
-  reflogs, refs; ~4 000 runs × 6–8 commands), mutated commit/tree/tag objects (2 900 runs), random revision/pathspec/URL/config
-  arguments to ~100 commands (~9 000 runs), random `.gitignore`/`.gitattributes`/pathspecs (600 runs), mutated mailboxes for
-  `am`/`mailinfo` (400 runs), looking for exit 101 / `panicked`. Three panics, all fixed, each with a test:
+  reflogs, refs; 6 300 runs × 6–8 commands), mutated commit/tree/tag objects (2 500 runs × 6 commands), random
+  revision/pathspec/URL/config arguments to ~100 commands (14 000 runs), random `.gitignore`/`.gitattributes`/pathspecs
+  (600 runs × 5 commands), mutated mailboxes for `am`/`mailinfo` (400 runs × 2 commands), looking for exit 101 / `panicked`. Three panics, all fixed, each with a test:
   1. `apply --3way` with a non-ASCII `index` id sliced the string inside a character (`patch.rs`, my own code from this block):
      `apply_three_way_with_a_garbled_index_id_falls_back_to_a_direct_apply_instead_of_panicking`.
   2. `IndexEntry::parse` read the flags word before checking that it was there (`index out of bounds` on an index cut inside an
