@@ -36,6 +36,8 @@ v() {
     fi
     # Normalise the implementation's own name and the per-run root out of the text.
     if [ "${SORT_OUT:-0}" = 1 ]; then sort -o "$TMPOUT" "$TMPOUT"; fi
+    # Lines matching DROP_OUT are removed (statistics that legitimately differ, e.g. pack sizes).
+    if [ -n "${DROP_OUT:-}" ]; then grep -v -E "$DROP_OUT" "$TMPOUT" >"$TMPOUT.f"; mv "$TMPOUT.f" "$TMPOUT"; fi
     sed -e "s#$ROOT#<ROOT>#g" "$TMPOUT" >>"$TRANSCRIPT"
     if [ -s "$TMPERR" ] && [ "${NO_ERR:-0}" != 1 ]; then
         echo "--- stderr" >>"$TRANSCRIPT"

@@ -490,7 +490,14 @@ impl Odb {
     /// As [`Odb::write`].
     pub fn write_raw(&self, kind: ObjectKind, data: &[u8]) -> Result<ObjectId> {
         // Always loose; the id is computed from the header the kind implies, never from a
-        // caller field. Existing files are left alone.
+        // caller field. An object a pack already holds is not written again, and an existing
+        // loose file is left alone.
+        if !self.packs.is_empty() {
+            let (oid, _) = crate::object::hash_object(self.format, kind, data)?;
+            if self.packs.iter().any(|pack| pack.contains(&oid)) {
+                return Ok(oid);
+            }
+        }
         self.loose.write_raw(kind, data)
     }
 

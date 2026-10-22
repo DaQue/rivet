@@ -39,8 +39,8 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    branching, clean, history, ignore, mv, plumbing, reflog, remote, sequencer, setup, snapshot,
-    stash, tag,
+    branching, clean, history, ignore, maintenance, mv, plumbing, reflog, remote, sequencer, setup,
+    snapshot, stash, tag,
 };
 
 /// The `rivet` command line.
@@ -152,6 +152,13 @@ pub enum Commands {
 
     /// Show the objects a commit, tag or tree names.
     Show(history::ShowArgs),
+
+    /// Pack loose objects and refs, and prune unreachable objects.
+    Gc(maintenance::GcArgs),
+
+    /// Count unpacked objects and report pack statistics.
+    #[command(name = "count-objects")]
+    CountObjects(maintenance::CountObjectsArgs),
 
     /// Move or rename a file, a directory or a symlink.
     Mv(mv::MvArgs),

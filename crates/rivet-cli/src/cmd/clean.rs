@@ -297,7 +297,7 @@ pub fn run_clean(global: &GlobalArgs, args: &CleanArgs) -> Result<i32> {
     plan.walk(&root.clone(), BStr::new(""), false)?;
 
     let mut found = std::mem::take(&mut plan.found);
-    found.sort_by(|a, b| display_key(a).cmp(&display_key(b)));
+    found.sort_by_key(display_key);
 
     use std::io::Write as _;
     let mut out = Vec::new();

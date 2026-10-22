@@ -2,6 +2,7 @@
 # The differential scenarios. Run all: tools/difftest/scenarios.sh; run some: ... name1 name2
 FAKESSH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fakessh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+NOW0=$(date +%s)   # one wall-clock reading shared by both implementations
 
 s_basic_commit() {
     v init -q repo; cd repo
@@ -1265,6 +1266,155 @@ s_mv() {
     cd ..
     v status --short
     v diff --stat HEAD
+}
+
+# Reachable objects, sorted: the content-level check that two repositories hold the same history.
+objset() { g rev-list --objects --all | sort; }
+
+s_count_objects() {
+    v init -q repo; cd repo
+    v count-objects
+    v count-objects -v
+    echo a >a; mkdir d; echo b >d/b; v add a d; v commit -q -m one
+    tick; echo more >>a; v commit -q -a -m two
+    v count-objects
+    v count-objects -v
+    v count-objects -vH
+    v count-objects -H
+    g repack -adq
+    v count-objects -v
+    echo loose >c; v add c; v commit -q -m three
+    DROP_OUT='^size-pack' v count-objects -v
+    g repack -q
+    DROP_OUT='^size-pack' v count-objects -v
+    g repack -adq
+    echo junk >.git/objects/pack/garbage.tmp
+    mkdir -p .git/objects/ab; echo junk >.git/objects/ab/notanobject
+    DROP_OUT='^size-pack' v count-objects -v
+    v count-objects
+}
+
+s_gc() {
+    g config --global gc.cruftPacks false
+    v init -q repo; cd repo
+    echo a >a; mkdir d; echo b >d/b; v add a d; v commit -q -m one
+    tick; echo more >>a; v commit -q -a -m two
+    v branch topic; v tag light; v tag -a ann -m annotated
+    v switch -q topic; tick; echo t >t; v add t; v commit -q -m topic; v switch -q main
+    tick; echo stash >>a; v stash
+    DROP_OUT='^size-pack' v count-objects -v
+    v gc
+    DROP_OUT='^size-pack' v count-objects -v
+    objset
+    v fsck
+    v log --oneline --all
+    g for-each-ref
+    cat .git/packed-refs
+    v gc
+    DROP_OUT='^size-pack' v count-objects -v
+    tick; echo three >>a; v commit -q -a -m three
+    v branch -D topic
+    tick; v gc --no-prune
+    DROP_OUT='^size-pack' v count-objects -v
+    objset
+    v fsck
+    g show-ref
+    v status
+    v log --oneline
+    v checkout -q -- . 
+    v reflog
+    v cat-file -p ann
+    v rev-parse ann^{}
+}
+
+s_gc_prune() {
+    g config --global gc.cruftPacks false
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    tick; echo b >b; v add b; v commit -q -m two
+    # unreachable objects: one old, one new, one old inside a pack, one new inside a pack
+    echo old-loose | g hash-object -w --stdin >/dev/null
+    echo new-loose | g hash-object -w --stdin >/dev/null
+    old=$(echo old-loose | g hash-object --stdin)
+    touch -d '30 days ago' ".git/objects/${old:0:2}/${old:2}"
+    g repack -adq
+    DROP_OUT='^size-pack' v count-objects -v
+    echo packed-unreachable | g hash-object -w --stdin >/dev/null
+    echo late-loose | g hash-object -w --stdin >/dev/null
+    late=$(echo late-loose | g hash-object --stdin)
+    touch -d '30 days ago' ".git/objects/${late:0:2}/${late:2}"
+    v gc
+    DROP_OUT='^size-pack' v count-objects -v
+    g cat-file -e "$old" 2>&1; echo "old exists: $?"
+    g cat-file -e "$late" 2>&1; echo "late exists: $?"
+    v fsck
+    objset
+    v gc --prune=now
+    DROP_OUT='^size-pack' v count-objects -v
+    v fsck
+    objset
+    echo x | g hash-object -w --stdin >/dev/null
+    v gc --prune=3.days.ago
+    DROP_OUT='^size-pack' v count-objects -v
+    v gc --prune=bogus
+    v gc
+    v gc --auto
+}
+
+s_gc_reflog() {
+    g config --global gc.cruftPacks false
+    local day=86400
+    at() { export GIT_AUTHOR_DATE="$1 +0000" GIT_COMMITTER_DATE="$1 +0000"; }
+    v init -q repo; cd repo
+    at $((NOW0 - 100 * day)); echo 1 >f; v add f; v commit -q -m "100 days old"
+    at $((NOW0 - 60 * day)); echo 2 >>f; v commit -q -a -m "60 days old"
+    at $((NOW0 - 40 * day)); v switch -q -c tmp; echo 3 >>f; v commit -q -a -m "unreachable at 40 days"
+    v switch -q main; v branch -D tmp
+    at $((NOW0 - 10 * day)); echo 4 >>f; v commit -q -a -m "10 days old"
+    at $((NOW0 - 5 * day)); echo 5 >>f; v commit -q -a -m "5 days old, undone"
+    at $((NOW0 - 1 * day)); v reset -q --hard HEAD~1
+    v reflog
+    v gc
+    v reflog
+    v reflog main
+    DROP_OUT='^size-pack' v count-objects -v
+    objset
+    v fsck
+    v gc --prune=now
+    DROP_OUT='^size-pack' v count-objects -v
+    objset
+    v fsck
+    git config gc.reflogExpire never
+    git config gc.reflogExpireUnreachable never
+    at $((NOW0 - 1 * day)); echo 6 >>f; v commit -q -a -m six
+    at $((NOW0 - 200 * day)); v branch old; v tag -a oldtag -m old
+    v gc
+    v reflog
+    objset
+}
+
+s_gc_after_cruft() {
+    g init -q repo; cd repo
+    echo a >a; g add a; g commit -qm one
+    tick; echo b >b; g add b; g commit -qm two
+    echo stray | g hash-object -w --stdin >/dev/null
+    old=$(echo old-stray | g hash-object -w --stdin)
+    touch -d '30 days ago' ".git/objects/${old:0:2}/${old:2}"
+    g branch -q doomed; g switch -q doomed; tick; echo c >c; g add c; g commit -qm doomed; g switch -q main; g branch -qD doomed
+    g reflog expire --expire=now --all
+    g gc -q
+    DROP_OUT='^size-pack' v count-objects -v
+    objset
+    v gc
+    # Git keeps young unreachable objects in a cruft pack; Rivet leaves them loose.
+    DROP_OUT='^(size|count|in-pack|packs|prune-packable|size-pack)' v count-objects -v
+    objset
+    v fsck
+    v gc --prune=now
+    DROP_OUT='^size-pack' v count-objects -v
+    objset
+    v fsck
+    v log --oneline
 }
 
 if [ $# -eq 0 ]; then

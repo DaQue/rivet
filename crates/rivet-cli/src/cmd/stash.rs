@@ -119,8 +119,8 @@ fn stash_ref() -> RefName {
 pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
     let mut repository = super::open(global)?;
     match &args.command {
-        None => push(&mut repository, &args.push),
-        Some(StashCommand::Push(push_args)) => push(&mut repository, push_args),
+        None => push(&mut repository, &args.push, global.quiet),
+        Some(StashCommand::Push(push_args)) => push(&mut repository, push_args, global.quiet),
         Some(StashCommand::List) => list(&repository),
         Some(StashCommand::Show(show_args)) => show(&repository, show_args),
         Some(StashCommand::Apply(r)) => apply(global, &mut repository, r, false),
@@ -142,7 +142,7 @@ fn clear(repository: &Repository) -> Result<()> {
     Ok(())
 }
 
-fn push(repository: &mut Repository, args: &PushArgs) -> Result<i32> {
+fn push(repository: &mut Repository, args: &PushArgs, quiet: bool) -> Result<i32> {
     if args.include_untracked || args.all || args.keep_index || !args.paths.is_empty() {
         anyhow::bail!(
             "stash: --include-untracked, --all, --keep-index and pathspecs are not implemented"
@@ -210,7 +210,9 @@ fn push(repository: &mut Repository, args: &PushArgs) -> Result<i32> {
         );
         repository.refs().append_reflog(&RefName::head(), &reset)?;
     }
-    println!("Saved working directory and index state {message}");
+    if !quiet {
+        println!("Saved working directory and index state {message}");
+    }
     Ok(0)
 }
 

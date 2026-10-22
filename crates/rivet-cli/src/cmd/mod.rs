@@ -34,6 +34,7 @@ pub mod branching;
 pub mod clean;
 pub mod history;
 pub mod ignore;
+pub mod maintenance;
 pub mod mv;
 pub mod plumbing;
 pub mod pretty;
@@ -90,6 +91,8 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Restore(args) => snapshot::run_restore(&global, &args),
         Commands::Reset(args) => snapshot::run_reset(&global, &args),
         Commands::Log(args) => history::run_log(&global, &args),
+        Commands::Gc(args) => maintenance::run_gc(&global, &args),
+        Commands::CountObjects(args) => maintenance::run_count_objects(&global, &args),
         Commands::Mv(args) => mv::run_mv(&global, &args),
         Commands::Clean(args) => clean::run_clean(&global, &args),
         Commands::Stash(args) => stash::run_stash(&global, &args),
