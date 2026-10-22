@@ -2457,6 +2457,101 @@ Signed-off-by: Someone <s@x>"
     v reflog
 }
 
+s_notes_basic() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    tick; echo b >b; v add b; v commit -q -m two
+    tick; echo c >c; v add c; v commit -q -m three
+    v notes list
+    v notes show HEAD
+    v notes add -m 'hello' HEAD
+    tick; v notes add -m 'again' HEAD
+    tick; v notes add -f -m 'forced' HEAD
+    tick; v notes append -m 'second para' HEAD
+    tick; v notes append -m 'only para' HEAD~1
+    v notes show HEAD
+    v notes show HEAD~1
+    v notes show HEAD~2
+    v notes list
+    v notes list HEAD
+    v notes list HEAD~2
+    tick; v notes copy HEAD HEAD~2
+    tick; v notes copy HEAD~1 HEAD
+    tick; v notes copy -f HEAD~1 HEAD
+    v notes copy HEAD~2 HEAD~0
+    v notes copy nosuch HEAD
+    printf 'from file\n\n\n  indented  \n\n' >../msg.txt
+    tick; v notes add -F ../msg.txt HEAD~2 -f
+    v notes show HEAD~2
+    tick; v notes add -f -m one -m two -m 'three   ' HEAD
+    v notes show HEAD
+    tick; v notes append -F ../msg.txt HEAD
+    v notes show HEAD
+    tick; v notes add -f -m '' HEAD~1
+    v notes list
+    v notes remove HEAD~1
+    tick; v notes remove HEAD HEAD~2
+    v notes remove HEAD
+    v notes remove --ignore-missing HEAD
+    v notes list
+    tick; v notes add --allow-empty -m '' HEAD
+    v notes show HEAD
+    v notes show nosuch
+    v notes add -m x nosuch
+    v notes list nosuch
+    tick; v notes --ref=extra add -m side HEAD
+    v notes --ref=refs/notes/extra list
+    v notes --ref=notes/other add -m other HEAD~1
+    tick; git config core.notesRef refs/notes/viaconfig
+    v notes add -m cfg HEAD
+    v notes list
+    v notes show HEAD
+    git config --unset core.notesRef
+    v notes list
+    v log --format='%h %s' refs/notes/commits
+    v log --oneline refs/notes/extra
+    v reflog show refs/notes/commits
+    v cat-file -p "$(g rev-parse refs/notes/commits^{tree})"
+    v cat-file -p "$(g rev-parse refs/notes/viaconfig^{tree})"
+}
+
+# Notes on blobs, so one tree can be filled with hundreds of notes cheaply; `g notes copy --stdin`
+# (real git, in both twins) builds the starting tree, and the rivet/git operation under test then
+# rewrites it, which is where the fan-out has to come out identical.
+notes_fill() {
+    local count=$1
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    mkdir ../blobs; seq 1 "$count" | split -l 1 -a 6 - ../blobs/f
+    g hash-object -w --stdin-paths < <(printf '%s\n' ../blobs/f*) >../oids
+    g notes add -m seed HEAD
+    paste -d' ' <(yes HEAD | head -n "$count") ../oids | g notes copy --stdin
+}
+
+s_notes_fanout() {
+    notes_fill 600
+    tick; v notes add -m extra "$(echo extra | g hash-object -w --stdin)"
+    tick; v notes remove "$(sed -n 7p ../oids)"
+    tick; v notes append -m more "$(sed -n 9p ../oids)"
+    v notes list "$(sed -n 11p ../oids)"
+    v cat-file -p "$(g rev-parse refs/notes/commits^{tree})"
+}
+
+s_notes_fanout_small() {
+    notes_fill 255
+    tick; v notes add -m extra "$(echo extra | g hash-object -w --stdin)"
+    # Shrinking *below* the fan-out threshold is a known gap (git keeps untouched fan-out
+    # subtrees verbatim); a handful of removals stays above it.
+    for n in $(seq 2 20); do v notes remove "$(sed -n ${n}p ../oids)" >/dev/null; tick; done
+    v cat-file -p "$(g rev-parse refs/notes/commits^{tree})"
+}
+
+s_notes_fanout_deep() {
+    notes_fill 70000
+    tick; v notes add -m extra "$(echo extra | g hash-object -w --stdin)"
+    v cat-file -p "$(g rev-parse refs/notes/commits^{tree})"
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

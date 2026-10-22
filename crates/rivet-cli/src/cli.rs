@@ -40,7 +40,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
     am, apply, blame, branching, clean, format_patch, grep, history, ignore, maintenance, mv,
-    plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot, stash, tag,
+    notes, plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot, stash, tag,
 };
 
 /// The `rivet` command line.
@@ -285,6 +285,9 @@ pub enum Commands {
 
     /// Summarise `log` output by author.
     Shortlog(query::ShortlogArgs),
+
+    /// Add, show, list, append, remove and copy object notes.
+    Notes(notes::NotesArgs),
 }
 
 /// The object format a repository is created with, or expects.

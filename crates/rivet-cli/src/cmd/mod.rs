@@ -41,6 +41,7 @@ pub mod history;
 pub mod ignore;
 pub mod maintenance;
 pub mod mv;
+pub mod notes;
 pub mod patch;
 pub mod plumbing;
 pub mod pretty;
@@ -140,6 +141,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::MergeBase(args) => query::run_merge_base(&global, &args),
         Commands::Describe(args) => query::run_describe(&global, &args),
         Commands::Shortlog(args) => query::run_shortlog(&global, &args),
+        Commands::Notes(args) => notes::run_notes(&global, &args),
     }
 }
 
