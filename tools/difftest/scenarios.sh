@@ -2737,6 +2737,38 @@ s_tag_nested_hint() {
     v cat-file -p deeper
 }
 
+# Real git writes a TREE (cached tree) extension on `write-tree`/`commit`; a rivet edit of the index
+# must not leave it behind, or the next `git write-tree`/`git commit` reuses a stale tree id.
+# After each rivet index edit git itself reads the index back: `write-tree`, `diff --cached` and a
+# commit whose tree has to hold the edit.
+s_index_cache_tree() {
+    v init -q repo; cd repo
+    mkdir -p d/e other; echo a >d/e/a; echo b >d/b; echo c >c; echo o >other/o; echo p >other/p
+    v add .; tick; v commit -q -m base
+    readback() {
+        vg write-tree
+        vg diff --cached --stat
+        vg ls-files -s
+    }
+    fresh() { g write-tree >/dev/null; }
+
+    fresh; echo A >d/e/a; v add d/e/a; readback
+    fresh; echo n >d/e/new; v add d/e/new; readback
+    fresh; v rm -q d/b; readback
+    fresh; v mv c d/e/c; readback
+    fresh; v restore --staged d/e/a; readback
+    fresh; v reset -q -- d/e/new; readback
+    fresh; v add d/e/new; fresh; v rm -q --cached d/e/new; readback
+    fresh; echo Z >other/o; v add other; readback
+    fresh; v checkout HEAD -- d/e/a; readback
+    echo changed >other/p; g diff other/p >../cached.patch; g checkout -q -- other/p
+    fresh; v apply --cached ../cached.patch; readback
+    tick; vg commit -q -m "after rivet edits"
+    vg ls-tree -r HEAD
+    vg fsck --strict
+    v status -s
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

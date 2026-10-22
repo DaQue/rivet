@@ -57,6 +57,21 @@ v() {
 
 g() { "$GIT" "$@"; }
 
+# Like g, but the command, its output and its exit code go into the transcript, so what real git
+# reads out of a repository that rivet just edited is compared between the two runs.
+vg() {
+    local rc
+    echo "\$ g $*" | sed -e "s#$ROOT#<ROOT>#g" >>"$TRANSCRIPT"
+    "$GIT" "$@" <"${STDIN_FILE:-/dev/null}" >"$TMPOUT" 2>"$TMPERR"; rc=$?
+    sed -e "s#$ROOT#<ROOT>#g" "$TMPOUT" >>"$TRANSCRIPT"
+    if [ -s "$TMPERR" ]; then
+        echo "--- stderr" >>"$TRANSCRIPT"
+        sed -e "s#$ROOT#<ROOT>#g" "$TMPERR" >>"$TRANSCRIPT"
+    fi
+    echo "[exit $rc]" >>"$TRANSCRIPT"
+    return $rc
+}
+
 # Like v, but with the output lines sorted (for commands whose order is a hash-table accident).
 # Like v, but the stderr text is not compared (only stdout and the exit code), for commands whose
 # diagnostics are free-form.

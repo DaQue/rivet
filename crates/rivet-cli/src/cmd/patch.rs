@@ -707,11 +707,6 @@ pub fn apply_to_repo(
     }
     if options.index || options.cached {
         repository.index_mut().sort();
-        // The cached tree no longer describes the entries.
-        repository
-            .index_mut()
-            .extensions_mut()
-            .retain(|e| !e.is_tree());
         repository.write_index().map_err(|e| fail(&e))?;
     }
     Ok(warnings)

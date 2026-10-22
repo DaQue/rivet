@@ -1449,12 +1449,27 @@ impl Index {
                 // Replace in place. `swap_remove` here would reorder the list *and* — because the
                 // replacement is the value being inserted — silently drop the new entry, leaving
                 // the path absent from the index entirely.
+                // A stat-only refresh (same blob, same mode) describes the same trees; any other
+                // replacement does not.
+                if e.oid != entry.oid || e.mode != entry.mode {
+                    self.invalidate_cache_tree();
+                }
                 return Some(std::mem::replace(&mut self.entries[i], entry));
             }
             i += 1;
         }
+        self.invalidate_cache_tree();
         self.entries.push(entry);
         None
+    }
+
+    /// Drop the cached-tree (`TREE`) extension. It records the id of every directory the entries
+    /// described when it was written, so once an entry changes it would let `git write-tree` and
+    /// `git commit` reuse a tree that no longer matches the index. Git invalidates the touched
+    /// path's directories only; dropping the whole extension is valid too, because a missing
+    /// cache-tree is simply recomputed.
+    fn invalidate_cache_tree(&mut self) {
+        self.extensions.retain(|ext| !ext.is_tree());
     }
 
     /// Phase 3 — remove an entry by path and stage.
@@ -1469,6 +1484,7 @@ impl Index {
         while i < self.entries.len() {
             let e = &self.entries[i];
             if e.path == path && e.stage() == stage {
+                self.invalidate_cache_tree();
                 return Some(self.entries.swap_remove(i));
             }
             i += 1;
@@ -1708,6 +1724,9 @@ impl IndexExt for Index {
             }
         }
         self.entries = kept;
+        if !removed.is_empty() {
+            self.invalidate_cache_tree();
+        }
         removed
     }
 

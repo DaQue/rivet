@@ -256,3 +256,19 @@ so that is what `tag.rs` does. The scenario failed on the base commit (git print
 Found, not fixed: rivet has no global `git -c key=value` option (`rivet -c … tag` → clap error); other `advice.*`
 keys are still not honoured by the existing hints.
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 117 PASS / `failures: 0`.
+
+### Phase 1.7 — stale `TREE` index extension (landed, scenario `s_index_cache_tree`)
+Worse than the brief said: this was a silent-corruption bug, not only an unaudited code path. After real git wrote a
+cache-tree (`git commit`, `git write-tree`), a rivet `add`/`rm`/`mv`/`restore --staged`/`reset <path>`/`apply --cached`
+kept the old `TREE` extension, and then real `git write-tree` returned the **old tree id** and `git diff --cached` showed
+nothing, so a following `git commit` would have recorded the pre-edit tree (base: `git write-tree` → `5bd3e5b…` for every
+step, git-twin got a distinct id per step).
+Rule implemented in the index layer (`Index::insert`, `remove`, `IndexExt::remove_path`; `resolve` goes through them):
+any change to the entry set drops the cached-tree extension; an `insert` that only refreshes stat data (same oid + mode)
+keeps it. Deliberate deviation: git invalidates only the touched path's directories and keeps valid sibling nodes; we
+drop the whole extension (valid, just recomputed by readers), so index *bytes* differ from git's after an edit although
+`ls-files`, `write-tree` and `fsck` agree. The `apply` workaround in `cmd/patch.rs` is deleted.
+`entries_mut()` has no callers (checked) and still documents the caller's responsibility.
+Harness: new `vg` helper in `tools/difftest/lib.sh` — runs real git and records its output/exit code in the transcript, so
+what git reads out of a rivet-edited repository is compared (the old `g` helper discards output).
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 118 PASS / `failures: 0`.
