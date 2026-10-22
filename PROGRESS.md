@@ -245,3 +245,14 @@ Two further real divergences found by the scenario and fixed with it:
   each id's hex text; own scenario `s_abbrev_odd_lengths` (lengths 4–12, 39, 40, uppercase, no-match).
 - `switch --detach <x>` while already detached at that commit wrote a reflog entry; git writes none.
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 116 PASS / `failures: 0`.
+
+### Phase 1.6 — nested-tag hint on `tag -a` (landed, scenario `s_tag_nested_hint`)
+**The brief's expected text is wrong**: git 2.56 does not print `warning: tag 'x' is actually an annotated tag`. It
+prints a five-line `hint:` block on stderr, only when an *annotated* tag (`-a`/`-m`/`-F`) is created on an object that
+is itself a tag (`hint: You have created a nested tag. …`, `hint: \tgit tag -f <name> <object-as-typed>^{}`,
+`hint: Disable this message with "git config set advice.nestedTag false"`). Lightweight tags and commit targets print
+nothing; `advice.nestedTag=false` silences it; an explicit `advice.nestedTag=true` drops the "Disable" line. Git won,
+so that is what `tag.rs` does. The scenario failed on the base commit (git printed the hint, rivet nothing).
+Found, not fixed: rivet has no global `git -c key=value` option (`rivet -c … tag` → clap error); other `advice.*`
+keys are still not honoured by the existing hints.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 117 PASS / `failures: 0`.

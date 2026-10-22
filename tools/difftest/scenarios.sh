@@ -2711,6 +2711,32 @@ s_abbrev_odd_lengths() {
     v rev-parse 0000000 1234567x
 }
 
+# Creating an annotated tag whose target is itself a tag prints git's nested-tag hint (stderr,
+# naming the spec as typed); lightweight tags and commit targets stay silent; advice.nestedTag
+# turns it off. (The brief's "warning: tag ... is actually an annotated tag" is not what git 2.56 prints.)
+s_tag_nested_hint() {
+    v init -q repo; cd repo
+    echo 1 >f; v add f; tick; v commit -q -m c1
+    tick; v tag -a -m first ann
+    tick; v tag -a -m second nested ann
+    tick; v tag -m third viam ann
+    tick; v tag light ann
+    tick; v tag -a -m onc oncommit HEAD
+    tick; v tag -a -m peeled peeled 'ann^{}'
+    tick; v tag -a -m full fullspec refs/tags/ann
+    tick; v tag -a -m byid byid "$(g rev-parse ann)"
+    tick; v tag -a -m deeper deeper nested
+    tick; v tag -f -a -m again nested ann
+    tick; v tag -a -m dup nested ann
+    git config advice.nestedTag false
+    tick; v tag -a -m viaconfig viaconfig ann
+    git config advice.nestedTag true
+    tick; v tag -a -m back back ann
+    v tag -l
+    v cat-file -p nested
+    v cat-file -p deeper
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

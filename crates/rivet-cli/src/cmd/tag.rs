@@ -310,6 +310,22 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
             anyhow::bail!("no tag message?");
         }
         let kind = repository.odb().read_header(&target)?.0;
+        let advice = advice_setting(&repository, "advice.nestedTag");
+        if kind == rivet_core::ObjectKind::Tag && advice != Some(false) {
+            eprintln!(
+                "hint: You have created a nested tag. The object referred to by your new tag is"
+            );
+            eprintln!(
+                "hint: already a tag. If you meant to tag the object that it points to, use:"
+            );
+            eprintln!("hint:");
+            eprintln!("hint: \tgit tag -f {name} {target_spec}^{{}}");
+            if advice.is_none() {
+                eprintln!(
+                    "hint: Disable this message with \"git config set advice.nestedTag false\""
+                );
+            }
+        }
         let tagger = repository.committer_signature()?;
         let mut builder = rivet_core::object::tag::TagBuilder::new();
         builder
@@ -336,6 +352,16 @@ pub fn run_tag(global: &GlobalArgs, args: &TagArgs) -> Result<i32> {
 
 use bstr::BStr;
 use rivet_core::{ObjectId, RefName, Repository};
+
+/// How an `advice.*` key is configured: `None` when unset (the hint shows, with its "Disable this
+/// message" line), otherwise the boolean (an explicit `true` shows the hint without that line).
+fn advice_setting(repository: &Repository, key: &str) -> Option<bool> {
+    repository
+        .config_value(BStr::new(key.as_bytes()))
+        .ok()
+        .flatten()
+        .and_then(|value| rivet_core::parse_bool(BStr::new(&value[..])).ok())
+}
 
 /// Git's tag message cleanup: strip trailing whitespace per line, collapse runs of blank lines,
 /// drop leading and trailing blank lines, and end with exactly one newline.
