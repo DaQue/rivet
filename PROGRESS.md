@@ -368,3 +368,18 @@ no difference from git; `-M`/`-C` changed the output in most of those repositori
 Not implemented: `-M`/`-C` while the file has uncommitted changes (refused with a message), `--incremental`, `-w`, `--since`, `-S`,
 `--contents`, `--reverse`, `--root`, `-n`/`--show-number`, `-t`, `--date`, `--abbrev`, regex `-L`.
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 137 PASS / `failures: 0`.
+
+## Block 3 (autonomous run, base `3f10b26`)
+
+### Phase A.1 — `apply --stat/--numstat/--summary/-z/--apply` (landed, scenarios `s_apply_stat`, `s_apply_stat_renames`)
+Output is `apply.c`'s own layout, not `diff --stat`'s: name column = longest quoted name capped at 50 (longer names become
+`...` + the tail from the first `/` at or after `len+3-50`); graph scaled with `max = 70 - name_width` when
+`name_width + max_change > 70`, else by `max_change`, rounded (`(n*max + max_change/2) / max_change`); the count is `|%5d ` (a
+trailing space even for 0); binary files are ` |  Bin`. Blocks come out in the order stat, numstat, summary. Stat and numstat names
+are C-quoted; summary names are not. Nothing is applied unless `--apply`; with `--check` or `--apply` the patch is checked first and
+a patch that does not fit prints no statistics (exit 1).
+Verified against `/usr/bin/git` where the brief differed: `--stat` and `--numstat` list only the **new** name of a rename (never
+`old => new` in the stat, never `old\0new` with `-z`: `-z` is `added\tdeleted\tnew\0`); `--summary` renames use `dir/{a => b}` with
+only the common *leading* directories factored out; the `mode change` line of a rename carries no name; `-R` lists the patches
+in reverse order but sizes the name column from the unreversed names.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 139 scenarios / `failures: 0`.

@@ -25,6 +25,9 @@ pub struct Hunk {
     pub old_no_newline: bool,
     /// The post-image ends without a newline.
     pub new_no_newline: bool,
+    /// The hunk exactly as the patch has it (`@@` line to the last line, `\ No newline`
+    /// markers included, every line newline-terminated): what a `.rej` file repeats.
+    pub raw: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -38,6 +41,16 @@ pub struct FilePatch {
     pub rename: bool,
     pub copy: bool,
     pub hunks: Vec<Hunk>,
+    /// The abbreviated blob ids of the `index <old>..<new>` line.
+    pub old_oid: Option<String>,
+    pub new_oid: Option<String>,
+    /// The `similarity index` of a rename or copy.
+    pub similarity: Option<u32>,
+    /// A binary patch: `Binary files … differ` (no data) or `GIT binary patch` (`binary_data`).
+    pub binary: bool,
+    pub binary_data: bool,
+    pub lines_added: usize,
+    pub lines_deleted: usize,
 }
 
 fn unquote(name: &[u8]) -> Vec<u8> {
@@ -206,12 +219,40 @@ pub fn parse(text: &[u8], strip_n: usize) -> Result<Vec<FilePatch>> {
                     patch.old_path = Some(unquote(v));
                 } else if let Some(v) = l.strip_prefix(b"copy to ") {
                     patch.new_path = Some(unquote(v));
-                } else if l.starts_with(b"similarity index ")
-                    || l.starts_with(b"dissimilarity index ")
-                    || l.starts_with(b"index ")
-                {
-                } else if l.starts_with(b"GIT binary patch") || l.starts_with(b"Binary files ") {
-                    bail!("binary patches are not supported");
+                } else if let Some(v) = l.strip_prefix(b"similarity index ") {
+                    patch.similarity = String::from_utf8_lossy(v)
+                        .trim_end_matches('%')
+                        .parse()
+                        .ok();
+                } else if l.starts_with(b"dissimilarity index ") {
+                } else if let Some(v) = l.strip_prefix(b"index ") {
+                    let text = String::from_utf8_lossy(v);
+                    let ids = text.split(' ').next().unwrap_or("");
+                    if let Some((old, new)) = ids.split_once("..") {
+                        patch.old_oid = Some(old.to_string());
+                        patch.new_oid = Some(new.to_string());
+                    }
+                } else if l.starts_with(b"GIT binary patch") {
+                    patch.binary = true;
+                    patch.binary_data = true;
+                    i += 1;
+                    // Two blocks (forward, reverse), each ended by a blank line.
+                    let mut blanks = 0;
+                    while i < lines.len() && !lines[i].starts_with(b"diff --git ") {
+                        if lines[i].is_empty() {
+                            blanks += 1;
+                            if blanks == 2 {
+                                i += 1;
+                                break;
+                            }
+                        }
+                        i += 1;
+                    }
+                    break;
+                } else if l.starts_with(b"Binary files ") {
+                    patch.binary = true;
+                    i += 1;
+                    break;
                 } else {
                     break;
                 }
@@ -254,6 +295,7 @@ pub fn parse(text: &[u8], strip_n: usize) -> Result<Vec<FilePatch>> {
             let Some((old_start, old_len, new_start, new_len)) = parse_hunk_header(lines[i]) else {
                 break;
             };
+            let hunk_first = i;
             i += 1;
             let mut hunk = Hunk {
                 old_start,
@@ -294,7 +336,20 @@ pub fn parse(text: &[u8], strip_n: usize) -> Result<Vec<FilePatch>> {
             if old_seen != old_len || new_seen != new_len {
                 bail!("corrupt patch at line {i}");
             }
+            for line in &lines[hunk_first..i] {
+                hunk.raw.extend_from_slice(line);
+                hunk.raw.push(b'\n');
+            }
             patch.hunks.push(hunk);
+        }
+        for hunk in &patch.hunks {
+            for (kind, _) in &hunk.lines {
+                match kind {
+                    b'+' => patch.lines_added += 1,
+                    b'-' => patch.lines_deleted += 1,
+                    _ => {}
+                }
+            }
         }
         patches.push(patch);
     }
@@ -474,6 +529,23 @@ pub fn apply_to_repo(
     let show = |p: &[u8]| String::from_utf8_lossy(p).into_owned();
 
     for patch in patches {
+        if patch.binary {
+            let name = patch
+                .new_path
+                .as_deref()
+                .or(patch.old_path.as_deref())
+                .unwrap_or_default();
+            if patch.binary_data {
+                errors.push("error: binary patches are not supported".to_string());
+            } else {
+                errors.push(format!(
+                    "error: cannot apply binary patch to '{}' without full index line",
+                    show(name)
+                ));
+                errors.push(format!("error: {}: patch does not apply", show(name)));
+            }
+            continue;
+        }
         let (old, new) = if options.reverse {
             (patch.new_path.clone(), patch.old_path.clone())
         } else {

@@ -2332,6 +2332,78 @@ s_apply() {
     vin $'garbage\n' apply
 }
 
+s_apply_stat() {
+    v init -q repo; cd repo
+    seq 1 30 | sed 's/^/line /' >a.txt
+    printf 'x\ny\n' >b.txt; echo old >old.txt; printf '#!/bin/sh\n' >run.sh
+    D=some/very/long/directory/name/for/testing; mkdir -p $D
+    seq 1 100 >$D/longfile_name_here.txt
+    seq 1 6000 >big.txt; printf 'k\n' >mixed.txt
+    v add .; v commit -q -m base
+    sed -i '5s/.*/FIVE/' a.txt; echo more >>b.txt; git rm -q -f old.txt; chmod +x run.sh
+    seq 1 100 | sed 's/^/Z/' >$D/longfile_name_here.txt
+    seq 1 6000 | sed 's/^/X/' >big.txt
+    echo new >added.txt; printf 'caf\303\251\n' >"caf\303\251.txt"; : >empty.txt
+    git add -A
+    g diff --cached >../all.patch
+    g diff --cached -R >../rev.patch
+    g diff --cached --no-prefix -- a.txt b.txt added.txt >../few.patch
+    g reset -q --hard; g clean -fdq
+    v apply --stat ../all.patch
+    v apply --numstat ../all.patch
+    v apply --summary ../all.patch
+    v apply --stat --numstat --summary ../all.patch
+    v apply --summary --numstat --stat ../all.patch
+    v apply -z --numstat ../all.patch
+    v apply -z --summary ../all.patch
+    v apply -R --stat --summary ../rev.patch
+    v apply -R --numstat ../all.patch
+    v apply --stat -p0 ../few.patch
+    v status --short
+    # inspecting does not apply; --apply does, --check does not
+    v apply --stat --check ../all.patch
+    v status --short
+    v apply --stat --apply ../all.patch
+    v status --short
+    cat a.txt | sed -n '5p'; ls
+    g reset -q --hard; g clean -fdq
+    v apply --numstat --apply --index ../all.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # a patch that does not fit prints no statistics when it is checked
+    sed -i '5s/.*/changed/' a.txt
+    v apply --stat ../all.patch
+    v apply --stat --check ../all.patch
+    v apply --stat --apply ../all.patch
+    v status --short
+    # an empty or unreadable patch
+    vin '' apply --stat
+    v apply --stat nosuch.patch
+}
+
+s_apply_stat_renames() {
+    v init -q repo; cd repo
+    mkdir -p d/e d/x
+    seq 1 20 >d/e/f.txt; seq 1 20 >d/x/g.txt; seq 1 20 >h.txt; seq 1 20 >cp.txt
+    seq 1 20 >m.sh; seq 1 20 >n.sh; printf '\000\001bin' >bin.dat
+    v add .; v commit -q -m base
+    git mv d/e/f.txt d/x/f.txt; git mv d/x/g.txt d/e/gg.txt; git mv h.txt "t ab.txt"
+    sed -i '3s/.*/three/' d/x/f.txt
+    cp cp.txt cp2.txt; sed -i 1d cp2.txt
+    git mv m.sh m2.sh; chmod +x m2.sh
+    chmod +x n.sh
+    printf '\000\002bin!' >bin.dat
+    git add -A
+    g diff --cached -M -C --find-copies-harder HEAD >../ren.patch
+    g reset -q --hard
+    v apply --stat --numstat --summary ../ren.patch
+    v apply -z --numstat ../ren.patch
+    v apply -R --stat --summary ../ren.patch
+    v apply --stat --summary --check ../ren.patch
+    # binary files are listed as Bin / -
+    v apply --numstat ../ren.patch
+}
+
 s_format_patch() {
     v init -q repo; cd repo
     seq 1 20 >a; printf '#!/bin/sh\n' >run.sh
