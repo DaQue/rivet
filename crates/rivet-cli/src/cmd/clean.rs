@@ -219,7 +219,7 @@ fn join(dir: &BStr, name: &[u8]) -> BString {
 }
 
 /// `path` as seen from the directory `cwd` (both work-tree relative, `/`-separated).
-fn relative_to(cwd: &[u8], path: &[u8]) -> Vec<u8> {
+pub(super) fn relative_to(cwd: &[u8], path: &[u8]) -> Vec<u8> {
     let base: Vec<&[u8]> = cwd
         .split(|b| *b == b'/')
         .filter(|c| !c.is_empty())

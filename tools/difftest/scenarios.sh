@@ -2571,6 +2571,31 @@ s_merge_auto_merging() {
     v log --oneline
 }
 
+# From a subdirectory `status` (long and --short) prints cwd-relative paths, `../` for paths
+# outside it; --porcelain stays root-relative. Renames are relativised per side.
+s_status_subdir() {
+    v init -q repo; cd repo
+    mkdir -p sub/deep other
+    echo a >sub/a; echo b >other/b; echo r >root; echo d >sub/deep/d; echo q >sub/gone
+    v add .; v commit -q -m base
+    echo m >>sub/a; echo m >>other/b; echo n >sub/new; echo n >other/new; echo x >>root
+    mkdir sub/newdir; echo z >sub/newdir/z
+    rm sub/gone
+    v mv sub/deep/d sub/deep/e
+    echo s >sub/staged; v add sub/staged
+    ( cd sub
+      v status -s
+      v status
+      v status -s -uall
+      v status -s -uno
+      v status --porcelain
+      v status -s -b
+      cd deep
+      v status -s
+      v status )
+    ( cd other; v status -s )
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

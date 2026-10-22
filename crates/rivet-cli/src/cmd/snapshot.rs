@@ -738,6 +738,22 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     }
 
     let mut status = repository.status(&options)?;
+    // Git shows paths relative to the directory it was run from, except in porcelain output.
+    let cwd_prefix = match repository.worktree()?.root() {
+        Some(root) if args.porcelain.is_none() => {
+            let here = std::env::current_dir()?;
+            BString::from(super::path_arg(
+                here.strip_prefix(root).unwrap_or(std::path::Path::new("")),
+            )?)
+        }
+        _ => BString::default(),
+    };
+    let q = |path: &[u8], quote_space: bool| -> String {
+        if cwd_prefix.is_empty() {
+            return q(path, quote_space);
+        }
+        q(&super::clean::relative_to(&cwd_prefix, path), quote_space)
+    };
     let head = repository.head()?;
     // Conflicted paths get their own section and two-letter codes, decided by which stages exist.
     let unmerged: Vec<(BString, &'static str, &'static str)> = {
@@ -983,7 +999,7 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         }
         println!("  (use \"git add <file>...\" to mark resolution)");
         for (path, _, label) in &unmerged {
-            println!("\t{:<17}{}", label, path);
+            println!("\t{:<17}{}", label, q(path, false));
         }
         wrote_section = true;
     }

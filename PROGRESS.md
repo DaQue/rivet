@@ -202,3 +202,11 @@ it; `-q` leaves it alone, as git does. Base output before the fix: git printed `
 Gate: fmt clean, clippy clean, `cargo test --workspace` 206 passed / 0 failed / 0 ignored, `scenarios.sh` 111 PASS / `failures: 0`.
 Known gap: `cherry-pick`/`revert`/`rebase`/`stash` still pass an empty list (their clean content merges do not print
 `Auto-merging`); ordering of clean vs conflicted `Auto-merging` lines is clean-first, git interleaves by path.
+
+### Phase 1.2 — `status` paths relative to the cwd (landed, scenario `s_status_subdir`)
+Long and `--short` formats now print cwd-relative paths (`../other/b`, `a`, `deep/d -> deep/e`, untracked dirs keep
+their trailing slash); `--porcelain` stays root-relative. Checked `-uall`, `-uno`, `-b`, renames, and runs from
+`sub/`, `sub/deep/` and `other/`. The scenario failed on the base commit (rivet printed `sub/a` etc.) and passes now.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 112 PASS / `failures: 0`.
+Found, not fixed (separate divergence, not in the brief): `status <pathspec>` (e.g. `status -s other`) filters only the
+untracked list; tracked staged/unstaged changes outside the pathspec are still printed. Git limits all of them.
