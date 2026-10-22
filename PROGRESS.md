@@ -178,3 +178,15 @@ hold exactly what the merge would write (git's rule; needed by `stash apply`); `
 - `cargo test --workspace`: 200 passed, 0 failed, 0 ignored (includes `difftest` running every scenario, the new
   `pack::deltify` and `cmd::regex` unit tests)
 - `bash tools/difftest/scenarios.sh`: 106 PASS, `failures: 0` (exit 0) — 74 before this block, 32 added
+
+## Handoff to the unattended block (2026-10-22 12:30)
+- Base commit `a71c2be`: `f869b10` (docs.rs surface) plus a test-fixture flake fix. Tree clean.
+- Fixed before the launch: the `sideband_git_differential` fixtures were named with pid + nanoseconds,
+  and two of its tests run in parallel threads, so they shared one directory and raced —
+  `cannot copy '.../hooks/pre-merge-commit.sample': File exists` and `chmod on .../config.lock failed`.
+  `cargo test --workspace` therefore failed at random on an untouched tree. Names now carry a
+  per-process sequence number; the binary passes 3/3.
+- Gate re-verified by the orchestrator on `a71c2be`: `cargo fmt --check` clean, clippy
+  `--workspace --all-targets -- -D warnings` clean (0 warnings in the log), every `test result: ok`,
+  `scenarios.sh` 106 PASS / `failures: 0`.
+- Brief for the block: `.claude/HANDOFF.md`. Live checklist: `.claude/PRIORITIES.md`.
