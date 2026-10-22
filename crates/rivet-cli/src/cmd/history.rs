@@ -695,45 +695,78 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
         });
     }
 
-    // Conflicted paths need Git's combined diff (`diff --cc`), which is not implemented; naming
-    // them keeps the omission visible instead of silent.
-    let unmerged_paths: Vec<bstr::BString> = if revisions.is_empty() && !args.cached {
+    // Conflicted paths (work tree against the index only) are rendered the way git does: a
+    // combined `diff --cc` when both sides are present, `* Unmerged path` plus the diff against
+    // stage 2 otherwise.
+    let mut unmerged_paths: Vec<bstr::BString> = if revisions.is_empty() {
         repository
             .index()
             .entries()
             .iter()
-            .filter(|e| {
-                e.stage() == rivet_core::index::Stage::Ours
-                    || (e.is_unmerged() && e.stage() == rivet_core::index::Stage::Base)
-            })
+            .filter(|e| e.is_unmerged())
             .map(|e| e.path.clone())
             .collect()
     } else {
         Vec::new()
     };
-    let changed = !diff.is_empty();
+    unmerged_paths.dedup();
+    unmerged_paths.retain(|path| {
+        specs.is_empty()
+            || specs
+                .iter()
+                .any(|s| rivet_core::ops::pathspec_matches(BStr::new(&path[..]), BStr::new(&s[..])))
+    });
+    if args.stat && !unmerged_paths.is_empty() {
+        anyhow::bail!("diff: --stat of conflicted paths is not implemented");
+    }
+    let mut changed = !diff.is_empty();
     if global.quiet {
-        return Ok(if changed { 1 } else { 0 });
+        return Ok(if changed || !unmerged_paths.is_empty() {
+            1
+        } else {
+            0
+        });
     }
     let mut out = Vec::new();
-    if args.name_only {
-        for file in &diff.files {
-            out.extend_from_slice(&rivet_core::ops::quote_path(file.path(), false));
-            out.push(b'\n');
-        }
-    } else if args.name_status {
-        rivet_core::format_name_status(&diff, &mut out)?;
-    } else if args.stat {
-        rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
-    } else {
-        rivet_core::format_unified(&diff, format, &mut out)?;
-    }
-    if !args.name_only && !args.name_status && !args.stat {
-        let mut seen = std::collections::BTreeSet::new();
-        for path in &unmerged_paths {
-            if seen.insert(path.clone()) {
-                out.extend_from_slice(format!("* Unmerged path {path}\n").as_bytes());
+    if unmerged_paths.is_empty() {
+        if args.name_only {
+            for file in &diff.files {
+                out.extend_from_slice(&rivet_core::ops::quote_path(file.path(), false));
+                out.push(b'\n');
             }
+        } else if args.name_status {
+            rivet_core::format_name_status(&diff, &mut out)?;
+        } else if args.stat {
+            rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
+        } else {
+            rivet_core::format_unified(&diff, format, &mut out)?;
+        }
+    } else {
+        // One chunk of output per path, merged in path order with the ordinary changes.
+        let mode = if args.name_only {
+            DiffMode::NameOnly
+        } else if args.name_status {
+            DiffMode::NameStatus
+        } else {
+            DiffMode::Patch
+        };
+        let mut chunks: Vec<(bool, bstr::BString, Vec<u8>)> = Vec::new();
+        for file in &diff.files {
+            let mut one = rivet_core::TreeDiff::new();
+            one.stats.push(file.stat());
+            one.files.push(file.clone());
+            let mut bytes = Vec::new();
+            write_diff(&repository, mode, &one, &mut bytes)?;
+            chunks.push((true, bstr::BString::from(file.path()), bytes));
+        }
+        for path in &unmerged_paths {
+            let (bytes, combined) = unmerged_chunk(&repository, path, mode, args.cached, &options)?;
+            changed |= !combined;
+            chunks.push((!combined, path.clone(), bytes));
+        }
+        chunks.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        for (_, _, bytes) in chunks {
+            out.extend_from_slice(&bytes);
         }
     }
     if let Some(path) = &args.output {
@@ -835,6 +868,122 @@ fn write_diff(
         DiffMode::Patch => rivet_core::format_unified(diff, repository.format(), out)?,
     }
     Ok(())
+}
+
+/// Everything `diff` prints for one unmerged path: git's combined `diff --cc` when both sides of
+/// the conflict are present (patch output only), otherwise `* Unmerged path` followed by the
+/// work tree's difference from stage 2.
+///
+/// The flag says whether the chunk is a combined diff: git prints those immediately and the rest
+/// when it flushes its diff queue, and does not count them for `--exit-code`.
+fn unmerged_chunk(
+    repository: &Repository,
+    path: &bstr::BString,
+    mode: DiffMode,
+    cached: bool,
+    options: &rivet_core::DiffOptions,
+) -> Result<(Vec<u8>, bool)> {
+    use rivet_core::index::Stage;
+    let index = repository.index();
+    let stage = |s: Stage| {
+        index
+            .entry_at(BStr::new(&path[..]), s)
+            .ok()
+            .flatten()
+            .cloned()
+    };
+    let (ours, theirs) = (stage(Stage::Ours), stage(Stage::Theirs));
+    let worktree = repository.worktree()?;
+    let data = match worktree.read_file(BStr::new(&path[..])) {
+        _ if cached => None,
+        Ok(data) => Some(data),
+        Err(rivet_core::Error::IoAtPath { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            None
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let quoted = rivet_core::ops::quote_path(&path[..], false);
+    let mut out = Vec::new();
+    if let (false, DiffMode::Patch, Some(ours), Some(theirs), Some(data)) =
+        (cached, mode, &ours, &theirs, &data)
+    {
+        let wt_mode = worktree.stat(BStr::new(&path[..]))?.map(|s| s.mode);
+        if wt_mode != Some(ours.mode) || ours.mode != theirs.mode {
+            anyhow::bail!("diff: combined diff of a conflicted mode change is not implemented");
+        }
+        let read = |oid: &ObjectId| -> Result<Vec<u8>> {
+            Ok(repository
+                .odb()
+                .read_typed(oid, rivet_core::ObjectKind::Blob)?
+                .into_data())
+        };
+        let (a, b) = (read(&ours.oid)?, read(&theirs.oid)?);
+        if [&a, &b, data]
+            .iter()
+            .any(|d| rivet_core::diff::is_binary(d))
+        {
+            anyhow::bail!("diff: combined diff of binary files is not implemented");
+        }
+        let hex = |oid: &ObjectId| {
+            let full = oid.to_hex();
+            String::from_utf8_lossy(&full[..7.min(full.len())]).into_owned()
+        };
+        out.extend_from_slice(b"diff --cc ");
+        out.extend_from_slice(&quoted);
+        out.extend_from_slice(
+            format!(
+                "\nindex {},{}..0000000\n--- a/",
+                hex(&ours.oid),
+                hex(&theirs.oid)
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(&quoted);
+        out.extend_from_slice(b"\n+++ b/");
+        out.extend_from_slice(&quoted);
+        out.push(b'\n');
+        out.extend_from_slice(&rivet_core::diff::combined::combined_hunks(
+            &[&a, &b],
+            data,
+            options.context,
+        ));
+        return Ok((out, true));
+    }
+    match mode {
+        DiffMode::Patch => {
+            out.extend_from_slice(b"* Unmerged path ");
+            out.extend_from_slice(&quoted);
+            out.push(b'\n');
+        }
+        DiffMode::NameOnly => {
+            out.extend_from_slice(&quoted);
+            out.push(b'\n');
+        }
+        DiffMode::NameStatus => {
+            out.extend_from_slice(b"U\t");
+            out.extend_from_slice(&quoted);
+            out.push(b'\n');
+        }
+        DiffMode::Stat => unreachable!("--stat of conflicted paths is refused earlier"),
+    }
+    if let (false, Some(ours)) = (cached, &ours) {
+        let file = rivet_core::diff::entry_diff(
+            worktree,
+            ours,
+            data.as_deref(),
+            repository.odb(),
+            options,
+        )?;
+        if file.old_oid != file.new_oid || file.old_mode != file.new_mode {
+            let mut one = rivet_core::TreeDiff::new();
+            one.stats.push(file.stat());
+            one.files.push(file);
+            write_diff(repository, mode, &one, &mut out)?;
+        }
+    }
+    Ok((out, false))
 }
 
 fn layout_uses_decorations(layout: &pretty::Layout) -> bool {

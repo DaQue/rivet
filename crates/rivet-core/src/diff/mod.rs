@@ -48,6 +48,7 @@
 
 use bstr::{BStr, BString};
 
+pub mod combined;
 pub mod compact;
 pub mod myers;
 pub mod rename;

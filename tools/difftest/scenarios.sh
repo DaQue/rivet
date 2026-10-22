@@ -1417,6 +1417,103 @@ s_gc_after_cruft() {
     v log --oneline
 }
 
+s_status_nested() {
+    v init -q repo; cd repo
+    echo k >keep; v add keep; v commit -q -m base
+    mkdir nested; git init -q nested; echo n >nested/n; echo m >nested/m
+    mkdir -p outer/inner; git init -q outer/inner; echo i >outer/inner/i
+    mkdir -p mixed/sub; git init -q mixed/sub; echo s >mixed/sub/s; echo x >mixed/x
+    git init -q emptyrepo
+    echo u >u
+    v status --short
+    v status --short --untracked-files=all
+    v status --porcelain=v1 -uall
+    v status -uall
+    v status -unormal
+}
+
+s_checkout_unmerged() {
+    v init -q repo; cd repo
+    echo base >f; echo other >g; v add f g; v commit -q -m base
+    v branch side; echo main >f; v commit -q -a -m main
+    v switch -q side; echo side >f; v commit -q -a -m side
+    v switch -q main
+    v merge side
+    v checkout -- f
+    v checkout -- g
+    v checkout -- .
+    v checkout HEAD -- f
+    v restore f
+    v status --short
+    cat f
+}
+
+s_diff_conflict() {
+    v init -q repo; cd repo
+    printf 'a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n' >f; echo other >g; printf '1\n2\n3\n' >h
+    printf 'x\n' >md; printf 'p\nq\n' >r
+    v add f g h md r; v commit -q -m base
+    v branch side
+    printf 'a\nMAIN\nc\nd\ne\nf\ng\nh\ni\nj\nK1\nl\n' >f; printf '1\n2\nmain3\n' >h; printf 'x\nmain\n' >md; printf 'p\nmain\nq\n' >r
+    v commit -q -a -m main
+    v switch -q side
+    printf 'a\nSIDE\nc\nd\ne\nf\ng\nh\ni\nj\nK2\nl\n' >f; printf '1\n2\nside3\n' >h; git rm -q md; printf 'p\nside\nq\n' >r
+    v commit -q -a -m side
+    v switch -q main
+    v merge side
+    v status --short
+    v diff
+    v diff --name-only
+    v diff --name-status
+    v diff f
+    v diff h md
+    v diff -U1 f
+    v diff -U0 f
+    v diff --exit-code f
+    echo $?
+    v diff --cached
+    # resolve h by taking ours, r by a fresh third version, and leave f/md conflicted
+    printf '1\n2\nmain3\n' >h
+    printf 'p\nboth\nq\n' >r
+    v diff
+    v diff --name-only
+    echo more >>g
+    v diff
+    rm md
+    v diff -- md
+    g add h r f; g rm -q --cached md
+    v diff
+    v diff --cached
+}
+
+s_diff_conflict_shapes() {
+    v init -q repo; cd repo
+    seq 1 30 >f; seq 1 5 >t
+    v add f t; v commit -q -m base
+    v branch side
+    sed -e '1s/.*/one-main/' -e '15s/.*/fifteen-main/' -e '30s/.*/last-main/' f >f2; mv f2 f
+    echo main-add >new; v add new; echo mt >>t
+    v commit -q -a -m main
+    v switch -q side
+    sed -e '1s/.*/one-side/' -e '16s/.*/sixteen-side/' -e '30s/.*/last-side/' f >f2; mv f2 f
+    echo side-add >new; v add new; echo st >>t
+    v commit -q -a -m side
+    v switch -q main
+    v merge side
+    v diff
+    v config merge.conflictStyle diff3
+    g checkout -q -m -- f
+    v diff f
+    sed -i -e '/^<<<<<<<\|^=======\|^>>>>>>>/d' f
+    v diff f
+    printf 'x\n' >f
+    v diff f
+    : >f
+    v diff f
+    printf 'no newline' >f
+    v diff f
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

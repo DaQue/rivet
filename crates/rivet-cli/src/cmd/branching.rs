@@ -1758,7 +1758,40 @@ fn checkout_paths(
         None => (None, "the index".to_string()),
     };
     let staged = tree.is_some();
+    // Restoring from the index cannot take an unmerged path: git reports each one and exits 1,
+    // after still restoring every other path the specs select.
+    let mut unmerged: Vec<BString> = Vec::new();
+    if tree.is_none() {
+        use rivet_core::IndexExt;
+        for path in repository.index().conflicts() {
+            let selected = specs.iter().any(|spec| {
+                spec.is_empty()
+                    || spec == "."
+                    || path == *spec
+                    || (path.len() > spec.len()
+                        && path.starts_with(&spec[..])
+                        && path[spec.len()] == b'/')
+            });
+            if selected {
+                unmerged.push(path);
+            }
+        }
+        unmerged.dedup();
+        specs.retain(|spec| !unmerged.iter().any(|path| path == spec));
+        if specs.is_empty() {
+            for path in &unmerged {
+                eprintln!("error: path '{path}' is unmerged");
+            }
+            return Ok(1);
+        }
+    }
     match repository.restore_paths(tree, &specs, staged, true, true) {
+        Ok(_) if !unmerged.is_empty() => {
+            for path in &unmerged {
+                eprintln!("error: path '{path}' is unmerged");
+            }
+            Ok(1)
+        }
         Ok(count) => {
             if !quiet {
                 let noun = if count == 1 { "path" } else { "paths" };

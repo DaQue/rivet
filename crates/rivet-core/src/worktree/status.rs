@@ -682,6 +682,31 @@ pub fn untracked_paths(
         }
     }
 
+    // An untracked directory that is itself a repository (it has a `.git`) is reported as one
+    // `dir/` entry in every mode and never descended into; a tracked gitlink is not untracked
+    // content at all.
+    if let Some(root) = worktree.root() {
+        use std::os::unix::ffi::OsStrExt;
+        let nested: Vec<BString> = untracked_dirs
+            .iter()
+            .filter(|dir| {
+                root.join(std::ffi::OsStr::from_bytes(dir.as_ref()))
+                    .join(".git")
+                    .exists()
+            })
+            .cloned()
+            .collect();
+        for dir in nested {
+            let mut prefix = dir.clone();
+            prefix.push(b'/');
+            untracked_files.retain(|file| !file.starts_with(&prefix[..]));
+            untracked_dirs.retain(|d| d != &dir && !d.starts_with(&prefix[..]));
+            if !tracked.contains(&dir) {
+                untracked_files.insert(prefix);
+            }
+        }
+    }
+
     // A directory with nothing untracked inside — empty, or holding only ignored files — is not
     // reported: Git does not track directories, so it has nothing to say about them.
     untracked_dirs.retain(|dir| {
