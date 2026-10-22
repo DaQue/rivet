@@ -230,6 +230,72 @@ impl PackWriter {
         Ok(id)
     }
 
+    /// The pack offset of the entry written last, if any.
+    pub fn last_offset(&self) -> Option<u64> {
+        self.entries.last().map(|e| e.offset)
+    }
+
+    /// Append `target` as an `OFS_DELTA` against the entry that starts at `base_offset`.
+    ///
+    /// `delta` is the instruction stream (as built by [`crate::pack::deltify::create_delta`]);
+    /// `target` is the id of the object it reconstructs. The base must already have been written,
+    /// which is what makes the offset distance positive. Returns the new entry's offset.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::CorruptPack`]-class failures only for an offset that is not behind the new entry.
+    pub fn write_ofs_delta(
+        &mut self,
+        target: ObjectId,
+        base_offset: u64,
+        delta: &[u8],
+    ) -> Result<u64> {
+        let offset = self.data.len() as u64;
+        if base_offset >= offset {
+            return Err(Error::Message(
+                "pack: a delta base must be written before its delta".to_string(),
+            ));
+        }
+        let mut header = Vec::with_capacity(16);
+        let mut size = delta.len() as u64;
+        let mut byte = (6u8 << 4) | (size & 0x0f) as u8;
+        size >>= 4;
+        while size > 0 {
+            header.push(byte | 0x80);
+            byte = (size & 0x7f) as u8;
+            size >>= 7;
+        }
+        header.push(byte);
+        let mut distance = offset - base_offset;
+        let mut encoded = [0u8; 10];
+        let mut pos = encoded.len() - 1;
+        encoded[pos] = (distance & 0x7f) as u8;
+        loop {
+            distance >>= 7;
+            if distance == 0 {
+                break;
+            }
+            distance -= 1;
+            pos -= 1;
+            encoded[pos] = 0x80 | (distance & 0x7f) as u8;
+        }
+        header.extend_from_slice(&encoded[pos..]);
+
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, delta)?;
+        let compressed = encoder.finish()?;
+        let crc = crc32(&[&header, &compressed]);
+        self.data.extend_from_slice(&header);
+        self.data.extend_from_slice(&compressed);
+        self.entries.push(PackIndexEntry {
+            oid: target,
+            offset,
+            crc32: crc,
+        });
+        Ok(offset)
+    }
+
     /// Phase 10 — how many objects have been written so far.
     ///
     /// # Caveats

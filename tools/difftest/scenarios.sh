@@ -1682,6 +1682,72 @@ s_clean_exclude() {
     ls
 }
 
+# The delta structure of every pack, as real git reports it, without sizes and offsets that
+# depend on the zlib build: "<id> <type> <size> [<depth> <base>]", sorted.
+packshape() {
+    echo "## packshape" >>"$TRANSCRIPT"
+    for idx in .git/objects/pack/*.idx; do
+        [ -e "$idx" ] || continue
+        g verify-pack -v "$idx" | awk 'NF == 5 && $1 ~ /^[0-9a-f]+$/ { print $1, $2, $3 } NF == 7 && $1 ~ /^[0-9a-f]+$/ { print $1, $2, $3, $6, $7 }'
+    done | sort >>"$TRANSCRIPT"
+}
+
+s_gc_delta() {
+    g config --global gc.cruftPacks false
+    g config --global pack.threads 1
+    v init -q repo; cd repo
+    seq 1 200 | sed 's/^/line /' >big.txt
+    cp big.txt copy.txt
+    mkdir src; for i in 1 2 3; do seq 1 80 | sed "s/^/mod$i /" >src/m$i.c; done
+    v add .; v commit -q -m one
+    for n in 2 3 4 5 6 7 8 9 10 11 12; do
+        tick; sed -i "$((n * 10))s/.*/changed at rev $n/" big.txt; echo "extra $n" >>copy.txt
+        sed -i "5s/.*/m1 rev $n/" src/m1.c; v commit -q -a -m "rev $n"
+    done
+    v tag -a v1 -m annotated
+    v gc
+    packshape
+    tick; echo more >>big.txt; v commit -q -a -m again
+    v gc
+    packshape
+    v fsck
+    DROP_OUT='^size-pack' v count-objects -v
+    objset >>"$TRANSCRIPT"
+}
+
+s_gc_delta_shapes() {
+    g config --global gc.cruftPacks false
+    g config --global pack.threads 1
+    v init -q repo; cd repo
+    mkdir -p lib/a lib/b docs
+    for i in $(seq 1 40); do seq 1 $((20 + i)) | sed "s/^/file $i row /" >lib/a/f$i.txt; done
+    for i in $(seq 1 15); do seq 1 60 | sed "s/^/b$i /" >lib/b/g$i.c; done
+    awk 'BEGIN { srand(7); for (i = 0; i < 3000; i++) printf "%d %d lorem ipsum %d\n", i, int(rand() * 100000), int(rand() * 7) }' >docs/big.txt
+    awk 'BEGIN { for (i = 0; i < 4000; i++) print "same same same same" }' >docs/rep.txt
+    head -c 30000 /dev/zero | tr '\0' 'A' >docs/blob.bin
+    v add .; v commit -q -m base
+    for n in $(seq 2 64); do
+        tick
+        sed -i "$((n * 3 % 3000 + 1))s/.*/edited at $n/" docs/big.txt
+        echo "n $n" >>lib/a/f$((n % 40 + 1)).txt
+        if [ $((n % 5)) = 0 ]; then echo "row $n" >>docs/rep.txt; fi
+        if [ $((n % 7)) = 0 ]; then printf 'B%s' "$n" >>docs/blob.bin; fi
+        if [ $((n % 9)) = 0 ]; then git rm -q -f lib/b/g$((n / 9)).c; fi
+        v commit -q -a -m "rev $n"
+    done
+    v branch topic HEAD~20
+    v tag light HEAD~5
+    v tag -a v1 -m annotated HEAD~30
+    v gc
+    packshape
+    tick; echo tail >>docs/big.txt; v commit -q -a -m tail
+    v switch -q topic; tick; echo topic >>lib/a/f1.txt; v commit -q -a -m topic; v switch -q main
+    v gc
+    packshape
+    v fsck
+    v log --oneline --all | head -3
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

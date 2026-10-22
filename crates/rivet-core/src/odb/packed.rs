@@ -269,6 +269,48 @@ impl PackedObjectStore {
         self.pack.pack()?.get_at_offset(offset, bases)
     }
 
+    /// Pack offset to object id, for resolving `OFS_DELTA` bases.
+    pub fn oids_by_offset(&self) -> std::collections::HashMap<u64, ObjectId> {
+        let index = self.index.as_index();
+        let mut map = std::collections::HashMap::with_capacity(index.len());
+        for i in 0..index.len() {
+            if let Some(entry) = index.entry(i) {
+                map.insert(entry.offset, entry.oid);
+            }
+        }
+        map
+    }
+
+    /// If `oid` is stored here as a delta, its base object and the delta's instruction bytes.
+    ///
+    /// `by_offset` is [`PackedObjectStore::oids_by_offset`], passed in so a caller looking at many
+    /// entries builds it once. `None` for an undeltified entry.
+    ///
+    /// # Errors
+    ///
+    /// The pack-level errors of reading the entry.
+    pub fn stored_delta(
+        &self,
+        oid: &ObjectId,
+        by_offset: &std::collections::HashMap<u64, ObjectId>,
+    ) -> Result<Option<(ObjectId, Vec<u8>)>> {
+        let Some(found) = self.index.as_index().lookup(oid) else {
+            return Ok(None);
+        };
+        let pack = self.pack.pack()?;
+        let entry = pack.entry_at(found.offset)?;
+        let base = match (entry.kind, entry.base_offset, entry.base_oid) {
+            (crate::pack::EntryKind::OfsDelta, Some(offset), _) => by_offset.get(&offset).copied(),
+            (crate::pack::EntryKind::RefDelta, _, Some(base)) => Some(base),
+            _ => None,
+        };
+        let Some(base) = base else {
+            return Ok(None);
+        };
+        let (delta, _) = crate::pack::inflate_at(pack.raw(), entry.data_offset as usize)?;
+        Ok(Some((base, delta)))
+    }
+
     /// Phase 10 — every object id this pack contains, in id order.
     ///
     /// # Caveats

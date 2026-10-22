@@ -167,6 +167,282 @@ fn reachable_objects(repo: &Repository, with_reflogs: bool) -> Result<HashSet<Ob
     Ok(reachable)
 }
 
+/// The starting points of the object walk in `--all --reflog` order: `HEAD`, the refs, then the
+/// reflog entries. Must be read before refs are packed, as the ref store's snapshot goes stale
+/// once the loose files are gone.
+fn walk_tips(repo: &Repository) -> Result<Vec<(Vec<u8>, ObjectId)>> {
+    let odb = repo.odb();
+    let mut tips: Vec<(Vec<u8>, ObjectId)> = Vec::new();
+    if let Some(oid) = repo.head()?.oid() {
+        tips.push((b"HEAD".to_vec(), oid));
+    }
+    for (name, target) in repo.refs().list(b"refs/")? {
+        if let RefTarget::Direct(oid) = target {
+            tips.push((name.as_bytes().to_vec(), oid));
+        }
+    }
+    let mut names: Vec<RefName> = vec![RefName::head()];
+    for (name, _) in repo.refs().list(b"refs/")? {
+        names.push(name);
+    }
+    for name in &names {
+        for entry in repo.refs().reflog(name)? {
+            for oid in [entry.old, entry.new] {
+                if !oid.is_zero() && odb.contains(&oid) {
+                    tips.push((Vec::new(), oid));
+                }
+            }
+        }
+    }
+    Ok(tips)
+}
+
+/// The objects of `wanted` in the order `git pack-objects --all --reflog --indexed-objects` lists
+/// them (tag objects, then commits newest first, then each commit's trees and blobs depth first),
+/// each with Git's name hash of the first path it was reached by.
+fn recency_order(
+    repo: &Repository,
+    wanted: &HashSet<ObjectId>,
+    tips: Vec<(Vec<u8>, ObjectId)>,
+) -> Result<Vec<(ObjectId, u32)>> {
+    use crate::object::{Commit, Tree};
+    use crate::pack::deltify::pack_name_hash;
+    use std::collections::BinaryHeap;
+
+    let odb = repo.odb();
+    let format = repo.format();
+    let mut out: Vec<(ObjectId, u32)> = Vec::new();
+    let mut seen: HashSet<ObjectId> = HashSet::new();
+
+    let mut commit_tips: Vec<ObjectId> = Vec::new();
+    for (name, mut oid) in tips {
+        let mut label = name;
+        loop {
+            if !odb.contains(&oid) {
+                break;
+            }
+            let object = odb.read(&oid)?;
+            match object.kind() {
+                ObjectKind::Tag => {
+                    if seen.insert(oid) && wanted.contains(&oid) {
+                        out.push((oid, pack_name_hash(&label)));
+                    }
+                    label = Vec::new();
+                    oid = Tag::parse(format, object.data())?.object;
+                }
+                ObjectKind::Commit => {
+                    commit_tips.push(oid);
+                    break;
+                }
+                _ => break,
+            }
+        }
+    }
+
+    // Commits by date, newest first, a commit only after it was reached from a child.
+    type Entry = (i64, std::cmp::Reverse<usize>, ObjectId);
+    let mut heap: BinaryHeap<Entry> = BinaryHeap::new();
+    let mut queued: HashSet<ObjectId> = HashSet::new();
+    let mut sequence = 0usize;
+    let mut push =
+        |heap: &mut BinaryHeap<Entry>, oid: ObjectId, sequence: &mut usize| -> Result<()> {
+            if !queued.insert(oid) {
+                return Ok(());
+            }
+            let object = odb.read(&oid)?;
+            let commit = Commit::parse(format, object.data())?;
+            heap.push((commit.committer.when, std::cmp::Reverse(*sequence), oid));
+            *sequence += 1;
+            Ok(())
+        };
+    for oid in commit_tips {
+        push(&mut heap, oid, &mut sequence)?;
+    }
+    let mut commits: Vec<(ObjectId, ObjectId)> = Vec::new();
+    while let Some((_, _, oid)) = heap.pop() {
+        let object = odb.read(&oid)?;
+        let commit = Commit::parse(format, object.data())?;
+        commits.push((oid, commit.tree));
+        for parent in &commit.parents {
+            push(&mut heap, *parent, &mut sequence)?;
+        }
+    }
+    for (oid, _) in &commits {
+        if seen.insert(*oid) && wanted.contains(oid) {
+            out.push((*oid, 0));
+        }
+    }
+
+    // Trees and blobs, commit by commit, depth first.
+    fn walk(
+        repo: &Repository,
+        tree: ObjectId,
+        path: &mut Vec<u8>,
+        wanted: &HashSet<ObjectId>,
+        seen: &mut HashSet<ObjectId>,
+        out: &mut Vec<(ObjectId, u32)>,
+    ) -> Result<()> {
+        if !seen.insert(tree) {
+            return Ok(());
+        }
+        if wanted.contains(&tree) {
+            out.push((tree, crate::pack::deltify::pack_name_hash(path)));
+        }
+        let object = repo.odb().read(&tree)?;
+        let parsed = Tree::parse(repo.format(), object.data())?;
+        for entry in &parsed.entries {
+            let base = path.len();
+            if !path.is_empty() {
+                path.push(b'/');
+            }
+            path.extend_from_slice(&entry.name);
+            match entry.mode {
+                crate::object::EntryMode::Tree => walk(repo, entry.oid, path, wanted, seen, out)?,
+                crate::object::EntryMode::Commit => {}
+                _ => {
+                    if seen.insert(entry.oid) && wanted.contains(&entry.oid) {
+                        out.push((entry.oid, crate::pack::deltify::pack_name_hash(path)));
+                    }
+                }
+            }
+            path.truncate(base);
+        }
+        Ok(())
+    }
+    for (_, tree) in &commits {
+        walk(repo, *tree, &mut Vec::new(), wanted, &mut seen, &mut out)?;
+    }
+
+    // Whatever else must be packed (objects only an index entry or reflog line reaches).
+    let mut rest: Vec<ObjectId> = wanted
+        .iter()
+        .filter(|o| !seen.contains(*o))
+        .copied()
+        .collect();
+    rest.sort();
+    out.extend(rest.into_iter().map(|oid| (oid, 0)));
+    Ok(out)
+}
+
+/// Write `to_pack` as one pack, deltified the way `git pack-objects` would: returns the pack's
+/// summary. `reusable` maps an object to the delta it is already stored as in a pack that is
+/// being replaced.
+fn write_deltified(
+    repo: &Repository,
+    to_pack: &HashSet<ObjectId>,
+    reusable: &HashMap<ObjectId, (ObjectId, Vec<u8>)>,
+    tips: Vec<(Vec<u8>, ObjectId)>,
+    pack_dir: &Path,
+) -> Result<crate::pack::writer::PackWriteSummary> {
+    use crate::pack::deltify::{DeltaInput, search_deltas};
+
+    let odb = repo.odb();
+    let order = recency_order(repo, to_pack, tips)?;
+    let position: HashMap<ObjectId, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, (oid, _))| (*oid, i))
+        .collect();
+    let mut inputs: Vec<DeltaInput> = Vec::with_capacity(order.len());
+    for (oid, hash) in &order {
+        let object = odb.read(oid)?;
+        let reused = reusable
+            .get(oid)
+            .and_then(|(base, delta)| position.get(base).map(|b| (*b, delta.len() as u64)));
+        inputs.push(DeltaInput {
+            kind: object.kind(),
+            name_hash: *hash,
+            size: object.data().len() as u64,
+            reused_base: reused.map(|(b, _)| b),
+            reused_size: reused.map(|(_, s)| s).unwrap_or(0),
+        });
+    }
+
+    let config_number = |key: &str, default: usize| -> usize {
+        repo.config_value(bstr::BStr::new(key.as_bytes()))
+            .ok()
+            .flatten()
+            .and_then(|v| String::from_utf8_lossy(&v).trim().parse::<usize>().ok())
+            .unwrap_or(default)
+    };
+    let window = config_number("pack.window", 10);
+    let depth = config_number("pack.depth", 50);
+    let chosen = if window == 0 || depth == 0 {
+        vec![None; order.len()]
+    } else {
+        let mut load = |i: usize| -> Result<Vec<u8>> { Ok(odb.read(&order[i].0)?.data().to_vec()) };
+        search_deltas(
+            &inputs,
+            &mut load,
+            window,
+            depth,
+            match repo.format() {
+                crate::hash::ObjectFormat::Sha1 => 20,
+                _ => 32,
+            },
+        )?
+    };
+
+    // Commits and tags first, then trees, then blobs; a delta only after its base.
+    let mut sequence: Vec<usize> = Vec::with_capacity(order.len());
+    for rank in [
+        [ObjectKind::Tag, ObjectKind::Commit].as_slice(),
+        [ObjectKind::Tree].as_slice(),
+        [ObjectKind::Blob].as_slice(),
+    ] {
+        for (i, input) in inputs.iter().enumerate() {
+            if rank.contains(&input.kind) {
+                sequence.push(i);
+            }
+        }
+    }
+    let mut writer = PackWriter::new(repo.format());
+    let mut offsets: Vec<Option<u64>> = vec![None; order.len()];
+    fn emit(
+        i: usize,
+        repo: &Repository,
+        order: &[(ObjectId, u32)],
+        chosen: &[Option<crate::pack::deltify::ChosenDelta>],
+        reusable: &HashMap<ObjectId, (ObjectId, Vec<u8>)>,
+        writer: &mut PackWriter,
+        offsets: &mut [Option<u64>],
+    ) -> Result<()> {
+        if offsets[i].is_some() {
+            return Ok(());
+        }
+        match &chosen[i] {
+            Some(choice) => {
+                emit(choice.base, repo, order, chosen, reusable, writer, offsets)?;
+                let base_offset = offsets[choice.base].expect("base written first");
+                let delta: &[u8] = match &choice.delta {
+                    Some(bytes) => bytes,
+                    None => &reusable[&order[i].0].1,
+                };
+                offsets[i] = Some(writer.write_ofs_delta(order[i].0, base_offset, delta)?);
+            }
+            None => {
+                let object = repo.odb().read(&order[i].0)?;
+                writer.write_raw(object.kind(), object.data())?;
+                offsets[i] = writer.last_offset();
+            }
+        }
+        Ok(())
+    }
+    for i in sequence {
+        emit(
+            i,
+            repo,
+            &order,
+            &chosen,
+            reusable,
+            &mut writer,
+            &mut offsets,
+        )?;
+    }
+    let (_, summary) = writer.finish_to_path(pack_dir)?;
+    Ok(summary)
+}
+
 /// Collect the names of every reflog under `logs/`.
 fn reflog_names(dir: &Path, prefix: &str, out: &mut Vec<String>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -342,6 +618,7 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
     report.reflog_entries_expired = expire_reflogs(repo, options)?;
     // Before packing refs: the store's snapshot goes stale once the loose files are deleted.
     let reachable = reachable_objects(repo, true)?;
+    let tips = walk_tips(repo)?;
     if options.pack_refs {
         report.refs_packed = pack_refs(repo)?;
     }
@@ -397,12 +674,28 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
 
     let mut new_checksum: Option<ObjectId> = None;
     if !already_packed && !to_pack.is_empty() {
-        let mut writer = PackWriter::new(format);
-        for oid in &to_pack {
-            let object = odb.read(oid)?;
-            writer.write_object(&object)?;
+        let wanted: HashSet<ObjectId> = to_pack.iter().copied().collect();
+        // Deltas already stored in the packs being replaced are kept when their base is packed too.
+        let mut reusable: HashMap<ObjectId, (ObjectId, Vec<u8>)> = HashMap::new();
+        for pack in odb.packs() {
+            if !removable
+                .iter()
+                .any(|(_, checksum, _, _)| *checksum == pack.checksum())
+            {
+                continue;
+            }
+            let by_offset = pack.oids_by_offset();
+            for oid in pack.oids()? {
+                if wanted.contains(&oid)
+                    && !reusable.contains_key(&oid)
+                    && let Some((base, delta)) = pack.stored_delta(&oid, &by_offset)?
+                    && wanted.contains(&base)
+                {
+                    reusable.insert(oid, (base, delta));
+                }
+            }
         }
-        let (_, summary) = writer.finish_to_path(&pack_dir)?;
+        let summary = write_deltified(repo, &wanted, &reusable, tips, &pack_dir)?;
         new_checksum = Some(summary.checksum);
         report.objects_packed = to_pack.len();
 

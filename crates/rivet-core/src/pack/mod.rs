@@ -77,6 +77,7 @@ use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{Object, ObjectKind};
 
 pub mod delta;
+pub mod deltify;
 pub mod index;
 pub mod reader;
 pub mod verify;
