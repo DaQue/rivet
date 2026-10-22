@@ -1955,7 +1955,8 @@ pub fn merge_commit(
         Err(error) => return report_checkout_refusal(error, "merge"),
     };
 
-    let conflicted = print_merge_report(&result, label);
+    let auto_merged = cleanly_content_merged(repository, base, ours, theirs, &result)?;
+    let conflicted = print_merge_report(&result, label, &auto_merged);
 
     if !conflicted.is_empty() || no_commit {
         let mut merge_msg = BString::from(message);
@@ -2014,16 +2015,72 @@ pub fn merge_commit(
     Ok(0)
 }
 
-/// Print the `Auto-merging` / `CONFLICT` lines of a finished tree merge and return the
-/// conflicted paths. `label` names the incoming side in the modify/delete wording.
-pub(super) fn print_merge_report(result: &rivet_core::TreeMerge, label: &str) -> Vec<BString> {
+/// Blob id of `path` inside `tree`, or `None` when the path is absent or not a file.
+fn blob_at(repository: &Repository, tree: ObjectId, path: &[u8]) -> Result<Option<ObjectId>> {
+    let mut current = tree;
+    let mut parts = path.split(|b| *b == b'/').peekable();
+    while let Some(name) = parts.next() {
+        let rivet_core::Object::Tree(body) = repository.odb().read(&current)? else {
+            return Ok(None);
+        };
+        let parsed = rivet_core::object::Tree::parse(repository.format(), &body)?;
+        let Some(entry) = parsed.entries.iter().find(|e| e.name.as_slice() == name) else {
+            return Ok(None);
+        };
+        if parts.peek().is_some() {
+            current = entry.oid;
+        } else {
+            return Ok((entry.mode != rivet_core::object::EntryMode::Tree).then_some(entry.oid));
+        }
+    }
+    Ok(None)
+}
+
+/// Paths both sides changed that merged without conflict: git announces each with
+/// `Auto-merging <path>`: a file present in the base and on both sides, changed differently.
+fn cleanly_content_merged(
+    repository: &Repository,
+    base: Option<ObjectId>,
+    ours: ObjectId,
+    theirs: ObjectId,
+    result: &rivet_core::TreeMerge,
+) -> Result<Vec<BString>> {
+    let Some(base) = base else {
+        return Ok(Vec::new());
+    };
+    let base_tree = repository.commit_tree(base)?;
+    let our_tree = repository.commit_tree(ours)?;
+    let their_tree = repository.commit_tree(theirs)?;
+    let mut out = Vec::new();
     for path in &result.paths {
-        if result.conflicts.iter().any(|c| c.path == path.path) {
+        if path.kind.is_some() || path.result.is_none() {
             continue;
         }
-        if path.kind.is_some() {
-            println!("Auto-merging {}", path.path);
+        let in_base = blob_at(repository, base_tree, &path.path)?;
+        let in_ours = blob_at(repository, our_tree, &path.path)?;
+        let in_theirs = blob_at(repository, their_tree, &path.path)?;
+        if in_base.is_some()
+            && in_ours.is_some()
+            && in_theirs.is_some()
+            && in_ours != in_theirs
+            && in_base != in_ours
+            && in_base != in_theirs
+        {
+            out.push(path.path.clone());
         }
+    }
+    Ok(out)
+}
+
+/// Print the `Auto-merging` / `CONFLICT` lines of a finished tree merge and return the
+/// conflicted paths. `label` names the incoming side in the modify/delete wording.
+pub(super) fn print_merge_report(
+    result: &rivet_core::TreeMerge,
+    label: &str,
+    auto_merged: &[BString],
+) -> Vec<BString> {
+    for path in auto_merged {
+        println!("Auto-merging {path}");
     }
     let mut conflicted = Vec::new();
     for conflict in &result.conflicts {

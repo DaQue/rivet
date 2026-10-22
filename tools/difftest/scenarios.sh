@@ -2552,6 +2552,25 @@ s_notes_fanout_deep() {
     v cat-file -p "$(g rev-parse refs/notes/commits^{tree})"
 }
 
+# `Auto-merging <path>` names every file both sides changed, clean or not, and `-q` does not
+# silence it (git 2.56: stdout is exactly that line). Files only one side touched are silent.
+s_merge_auto_merging() {
+    v init -q repo; cd repo
+    printf '1\n2\n3\n4\n5\n' >f; printf 'x\ny\nz\n' >h; v add f h; v commit -q -m base
+    v branch topic; v branch other
+    tick; printf 'one\n2\n3\n4\n5\n' >f; echo m >only_main; v add only_main; v commit -q -a -m "main f"
+    v switch -q topic
+    tick; printf '1\n2\n3\n4\nfive\n' >f; echo t >new; printf 'x\ny\nZ\n' >h; v add new; v commit -q -a -m "topic f h new"
+    v switch -q other
+    tick; printf 'x\ny\nzz\n' >h; v commit -q -a -m "other h"
+    v switch -q main
+    v merge -q topic -m quiet
+    v log --oneline
+    v show --stat HEAD
+    v merge other -m loud
+    v log --oneline
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

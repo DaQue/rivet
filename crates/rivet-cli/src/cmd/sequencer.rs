@@ -425,7 +425,7 @@ fn apply_one(
                 .map(|code| if code == 1 { failed(op) } else { code });
         }
     };
-    let conflicted = super::branching::print_merge_report(&result, &label);
+    let conflicted = super::branching::print_merge_report(&result, &label, &[]);
 
     let message = match op {
         Op::Pick => pick.message.clone(),

@@ -608,7 +608,7 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
                 return Ok(1);
             }
         };
-        let conflicted = super::branching::print_merge_report(&result, &label);
+        let conflicted = super::branching::print_merge_report(&result, &label, &[]);
         if !conflicted.is_empty() {
             let git_dir = repository.git_dir().to_path_buf();
             let mut merge_msg = original.message.clone();

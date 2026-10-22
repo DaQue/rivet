@@ -190,3 +190,15 @@ hold exactly what the merge would write (git's rule; needed by `stash apply`); `
   `--workspace --all-targets -- -D warnings` clean (0 warnings in the log), every `test result: ok`,
   `scenarios.sh` 106 PASS / `failures: 0`.
 - Brief for the block: `.claude/HANDOFF.md`. Live checklist: `.claude/PRIORITIES.md`.
+
+## Autonomous block (2026-10-22)
+
+### Phase 1.1 — `merge` `Auto-merging <path>` (landed, scenario `s_merge_auto_merging`)
+Real divergence was wider than `-q`: rivet never printed `Auto-merging` for a *clean* content merge (with or
+without `-q`); the loop in `print_merge_report` filtered on `kind.is_some()`, which is `None` for clean paths.
+Now `merge_commit` derives the list from the base/ours/theirs blobs (present in all three, all differ) and prints
+it; `-q` leaves it alone, as git does. Base output before the fix: git printed `Auto-merging f`, rivet printed nothing
+(scenario FAIL on the base commit, PASS after).
+Gate: fmt clean, clippy clean, `cargo test --workspace` 206 passed / 0 failed / 0 ignored, `scenarios.sh` 111 PASS / `failures: 0`.
+Known gap: `cherry-pick`/`revert`/`rebase`/`stash` still pass an empty list (their clean content merges do not print
+`Auto-merging`); ordering of clean vs conflicted `Auto-merging` lines is clean-first, git interleaves by path.

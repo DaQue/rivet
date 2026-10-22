@@ -562,8 +562,8 @@ fn apply(
     } else {
         match repository.merge_into_worktree(Some(parents[0]), stash, &options) {
             Ok(result) => {
-                conflicted =
-                    !super::branching::print_merge_report(&result, "Stashed changes").is_empty();
+                conflicted = !super::branching::print_merge_report(&result, "Stashed changes", &[])
+                    .is_empty();
             }
             Err(error) => {
                 let code = super::branching::report_checkout_refusal(error, "merge")?;
