@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use super::pretty;
 use crate::cli::{DiffAlgorithmArg, GlobalArgs};
 
 /// Arguments to `rivet log`.
@@ -106,6 +107,22 @@ pub struct LogArgs {
     #[arg(long = "name-status")]
     pub name_status: bool,
 
+    /// Print only the names of the changed paths after each commit.
+    #[arg(long = "name-only")]
+    pub name_only: bool,
+
+    /// Lay each commit out as `oneline`, `short`, `medium`, `full`, `fuller` or `format:<fmt>`.
+    #[arg(long = "pretty", value_name = "FORMAT")]
+    pub pretty: Option<String>,
+
+    /// Lay each commit out with a format string (`tformat:` semantics).
+    #[arg(long = "format", value_name = "FORMAT")]
+    pub format: Option<String>,
+
+    /// Date style: `default`, `iso`, `iso-strict`, `relative`, `short`, `raw`, `unix`, `rfc2822`.
+    #[arg(long = "date", value_name = "STYLE")]
+    pub date: Option<String>,
+
     /// Print the object names in full, not abbreviated.
     #[arg(long = "no-abbrev-commit")]
     pub no_abbrev_commit: bool,
@@ -167,6 +184,22 @@ pub struct ShowArgs {
     /// Abbreviate the object ids to this many hex characters, or to all of them.
     #[arg(long = "abbrev", value_name = "N")]
     pub abbrev: Option<Option<usize>>,
+
+    /// Print a diffstat instead of the patch.
+    #[arg(long = "stat")]
+    pub stat: bool,
+
+    /// Print only the names of the changed paths instead of the patch.
+    #[arg(long = "name-only")]
+    pub name_only: bool,
+
+    /// Print the changed paths with a status letter instead of the patch.
+    #[arg(long = "name-status")]
+    pub name_status: bool,
+
+    /// Date style: `default`, `iso`, `iso-strict`, `relative`, `short`, `raw`, `unix`, `rfc2822`.
+    #[arg(long = "date", value_name = "STYLE")]
+    pub date: Option<String>,
 }
 
 /// Arguments to `rivet diff`.
@@ -403,26 +436,57 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
 
     let oids = rivet_core::revwalk::walk_oids(repository.odb(), &starts, &options)?;
     let diff_options = rivet_core::DiffOptions::new();
+    let layout = match (&args.format, &args.pretty) {
+        (Some(spec), _) | (None, Some(spec)) => pretty::Layout::parse(spec)?,
+        _ if args.oneline => pretty::Layout::Oneline,
+        _ => pretty::Layout::Medium,
+    };
+    // `--oneline` abbreviates ids; `--pretty=oneline` prints them in full.
+    let full_ids = if layout == pretty::Layout::Oneline && !args.oneline {
+        true
+    } else {
+        args.no_abbrev_commit
+    };
+    let date = args.date.as_deref().unwrap_or("default");
+    pretty::check_date_style(date)?;
+    let diff_mode = if args.name_only {
+        Some(DiffMode::NameOnly)
+    } else if args.name_status {
+        Some(DiffMode::NameStatus)
+    } else if args.stat {
+        Some(DiffMode::Stat)
+    } else if args.patch {
+        Some(DiffMode::Patch)
+    } else {
+        None
+    };
+    let decorations = if layout_uses_decorations(&layout) {
+        decoration_map(&repository)?
+    } else {
+        Default::default()
+    };
     let mut out = Vec::new();
     for (position, oid) in oids.iter().enumerate() {
         let commit = read_commit(&repository, oid)?;
-        if args.oneline {
-            let subject = subject_of(&commit.message);
-            out.extend_from_slice(
-                format!(
-                    "{} {}\n",
-                    abbrev(&repository, oid, args.no_abbrev_commit),
-                    subject
-                )
-                .as_bytes(),
-            );
-        } else {
-            if position > 0 {
-                out.push(b'\n');
+        if position > 0 {
+            match &layout {
+                l if l.is_block() => out.push(b'\n'),
+                pretty::Layout::Format {
+                    terminator: false, ..
+                } => out.push(b'\n'),
+                _ => {}
             }
-            write_commit_header(&repository, oid, &commit, args.no_abbrev_commit, &mut out);
         }
-        if args.patch || args.stat || args.name_status {
+        out.extend_from_slice(&render_commit(
+            &repository,
+            &layout,
+            oid,
+            &commit,
+            date,
+            full_ids,
+            &decorations,
+        ));
+        if let Some(mode) = diff_mode {
             let diff = commit_diff(
                 &repository,
                 &commit,
@@ -430,16 +494,10 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 &args.paths_as_specs(&repository)?,
             )?;
             if !diff.is_empty() && commit.parents.len() < 2 {
-                if !args.oneline {
+                if layout.blank_before_diff() {
                     out.push(b'\n');
                 }
-                if args.name_status {
-                    rivet_core::format_name_status(&diff, &mut out)?;
-                } else if args.stat {
-                    rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
-                } else {
-                    rivet_core::format_unified(&diff, format, &mut out)?;
-                }
+                write_diff(&repository, mode, &diff, &mut out)?;
             }
         }
     }
@@ -686,7 +744,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
     Ok(if args.exit_code && changed { 1 } else { 0 })
 }
 
-use bstr::{BStr, ByteSlice};
+use bstr::BStr;
 use rivet_core::revwalk::{SortOrder, WalkOptions};
 use rivet_core::{ObjectId, Repository};
 
@@ -705,6 +763,7 @@ struct LogCommit {
     parents: Vec<ObjectId>,
     tree: ObjectId,
     author: rivet_core::Signature,
+    committer: rivet_core::Signature,
     message: Vec<u8>,
 }
 
@@ -717,24 +776,9 @@ fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<LogCommit> {
         parents: commit.parents.clone(),
         tree: commit.tree,
         author: commit.author.clone(),
+        committer: commit.committer.clone(),
         message: commit.message.to_vec(),
     })
-}
-
-fn subject_of(message: &[u8]) -> String {
-    // Git joins the first paragraph's lines with spaces for `--oneline`.
-    let mut parts = Vec::new();
-    for line in message.lines() {
-        if line.iter().all(u8::is_ascii_whitespace) {
-            if parts.is_empty() {
-                continue;
-            } else {
-                break;
-            }
-        }
-        parts.push(String::from_utf8_lossy(line).trim().to_string());
-    }
-    parts.join(" ")
 }
 
 fn abbrev(repository: &Repository, oid: &ObjectId, full: bool) -> String {
@@ -764,39 +808,116 @@ fn abbrev(repository: &Repository, oid: &ObjectId, full: bool) -> String {
     hex[..length].to_string()
 }
 
-fn write_commit_header(
+/// How a commit's diff is printed after its header.
+#[derive(Clone, Copy)]
+enum DiffMode {
+    Patch,
+    Stat,
+    NameOnly,
+    NameStatus,
+}
+
+fn write_diff(
     repository: &Repository,
+    mode: DiffMode,
+    diff: &rivet_core::TreeDiff,
+    out: &mut Vec<u8>,
+) -> Result<()> {
+    match mode {
+        DiffMode::NameOnly => {
+            for file in &diff.files {
+                out.extend_from_slice(&rivet_core::ops::quote_path(file.path(), false));
+                out.push(b'\n');
+            }
+        }
+        DiffMode::NameStatus => rivet_core::format_name_status(diff, out)?,
+        DiffMode::Stat => rivet_core::format_stat_sized(diff, Some(repository.odb()), out)?,
+        DiffMode::Patch => rivet_core::format_unified(diff, repository.format(), out)?,
+    }
+    Ok(())
+}
+
+fn layout_uses_decorations(layout: &pretty::Layout) -> bool {
+    match layout {
+        pretty::Layout::Format { template, .. } => {
+            template.contains("%d") || template.contains("%D")
+        }
+        _ => false,
+    }
+}
+
+/// Ref names pointing at each commit, in Git's display order: `HEAD -> branch` first, then the
+/// refs in reverse name order (tags, remote branches, local branches).
+fn decoration_map(
+    repository: &Repository,
+) -> Result<std::collections::HashMap<ObjectId, Vec<String>>> {
+    let mut refs = repository.refs().list_all(repository.odb())?;
+    refs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    let mut map: std::collections::HashMap<ObjectId, Vec<String>> = Default::default();
+    let head = repository.head()?;
+    for (name, oid) in refs.iter().rev() {
+        let bytes = name.as_bytes();
+        let label = if bytes.starts_with(b"refs/tags/") {
+            format!("tag: {}", name.short_name())
+        } else if bytes.starts_with(b"refs/heads/") || bytes.starts_with(b"refs/remotes/") {
+            name.short_name().to_string()
+        } else {
+            continue;
+        };
+        let label = match head.branch() {
+            Some(branch) if branch == name => format!("HEAD -> {label}"),
+            _ => label,
+        };
+        let list = map.entry(*oid).or_default();
+        if label.starts_with("HEAD -> ") {
+            list.insert(0, label);
+        } else {
+            list.push(label);
+        }
+    }
+    if let rivet_core::HeadState::Detached { oid } = head {
+        let commit = repository
+            .refs()
+            .peel_oid(oid, repository.odb())
+            .unwrap_or(oid);
+        map.entry(commit).or_default().insert(0, "HEAD".to_string());
+    }
+    Ok(map)
+}
+
+fn render_commit(
+    repository: &Repository,
+    layout: &pretty::Layout,
     oid: &ObjectId,
     commit: &LogCommit,
+    date: &str,
     full_ids: bool,
-    out: &mut Vec<u8>,
-) {
-    out.extend_from_slice(format!("commit {oid}\n").as_bytes());
-    if commit.parents.len() > 1 {
-        let parents: Vec<String> = commit
-            .parents
-            .iter()
-            .map(|p| abbrev(repository, p, full_ids))
-            .collect();
-        out.extend_from_slice(format!("Merge: {}\n", parents.join(" ")).as_bytes());
-    }
-    out.extend_from_slice(
-        format!("Author: {} <{}>\n", commit.author.name, commit.author.email).as_bytes(),
-    );
-    out.extend_from_slice(
-        format!(
-            "Date:   {}\n",
-            rivet_core::ops::format_git_date(commit.author.when, commit.author.tz_offset_minutes)
-        )
-        .as_bytes(),
-    );
-    out.push(b'\n');
-    let message = commit.message.trim_end_with(|c| c == '\n');
-    for line in message.lines() {
-        out.extend_from_slice(b"    ");
-        out.extend_from_slice(line);
+    decorations: &std::collections::HashMap<ObjectId, Vec<String>>,
+) -> Vec<u8> {
+    let abbreviate = |o: &ObjectId| abbrev(repository, o, false);
+    let entry = pretty::Entry {
+        oid: *oid,
+        tree: commit.tree,
+        parents: &commit.parents,
+        author: &commit.author,
+        committer: &commit.committer,
+        message: &commit.message,
+        decorations: decorations.get(oid).map_or(&[], Vec::as_slice),
+    };
+    let style = pretty::Style {
+        date,
+        now: pretty::now(),
+        abbrev: &abbreviate,
+        full_ids,
+    };
+    let mut out = pretty::render(layout, &entry, &style);
+    if let pretty::Layout::Format {
+        terminator: true, ..
+    } = layout
+    {
         out.push(b'\n');
     }
+    out
 }
 
 impl crate::cmd::history::LogArgs {
@@ -895,21 +1016,43 @@ fn show_object(
         }
         rivet_core::ObjectKind::Commit => {
             let commit = read_commit(repository, oid)?;
-            let oneline = args.pretty.as_deref() == Some("oneline")
-                || args.format.as_deref() == Some("oneline");
-            if oneline {
-                out.extend_from_slice(
-                    format!(
-                        "{} {}\n",
-                        abbrev(repository, oid, false),
-                        subject_of(&commit.message)
-                    )
-                    .as_bytes(),
-                );
+            let layout = match (&args.format, &args.pretty) {
+                (Some(spec), _) | (None, Some(spec)) => pretty::Layout::parse(spec)?,
+                _ => pretty::Layout::Medium,
+            };
+            let date = args.date.as_deref().unwrap_or("default");
+            pretty::check_date_style(date)?;
+            let full_ids = layout == pretty::Layout::Oneline;
+            let decorations = if layout_uses_decorations(&layout) {
+                decoration_map(repository)?
             } else {
-                write_commit_header(repository, oid, &commit, false, out);
-            }
-            if !args.no_patch && commit.parents.len() < 2 {
+                Default::default()
+            };
+            out.extend_from_slice(&render_commit(
+                repository,
+                &layout,
+                oid,
+                &commit,
+                date,
+                full_ids,
+                &decorations,
+            ));
+            let diff_mode = if args.no_patch {
+                None
+            } else if args.name_only {
+                Some(DiffMode::NameOnly)
+            } else if args.name_status {
+                Some(DiffMode::NameStatus)
+            } else if args.stat {
+                Some(DiffMode::Stat)
+            } else {
+                Some(DiffMode::Patch)
+            };
+            // A merge shows no patch (the combined diff is not implemented), but its diffstat is
+            // against the first parent, as in Git.
+            if let Some(mode) = diff_mode
+                && (commit.parents.len() < 2 || matches!(mode, DiffMode::Stat))
+            {
                 let mut options = rivet_core::DiffOptions::new();
                 if let Some(n) = args.context {
                     options.context = n;
@@ -920,8 +1063,10 @@ fn show_object(
                 }
                 let diff = commit_diff(repository, &commit, &options, &specs)?;
                 if !diff.is_empty() {
-                    out.push(b'\n');
-                    rivet_core::format_unified(&diff, repository.format(), out)?;
+                    if layout.blank_before_diff() {
+                        out.push(b'\n');
+                    }
+                    write_diff(repository, mode, &diff, out)?;
                 }
             }
         }

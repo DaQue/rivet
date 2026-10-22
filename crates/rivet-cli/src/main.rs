@@ -48,8 +48,45 @@ use clap::Parser;
 
 use crate::cli::Cli;
 
+/// Git's `log -<N>` shorthand for `-n <N>`: clap cannot declare a numeric short flag, so the
+/// argument vector is rewritten before parsing. Only `log` arguments before `--` are touched.
+fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut iter = args.into_iter();
+    out.extend(iter.next()); // argv[0]
+    let mut command_seen = false;
+    let mut in_log = false;
+    let mut after_dashes = false;
+    while let Some(arg) = iter.next() {
+        let text = arg.to_string_lossy().into_owned();
+        if !command_seen {
+            if text == "--repo" {
+                out.push(arg);
+                out.extend(iter.next());
+                continue;
+            }
+            if !text.starts_with('-') {
+                command_seen = true;
+                in_log = text == "log";
+            }
+        } else if in_log && !after_dashes {
+            if text == "--" {
+                after_dashes = true;
+            } else if text.len() > 1
+                && text.starts_with('-')
+                && text[1..].bytes().all(|b| b.is_ascii_digit())
+            {
+                out.push(format!("-n{}", &text[1..]).into());
+                continue;
+            }
+        }
+        out.push(arg);
+    }
+    out
+}
+
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(expand_count_shorthand(std::env::args_os().collect()));
     match cmd::dispatch(cli) {
         Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
         Err(error) => {

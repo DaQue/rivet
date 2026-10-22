@@ -34,6 +34,7 @@ pub mod branching;
 pub mod history;
 pub mod ignore;
 pub mod plumbing;
+pub mod pretty;
 pub mod remote;
 pub mod setup;
 pub mod snapshot;

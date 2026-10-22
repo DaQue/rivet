@@ -836,6 +836,106 @@ pub fn format_git_date(when: i64, tz_offset_minutes: i32) -> String {
     )
 }
 
+/// Whether `style` names a date format [`format_date_style`] understands.
+pub fn is_date_style(style: &str) -> bool {
+    matches!(
+        style,
+        "default"
+            | "iso"
+            | "iso8601"
+            | "iso-strict"
+            | "iso8601-strict"
+            | "relative"
+            | "short"
+            | "raw"
+            | "unix"
+            | "rfc"
+            | "rfc2822"
+    )
+}
+
+/// Format a signature time in one of `--date=`'s styles: `default`, `iso`, `iso-strict`,
+/// `relative`, `short`, `raw`, `unix`, `rfc2822`. `now` is the reference for `relative`.
+/// Returns `None` for an unknown style.
+pub fn format_date_style(
+    style: &str,
+    when: i64,
+    tz_offset_minutes: i32,
+    now: i64,
+) -> Option<String> {
+    let offset =
+        jiff::tz::Offset::from_seconds(tz_offset_minutes * 60).unwrap_or(jiff::tz::Offset::UTC);
+    let stamp = jiff::Timestamp::from_second(when).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+    let zoned = stamp.to_zoned(jiff::tz::TimeZone::fixed(offset));
+    let abs = tz_offset_minutes.abs();
+    let sign = if tz_offset_minutes < 0 { '-' } else { '+' };
+    let zone = format!("{sign}{:02}{:02}", abs / 60, abs % 60);
+    Some(match style {
+        "default" => format_git_date(when, tz_offset_minutes),
+        "iso" | "iso8601" => format!("{} {zone}", zoned.strftime("%Y-%m-%d %H:%M:%S")),
+        "iso-strict" | "iso8601-strict" => {
+            let zone = if tz_offset_minutes == 0 {
+                "Z".to_string()
+            } else {
+                format!("{sign}{:02}:{:02}", abs / 60, abs % 60)
+            };
+            format!("{}{zone}", zoned.strftime("%Y-%m-%dT%H:%M:%S"))
+        }
+        "short" => zoned.strftime("%Y-%m-%d").to_string(),
+        "raw" => format!("{when} {zone}"),
+        "unix" => when.to_string(),
+        "rfc" | "rfc2822" => format!("{} {zone}", zoned.strftime("%a, %-d %b %Y %H:%M:%S")),
+        "relative" => relative_date(when, now),
+        _ => return None,
+    })
+}
+
+/// Git's `show_date_relative`.
+fn relative_date(when: i64, now: i64) -> String {
+    fn unit(n: i64, one: &str, many: &str) -> String {
+        format!("{n} {} ago", if n == 1 { one } else { many })
+    }
+    if now < when {
+        return "in the future".to_string();
+    }
+    let mut diff = now - when;
+    if diff < 90 {
+        return unit(diff, "second", "seconds");
+    }
+    diff = (diff + 30) / 60;
+    if diff < 90 {
+        return unit(diff, "minute", "minutes");
+    }
+    diff = (diff + 30) / 60;
+    if diff < 36 {
+        return unit(diff, "hour", "hours");
+    }
+    diff = (diff + 12) / 24;
+    if diff < 14 {
+        return unit(diff, "day", "days");
+    }
+    if diff < 70 {
+        return unit((diff + 3) / 7, "week", "weeks");
+    }
+    if diff < 365 {
+        return unit((diff + 15) / 30, "month", "months");
+    }
+    if diff < 1825 {
+        let months_total = (diff * 12 * 2 + 365) / (365 * 2);
+        let (years, months) = (months_total / 12, months_total % 12);
+        if months > 0 {
+            return format!(
+                "{} {}, {}",
+                years,
+                if years == 1 { "year" } else { "years" },
+                unit(months, "month", "months")
+            );
+        }
+        return unit(years, "year", "years");
+    }
+    unit((diff + 183) / 365, "year", "years")
+}
+
 /// Parse a `--since`/`--until` style date (`@epoch`, `epoch`, ISO date or datetime) to seconds.
 pub fn parse_approxidate(text: &str) -> Option<i64> {
     let text = text.trim();

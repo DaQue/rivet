@@ -808,6 +808,73 @@ s_histogram() {
     done
 }
 
+s_log_forms() {
+    v init -q repo; cd repo
+    printf 'one\n' >a; mkdir d; echo x >d/b; v add a d; v commit -q -m "first subject" -m "first body line"
+    tick; echo two >>a; v commit -q -a -m "second"
+    v branch topic; v tag light; v tag -a ann -m annotated
+    tick; echo three >>a; echo y >d/c; v add d/c; v commit -q -a -m "third subject
+continued line" -m "body para"
+    v switch -q topic
+    tick; echo t >t; v add t; v commit -q -m "topic work"
+    v switch -q main
+    tick; v merge -q --no-ff topic -m "merge topic"
+    v log -1
+    v log -n1
+    v log -2 --oneline
+    v log -3
+    v log --oneline -n 2
+    v log --format=%H
+    v log --format='%h|%T|%s|%an|%ae|%P'
+    v log --format='%H %h %t %p%n%b%%'
+    v log --format='%ad|%aD|%ai|%aI|%as|%at|%cd|%cn|%ce|%ct'
+    v log --format='%D|%d' --all
+    v log --date=iso --format='%ad %cd'
+    v log --date=short --format=%ad
+    v log --date=relative --format=%ar
+    v log --date=relative -2
+    v log --date=iso -1
+    v log --date=raw --format=%ad
+    v log --date=rfc2822 --format=%ad
+    v log --date=iso-strict --format=%ad
+    v log --pretty=oneline
+    v log --pretty=short
+    v log --pretty=medium
+    v log --pretty=full
+    v log --pretty=fuller
+    v log --pretty=format:'%h %s'
+    v log --pretty=tformat:'%h %s'
+    v log --pretty='%h %s'
+    v log --format='%h %s %Z %'
+    v log --stat --format=%s
+    v log --name-only --format=%s
+    v log --name-status --pretty=oneline
+    v log -1 -p --format='%h'
+    v log --pretty=bogus
+    v log --date=bogus
+    v show --stat
+    v show --name-only HEAD~1
+    v show --name-status HEAD~1
+    v show --format=%s -s
+    v show --pretty=full --stat HEAD~2
+    v show --date=iso --stat HEAD~2
+}
+
+s_verify_pack_v() {
+    g init -q repo; cd repo
+    seq 1 2000 >big; echo a >small; mkdir d; seq 1 300 >d/other
+    g add -A; g commit -qm c0
+    for i in 1 2 3 4 5 6; do
+        tick; seq 1 2000 | sed "s/^$((i * 100))$/edited $i/" >big; echo "$i" >>small
+        g add -A; g commit -qm "c$i"
+    done
+    g repack -adfq --depth=20 --window=50
+    local idx; idx=$(ls .git/objects/pack/*.idx)
+    v verify-pack -v "$idx"
+    v verify-pack -s "$idx"
+    v verify-pack "$idx"
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

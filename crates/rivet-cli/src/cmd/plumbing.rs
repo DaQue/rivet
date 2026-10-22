@@ -508,7 +508,7 @@ pub struct VerifyPackArgs {
     pub indexes: Vec<PathBuf>,
 
     /// Print a line for each object in the pack.
-    #[arg(long = "verbose")]
+    #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
 
     /// Print the pack's summary and skip per-object verification.
