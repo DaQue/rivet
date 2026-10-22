@@ -347,3 +347,24 @@ Not implemented: `--shell/--perl/--python/--tcl`, `--stdin`, `--start-after`, `-
 `%(trailers)`, `%(contents:trailers)`, `%(rest)`, `%(worktreepath)`, `%(deltabase)`, `%(objectsize:disk)`, `%(ahead-behind:…)`,
 `%(authordate:local|human)`, `%(refname:short)` strictness options, commit `gpgsig` in `contents:signature` (tag signatures only).
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 135 PASS / `failures: 0`.
+
+### Phase 2.3 — `blame -M`, `-C`, `--porcelain` (landed, scenarios `s_blame_move_copy`, `s_blame_porcelain`; `s_blame`, `s_blame_edits` unchanged and green)
+`cmd/blame.rs` is now a port of git's `blame.c` rather than a per-line pass: the final file is a list of entries (`lno`, `num`,
+suspect, `s_lno`); a commit-date work queue; `pass_blame` / `pass_blame_to_parent` (unchanged diff runs move to the parent, the
+rest stays as separate entries), `filter_small`, `blame_entry_score` (1 + alphanumerics of the entry's final lines, entries
+scoring ≤ threshold are ignored: `-M` 20, `-C` 40, `-M<n>`/`-C<n>` adjust), `find_copy_in_blob` + `copy_split_if_better`
+(best-scoring unchanged run of a line diff, ties go to the later candidate), `find_move_in_parent`, `find_copy_in_parent`
+(candidate files = the ones the commit changed or removed; `-C -C`: every file of the parent when the file is new in the commit;
+`-C -C -C`: always), `coalesce` for group sizes. `-C` implies `-M`; `-M<n>`/`-C<n>` are rewritten to long options in `main.rs`
+because clap cannot take an optional attached value without swallowing the next argument.
+Porcelain: `--porcelain`/`-p`, `--line-porcelain` with `previous <sha> <path>` (first parent version the file was compared with,
+renames included), `boundary` for root commits, `filename` once per commit (and for every group when a commit is blamed under
+more than one path), group sizes on the first line of each group, "Not Committed Yet" details for uncommitted lines (time and
+zone are the current ones, as in git).
+Verification beyond the scenarios: a throwaway fuzzer (110 random histories with branches, merges, renames and edits / inserts /
+deletes / moves / copies / duplicated runs of short and long lines; for every file at HEAD and three earlier revisions, 12 flag
+combinations including `-M`, `-C`, `-C -C`, `-C -C -C`, `-M5`, `-C10`, `-C5 -C5`, `--porcelain`, `--line-porcelain`, `-f`) found
+no difference from git; `-M`/`-C` changed the output in most of those repositories, so the heuristics were exercised.
+Not implemented: `-M`/`-C` while the file has uncommitted changes (refused with a message), `--incremental`, `-w`, `--since`, `-S`,
+`--contents`, `--reverse`, `--root`, `-n`/`--show-number`, `-t`, `--date`, `--abbrev`, regex `-L`.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 137 PASS / `failures: 0`.

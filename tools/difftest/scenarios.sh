@@ -3263,6 +3263,87 @@ last" "t$n" "m$n"; done
     v for-each-ref --sort=contents:subject --format='%(refname:short)' refs/heads
 }
 
+# Text with enough alphanumeric characters per line that moved or copied runs clear git's
+# thresholds (20 for -M, 40 for -C).
+bl_block() { # prefix count
+    local i
+    for i in $(seq 1 "$2"); do echo "$1 line number $i of the block with words"; done
+}
+bl_commit() { # name message
+    tick; GIT_AUTHOR_NAME="$1" GIT_AUTHOR_EMAIL="$1@x.org" v commit -q -a -m "$2"
+}
+bl_repo() {
+    v init -q repo; cd repo
+    { bl_block alpha 6; echo "tiny"; bl_block beta 6; echo "end"; } >a.txt
+    { echo "other file"; bl_block gamma 5; } >b.txt
+    { echo "untouched"; bl_block delta 7; } >c.txt
+    v add .; tick; GIT_AUTHOR_NAME=Root GIT_AUTHOR_EMAIL=root@x.org v commit -q -m root
+    # move: the beta block goes to the top of a.txt
+    { bl_block beta 6; bl_block alpha 6; echo "tiny"; echo "end"; } >a.txt
+    bl_commit Mover "move beta up"
+    # copy: a new file takes alpha lines from a.txt while a.txt changes too
+    { echo "new header"; bl_block alpha 6; echo "footer"; } >d.txt
+    echo "a change" >>a.txt
+    v add d.txt; bl_commit Copier "copy alpha to d.txt"
+    # copy from an unmodified file (only -C -C looks there)
+    { echo "e header"; bl_block delta 7; echo "e footer"; } >e.txt
+    v add e.txt; tick; GIT_AUTHOR_NAME=Harder GIT_AUTHOR_EMAIL=harder@x.org v commit -q -m "copy delta from untouched c.txt"
+    # a copy in a later commit of an existing file
+    { echo "f header"; bl_block gamma 5; } >>b.txt
+    bl_commit Later "append gamma copy to b.txt"
+}
+
+bl_run() { # every output form for one file/revision
+    v blame "$@"
+    v blame -M "$@"
+    v blame -C "$@"
+    v blame -C -C "$@"
+    v blame -C -C -C "$@"
+    v blame -M50 "$@"
+    v blame -C100 "$@"
+    v blame -f -C -C -C "$@"
+    v blame -s -M -C "$@"
+}
+
+s_blame_move_copy() {
+    bl_repo
+    for f in a.txt b.txt d.txt e.txt; do bl_run "$f"; done
+    bl_run HEAD~2 d.txt
+    v blame -L 2,5 -C -C a.txt
+    v blame -L 1,3 -L 8,10 -M d.txt
+}
+
+s_blame_porcelain() {
+    bl_repo
+    for f in a.txt d.txt b.txt; do
+        v blame --porcelain "$f"
+        v blame --line-porcelain "$f"
+        v blame -p -L 3,9 "$f"
+    done
+    v blame --porcelain -M a.txt
+    v blame --porcelain -C -C d.txt
+    v blame --line-porcelain -C -C -C e.txt
+    v blame --porcelain HEAD~3 a.txt
+    # a rename makes the 'previous' header name the old path
+    tick; g mv b.txt bb.txt; v commit -q -m "rename b"
+    bl_commit Editor "edit"
+    echo extra >>bb.txt; bl_commit Edit2 "edit2"
+    v blame --porcelain bb.txt
+    v blame --porcelain -f bb.txt
+    # merge with a side branch
+    v switch -q -c side HEAD~1
+    echo "side line" >>c.txt; bl_commit Sider "side"
+    v switch -q main
+    tick; g merge -q --no-ff -m "merge side" side >/dev/null 2>&1
+    v blame --porcelain c.txt
+    v blame --porcelain --line-porcelain c.txt
+    # uncommitted changes (git stamps them with the current time, which is not compared)
+    echo "work tree line" >>c.txt
+    DROP_OUT='^(author|committer)-time |^0000000{1,33} \(' v blame --porcelain c.txt
+    DROP_OUT='^0{8} \(' v blame c.txt
+    DROP_OUT='^0{8} ' v blame -s c.txt
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

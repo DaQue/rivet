@@ -57,6 +57,7 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
     let mut command_seen = false;
     let mut in_log = false;
     let mut in_format_patch = false;
+    let mut in_blame = false;
     let mut after_dashes = false;
     while let Some(arg) = iter.next() {
         let text = arg.to_string_lossy().into_owned();
@@ -70,6 +71,7 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                 command_seen = true;
                 in_log = text == "log" || text == "reflog";
                 in_format_patch = text == "format-patch";
+                in_blame = text == "blame";
             }
         } else if in_format_patch && !after_dashes {
             if text == "--" {
@@ -79,6 +81,28 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                 && text[1..].bytes().all(|b| b.is_ascii_digit())
             {
                 out.push(format!("--max-count={}", &text[1..]).into());
+                continue;
+            }
+        } else if in_blame && !after_dashes {
+            // `-M[<score>]` and `-C[<score>]` take an optional attached number; clap would let
+            // them swallow the next argument, so they become long options.
+            if text == "--" {
+                after_dashes = true;
+            } else if let Some(score) = text.strip_prefix("-M")
+                && score.bytes().all(|b| b.is_ascii_digit())
+            {
+                out.push("--detect-moves".into());
+                if !score.is_empty() {
+                    out.push(format!("--move-score={score}").into());
+                }
+                continue;
+            } else if let Some(score) = text.strip_prefix("-C")
+                && score.bytes().all(|b| b.is_ascii_digit())
+            {
+                out.push("--detect-copies".into());
+                if !score.is_empty() {
+                    out.push(format!("--copy-score={score}").into());
+                }
                 continue;
             }
         } else if in_log && !after_dashes {
