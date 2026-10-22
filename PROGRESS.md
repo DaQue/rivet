@@ -99,3 +99,82 @@ CLI grammar grew; no existing signature or doc comment in `rivet-core` was chang
 - `cargo test --workspace`: 193 passed, 0 failed, 0 ignored (includes `difftest` running every scenario, and the new
   `sequencer` and `maintenance` tests)
 - `bash tools/difftest/scenarios.sh`: 74 PASS, `failures: 0` (exit 0)
+
+## Porcelain completeness II (2026-10-22)
+
+Every item has a differential scenario in `tools/difftest/scenarios.sh` (real git vs rivet on stdout, stderr, exit code,
+refs, index, work tree, reflogs, pseudo-refs, `fsck`). New scenarios are listed with their item.
+
+| item | status | scenario |
+|---|---|---|
+| B1 `status -uall` with a nested repo | landed: an untracked directory holding a `.git` is one `dir/` entry in every mode | `s_status_nested` |
+| B2 `checkout -- <unmerged path>` | landed: `error: path 'f' is unmerged`, exit 1, other paths still restored | `s_checkout_unmerged` |
+| B3 `diff` of a conflicted path | landed as git's combined `diff --cc` (not a plain conflict diff: that is what git prints), incl. `-U<n>`, name-only/name-status, `* Unmerged path` + stage-2 diff for modify/delete, `--cached` listing; new `rivet_core::diff::combined` | `s_diff_conflict`, `s_diff_conflict_shapes` |
+| S1 `stash push -u/-a/-k`, pathspecs, `apply/pop --index` | landed on git's exact object layout (untracked commit as 3rd parent, empty one with `-u`), HEAD reflog/ORIG_HEAD rules; `stash apply` keeps the prior index; untracked restore failure reports like git | `s_stash_untracked`, `s_stash_keep_index`, `s_stash_pathspec`, `s_stash_index` |
+| S2 `clean -i`, `clean -e` | landed: git's menu (clean, filter, select by numbers, ask each, quit, help, prefixes, `?`), column layouts, `-e` incl. with `-x/-X` | `s_clean_interactive`, `s_clean_exclude` |
+| S3 `gc` deltas | landed: `pack-objects`' search (type/name-hash/size sort, window 10, depth 50, `try_delta` size rules, best-base move, reuse of existing deltas, `pack.window/depth`) and a port of `create_delta`; the delta structure (ids, types, sizes, depth, base) is identical to `git gc` on the scenarios. Cruft packs: **not done** (see gaps) | `s_gc_delta`, `s_gc_delta_shapes` (+ unit tests in `pack::deltify`) |
+| Q1 `rev-list` `--count --max-count --all --reverse A..B A...B ^X --first-parent --objects` | landed (`--objects` included: names, edge trees, tags, `--reverse` order) | `s_rev_list` |
+| Q2 `show-ref` `--heads --tags -d --verify --head -s -q` | landed | `s_show_ref` |
+| Q3 `for-each-ref --format` | landed: `refname[:short,:strip,:lstrip,:rstrip]`, `objectname[:short[=N]]`, `objecttype`, `objectsize`, `symref`, `HEAD`, `*`-peeled atoms, `--sort`, `--count`, patterns; `:short` uses git's strict ambiguity rule | `s_for_each_ref` |
+| Q4 `merge-base` `--all --is-ancestor` | landed (two commits) | `s_merge_base` |
+| Q5 `describe` `--tags --always --long --abbrev --exact-match` | landed: annotated > lightweight, newer tagger date wins, 10-candidate limit, depth = commits not reachable from the tag, git's three failure messages | `s_describe` |
+| Q6 `shortlog -s -n -e -c` | landed | `s_shortlog` |
+| R1 `rebase` | landed: `<upstream> [<branch>]`, `--onto`, `--continue/--skip/--abort`, merges flattened, patch-equivalent commits dropped (`warning: skipped previously applied commit`), reuse of unchanged commits, `rebase-merge/` state, `status` while stopped, reflogs byte-identical | `s_rebase_basic`, `s_rebase_onto`, `s_rebase_cherry_and_merges`, `s_rebase_dirty`, `s_rebase_conflict`, `s_rebase_skip_abort`, `s_rebase_multi_conflict` |
+| P5a `grep` (work tree, `--cached`, `<rev>`) | landed with an own POSIX BRE/ERE matcher (no new crates): `-e -i -w -v -F -E -G -n -l -L -c -q -h -H -a -I -A -B -C`, pathspecs, subdirectories, binary files | `s_grep` (+ regex unit tests) |
+| P5b `blame` | landed: `[rev] [--] file`, `-L` (N,M / N,+K / N,-K), `-e -s -l -f`, merges, whole-file renames, root `^` boundary | `s_blame`, `s_blame_edits` |
+| P5c `apply`, `format-patch`, `am` | landed: `apply [--check --index --cached -R -p<n>]` (offsets, no fuzz), `format-patch [-N] [<since>\|a..b] [-o --stdout --root -n --start-number --subject-prefix --signature]`, `am [mbox…] / --continue / --skip / --abort` with a resumable `.git/rebase-apply`, `status` text for an am session | `s_apply`, `s_format_patch`, `s_format_patch_wrap`, `s_am` |
+
+Other changes: `Repository::merge_into_worktree` no longer reports a path as dirty when the index and work tree already
+hold exactly what the merge would write (git's rule; needed by `stash apply`); `rivet_core::diff::unified::format_stat_width`
+(new) backs `format-patch`'s 72-column stat; `PackWriter::write_ofs_delta`/`last_offset` and
+`PackedObjectStore::{oids_by_offset, stored_delta}` are new items. No existing public signature or doc comment in
+`rivet-core` was changed.
+
+### Known gaps from this block (all refuse, or are listed here; none silently wrong as far as the scenarios show)
+- **gc**: no cruft packs (young unreachable objects stay loose, as before; git's cruft packs are still read); the object
+  list follows `rev-list --objects` order approximately (commit date order, trees depth first) and the write order is
+  commits/tags, trees, blobs with bases first, not git's `compute_write_order`, so offsets differ even though the delta
+  structure matches; search is single-threaded (git splits large lists over `pack.threads`); the "already one pack" shortcut
+  skips repacking; the hash-bucket culling of `diff-delta.c` (`HASH_LIMIT`) is approximated and the rolling-hash tables are
+  generated, not copied.
+- **diff on conflicts**: `--ours/--theirs/--base/-1/-2/-3`, `--stat` of conflicted paths (refused), combined diff of
+  binary files, symlinks or mode conflicts (refused).
+- **stash**: `branch/create/store/save`, `show -u`; `-k` with a pathspec follows the scenarios only.
+- **clean**: `-i` does not read a pager/`color.*`; `-e` patterns are matched like `.gitignore` lines relative to the root.
+- **rev-list**: only `--count --max-count -n --all --reverse --objects --first-parent` and `^X`, `A..B`, `A...B`; no
+  `--parents --boundary --left-right --no-merges --since --author --pretty --abbrev-commit --topo-order --date-order`.
+- **show-ref** `--exists --abbrev`; **for-each-ref** `%(if)`, `%(contents…)`, dates, `--merged --contains --points-at`,
+  `%(upstream)`, `%(authorname)`…; **merge-base** more than two commits, `--octopus --independent --fork-point`;
+  **describe** `--dirty --all --match --exclude --contains --first-parent --candidates`; **shortlog** stdin mode, `-w`,
+  `--group`, `--format`, mailmap.
+- **rebase**: `-i`, `--root`, `--rebase-merges`, `--autostash`, `--exec`, `--keep-base`, `--no-ff/--force-rebase`,
+  `--quit`, `--edit-todo`, `--reapply-cherry-picks`, `--empty=`, rerere, hooks, `rebase.*` config. The `rebase-merge/` files
+  use git's names but were only checked by rivet's own `--continue`; git continuing a rivet-stopped rebase (or the
+  reverse) is untested. Patch equivalence uses rivet's own patch id, not git's number.
+- **grep**: `-P`, `-o`, `--and/--or/--not`, `--heading`, `-z`, `--threads`, `-p/-W`, `--untracked`, `--no-index`,
+  `--recurse-submodules`, back-references. The matcher is a backtracking one, so a pathological pattern is slow.
+- **blame**: `-C/-M`, `--porcelain`, `--incremental`, `-w`, `--contents`, `--since`, `-S`, regex `-L`. Blame of a
+  modified work tree file (the "Not Committed Yet" lines) is implemented but has no scenario (its date is the clock).
+- **apply**: `--stat --numstat --summary --3way --reject`, whitespace options, binary patches, symlink patches, fuzz.
+- **format-patch**: cover letters, threading, attachments, `-k`, pathspec limiting, non-ASCII headers (RFC 2047); the
+  default signature carries rivet's version (git's carries git's), so byte comparisons use `--no-signature`.
+- **am**: `--3way`, `--signoff`, `-k`, `--directory`, `--whitespace`, scissors, `--show-current-patch`, `--quit`, RFC 2047
+  headers, non-mbox input; `am --abort` after HEAD moved warns like git but was not scenario-tested.
+
+### Bugs found while testing and **not** fixed (outside this block's list)
+- `merge -q` omits `Auto-merging <path>` which git prints even with `-q`.
+- `status --short` (and the `-s` format) from a subdirectory prints root-relative paths; git prints cwd-relative ones.
+- `add <path>` of a deleted, unmerged path fails with `pathspec … did not match`; git stages the removal.
+- Revision parsing has no `<ref>@{N}` reflog selector (`reset --hard topic@{1}`, `switch -c x topic@{3}` fail).
+- `status` prints `HEAD detached at <short id>`; git prints the name the detach used (`HEAD detached at refs/heads/topic`).
+- `tag -a <name> <annotated tag>` lacks git's nested-tag hint; `log --graph`, `checkout -m`, `switch --merge` remain
+  unimplemented (already listed above).
+- A stale `TREE` extension survives index edits made through `Index::insert/remove_path`; `apply` drops it explicitly before
+  writing, other callers were not audited.
+
+### Gates (2026-10-22, after the last commit of the block)
+- `cargo fmt --check`: clean (exit 0)
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean (exit 0)
+- `cargo test --workspace`: 200 passed, 0 failed, 0 ignored (includes `difftest` running every scenario, the new
+  `pack::deltify` and `cmd::regex` unit tests)
+- `bash tools/difftest/scenarios.sh`: 106 PASS, `failures: 0` (exit 0) — 74 before this block, 32 added
