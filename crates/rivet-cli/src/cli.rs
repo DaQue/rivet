@@ -39,7 +39,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    branching, history, ignore, plumbing, reflog, remote, sequencer, setup, snapshot, tag,
+    branching, history, ignore, plumbing, reflog, remote, sequencer, setup, snapshot, stash, tag,
 };
 
 /// The `rivet` command line.
@@ -151,6 +151,9 @@ pub enum Commands {
 
     /// Show the objects a commit, tag or tree names.
     Show(history::ShowArgs),
+
+    /// Shelve and restore local changes.
+    Stash(stash::StashArgs),
 
     /// Show a ref's reflog.
     Reflog(reflog::ReflogArgs),

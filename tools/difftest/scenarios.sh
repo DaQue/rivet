@@ -1064,6 +1064,105 @@ s_reflog() {
     v reflog show HEAD -n 0
 }
 
+s_stash() {
+    v init -q repo; cd repo
+    printf '1\n2\n3\n' >a; echo b >b; mkdir d; echo c >d/c; v add a b d; v commit -q -m "first subject" -m "body"
+    v stash list
+    v stash
+    v stash push
+    v stash show
+    v stash pop
+    v stash apply
+    v stash drop
+    tick; echo a2 >>a; v stash
+    v stash list
+    v status --short
+    v stash show
+    v stash show -p
+    v stash show --name-only
+    v stash show --name-status
+    v stash show stash@{0}
+    v stash apply
+    v status --short
+    v stash list
+    v checkout -q -- a
+    tick; echo new >n; v add n; echo b2 >>b; v add b; echo b3 >>b; rm d/c
+    v stash push -m "my message"
+    v status --short
+    ls
+    v stash list
+    tick; echo more >>a; v stash
+    v stash list
+    v stash show 1
+    v stash show stash@{1} -p
+    v stash pop
+    v status --short
+    v stash list
+    v stash pop stash@{0}
+    v status --short
+    v stash list
+    v stash pop
+    v stash drop
+    v stash show
+    v stash apply
+    v stash show stash@{3}
+}
+
+s_stash_stack() {
+    v init -q repo; cd repo
+    echo a >a; echo b >b; echo c >c; v add a b c; v commit -q -m base
+    for i in 1 2 3 4; do
+        tick; echo "change $i" >>a; v stash push -m "stash number $i"
+    done
+    tick; echo wip >b; v stash
+    v stash list
+    v stash drop stash@{2}
+    v stash list
+    v stash drop 0
+    v stash list
+    v stash pop stash@{1}
+    v stash list
+    v checkout -q -- .
+    v stash drop stash@{9}
+    v stash drop stash@{1}
+    v stash list
+    v stash drop
+    v stash list
+    v stash clear
+    v stash list
+    v stash drop
+    v branch other
+    tick; echo x >>a; v stash
+    v switch -q other
+    tick; echo y >>c; v commit -q -a -m "other edits c"
+    v stash apply
+    v stash list
+    v log --oneline --format='%h %s %p' stash
+    v switch -q --detach main
+    tick; echo z >>b; v stash
+    v stash list
+}
+
+s_stash_conflict() {
+    v init -q repo; cd repo
+    printf '1\n2\n3\n' >f; echo g >g; v add f g; v commit -q -m base
+    tick; printf '1\nstashed\n3\n' >f; echo gg >>g; v stash
+    tick; printf '1\nupstream\n3\n' >f; v commit -q -a -m upstream
+    v stash apply
+    cat f
+    v status --short
+    v stash pop
+    v stash list
+    v reset -q --hard
+    echo dirty >f
+    v stash apply
+    v status --short
+    v checkout -q -- f
+    v stash apply
+    v stash list
+    v stash pop
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

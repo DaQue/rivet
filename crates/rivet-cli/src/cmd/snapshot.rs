@@ -925,7 +925,7 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         println!("  (use \"git {name} --skip\" to skip this patch)");
         println!("  (use \"git {name} --abort\" to cancel the {name} operation)");
         println!();
-    } else if !unmerged.is_empty() {
+    } else if !unmerged.is_empty() && rivet_core::merge_in_progress(repository.git_dir()) {
         println!("You have unmerged paths.");
         println!("  (fix conflicts and run \"git commit\")");
         println!("  (use \"git merge --abort\" to abort the merge)");
@@ -960,10 +960,11 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             println!();
         }
         println!("Unmerged paths:");
-        if picking
+        // Git offers `restore --staged` everywhere except during a merge or a cherry-pick.
+        let cherry_picking = picking
             .as_ref()
-            .is_some_and(|(_, _, name)| *name == "revert")
-        {
+            .is_some_and(|(_, _, name)| *name == "cherry-pick");
+        if !rivet_core::merge_in_progress(repository.git_dir()) && !cherry_picking {
             println!("  (use \"git restore --staged <file>...\" to unstage)");
         }
         println!("  (use \"git add <file>...\" to mark resolution)");

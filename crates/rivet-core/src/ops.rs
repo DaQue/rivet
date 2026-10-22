@@ -447,6 +447,41 @@ impl Repository {
         self.write_index()
     }
 
+    /// The tree of every tracked path as it is in the work tree right now: index entries with
+    /// their content re-read from disk, paths deleted from disk omitted. Staged additions are
+    /// included. This is the tree of a stash commit. Nothing but objects is written.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnmergedPath`] while the index has conflict stages, and I/O or object errors.
+    pub fn worktree_tree(&self) -> Result<ObjectId> {
+        let worktree = self.worktree()?;
+        let mut tree_index = Index::new();
+        for entry in self.index().entries() {
+            if entry.stage() != Stage::Normal {
+                return Err(Error::UnmergedPath {
+                    path: entry.path.clone(),
+                });
+            }
+            let path = BStr::new(&entry.path[..]);
+            if entry.mode == EntryMode::Commit {
+                tree_index.insert(entry.clone());
+                continue;
+            }
+            let Some(stat) = worktree.stat(path)? else {
+                continue;
+            };
+            if stat.mode == EntryMode::Tree {
+                continue;
+            }
+            let data = worktree.read_file(path)?;
+            let oid = self.odb().write_raw(ObjectKind::Blob, &data)?;
+            tree_index.insert(make_index_entry(path, stat.mode, oid, Some(&stat)));
+        }
+        tree_index.sort();
+        crate::repo::write_tree_of(self.odb(), &tree_index)
+    }
+
     /// Make the index and the work tree exactly `tree`, discarding every local change to a
     /// tracked path (`reset --hard`, `checkout -f`). Untracked files are left alone unless the
     /// tree has a file at their path, which Git overwrites too.
