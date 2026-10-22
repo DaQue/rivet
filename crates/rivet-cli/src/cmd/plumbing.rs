@@ -1200,7 +1200,12 @@ pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
                 }
             }
             Err(error) => {
-                let _ = error;
+                if let rivet_core::Error::Message(message) = &error
+                    && message.starts_with("log for '")
+                {
+                    eprintln!("fatal: {message}");
+                    return Ok(128);
+                }
                 if args.verify {
                     // `--verify` wants exactly one resolvable revision and says so tersely.
                     if !args.quiet {

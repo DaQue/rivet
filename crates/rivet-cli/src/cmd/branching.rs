@@ -1275,8 +1275,9 @@ fn create_branch(
                 .unwrap_or_default()
         );
     }
-    let start_oid = super::resolve_commit(repository, start)
-        .map_err(|_| anyhow::anyhow!("not a valid object name: '{start}'"))?;
+    let start_oid = super::resolve_commit(repository, start).map_err(|e| {
+        super::rev_error(e, || anyhow::anyhow!("not a valid object name: '{start}'"))
+    })?;
     let who = repository.committer_signature()?;
     let label = start_label(repository, start)?;
     let reason = if exists {
@@ -1639,8 +1640,12 @@ fn checkout_new_branch(
     if exists && !reset {
         anyhow::bail!("a branch named '{name}' already exists");
     }
-    let start_oid = super::resolve_commit(repository, start).map_err(|_| {
-        anyhow::anyhow!("'{start}' is not a commit and a branch '{name}' cannot be created from it")
+    let start_oid = super::resolve_commit(repository, start).map_err(|e| {
+        super::rev_error(e, || {
+            anyhow::anyhow!(
+                "'{start}' is not a commit and a branch '{name}' cannot be created from it"
+            )
+        })
     })?;
     let old_head = repository.head()?;
     let from = super::head_reflog_label(repository)?;

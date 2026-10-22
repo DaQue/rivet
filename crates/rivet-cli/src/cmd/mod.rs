@@ -273,6 +273,16 @@ pub fn short_oid(oid: &rivet_core::ObjectId) -> String {
     oid.to_string().chars().take(7).collect()
 }
 
+/// `error` itself when it is the fatal the revision parser dies with for `<ref>@{N}` past the end
+/// of a reflog, otherwise the command's own wording from `fallback`.
+pub fn rev_error(error: anyhow::Error, fallback: impl FnOnce() -> anyhow::Error) -> anyhow::Error {
+    if error.to_string().starts_with("log for '") {
+        error
+    } else {
+        fallback()
+    }
+}
+
 /// Resolve a revision to the object it names, without peeling.
 pub fn resolve_rev(repository: &Repository, spec: &str) -> Result<rivet_core::ObjectId> {
     rivet_core::revparse::resolve(
@@ -281,7 +291,13 @@ pub fn resolve_rev(repository: &Repository, spec: &str) -> Result<rivet_core::Ob
         repository.odb(),
         bstr::BStr::new(spec.as_bytes()),
     )
-    .map_err(|_| anyhow::anyhow!("not a valid object name: '{spec}'"))
+    .map_err(|error| match error {
+        // Git dies with this text from inside the revision parser, whatever the command.
+        rivet_core::Error::Message(message) if message.starts_with("log for '") => {
+            anyhow::anyhow!(message)
+        }
+        _ => anyhow::anyhow!("not a valid object name: '{spec}'"),
+    })
 }
 
 /// Resolve a revision and peel it to a commit, with Git's wording on failure.

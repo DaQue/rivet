@@ -218,3 +218,16 @@ existing deletion pass already drops every stage (`remove_path`), matching git (
 Scenario covers UU/DU/UD files, a nonexistent path, and finishing the merge with `commit`; it failed on the base commit
 (`fatal: pathspec 'f' did not match any files`, exit 128 vs git's 0) and passes now.
 Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 113 PASS / `failures: 0`.
+
+### Phase 1.4 — `<ref>@{N}`, `@{N}`, `@{-N}` (landed, scenario `s_reflog_selector`)
+Implemented in `rivet-core/src/revparse.rs` (`resolve_reflog`, `previous_checkout`, `dwim_ref`; no public API change).
+Rules checked against git 2.56: `<ref>@{N}` reads that ref's own reflog (DWIM'd name, `HEAD` literal); bare `@{N}`
+uses the *current branch's* reflog (HEAD when detached); `@{-N}` is the branch N checkouts ago and may prefix `@{N}`
+(`@{-1}@{1}`); N may have leading zeros; suffixes compose (`topic@{1}~1`, `^{tree}`). Past the end: fatal
+`log for '<name as typed>' only has M entries` (exit 128; `@{99}` names the current branch); one past the oldest entry
+returns that entry's *old* id when it is not null (git's quirk, exercised by editing the log in the scenario).
+A ref without a reflog, `@{x}`, `@{}`, `x@{1}@{1}` stay "ambiguous argument", as in git.
+CLI: `resolve_rev`, `rev-parse`, `reset`, `branch`, `switch -c`/`checkout -b` let that one fatal through instead of
+their generic wording (`rev_error` in `cmd/mod.rs`). Base: every `@{N}` spec failed as "ambiguous argument".
+Not implemented (still invalid revision, as before): date selectors (`main@{yesterday}`), `@{upstream}`/`@{u}`/`@{push}`.
+Gate: fmt clean, clippy clean, doc clean, 206 tests passed / 0 failed, `scenarios.sh` 114 PASS / `failures: 0`.

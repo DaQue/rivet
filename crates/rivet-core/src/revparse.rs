@@ -153,6 +153,15 @@ fn resolve_base(format: ObjectFormat, refs: &RefStore, odb: &Odb, base: &BStr) -
         // HEAD; it reports an unborn branch as an error rather than an id.
         return refs.head_commit(odb);
     }
+    if let Some(oid) = resolve_reflog(refs, base)? {
+        return Ok(oid);
+    }
+    if let Some(back) = parse_previous(base) {
+        let Some(branch) = previous_checkout(refs, back) else {
+            return Err(invalid(base, "does not name an object"));
+        };
+        return resolve_base(format, refs, odb, BStr::new(&branch));
+    }
     if is_hex(base) {
         let hex_len = format.hex_len();
         if base.len() == hex_len {
@@ -164,8 +173,16 @@ fn resolve_base(format: ObjectFormat, refs: &RefStore, odb: &Odb, base: &BStr) -
         }
     }
 
-    // DWIM, in Git's order: the literal name first, then the namespaces a short name usually
-    // abbreviates. A full ref name that exists must win over any tagged name of the same text.
+    if let Some(name) = dwim_ref(refs, base) {
+        return refs.resolve_oid(&name);
+    }
+    Err(invalid(base, "does not name an object"))
+}
+
+/// Finds the ref a short name abbreviates, in Git's order: the literal name first, then the
+/// namespaces a short name usually abbreviates. A full ref name that exists must win over any
+/// tagged name of the same text.
+fn dwim_ref(refs: &RefStore, base: &BStr) -> Option<RefName> {
     let mut candidates = vec![base.to_owned()];
     for prefix in ["refs/", "refs/tags/", "refs/heads/", "refs/remotes/"] {
         let mut name = BString::from(prefix);
@@ -177,15 +194,93 @@ fn resolve_base(format: ObjectFormat, refs: &RefStore, odb: &Odb, base: &BStr) -
     remote_head.extend_from_slice(b"/HEAD");
     candidates.push(remote_head);
 
-    for candidate in candidates {
-        let Ok(name) = RefName::from_bytes(&candidate) else {
+    candidates.into_iter().find_map(|candidate| {
+        let name = RefName::from_bytes(&candidate).ok()?;
+        refs.read(&name).is_ok().then_some(name)
+    })
+}
+
+/// The branch (or detached id) `n` checkouts ago, from `checkout: moving from X to Y` entries in
+/// the `HEAD` reflog, newest first. `None` when `HEAD` has not moved that often.
+fn previous_checkout(refs: &RefStore, n: usize) -> Option<BString> {
+    let log = refs.reflog(&RefName::head()).ok()?;
+    let mut seen = 0;
+    for entry in log.iter().rev() {
+        let Some(rest) = entry.message.strip_prefix(b"checkout: moving from ") else {
             continue;
         };
-        if refs.read(&name).is_ok() {
-            return refs.resolve_oid(&name);
+        seen += 1;
+        if seen == n {
+            let from = rest.split_str(" to ").next().unwrap_or_default();
+            return Some(BString::from(from));
         }
     }
-    Err(invalid(base, "does not name an object"))
+    None
+}
+
+/// `@{-N}` on its own: the branch checked out `N` moves ago, as a name.
+fn parse_previous(base: &BStr) -> Option<usize> {
+    let inner = base.strip_prefix(b"@{-")?.strip_suffix(b"}")?;
+    let n: usize = std::str::from_utf8(inner).ok()?.parse().ok()?;
+    (n > 0 && inner.iter().all(u8::is_ascii_digit)).then_some(n)
+}
+
+/// `<ref>@{N}` and `@{N}`: the value `<ref>` had `N` updates ago, read from its reflog.
+///
+/// `Ok(None)` means the spec is not of this shape (or names no ref), and the caller carries on.
+/// Like Git, asking for the entry just past the oldest returns the oldest entry's *old* value
+/// when it is not the null id, and anything further is an error naming the ref as it was typed.
+fn resolve_reflog(refs: &RefStore, base: &BStr) -> Result<Option<ObjectId>> {
+    let Some(inner) = base.strip_suffix(b"}") else {
+        return Ok(None);
+    };
+    let Some(at) = inner.rfind(b"@{") else {
+        return Ok(None);
+    };
+    let Some(n) = std::str::from_utf8(&inner[at + 2..])
+        .ok()
+        .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|digits| digits.parse::<usize>().ok())
+    else {
+        return Ok(None);
+    };
+    let prefix = BStr::new(&inner[..at]);
+
+    let (shown, name) = if prefix.is_empty() {
+        match refs.head_branch()? {
+            Some(branch) => (BString::from(branch.short_name().as_bytes()), branch),
+            None => (BString::from("HEAD"), RefName::head()),
+        }
+    } else if prefix == "HEAD" {
+        (BString::from("HEAD"), RefName::head())
+    } else {
+        let typed = match parse_previous(prefix) {
+            Some(back) => match previous_checkout(refs, back) {
+                Some(branch) => branch,
+                None => return Ok(None),
+            },
+            None => prefix.to_owned(),
+        };
+        match dwim_ref(refs, BStr::new(&typed)) {
+            Some(name) => (typed, name),
+            None => return Ok(None),
+        }
+    };
+
+    let log = refs.reflog(&name)?;
+    if log.is_empty() {
+        return Ok(None);
+    }
+    if n < log.len() {
+        return Ok(Some(log[log.len() - 1 - n].new));
+    }
+    if n == log.len() && !log[0].old.is_zero() {
+        return Ok(Some(log[0].old));
+    }
+    Err(Error::Message(format!(
+        "log for '{shown}' only has {} entries",
+        log.len()
+    )))
 }
 
 /// Splits the rightmost suffix off a spec, if it has one.

@@ -2626,6 +2626,43 @@ s_add_deleted_unmerged() {
     v status -s
 }
 
+# `<ref>@{N}`, `@{N}` and `@{-N}` select reflog entries; asking past the end is a fatal error that
+# names the ref as typed (git 2.56: "log for 'topic' only has 3 entries", exit 128).
+s_reflog_selector() {
+    v init -q repo; cd repo
+    echo 1 >f; v add f; tick; v commit -q -m c1
+    echo 2 >f; tick; v commit -q -a -m c2
+    v switch -q -c topic
+    echo 3 >f; tick; v commit -q -a -m c3
+    echo 4 >f; tick; v commit -q -a -m c4
+    v switch -q main
+    for spec in topic@{0} topic@{1} topic@{2} topic@{3} topic@{4} topic@{9} refs/heads/topic@{1} \
+                heads/topic@{9} main@{0} main@{1} main@{2} HEAD@{0} HEAD@{3} HEAD@{99} @{0} @{1} @{99} \
+                @{-1} @{-2} @{-1}@{1} topic@{01} topic@{1}~1 topic@{1}^{tree} topic@{1}^{commit} \
+                nosuch@{1} topic@{x} topic@{-1} topic@{1}@{1} main@{} @{}; do
+        v rev-parse "$spec"
+    done
+    v log -1 --format='%h %s' topic@{2}
+    v log --oneline topic@{1}..topic
+    v show -s --format=%s topic@{1}
+    v diff --stat topic@{3} topic@{0}
+    v branch from-reflog topic@{2}
+    v branch bad-reflog topic@{9}
+    v switch -c x topic@{2}
+    v switch -c y topic@{9}
+    v switch main
+    v reset --hard topic@{1}
+    v log --oneline
+    v reset --hard topic@{9}
+    v reset --hard @{1}
+    v log --oneline
+    v reflog
+    # One past the oldest entry yields that entry's *old* id when it is not the null id (a log
+    # whose head was expired away); with a null old id it is the error above.
+    sed -i "1s/^0\\{40\\}/$(g rev-parse main)/" .git/logs/refs/heads/topic
+    v rev-parse topic@{3} topic@{4} topic@{5}
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

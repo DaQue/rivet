@@ -1230,7 +1230,12 @@ pub fn run_reset(global: &GlobalArgs, args: &ResetArgs) -> Result<i32> {
     // `reset <x>` with no `--`: a revision if it resolves, otherwise a path.
     let mut commit_spec = args.commit.clone();
     let mut pathspecs: Vec<PathBuf> = args.paths.clone();
-    if pathspecs.is_empty() && super::resolve_rev(&repository, &commit_spec).is_err() {
+    if pathspecs.is_empty()
+        && let Err(error) = super::resolve_rev(&repository, &commit_spec)
+    {
+        if error.to_string().starts_with("log for '") {
+            return Err(error);
+        }
         let as_path = std::path::Path::new(&commit_spec);
         let exists = super::worktree_path(&repository, as_path, "reset")
             .ok()
