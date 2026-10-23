@@ -1879,10 +1879,17 @@ s_clean_exclude() {
 # depend on the zlib build: "<id> <type> <size> [<depth> <base>]", sorted.
 packshape() {
     echo "## packshape" >>"$TRANSCRIPT"
+    # Each pack is listed in the order its objects are stored (git's write order); the packs
+    # themselves are ordered by their sorted object set, because pack file names differ.
+    local idx key blocks; blocks=$(mktemp -d "${TMPDIR:-/tmp}/packshape.XXXXXX")
     for idx in .git/objects/pack/*.idx; do
         [ -e "$idx" ] || continue
-        g verify-pack -v "$idx" | awk 'NF == 5 && $1 ~ /^[0-9a-f]+$/ { print $1, $2, $3 } NF == 7 && $1 ~ /^[0-9a-f]+$/ { print $1, $2, $3, $6, $7 }'
-    done | sort >>"$TRANSCRIPT"
+        g verify-pack -v "$idx" | awk 'NF == 5 && $1 ~ /^[0-9a-f]+$/ { print $1, $2, $3 } NF == 7 && $1 ~ /^[0-9a-f]+$/ { print $1, $2, $3, $6, $7 }' >"$blocks/cur"
+        key=$(sort "$blocks/cur" | sha1sum | cut -c1-40)
+        mv "$blocks/cur" "$blocks/$key"
+    done
+    for key in $(ls "$blocks"); do echo "# pack" >>"$TRANSCRIPT"; cat "$blocks/$key" >>"$TRANSCRIPT"; done
+    rm -rf "$blocks"
 }
 
 s_gc_delta() {

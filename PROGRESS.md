@@ -647,3 +647,16 @@ Base had the work committed from the handoff tree: `rm -r .` was refused and emp
 - Orphan: git writes no reflog line at all (not in `logs/HEAD`, no `logs/refs/heads/<name>`); rivet wrote `checkout: moving from main to fresh`. Also found on the base: `checkout --orphan` emptied the index and work tree, but git keeps them (files show as `A  a`, `A  b`); only `switch --orphan` empties. Both fixed (`orphan_branch(.., empty_tree)`), and the following `checkout main` reflog label (`moving from second to main`) is compared.
 Known gaps found while probing (not fixed): with unmerged paths and no `MERGE_HEAD`, `switch -c new` makes rivet print `M\tc1` and leave `MERGE_MSG`/`MERGE_MODE` behind, while git prints nothing extra and removes them; `rev-parse --abbrev-ref HEAD` is rejected by rivet's argument parser (`<ARG>...` required); `symbolic-ref` is not implemented.
 Gate after: fmt, clippy, doc clean; 219 passed / 0 failed / 0 ignored; `scenarios.sh` 162 PASS / `failures: 0`.
+
+### Phase 1.4 (update) — main `gc` pack write order (landed; supersedes the "NOT done" entry above; scenarios `s_gc_delta`, `s_gc_delta_shapes`, `s_gc_cruft`, `s_gc_cruft_expire`)
+`packshape` in `scenarios.sh` no longer sorts: each pack is listed in `verify-pack -v` (storage) order, packs ordered by their sorted object set. On the base
+`s_gc_delta` failed with git writing the tagged commit, then its tag, then the other commits, and with git writing a delta base followed by its whole delta family
+(rivet interleaved the deltas of different bases); `s_gc_cruft` / `s_gc_cruft_expire` failed on blob/tree order.
+Now ported (`git_write_order` in `gc.rs`, git's `compute_write_order`): untagged head of the list as listed, tagged tips (tag refs and what they peel to), remaining commits/tags,
+trees, then each unwritten object with its delta family (root, children before grandchildren). Findings from the oracle: an object stored as a delta in a pack being
+replaced counts as neither commit/tag nor tree there (git still sees its delta type), so reused tree deltas wait for their family; the object list puts tag objects after
+all commits (pending-list order), then the index's blobs (`--indexed-objects`), then trees.
+Caveat (approximation, not exact): git also lists the index's *cache-tree* trees ahead of every commit's tree. Rivet does not keep the `TREE` extension, so it treats the
+index as cached only when it equals `HEAD`'s tree exactly (HEAD read from the walk tips, as the ref store snapshot is stale after `pack_refs`). Partially valid caches
+(some directories invalidated) are not reproduced; no scenario hits that.
+Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored (2 new unit tests for the ordering); `scenarios.sh` 162 PASS / `failures: 0`; the five gc scenarios passed 3 runs in a row.

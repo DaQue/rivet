@@ -209,7 +209,7 @@ fn walk_tips(repo: &Repository) -> Result<Vec<(Vec<u8>, ObjectId)>> {
 }
 
 /// The objects of `wanted` in the order `git pack-objects --all --reflog --indexed-objects` lists
-/// them (tag objects, then commits newest first, then each commit's trees and blobs depth first),
+/// them (commits newest first, then tag objects, then each commit's trees and blobs depth first),
 /// each with Git's name hash of the first path it was reached by.
 fn recency_order(
     repo: &Repository,
@@ -226,6 +226,13 @@ fn recency_order(
     let mut out: Vec<(ObjectId, u32)> = Vec::new();
     let mut seen: HashSet<ObjectId> = HashSet::new();
 
+    // `HEAD` as the walk saw it: the ref store's own view is stale once refs are packed.
+    let head_tip = tips
+        .iter()
+        .find(|(name, _)| name == b"HEAD")
+        .map(|(_, oid)| *oid);
+    // Git shows tag objects with the pending (non-commit) objects, after every commit.
+    let mut tag_objects: Vec<(ObjectId, u32)> = Vec::new();
     let mut commit_tips: Vec<ObjectId> = Vec::new();
     for (_, mut oid) in tips {
         loop {
@@ -238,7 +245,7 @@ fn recency_order(
                     // Git names a tag object by the `tag` header it carries.
                     let tag = Tag::parse(format, object.data())?;
                     if seen.insert(oid) && wanted.contains(&oid) {
-                        out.push((oid, pack_name_hash(tag.name)));
+                        tag_objects.push((oid, pack_name_hash(tag.name)));
                     }
                     oid = tag.object;
                 }
@@ -285,6 +292,18 @@ fn recency_order(
         }
     }
 
+    out.append(&mut tag_objects);
+
+    // `--indexed-objects` puts the index's blobs in the pending list, ahead of any commit's tree.
+    for entry in repo.index().entries() {
+        if entry.mode != crate::object::EntryMode::Commit
+            && seen.insert(entry.oid)
+            && wanted.contains(&entry.oid)
+        {
+            out.push((entry.oid, crate::pack::deltify::pack_name_hash(&entry.path)));
+        }
+    }
+
     // Trees and blobs, commit by commit, depth first.
     fn walk(
         repo: &Repository,
@@ -327,6 +346,24 @@ fn recency_order(
             walk(repo, *tree, &mut Vec::new(), wanted, &mut seen, &mut out)?;
         }
     }
+    // The index's cached trees come next in the pending list, ahead of every commit's tree. The
+    // cache is only known to be whole when the index is exactly `HEAD`'s tree.
+    if let Some(head) = head_tip
+        && odb.contains(&head)
+    {
+        let tree = repo.commit_tree(head)?;
+        let index = repo.index().entries();
+        if index.iter().all(|e| !e.is_unmerged()) {
+            let indexed: std::collections::BTreeMap<_, _> = index
+                .iter()
+                .map(|e| (e.path.clone(), (e.mode, e.oid)))
+                .collect();
+            let flat = crate::ops::flatten_tree(odb, tree)?;
+            if flat == indexed {
+                walk(repo, tree, &mut Vec::new(), wanted, &mut seen, &mut out)?;
+            }
+        }
+    }
     for (_, tree) in &commits {
         walk(repo, *tree, &mut Vec::new(), wanted, &mut seen, &mut out)?;
     }
@@ -340,6 +377,95 @@ fn recency_order(
     rest.sort();
     out.extend(rest.into_iter().map(|oid| (oid, 0)));
     Ok(out)
+}
+
+/// The order `git pack-objects` writes a pack in (`compute_write_order`), as indexes into the
+/// object list: the untagged head of the list, the tagged tips, every remaining commit and tag,
+/// every tree (an object stored as a delta in the packs being replaced counts as neither, as
+/// git still sees it under its delta type), and last each still unwritten object together with the delta family it belongs to
+/// (the family's root, then its descendants depth first, siblings in list order).
+fn git_write_order(
+    kinds: &[ObjectKind],
+    bases: &[Option<usize>],
+    tagged: &[bool],
+    reused: &[bool],
+) -> Vec<usize> {
+    let n = kinds.len();
+    let mut child: Vec<Option<usize>> = vec![None; n];
+    let mut sibling: Vec<Option<usize>> = vec![None; n];
+    for i in (0..n).rev() {
+        if let Some(base) = bases[i] {
+            sibling[i] = child[base];
+            child[base] = Some(i);
+        }
+    }
+    let mut out: Vec<usize> = Vec::with_capacity(n);
+    let mut filled = vec![false; n];
+    fn add(filled: &mut [bool], i: usize, out: &mut Vec<usize>) {
+        if !filled[i] {
+            filled[i] = true;
+            out.push(i);
+        }
+    }
+    let last_untagged = tagged.iter().position(|t| *t).unwrap_or(n);
+    for i in 0..last_untagged {
+        add(&mut filled, i, &mut out);
+    }
+    for (i, _) in tagged
+        .iter()
+        .enumerate()
+        .skip(last_untagged)
+        .filter(|(_, t)| **t)
+    {
+        add(&mut filled, i, &mut out);
+    }
+    for i in last_untagged..n {
+        if !reused[i] && matches!(kinds[i], ObjectKind::Commit | ObjectKind::Tag) {
+            add(&mut filled, i, &mut out);
+        }
+    }
+    for i in last_untagged..n {
+        if !reused[i] && kinds[i] == ObjectKind::Tree {
+            add(&mut filled, i, &mut out);
+        }
+    }
+    for i in last_untagged..n {
+        if filled[i] {
+            continue;
+        }
+        let mut root = i;
+        while let Some(base) = bases[root] {
+            root = base;
+        }
+        let mut start = Some(root);
+        let mut add_to_order = true;
+        while let Some(node) = start {
+            if add_to_order {
+                add(&mut filled, node, &mut out);
+                let mut s = sibling[node];
+                while let Some(next) = s {
+                    add(&mut filled, next, &mut out);
+                    s = sibling[next];
+                }
+            }
+            if let Some(first) = child[node] {
+                start = Some(first);
+                add_to_order = true;
+            } else {
+                let mut cursor = Some(node);
+                start = None;
+                while let Some(c) = cursor {
+                    if let Some(next) = sibling[c] {
+                        start = Some(next);
+                        add_to_order = false;
+                        break;
+                    }
+                    cursor = bases[c];
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The order objects are written to a pack in.
@@ -360,6 +486,7 @@ fn write_deltified(
     reusable: &HashMap<ObjectId, (ObjectId, Vec<u8>)>,
     pack_dir: &Path,
     layout: Layout,
+    tag_refs: &[ObjectId],
 ) -> Result<crate::pack::writer::PackWriteSummary> {
     use crate::pack::deltify::{DeltaInput, search_deltas};
 
@@ -411,19 +538,22 @@ fn write_deltified(
 
     let mut sequence: Vec<usize> = Vec::with_capacity(order.len());
     match layout {
-        // Commits and tags first, then trees, then blobs; a delta only after its base.
+        // Git's `compute_write_order`: tagged tips, commits and tags, trees, then the rest by
+        // delta family; a delta only after its base.
         Layout::ByType => {
-            for rank in [
-                [ObjectKind::Tag, ObjectKind::Commit].as_slice(),
-                [ObjectKind::Tree].as_slice(),
-                [ObjectKind::Blob].as_slice(),
-            ] {
-                for (i, input) in inputs.iter().enumerate() {
-                    if rank.contains(&input.kind) {
-                        sequence.push(i);
-                    }
+            let mut tagged: HashSet<ObjectId> = HashSet::new();
+            for oid in tag_refs {
+                tagged.insert(*oid);
+                if odb.contains(oid) {
+                    tagged.insert(peel_fully(repo, *oid)?);
                 }
             }
+            let kinds: Vec<ObjectKind> = inputs.iter().map(|input| input.kind).collect();
+            let bases: Vec<Option<usize>> =
+                chosen.iter().map(|c| c.as_ref().map(|c| c.base)).collect();
+            let is_tagged: Vec<bool> = order.iter().map(|(oid, _)| tagged.contains(oid)).collect();
+            let reused: Vec<bool> = inputs.iter().map(|i| i.reused_base.is_some()).collect();
+            sequence = git_write_order(&kinds, &bases, &is_tagged, &reused);
         }
         // In the order given; `emit` writes a delta's base first, wherever the base is listed.
         Layout::AsListed => sequence.extend(0..order.len()),
@@ -919,8 +1049,14 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
                 }
             }
         }
+        let tag_refs: Vec<ObjectId> = tips
+            .iter()
+            .filter(|(name, _)| name.starts_with(b"refs/tags/"))
+            .map(|(_, oid)| *oid)
+            .collect();
         let order = recency_order(repo, &wanted, tips, &[])?;
-        let summary = write_deltified(repo, order, &reusable, &pack_dir, Layout::ByType)?;
+        let summary =
+            write_deltified(repo, order, &reusable, &pack_dir, Layout::ByType, &tag_refs)?;
         new_checksum = Some(summary.checksum);
         report.objects_packed = to_pack.len();
 
@@ -1016,8 +1152,14 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
                 }
             }
             let members: Vec<ObjectId> = plan.order.iter().map(|(oid, _)| *oid).collect();
-            let summary =
-                write_deltified(repo, plan.order, &reusable, &pack_dir, Layout::AsListed)?;
+            let summary = write_deltified(
+                repo,
+                plan.order,
+                &reusable,
+                &pack_dir,
+                Layout::AsListed,
+                &[],
+            )?;
             write_mtimes(&pack_dir, format, summary.checksum, &plan.mtimes, &members)?;
             let check = crate::odb::Odb::open(git_dir, format)?;
             let store = check
@@ -1144,4 +1286,59 @@ fn finish_loose(
         }
     }
     Ok(report.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_order_puts_tagged_tips_then_commits_trees_and_delta_families() {
+        use ObjectKind::{Blob, Commit, Tag, Tree};
+        // 0 commit, 1 tagged commit, 2 its tag, 3 commit, 4 tree, then a delta family: 5 is the
+        // root, 6 and 8 hang off it (6 first in list order), 7 hangs off 6; 9 stands alone.
+        let kinds = [
+            Commit, Commit, Tag, Commit, Tree, Blob, Blob, Blob, Blob, Blob,
+        ];
+        let bases = [
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(5),
+            Some(6),
+            Some(5),
+            None,
+        ];
+        let tagged = [
+            false, true, true, false, false, false, false, false, false, false,
+        ];
+        let reused = [false; 10];
+        assert_eq!(
+            git_write_order(&kinds, &bases, &tagged, &reused),
+            vec![0, 1, 2, 3, 4, 5, 6, 8, 7, 9]
+        );
+    }
+
+    #[test]
+    fn write_order_without_tags_keeps_list_order_and_defers_reused_deltas() {
+        use ObjectKind::{Commit, Tree};
+        // No tagged tip: everything up to the end of the list is written as listed. With a tag
+        // at the end, the untagged head stays as listed and a reused tree delta waits for its family.
+        let kinds = [Commit, Tree, Tree, Tree, Commit];
+        let bases = [None, None, Some(3), None, None];
+        let tagged = [false, false, false, false, true];
+        let reused = [false, false, true, false, false];
+        assert_eq!(
+            git_write_order(&kinds, &bases, &tagged, &reused),
+            vec![0, 1, 2, 3, 4]
+        );
+        let tagged = [true, false, false, false, false];
+        assert_eq!(
+            git_write_order(&kinds, &bases, &tagged, &reused),
+            vec![0, 4, 1, 3, 2]
+        );
+    }
 }
