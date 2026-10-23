@@ -1081,6 +1081,10 @@ pub struct DescribeArgs {
     #[arg(long = "tags")]
     pub tags: bool,
 
+    /// Use any ref, not just tags.
+    #[arg(long = "all")]
+    pub all: bool,
+
     /// Show an abbreviated object name when no tag describes the commit.
     #[arg(long = "always")]
     pub always: bool,
@@ -1102,6 +1106,16 @@ struct TagName {
     name: String,
     annotated: bool,
     date: i64,
+    /// Annotated tag 2, lightweight tag 1, any other ref 0: the higher one names a commit.
+    priority: u8,
+}
+
+/// What `git describe` settles on for a commit, or why it cannot.
+pub(super) enum Described {
+    /// The name to print.
+    Name(String),
+    /// The message after `fatal: ` that Git exits 128 with.
+    Failed(String),
 }
 
 /// Handler for `rivet describe`.
@@ -1113,16 +1127,44 @@ pub fn run_describe(global: &GlobalArgs, args: &DescribeArgs) -> Result<i32> {
     let repository = super::open(global)?;
     let spec = args.commit.as_deref().unwrap_or("HEAD");
     let target = super::resolve_commit(&repository, spec).map_err(|_| not_valid(spec))?;
+    match describe_commit(&repository, target, args)? {
+        Described::Name(name) => {
+            write_stdout(format!("{name}\n").as_bytes())?;
+            Ok(0)
+        }
+        Described::Failed(message) => {
+            eprintln!("fatal: {message}");
+            Ok(128)
+        }
+    }
+}
 
+/// `git describe` for one commit of `repository`, with the options of `args`.
+pub(super) fn describe_commit(
+    repository: &Repository,
+    target: ObjectId,
+    args: &DescribeArgs,
+) -> Result<Described> {
     // Tag names by the commit they peel to; the best name per commit wins.
     let mut names: HashMap<ObjectId, TagName> = HashMap::new();
     let mut lightweight_commits: HashSet<ObjectId> = HashSet::new();
-    for (refname, oid) in refs_sorted(&repository)? {
-        let Some(short) = refname.strip_prefix("refs/tags/") else {
+    for (refname, oid) in refs_sorted(repository)? {
+        let (short, is_tag) = if let Some(tag) = refname.strip_prefix("refs/tags/") {
+            let shown = if args.all {
+                format!("tags/{tag}")
+            } else {
+                tag.to_string()
+            };
+            (shown, true)
+        } else if args.all
+            && let Some(other) = refname.strip_prefix("refs/")
+        {
+            (other.to_string(), false)
+        } else {
             continue;
         };
         let object = repository.odb().read(&oid)?;
-        let (annotated, date) = if object.kind() == ObjectKind::Tag {
+        let (annotated, date) = if is_tag && object.kind() == ObjectKind::Tag {
             let tag = Tag::parse(repository.format(), object.data())?;
             (true, tag.tagger.when)
         } else {
@@ -1139,22 +1181,27 @@ pub fn run_describe(global: &GlobalArgs, args: &DescribeArgs) -> Result<i32> {
         {
             continue;
         }
-        if !annotated {
+        if is_tag && !annotated {
             lightweight_commits.insert(commit);
         }
-        if !annotated && !args.tags {
+        if !annotated && !args.tags && !args.all {
             continue;
         }
         let candidate = TagName {
-            name: short.to_string(),
+            name: short,
             annotated,
             date,
+            priority: match (is_tag, annotated) {
+                (true, true) => 2,
+                (true, false) => 1,
+                _ => 0,
+            },
         };
         let replace = match names.get(&commit) {
             None => true,
             Some(existing) => {
-                if existing.annotated != candidate.annotated {
-                    candidate.annotated
+                if existing.priority != candidate.priority {
+                    candidate.priority > existing.priority
                 } else {
                     existing.annotated && existing.date < candidate.date
                 }
@@ -1170,7 +1217,7 @@ pub fn run_describe(global: &GlobalArgs, args: &DescribeArgs) -> Result<i32> {
         if args.abbrev.is_some() {
             oid.to_string().chars().take(abbrev_len.max(4)).collect()
         } else {
-            super::history::abbrev(&repository, oid, false)
+            super::history::abbrev(repository, oid, false)
         }
     };
 
@@ -1180,16 +1227,17 @@ pub fn run_describe(global: &GlobalArgs, args: &DescribeArgs) -> Result<i32> {
         } else {
             exact.name.clone()
         };
-        write_stdout(format!("{line}\n").as_bytes())?;
-        return Ok(0);
+        return Ok(Described::Name(line));
     }
     if args.exact_match {
-        eprintln!("fatal: no tag exactly matches '{target}'");
-        return Ok(128);
+        return Ok(Described::Failed(format!(
+            "no tag exactly matches '{target}'"
+        )));
     }
     if names.is_empty() && lightweight_commits.is_empty() && !args.always {
-        eprintln!("fatal: No names found, cannot describe anything.");
-        return Ok(128);
+        return Ok(Described::Failed(
+            "No names found, cannot describe anything.".to_string(),
+        ));
     }
 
     // Candidates in the order a date-ordered walk reaches them, at most ten.
@@ -1214,23 +1262,23 @@ pub fn run_describe(global: &GlobalArgs, args: &DescribeArgs) -> Result<i32> {
     }
     let Some((depth, _, commit)) = best else {
         if args.always {
-            write_stdout(format!("{}\n", abbreviate(&target)).as_bytes())?;
-            return Ok(0);
+            return Ok(Described::Name(abbreviate(&target)));
         }
-        if !args.tags && walk.iter().any(|o| lightweight_commits.contains(o)) {
-            eprintln!(
-                "fatal: No annotated tags can describe '{target}'.\nHowever, there were unannotated tags: try --tags."
-            );
-        } else {
-            eprintln!(
-                "fatal: No tags can describe '{target}'.\nTry --always, or create some tags."
-            );
-        }
-        return Ok(128);
+        return Ok(Described::Failed(
+            if !args.tags && walk.iter().any(|o| lightweight_commits.contains(o)) {
+                format!(
+                    "No annotated tags can describe '{target}'.\nHowever, there were unannotated tags: try --tags."
+                )
+            } else {
+                format!("No tags can describe '{target}'.\nTry --always, or create some tags.")
+            },
+        ));
     };
     let name = &names[&commit].name;
-    write_stdout(format!("{name}-{depth}-g{}\n", abbreviate(&target)).as_bytes())?;
-    Ok(0)
+    Ok(Described::Name(format!(
+        "{name}-{depth}-g{}",
+        abbreviate(&target)
+    )))
 }
 
 // ---------------------------------------------------------------------------------------------

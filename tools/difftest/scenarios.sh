@@ -5193,6 +5193,95 @@ s_archive_add_file() {
     v archive -o ../d.tar --add-file=../nosuch HEAD
 }
 
+s_submodule_status() {
+    v init -q lib; (cd lib && tick && echo l >l.txt && v add l.txt && v commit -q -m l1 && v tag v1 && tick && echo l2 >>l.txt && v commit -q -am l2)
+    v init -q top; cd top
+    tick; echo t >t; v add t; v commit -q -m t1
+    v submodule
+    v submodule status
+    g -c protocol.file.allow=always submodule add -q ../lib vendor/lib
+    g -c protocol.file.allow=always submodule add -q ../lib other
+    tick; v commit -q -m "add submodules"
+    v submodule
+    v submodule status
+    v submodule status --cached
+    v submodule status --recursive
+    v submodule -q status
+    v submodule status --quiet
+    v submodule status vendor/lib
+    v submodule status other vendor
+    v submodule status nosuch
+    v submodule status t
+    # A submodule that moved on, and one that is on an older commit.
+    (cd vendor/lib && tick && echo l3 >>l.txt && v commit -q -am l3)
+    (cd other && v checkout -q --detach v1)
+    v submodule status
+    v submodule status --cached
+    # Tags of every kind, and none.
+    (cd vendor/lib && v tag light && tick && v tag -a -m annotated ann HEAD~1)
+    v submodule status
+    (cd vendor/lib && v checkout -q --detach HEAD~2)
+    v submodule status
+    (cd other && v checkout -q main && v tag -d v1 >/dev/null)
+    v submodule status
+    (cd other && v checkout -q --detach HEAD~1)
+    v submodule status
+    # Not checked out.
+    g clone -q . ../clone
+    (cd ../clone && v submodule status)
+    (cd ../clone && v submodule status --cached)
+    (cd ../clone && v submodule status other)
+    # Conflicted.
+    g update-index --force-remove other
+    printf '160000 1111111111111111111111111111111111111111 1\tother\n160000 2222222222222222222222222222222222222222 2\tother\n160000 3333333333333333333333333333333333333333 3\tother\n' | g update-index --index-info
+    v submodule status
+    # Without .gitmodules.
+    g read-tree HEAD
+    mv .gitmodules ../gitmodules.bak
+    v submodule status
+    v submodule status vendor/lib
+    v submodule status --quiet
+    # Without it anywhere but in HEAD.
+    g rm -q --cached .gitmodules
+    v submodule status
+    v submodule status vendor/lib
+    v submodule status --quiet
+    # Without a mapping for one of the paths.
+    g reset -q --hard
+    g config -f .gitmodules --remove-section submodule.other
+    v submodule status
+    v submodule status vendor/lib
+    v submodule status --quiet
+}
+
+s_describe_all() {
+    v init -q repo; cd repo
+    tick; echo 1 >f; v add f; v commit -q -m c1
+    v tag -a -m "tag one" v1
+    tick; echo 2 >f; v commit -q -am c2
+    v branch side
+    v tag light
+    tick; echo 3 >f; v commit -q -am c3
+    g update-ref refs/remotes/origin/main HEAD
+    tick; echo 4 >f; v commit -q -am c4
+    v describe --all
+    v describe --all HEAD~1
+    v describe --all HEAD~2
+    v describe --all HEAD~3
+    v describe --all --long HEAD~1
+    v describe --all --tags
+    v describe --all --always HEAD
+    v describe --all --abbrev=10
+    v describe --all --exact-match HEAD
+    v describe --all --exact-match HEAD~1
+    v checkout -q --detach HEAD~1
+    v describe --all
+    v checkout -q main
+    v tag -d light
+    v describe --all HEAD~1
+    v describe --all --tags HEAD~1
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -5204,6 +5293,7 @@ for s in "$@"; do
         s_worktree_branch_guards) run_scenario "$s" repo o d ;;
         s_worktree_force_guards) run_scenario "$s" repo o ;;
         s_worktree_gc_keeps) run_scenario "$s" repo d e ;;
+        s_submodule_status) run_scenario "$s" top ;;
         s_worktree_basic) run_scenario "$s" repo w1 w2 w3 ;;
         s_worktree_lock_remove) run_scenario "$s" repo e g ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;

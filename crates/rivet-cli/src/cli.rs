@@ -41,7 +41,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crate::cmd::{
     am, apply, archive, bisect, blame, branching, cherry, clean, format_patch, grep, history,
     ignore, maintenance, mv, notes, packrefs, plumbing, query, rebase, reflog, remote, sequencer,
-    setup, snapshot, stash, tag, worktree,
+    setup, snapshot, stash, submodule, tag, worktree,
 };
 
 /// The `rivet` command line.
@@ -169,6 +169,9 @@ pub enum Commands {
 
     /// Create an archive of files from a named tree.
     Archive(archive::ArchiveArgs),
+
+    /// Report on the submodules of the repository.
+    Submodule(submodule::SubmoduleArgs),
 
     /// Manage multiple working trees attached to one repository.
     Worktree(worktree::WorktreeArgs),
