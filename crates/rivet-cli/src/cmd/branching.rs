@@ -405,6 +405,14 @@ pub struct MergeArgs {
     /// Allow a merge between two commits that share no ancestor.
     #[arg(long = "allow-unrelated-histories")]
     pub allow_unrelated_histories: bool,
+
+    /// Stash local changes before the merge and apply them afterwards.
+    #[arg(long = "autostash")]
+    pub autostash: bool,
+
+    /// Do not stash local changes (overrides `merge.autoStash`).
+    #[arg(long = "no-autostash")]
+    pub no_autostash: bool,
 }
 
 /// Phase 6 — list, create, rename and delete branches.
@@ -936,6 +944,22 @@ pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
     }
 
     let target = first_rev.expect("a revision was resolved");
+    // Naming `HEAD` (or `@`) is no move at all: `HEAD` stays attached or detached as it was, no
+    // reflog line is written, and the only output is the local changes (`-f` drops them first).
+    if (target == "HEAD" || target == "@")
+        && !args.detach
+        && !args.merge
+        && let Some(head) = repository.head()?.oid()
+    {
+        if args.force {
+            let tree = repository.commit_tree(head)?;
+            repository.reset_hard_to_tree(tree)?;
+        }
+        if !global.quiet {
+            show_local_changes(&mut repository)?;
+        }
+        return Ok(0);
+    }
     let branch = RefName::branch(BStr::new(target.as_bytes())).ok();
     if let Some(branch) = branch.filter(|b| !args.detach && repository.refs().exists(b)) {
         return switch_to(
@@ -1033,10 +1057,12 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         }
         // `abort_merge` restores files and the index; `HEAD` itself never moved during a
         // conflicted merge, so there is nothing else to undo.
+        conclude_merge_autostash(&mut repository)?;
         return Ok(0);
     }
     if args.quit {
         rivet_core::clear_merge_state(&git_dir)?;
+        save_merge_autostash(&repository)?;
         return Ok(0);
     }
     if args.continue_merge {
@@ -1060,6 +1086,7 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
             super::short_oid(&oid),
             super::commit_subject(&repository, &oid)?
         );
+        conclude_merge_autostash(&mut repository)?;
         return Ok(0);
     }
 
@@ -1126,6 +1153,17 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         options.conflict_style = style.into();
     }
     let show_stat = !args.no_stat && !global.quiet;
+    let autostash = args.autostash
+        || (!args.no_autostash
+            && repository
+                .config_value(BStr::new(b"merge.autostash"))
+                .ok()
+                .flatten()
+                .and_then(|v| rivet_core::parse_bool(BStr::new(&v[..])).ok())
+                .unwrap_or(false));
+    if autostash && (args.squash || args.no_commit) {
+        anyhow::bail!("merge: --autostash with --squash or --no-commit is not implemented");
+    }
     merge_commit(
         &mut repository,
         theirs,
@@ -1139,7 +1177,34 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         "merge",
         args.message.is_some(),
         args.squash,
+        autostash,
     )
+}
+
+/// Put back the autostash a concluded merge left in `MERGE_AUTOSTASH`, if any.
+pub(super) fn conclude_merge_autostash(repository: &mut Repository) -> Result<()> {
+    let path = repository.git_dir().join("MERGE_AUTOSTASH");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    let _ = std::fs::remove_file(&path);
+    let oid = ObjectId::from_hex(repository.format(), BStr::new(text.trim().as_bytes()))?;
+    super::rebase::apply_autostash(repository, oid)
+}
+
+/// Keep the autostash of a merge that is being given up as a stash entry.
+pub(super) fn save_merge_autostash(repository: &Repository) -> Result<()> {
+    let path = repository.git_dir().join("MERGE_AUTOSTASH");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    let _ = std::fs::remove_file(&path);
+    let oid = ObjectId::from_hex(repository.format(), BStr::new(text.trim().as_bytes()))?;
+    super::stash::autostash_store(repository, oid, "autostash")?;
+    eprintln!(
+        "Autostash exists; creating a new stash entry.\nYour changes are safe in the stash.\nYou can run \"git stash pop\" or \"git stash drop\" at any time."
+    );
+    Ok(())
 }
 
 use bstr::{BStr, BString, ByteSlice};
@@ -1947,6 +2012,7 @@ pub fn merge_commit(
     action: &str,
     explicit_message: bool,
     squash: bool,
+    autostash: bool,
 ) -> Result<i32> {
     let git_dir = repository.git_dir().to_path_buf();
     let head = repository.head()?;
@@ -1985,9 +2051,17 @@ pub fn merge_commit(
                 super::short_oid(&theirs)
             );
         }
+        let stashed = if autostash {
+            super::rebase::create_autostash(repository)?
+        } else {
+            None
+        };
         let old_tree = repository.commit_tree(ours)?;
         let new_tree = repository.commit_tree(theirs)?;
         if let Err(error) = repository.checkout_tree(new_tree, false) {
+            if let Some(stash) = stashed {
+                super::rebase::apply_autostash(repository, stash)?;
+            }
             return report_checkout_refusal(error, "merge");
         }
         if squash {
@@ -2019,6 +2093,9 @@ pub fn merge_commit(
         if show_stat {
             super::print_diffstat(repository, Some(old_tree), new_tree)?;
         }
+        if let Some(stash) = stashed {
+            super::rebase::apply_autostash(repository, stash)?;
+        }
         return Ok(0);
     }
     if ff == FastForward::Only {
@@ -2047,9 +2124,19 @@ pub fn merge_commit(
 
     let mut options = options.clone();
     options.labels = (BString::from("HEAD"), BString::from(label));
+    let stashed = if autostash {
+        super::rebase::create_autostash(repository)?
+    } else {
+        None
+    };
     let result = match repository.merge_into_worktree(base, theirs, &options) {
         Ok(result) => result,
-        Err(error) => return report_checkout_refusal(error, "merge"),
+        Err(error) => {
+            if let Some(stash) = stashed {
+                super::rebase::apply_autostash(repository, stash)?;
+            }
+            return report_checkout_refusal(error, "merge");
+        }
     };
 
     let auto_merged = cleanly_content_merged(repository, base, ours, theirs, &result)?;
@@ -2107,6 +2194,12 @@ pub fn merge_commit(
         .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", mode_path.display()))?;
         if !conflicted.is_empty() {
             println!("Automatic merge failed; fix conflicts and then commit the result.");
+            if let Some(stash) = stashed {
+                let path = git_dir.join("MERGE_AUTOSTASH");
+                std::fs::write(&path, format!("{stash}\n"))
+                    .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", path.display()))?;
+                println!("When finished, apply stashed changes with `git stash pop`");
+            }
             return Ok(1);
         }
         println!("Automatic merge went well; stopped before committing as requested");
@@ -2129,6 +2222,9 @@ pub fn merge_commit(
     if show_stat {
         let old_tree = repository.commit_tree(ours)?;
         super::print_diffstat(repository, Some(old_tree), tree)?;
+    }
+    if let Some(stash) = stashed {
+        super::rebase::apply_autostash(repository, stash)?;
     }
     Ok(0)
 }

@@ -649,6 +649,7 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
             _ => {}
         }
     }
+    super::branching::conclude_merge_autostash(&mut repository)?;
     if global.quiet {
         return Ok(0);
     }
@@ -1328,6 +1329,7 @@ pub fn run_reset(global: &GlobalArgs, args: &ResetArgs) -> Result<i32> {
     let reason = format!("reset: moving to {commit_spec}");
     repository.move_head(target, bstr::BStr::new(reason.as_bytes()))?;
     rivet_core::clear_merge_state(&git_dir)?;
+    super::branching::save_merge_autostash(&repository)?;
 
     if !global.quiet {
         if args.hard {

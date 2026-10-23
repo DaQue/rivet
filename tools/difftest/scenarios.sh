@@ -4345,12 +4345,207 @@ s_merge_base_fork_point() {
     v merge-base --fork-point watch HEAD
 }
 
+# --autostash: tracked local changes are stashed before the operation and put back after it;
+# when putting them back conflicts, the stash entry stays (stash list, status and markers match).
+s_pull_autostash() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && echo f >f && g add a f && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    v init -q repo
+    (cd repo && v remote add origin ../origin.git && v fetch -q origin && v switch -q main)
+    cd repo
+    # fast-forward under --rebase, dirty tracked file
+    (cd ../seed && tick && echo b >b && g add b && g commit -qm two && g push -q origin HEAD:main 2>/dev/null)
+    echo dirty >>a
+    v pull --rebase --autostash
+    v status --short
+    v stash list
+    v reflog
+    # replayed local commit, staged and unstaged changes
+    tick; echo l1 >l1; v add l1; v commit -q -m local1
+    (cd ../seed && tick && echo c >c && g add c && g commit -qm three && g push -q origin HEAD:main 2>/dev/null)
+    echo staged >>f; v add f
+    v pull --rebase --autostash
+    v status --short
+    cat a f
+    v stash list
+    v log --format='%h %p %s' -3
+    # applying conflicts: the stash entry stays
+    v checkout -q -- a f
+    (cd ../seed && tick && echo up >a && g commit -qam four && g push -q origin HEAD:main 2>/dev/null)
+    tick; echo l2 >l2; v add l2; v commit -q -m local2
+    echo mine >a
+    v pull --rebase --autostash
+    v status --short
+    cat a
+    v stash list
+    v stash show -p
+    v checkout -q -f HEAD
+    v stash drop -q
+    # a plain (merge) pull
+    (cd ../seed && tick && echo d >d && g add d && g commit -qm five && g push -q origin HEAD:main 2>/dev/null)
+    echo dirty2 >>a
+    v pull --autostash --no-rebase
+    v status --short
+    v log --format='%h %p %s' -2
+    v stash list
+    tick; echo l3 >l3; v add l3; v commit -q -m local3
+    (cd ../seed && tick && echo e >e && g add e && g commit -qm six && g push -q origin HEAD:main 2>/dev/null)
+    v pull --autostash --no-rebase
+    v status --short
+    v log --format='%h %p %s' -3
+    v stash list
+    # nothing to stash: no message
+    v checkout -q -- a
+    (cd ../seed && tick && echo g >g && g add g && g commit -qm seven && g push -q origin HEAD:main 2>/dev/null)
+    v pull --rebase --autostash
+    v stash list
+    # without the flag a dirty tree is still refused
+    echo dirty3 >>a
+    v pull --rebase
+    g config rebase.autoStash true
+    (cd ../seed && tick && echo h >h && g add h && g commit -qm eight && g push -q origin HEAD:main 2>/dev/null)
+    v pull --rebase
+    v status --short
+}
+
+s_rebase_autostash() {
+    v init -q repo; cd repo
+    echo a >a; echo f >f; v add a f; v commit -q -m one
+    v branch up
+    tick; echo x >x; v add x; v commit -q -m two
+    echo dirty >>a
+    # up to date: stashed and put back
+    v rebase --autostash main
+    v status --short
+    v stash list
+    # a real rebase with the stash applied at the end
+    v switch -q up; tick; echo y >y; v add y; v commit -q -m upc; v switch -q main
+    echo dirty2 >>a
+    v rebase --autostash up
+    v status --short
+    cat a
+    v stash list
+    v reflog -4
+    # a conflict during the replay: the stash waits until --continue
+    v reset -q --hard HEAD
+    v switch -q up; tick; echo conf >f; v commit -q -a -m upf; v switch -q main
+    tick; echo mine >f; v commit -q -a -m minef
+    echo dirty3 >>a
+    v rebase --autostash up
+    v status --short
+    v stash list
+    echo res >f; v add f
+    GIT_EDITOR=true v rebase --continue
+    v status --short
+    cat a
+    v stash list
+    # and --abort puts it back too
+    v reset -q --hard HEAD
+    v switch -q up; tick; echo c2 >f; v commit -q -a -m up2; v switch -q main
+    tick; echo m2 >f; v commit -q -a -m m2
+    echo dirty4 >>a
+    v rebase --autostash up
+    v rebase --abort
+    v status --short
+    cat a
+    v stash list
+    # the config switch, and --no-autostash over it
+    g config rebase.autoStash true
+    echo dirty5 >>a
+    v rebase up
+    v status --short
+    v rebase --abort
+    v reset -q --hard HEAD
+    echo dirty6 >>a
+    v rebase --no-autostash up
+    v status --short
+}
+
+s_merge_autostash() {
+    v init -q repo; cd repo
+    echo a >a; echo f >f; v add a f; v commit -q -m one
+    v branch side; v branch clean
+    tick; echo mainf >f; v commit -q -a -m mainf
+    v switch -q side; tick; echo sidef >f; v commit -q -a -m sidef
+    v switch -q clean; tick; echo z >z; v add z; v commit -q -m zz
+    v switch -q main
+    # clean merge
+    echo dirty >>a
+    v merge --autostash clean
+    v status --short
+    v stash list
+    v log --format='%h %p %s' -2
+    # up to date
+    v merge --autostash clean
+    v status --short
+    # conflicting merge: the stash waits in MERGE_AUTOSTASH until the merge is concluded
+    v merge --autostash side
+    v status --short
+    v stash list
+    echo res >f; v add f
+    v commit -q -m merged
+    v status --short
+    cat a
+    v stash list
+    # abort
+    v reset -q --hard HEAD~1
+    v switch -q side; v branch -f other; v switch -q main
+    echo dirty2 >>a
+    v merge --autostash side
+    v merge --abort
+    v status --short
+    cat a
+    v stash list
+    # quit and reset keep the stash
+    echo dirty3 >>a
+    v merge --autostash side
+    v merge --quit
+    v status --short
+    v stash list
+    v reset -q --hard HEAD
+    v stash drop -q
+    echo dirty4 >>a
+    v merge --autostash side
+    v reset -q --hard HEAD
+    v status --short
+    v stash list
+    # a fast-forward
+    v stash drop -q
+    v switch -q -c ff clean
+    tick; echo w >w; v add w; v commit -q -m ww
+    v switch -q clean
+    echo dirty5 >>a
+    v merge --autostash ff
+    v status --short
+    v stash list
+}
+
+# Naming HEAD (or @) keeps the branch checked out: no "Already on", only the local changes.
+s_checkout_head() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    v checkout HEAD
+    cat .git/HEAD
+    echo dirty >>a
+    v checkout HEAD
+    v checkout @
+    v checkout -q HEAD
+    v checkout -f HEAD
+    cat a
+    v checkout --detach HEAD
+    cat .git/HEAD
+    v checkout HEAD
+    cat .git/HEAD
+    v reflog
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
 for s in "$@"; do
     case $s in
-        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
+        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
         s_pack_deltas) run_scenario "$s" origin cl cl2 ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         *) run_scenario "$s" ;;

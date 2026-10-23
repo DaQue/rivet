@@ -671,3 +671,15 @@ reflog; exactly one best common ancestor of the commit and all of them, and it m
 Not done: the fork point is only computed when `pull` has no explicit refspec arguments and the remote is the branch's configured one; `git pull --rebase <remote> <branch>` still rebases onto the
 fetched tip alone. The tracking ref is taken from the default `+refs/heads/*:refs/remotes/<remote>/*` mapping, not from a customised `remote.<name>.fetch`.
 Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored; `scenarios.sh` 164 PASS / `failures: 0`.
+
+### Phase 2.2 — `--autostash` for `rebase`, `merge`, `pull`; `checkout HEAD` (landed, scenarios `s_rebase_autostash`, `s_merge_autostash`, `s_pull_autostash`, `s_checkout_head`)
+Base: `pull --autostash` died `pull: --autostash, --interactive and --gpg-sign are not implemented`; `rebase --autostash` and `merge --autostash` were `unexpected argument`.
+Behaviour taken from `/usr/bin/git`: only tracked changes (index and work tree) are stashed; stdout `Created autostash: <7-hex>` (stash commit `On <branch>: autostash`, not stored); on success stderr
+`Applied autostash.` (changes come back unstaged, no stash entry ever existed); when applying conflicts the commit is stored as stash entry `autostash`, the 5-line "Your local changes are stashed, however applying them…" text goes to stderr, markers read `Updated upstream` / `Stashed changes`,
+and the operation still succeeds. `rebase` keeps the commit in `.git/rebase-merge/autostash` and applies it on finish, `--continue` finish and `--abort`; up-to-date rebases stash and unstash. `merge` creates it right before the fast-forward / merge
+(after `Updating a..b`), and a conflicted merge leaves `.git/MERGE_AUTOSTASH` plus `When finished, apply stashed changes with \`git stash pop\``; `commit` / `merge --continue` / `merge --abort` apply it, `merge --quit` and `reset` store it
+(`Autostash exists; creating a new stash entry.…`). `rebase.autoStash` / `merge.autoStash` and `--no-autostash` work; `pull --rebase --autostash` skips the clean-tree refusal and passes the flag on, and a fast-forwarding `pull --rebase` goes through the merge code as before.
+Reflog action of a `pull`-driven rebase is now the whole command line (`pull --rebase --autostash (pick): …`), as git's `GIT_REFLOG_ACTION`.
+Found with the new pull scenario: `checkout HEAD` / `checkout @` detached `HEAD` and wrote a reflog line; git treats it as no move at all (nothing printed but `M\tpath` lines, no reflog entry, attached stays attached; `-f` resets the tree). Fixed.
+Not done: `merge --autostash` with `--squash` or `--no-commit` and `pull --autostash --squash` are refused with an explicit "not implemented" error; `rebase --autostash` with `--interactive`/`--root` does not exist yet (those are not implemented at all).
+Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored; `scenarios.sh` 168 PASS / `failures: 0`.

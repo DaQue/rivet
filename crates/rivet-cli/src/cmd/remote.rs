@@ -212,9 +212,10 @@ pub struct FetchArgs {
 /// * **`--ff-only` refuses rather than merging**, and its refusal is exit `128` with the local
 ///   branch untouched. It is the only form of pull that can never create a commit, which is why
 ///   a script that must not invent history uses it.
-/// * **`--autostash` is not implemented** and must say so. A pull that silently left a dirty
-///   work tree unstashed fails at the merge step with an unrelated-looking error, and a pull
-///   that stashed without being asked loses the user's context.
+/// * **`--autostash` stashes only tracked changes, and only when asked** (the flag, or
+///   `rebase.autoStash` / `merge.autoStash`). It is handed to the rebase or the merge, which put
+///   the changes back at the end; when that conflicts the stash entry is kept and the message
+///   says how to recover. A pull that stashed without being asked would lose the user's context.
 /// * **Pulling into a repository with no upstream is an error**, not an implicit `origin`. A
 ///   branch with no `branch.<name>.merge` has no defined source, and guessing `origin/<name>`
 ///   produces a merge from a branch the user did not name.
@@ -268,11 +269,11 @@ pub struct PullArgs {
     #[arg(short = 'n', long = "no-tags")]
     pub no_tags: bool,
 
-    /// Stash local changes before pulling and restore them after. Not implemented in v1.
+    /// Stash local changes before pulling and restore them after.
     #[arg(long = "autostash")]
     pub autostash: bool,
 
-    /// The commit to merge, as an alternative to `--rebase`.
+    /// Do not stash local changes (overrides `rebase.autoStash` / `merge.autoStash`).
     #[arg(long = "no-autostash")]
     pub no_autostash: bool,
 
@@ -819,9 +820,8 @@ pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
 /// * **The local commits are not rewritten by a merge**, and `--rebase` is the flag that changes
 ///   that. A pull that rebased without being asked has rewritten the user's history, and a pull
 ///   that merged when `branch.<name>.rebase = true` has added a commit they configured away.
-/// * **A pull with a dirty work tree refuses**, and the refusal names the paths. Auto-stashing
-///   is not implemented, so the message must say what to do — commit or stash — rather than
-///   referring to a flag that does nothing.
+/// * **A pull with `--rebase` and a dirty work tree refuses** unless `--autostash` is in effect,
+///   and the refusal names what to do — commit or stash.
 /// * **`--all` fetches every remote but merges only the current branch's upstream**, which is a
 ///   combination whose name suggests more than it does; the progress output must distinguish the
 ///   remotes that were fetched from the one that was merged.
@@ -829,8 +829,8 @@ pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
 ///   current branch point at one, and a handler that found "the newest tag" and merged it would
 ///   be inventing an upstream.
 pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
-    if args.autostash || args.interactive || args.gpg_sign.is_some() {
-        anyhow::bail!("pull: --autostash, --interactive and --gpg-sign are not implemented");
+    if args.interactive || args.gpg_sign.is_some() {
+        anyhow::bail!("pull: --interactive and --gpg-sign are not implemented");
     }
     let mut repository = super::open(global)?;
     let head = repository.head()?;
@@ -865,7 +865,12 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
             .ok()
             .flatten()
             .is_some();
-    if rebase && !super::rebase::clean_tree(&mut repository, "pull with rebase")? {
+    let rebase_autostash =
+        super::rebase::autostash_wanted(&repository, args.autostash, args.no_autostash);
+    if rebase
+        && !rebase_autostash
+        && !super::rebase::clean_tree(&mut repository, "pull with rebase")?
+    {
         return Ok(128);
     }
     let upstream = match &branch {
@@ -965,7 +970,7 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
     }
     if rebase && !repository.is_ancestor(repository.head()?.oid().unwrap_or(theirs), theirs)? {
         // `git pull --rebase` is `git rebase --onto <fetched tip> <fork point or fetched tip>` under its own name.
-        super::rebase::set_action(if args.rebase { "pull --rebase" } else { "pull" });
+        super::rebase::set_action(&command_action("pull"));
         let hex = theirs.to_string();
         let upstream_hex = fork_point.map_or_else(|| hex.clone(), |oid| oid.to_string());
         drop(repository);
@@ -978,6 +983,8 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
                 continue_rebase: false,
                 abort: false,
                 skip: false,
+                autostash: args.autostash,
+                no_autostash: args.no_autostash,
             },
         );
     }
@@ -1024,6 +1031,23 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         super::branching::FastForward::Allow
     };
     let message = format!("Merge {description}");
+    // `--rebase` takes `rebase.autoStash` (a fast-forward still goes through the merge code);
+    // a plain pull takes `merge.autoStash`.
+    let autostash = if rebase {
+        rebase_autostash
+    } else {
+        args.autostash
+            || (!args.no_autostash
+                && repository
+                    .config_value(BStr::new(b"merge.autostash"))
+                    .ok()
+                    .flatten()
+                    .and_then(|v| rivet_core::parse_bool(BStr::new(&v[..])).ok())
+                    .unwrap_or(false))
+    };
+    if autostash && args.squash {
+        anyhow::bail!("pull: --autostash with --squash is not implemented");
+    }
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(&repository, "merge.renames");
     super::branching::merge_commit(
@@ -1039,6 +1063,7 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         &command_action("pull"),
         false,
         args.squash,
+        autostash,
     )
 }
 

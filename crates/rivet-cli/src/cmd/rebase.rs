@@ -12,7 +12,7 @@
 //!
 //! # What is refused
 //!
-//! `--interactive`, `--root`, `--rebase-merges`, `--autostash`, `--exec`, `--keep-base`, signing
+//! `--interactive`, `--root`, `--rebase-merges`, `--exec`, `--keep-base`, signing
 //! and the other options Git has; the grammar does not accept them, so they fail at the command
 //! line instead of being ignored.
 //!
@@ -60,6 +60,14 @@ pub struct RebaseArgs {
     /// Skip the commit that stopped the rebase and go on.
     #[arg(long = "skip")]
     pub skip: bool,
+
+    /// Stash local changes before the rebase and apply them afterwards.
+    #[arg(long = "autostash")]
+    pub autostash: bool,
+
+    /// Do not stash local changes (overrides `rebase.autoStash`).
+    #[arg(long = "no-autostash")]
+    pub no_autostash: bool,
 }
 
 /// What the reflog calls this command: `rebase`, or `pull --rebase` when `pull` drives it.
@@ -204,9 +212,9 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
     start(global, &mut repository, args, &dir)
 }
 
-/// Whether the work tree and index are clean enough to rebase; says why not on stderr, as
-/// `<what>` (`rebase`, or `pull with rebase`).
-pub(super) fn clean_tree(repository: &mut Repository, what: &str) -> Result<bool> {
+/// Whether the work tree has unstaged tracked changes, and whether the index differs from `HEAD`
+/// (or has conflicts).
+pub(super) fn dirty_parts(repository: &mut Repository) -> Result<(bool, bool)> {
     let mut options = rivet_core::StatusOptions::new();
     options.untracked_files = rivet_core::UntrackedMode::No;
     let status = repository.status(&options)?;
@@ -215,6 +223,71 @@ pub(super) fn clean_tree(repository: &mut Repository, what: &str) -> Result<bool
         .iter()
         .any(|e| e.kind != rivet_core::ChangeKind::Unmerged);
     let staged = !status.staged.is_empty() || repository.index().has_conflicts();
+    Ok((unstaged, staged))
+}
+
+/// Whether `--autostash` is in effect: the flag, else `rebase.autoStash`.
+pub(super) fn autostash_wanted(repository: &Repository, on: bool, off: bool) -> bool {
+    if off {
+        return false;
+    }
+    on || repository
+        .config_value(BStr::new(b"rebase.autostash"))
+        .ok()
+        .flatten()
+        .and_then(|v| rivet_core::parse_bool(BStr::new(&v[..])).ok())
+        .unwrap_or(false)
+}
+
+/// Stash the tracked local changes the way `git rebase --autostash` does: create the stash
+/// commit, reset to `HEAD` and say so. `None` when there was nothing to stash.
+pub(super) fn create_autostash(repository: &mut Repository) -> Result<Option<ObjectId>> {
+    let (unstaged, staged) = dirty_parts(repository)?;
+    if !unstaged && !staged {
+        return Ok(None);
+    }
+    let stash = super::stash::autostash_create(repository, "autostash")?;
+    println!("Created autostash: {}", super::short_oid(&stash));
+    Ok(Some(stash))
+}
+
+/// Put an autostash back: silently on success (`Applied autostash.`), otherwise keep it as a
+/// stash entry and say how to recover.
+pub(super) fn apply_autostash(repository: &mut Repository, stash: ObjectId) -> Result<()> {
+    let base = repository
+        .commit_parents(stash)?
+        .first()
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("autostash {stash} has no parent"))?;
+    if super::stash::autostash_merge(
+        repository,
+        stash,
+        base,
+        "Updated upstream",
+        "Stashed changes",
+    )? {
+        super::stash::autostash_store(repository, stash, "autostash")?;
+        eprintln!(
+            "Your local changes are stashed, however applying them\nresulted in conflicts.  You can either resolve the conflicts\nand then discard the stash with \"git stash drop\", or, if you\ndo not want to resolve them now, run \"git reset --hard\" and\napply the local changes later by running \"git stash pop\"."
+        );
+    } else {
+        eprintln!("Applied autostash.");
+    }
+    Ok(())
+}
+
+/// The autostash a stopped rebase saved, if any.
+fn saved_autostash(repository: &Repository, dir: &Path) -> Option<ObjectId> {
+    let text = read_state(dir, "autostash");
+    (!text.is_empty())
+        .then(|| ObjectId::from_hex(repository.format(), BStr::new(text.as_bytes())).ok())
+        .flatten()
+}
+
+/// Whether the work tree and index are clean enough to rebase; says why not on stderr, as
+/// `<what>` (`rebase`, or `pull with rebase`).
+pub(super) fn clean_tree(repository: &mut Repository, what: &str) -> Result<bool> {
+    let (unstaged, staged) = dirty_parts(repository)?;
     if unstaged {
         eprintln!("error: cannot {what}: You have unstaged changes.");
     }
@@ -305,7 +378,12 @@ fn start(
         None => upstream,
     };
 
-    if !clean_tree(repository, "rebase")? {
+    let autostash = if autostash_wanted(repository, args.autostash, args.no_autostash) {
+        create_autostash(repository)?
+    } else {
+        None
+    };
+    if autostash.is_none() && !clean_tree(repository, "rebase")? {
         return Ok(1);
     }
 
@@ -354,6 +432,9 @@ fn start(
                     Some(branch) => println!("Current branch {branch} is up to date."),
                     None => println!("HEAD is up to date."),
                 }
+            }
+            if let Some(stash) = autostash {
+                apply_autostash(repository, stash)?;
             }
             return Ok(0);
         }
@@ -420,6 +501,9 @@ fn start(
         .collect();
     write_state(dir, "git-rebase-todo", &lines)?;
     write_state(dir, "git-rebase-todo.backup", &lines)?;
+    if let Some(stash) = autostash {
+        write_state(dir, "autostash", &format!("{stash}\n"))?;
+    }
     let _ = label;
     run_todo(global, repository, dir)
 }
@@ -466,7 +550,11 @@ fn abort(repository: &mut Repository, dir: &Path) -> Result<i32> {
         repository.point_head(HeadTarget::Detached(orig), BStr::new(reason.as_bytes()))?;
     }
     clear_pick_state(repository);
+    let stash = saved_autostash(repository, dir);
     std::fs::remove_dir_all(dir)?;
+    if let Some(stash) = stash {
+        apply_autostash(repository, stash)?;
+    }
     Ok(0)
 }
 
@@ -700,15 +788,18 @@ fn finish(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Resul
         repository.set_ref_logged(&name, head, &who, BStr::new(reason.as_bytes()))?;
         let reason = format!("{} (finish): returning to {head_name}", action());
         repository.point_head(HeadTarget::Branch(&name), BStr::new(reason.as_bytes()))?;
-        if !global.quiet {
-            eprintln!("Successfully rebased and updated {head_name}.");
-        }
-    } else {
-        if !global.quiet {
-            eprintln!("Successfully rebased and updated detached HEAD.");
-        }
     }
     clear_pick_state(repository);
+    let stash = saved_autostash(repository, dir);
     std::fs::remove_dir_all(dir)?;
+    if let Some(stash) = stash {
+        apply_autostash(repository, stash)?;
+    }
+    if !global.quiet {
+        match head_name.strip_prefix("refs/heads/") {
+            Some(_) => eprintln!("Successfully rebased and updated {head_name}."),
+            None => eprintln!("Successfully rebased and updated detached HEAD."),
+        }
+    }
     Ok(0)
 }

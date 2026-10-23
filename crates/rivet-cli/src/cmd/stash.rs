@@ -762,6 +762,15 @@ fn drop_at(
 /// just `<text>`), then reset the index and work tree to `HEAD` without touching any reflog.
 /// Returns the stash commit.
 pub(super) fn autostash_save(repository: &mut Repository, text: &str) -> Result<ObjectId> {
+    let stash_commit = autostash_create(repository, text)?;
+    autostash_store(repository, stash_commit, text)?;
+    Ok(stash_commit)
+}
+
+/// The first half of `git stash create`: write the index and work-tree commits for the tracked
+/// local changes, as `On <branch>: <text>`, then reset the index and work tree to `HEAD`. The
+/// stash is not recorded anywhere (see [`autostash_store`]). Returns the stash commit.
+pub(super) fn autostash_create(repository: &mut Repository, text: &str) -> Result<ObjectId> {
     let head = repository.head()?;
     let Some(head_oid) = head.oid() else {
         anyhow::bail!("stash: cannot stash on an unborn branch");
@@ -793,7 +802,16 @@ pub(super) fn autostash_save(repository: &mut Repository, text: &str) -> Result<
         &[head_oid, index_commit],
         &format!("On {branch}: {text}"),
     )?;
+    repository.reset_hard_to_tree(head_tree)?;
+    Ok(stash_commit)
+}
 
+/// `git stash store -m <text>`: push `stash_commit` onto the stash stack.
+pub(super) fn autostash_store(
+    repository: &Repository,
+    stash_commit: ObjectId,
+    text: &str,
+) -> Result<()> {
     let name = stash_ref();
     let old = repository
         .refs()
@@ -805,9 +823,7 @@ pub(super) fn autostash_save(repository: &mut Repository, text: &str) -> Result<
     let who = repository.committer_signature()?;
     let entry = ReflogEntry::new(old, stash_commit, who, BString::from(text));
     repository.refs().append_reflog(&name, &entry)?;
-
-    repository.reset_hard_to_tree(head_tree)?;
-    Ok(stash_commit)
+    Ok(())
 }
 
 /// `switch --merge`'s second half: merge the autostash `stash` (taken on top of `base`) into the
@@ -821,9 +837,25 @@ pub(super) fn autostash_apply(
     base: ObjectId,
     ours: &str,
 ) -> Result<bool> {
+    let conflicted = autostash_merge(repository, stash, base, ours, "local")?;
+    if !conflicted {
+        remove_entry(repository, 0)?;
+    }
+    Ok(conflicted)
+}
+
+/// [`autostash_apply`] without touching the stash stack: merge `stash` (taken on top of `base`)
+/// into the work tree under the given conflict-marker labels. Returns whether it conflicted.
+pub(super) fn autostash_merge(
+    repository: &mut Repository,
+    stash: ObjectId,
+    base: ObjectId,
+    ours: &str,
+    theirs: &str,
+) -> Result<bool> {
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(repository, "merge.renames");
-    options.labels = (BString::from(ours), BString::from("local"));
+    options.labels = (BString::from(ours), BString::from(theirs));
     let index_before = repository.write_tree()?;
     let result = repository.merge_into_worktree(Some(base), stash, &options)?;
     if !result.conflicts.is_empty() {
@@ -845,6 +877,5 @@ pub(super) fn autostash_apply(
     }
     repository.index_mut().sort();
     repository.write_index()?;
-    remove_entry(repository, 0)?;
     Ok(false)
 }
