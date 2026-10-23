@@ -246,6 +246,13 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
         }
     }
 
+    // The other work trees keep their detached `HEAD`, their index and their `HEAD` log alive.
+    for oid in crate::gc::other_worktree_roots(repo, !options.no_reflogs)? {
+        if let Some(kind) = kinds.get(&oid) {
+            roots.push((oid, *kind));
+        }
+    }
+
     // Pass 2: reachability.
     let mut reachable: HashSet<ObjectId> = HashSet::new();
     let mut missing: BTreeSet<(ObjectId, u8)> = BTreeSet::new();

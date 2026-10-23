@@ -149,7 +149,7 @@ fn clear(repository: &Repository) -> Result<()> {
     if repository.refs().exists(&name) {
         repository.refs().delete(&name)?;
     }
-    rivet_core::refs::reflog::delete(repository.git_dir(), &name)?;
+    rivet_core::refs::reflog::delete(repository.common_dir(), &name)?;
     Ok(())
 }
 
@@ -724,7 +724,7 @@ fn remove_entry(repository: &Repository, position: usize) -> Result<ObjectId> {
         entry.old = previous;
         previous = entry.new;
     }
-    let path = name.reflog_path(repository.git_dir());
+    let path = name.reflog_path(repository.common_dir());
     if stack.is_empty() {
         clear(repository)?;
     } else {

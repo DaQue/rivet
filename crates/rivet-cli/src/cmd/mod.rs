@@ -61,6 +61,7 @@ pub mod setup;
 pub mod snapshot;
 pub mod stash;
 pub mod tag;
+pub mod worktree;
 
 use std::path::Path;
 
@@ -111,6 +112,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::CountObjects(args) => maintenance::run_count_objects(&global, &args),
         Commands::Bisect(args) => bisect::run_bisect(&global, &args),
         Commands::Cherry(args) => cherry::run_cherry(&global, &args),
+        Commands::Worktree(args) => worktree::run_worktree(&global, &args),
         Commands::Repack(args) => maintenance::run_repack(&global, &args),
         Commands::PackRefs(args) => packrefs::run_pack_refs(&global, &args),
         Commands::Mv(args) => mv::run_mv(&global, &args),
@@ -288,8 +290,13 @@ pub fn short_oid(oid: &rivet_core::ObjectId) -> String {
 ///
 /// Git takes `<name>` from the newest `checkout: moving from X to <name>` entry of the `HEAD`
 /// reflog: a name that expands to a ref (minus `refs/tags/` and `refs/remotes/`) pointing at the
-/// checked-out commit is kept as written by that expansion, anything else is the short id.
-pub fn detached_description(repository: &Repository, head: &rivet_core::ObjectId) -> String {
+/// checked-out commit is kept as written by that expansion, anything else is the short id. A `HEAD`
+/// log without such an entry (a fresh `worktree add --detach`) gives `None`: git then says
+/// "Not currently on any branch." and "(no branch)".
+pub fn detached_description(
+    repository: &Repository,
+    head: &rivet_core::ObjectId,
+) -> Option<String> {
     let refs = repository.refs();
     let short = short_oid(head);
     let entry = refs
@@ -300,9 +307,7 @@ pub fn detached_description(repository: &Repository, head: &rivet_core::ObjectId
                 .rev()
                 .find(|e| e.message.starts_with(b"checkout: moving from "))
         });
-    let Some(entry) = entry else {
-        return format!("HEAD detached at {short}");
-    };
+    let entry = entry?;
     let at_or_from = if entry.new == *head { "at" } else { "from" };
     let message = entry.message.to_string();
     let target = message.split_once(" to ").map_or("", |(_, to)| to);
@@ -335,7 +340,10 @@ pub fn detached_description(repository: &Repository, head: &rivet_core::ObjectId
             break;
         }
     }
-    format!("HEAD detached {at_or_from} {}", name.unwrap_or(short))
+    Some(format!(
+        "HEAD detached {at_or_from} {}",
+        name.unwrap_or(short)
+    ))
 }
 
 /// `error` itself when it is the fatal the revision parser dies with for `<ref>@{N}` past the end

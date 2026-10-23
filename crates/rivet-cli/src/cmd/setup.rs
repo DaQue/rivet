@@ -493,7 +493,7 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
             None
         }
     };
-    let local_path = repository.as_ref().map(|r| r.git_dir().join("config"));
+    let local_path = repository.as_ref().map(|r| r.common_dir().join("config"));
     let global_path = {
         let paths = global_config_paths();
         paths

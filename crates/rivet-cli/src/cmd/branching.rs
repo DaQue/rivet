@@ -577,16 +577,37 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
     {
         rows.push(Row {
             marker: '*',
-            label: format!("({})", super::detached_description(&repository, oid)),
+            label: format!(
+                "({})",
+                super::detached_description(&repository, oid)
+                    .unwrap_or_else(|| "no branch".to_string())
+            ),
             oid: Some(*oid),
             symref: None,
         });
     }
     if !args.remotes {
+        // Branches checked out in the other work trees are marked `+`.
+        let mut elsewhere: std::collections::HashSet<String> = Default::default();
+        for entry in super::worktree::entries(&repository)? {
+            if Some(entry.path.as_path()) == repository.worktree_path() {
+                continue;
+            }
+            if let super::worktree::Head::Branch(name) = entry.head {
+                elsewhere.insert(name);
+            }
+        }
         for (name, oid) in repository.refs().list_branches()? {
             let current = head.branch() == Some(&name);
+            let other = elsewhere.contains(&name.to_string());
             rows.push(Row {
-                marker: if current { '*' } else { ' ' },
+                marker: if current {
+                    '*'
+                } else if other {
+                    '+'
+                } else {
+                    ' '
+                },
                 label: name.short_name().to_string(),
                 oid: Some(oid),
                 symref: None,
@@ -759,7 +780,8 @@ pub fn run_switch(global: &GlobalArgs, args: &SwitchArgs) -> Result<i32> {
     let target = resolve_previous(&repository, target)?;
 
     if args.detach {
-        let oid = super::resolve_commit(&repository, &target)?;
+        let oid = super::resolve_commit(&repository, &target)
+            .map_err(|_| anyhow::anyhow!("invalid reference: {target}"))?;
         return switch_to(
             &mut repository,
             Destination::Detached(oid),
@@ -1361,14 +1383,18 @@ fn create_branch(
     if exists && !force {
         anyhow::bail!("a branch named '{name}' already exists");
     }
-    if exists && head.branch() == Some(&branch) {
-        anyhow::bail!(
-            "cannot force update the branch '{name}' used by worktree at '{}'",
-            repository
-                .worktree_path()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default()
-        );
+    if exists {
+        let used_at = if head.branch() == Some(&branch) {
+            repository.worktree_path().map(|p| p.to_path_buf())
+        } else {
+            super::worktree::branch_in_use(repository, &branch.to_string(), None)?
+        };
+        if let Some(path) = used_at {
+            anyhow::bail!(
+                "cannot force update the branch '{name}' used by worktree at '{}'",
+                path.display()
+            );
+        }
     }
     let start_oid = super::resolve_commit(repository, start).map_err(|e| {
         super::rev_error(e, || anyhow::anyhow!("not a valid object name: '{start}'"))
@@ -1420,15 +1446,19 @@ fn delete_branch(
         eprintln!("error: {what} '{name}' not found");
         return Ok(1);
     };
-    if !remote && head.branch() == Some(&reference) {
-        eprintln!(
-            "error: cannot delete branch '{name}' used by worktree at '{}'",
-            repository
-                .worktree_path()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default()
-        );
-        return Ok(1);
+    if !remote {
+        let used_at = if head.branch() == Some(&reference) {
+            repository.worktree_path().map(|p| p.to_path_buf())
+        } else {
+            super::worktree::branch_in_use(repository, &reference.to_string(), None)?
+        };
+        if let Some(path) = used_at {
+            eprintln!(
+                "error: cannot delete branch '{name}' used by worktree at '{}'",
+                path.display()
+            );
+            return Ok(1);
+        }
     }
     if !force && !remote {
         // Merged into its upstream if it has one, otherwise into HEAD.
@@ -1463,9 +1493,9 @@ fn delete_branch(
         }
     } else {
         // The branch's own config section goes with it, as in Git.
-        let mut config = rivet_core::Config::load(&repository.git_dir().join("config"))?;
+        let mut config = rivet_core::Config::load(&repository.common_dir().join("config"))?;
         if config.remove_section(BStr::new("branch"), Some(BStr::new(name.as_bytes()))) {
-            config.write(&repository.git_dir().join("config"))?;
+            config.write(&repository.common_dir().join("config"))?;
         }
         if !quiet {
             println!("Deleted branch {name} (was {}).", super::short_oid(&oid));
@@ -1522,6 +1552,13 @@ fn rename_branch(
         if head.branch() == Some(new) {
             anyhow::bail!("cannot force update the current branch.");
         }
+        if let Some(path) = super::worktree::branch_in_use(repository, &new.to_string(), None)? {
+            anyhow::bail!(
+                "cannot force update the branch '{}' used by worktree at '{}'",
+                new.short_name(),
+                path.display()
+            );
+        }
         repository.refs().delete(new)?;
     }
     let who = repository.committer_signature()?;
@@ -1538,8 +1575,43 @@ fn rename_branch(
                 rivet_core::ReflogEntry::new(oid, oid, who.clone(), BString::from(reason.as_str()));
             repository.refs().append_reflog(new, &entry)?;
         }
+        // Git moves the `HEAD` of every work tree that was on the old branch. The current one logs
+        // the deletion and the creation of the branch it is on; the others log the creation.
+        let zero = ObjectId::zero(repository.format());
         if head.branch() == Some(old) {
             repository.refs().set_head(new, None)?;
+            if repository.should_log_ref(&RefName::head()) {
+                for (from, to) in [(oid, zero), (zero, oid)] {
+                    let entry = rivet_core::ReflogEntry::new(
+                        from,
+                        to,
+                        who.clone(),
+                        BString::from(reason.as_str()),
+                    );
+                    repository.refs().append_reflog(&RefName::head(), &entry)?;
+                }
+            }
+        }
+        for entry in super::worktree::entries(repository)? {
+            let super::worktree::Head::Branch(on) = &entry.head else {
+                continue;
+            };
+            if on != &old.to_string() || Some(entry.path.as_path()) == repository.worktree_path() {
+                continue;
+            }
+            std::fs::write(entry.admin.join("HEAD"), format!("ref: {new}\n"))?;
+            let line = rivet_core::ReflogEntry::new(
+                zero,
+                oid,
+                who.clone(),
+                BString::from(reason.as_str()),
+            )
+            .to_bytes();
+            let log = entry.admin.join("logs/HEAD");
+            if log.exists() {
+                let mut file = std::fs::OpenOptions::new().append(true).open(&log)?;
+                std::io::Write::write_all(&mut file, &line)?;
+            }
         }
     }
     // Carry the branch's configuration across.
@@ -1657,6 +1729,17 @@ fn switch_to(
     merge: bool,
 ) -> Result<i32> {
     let old_head = repository.head()?;
+    if let Destination::Branch(branch) = &destination
+        && old_head.branch() != Some(branch)
+        && let Some(path) = super::worktree::branch_in_use(repository, &branch.to_string(), None)?
+    {
+        eprintln!(
+            "fatal: '{}' is already used by worktree at '{}'",
+            branch.short_name(),
+            path.display()
+        );
+        return Ok(128);
+    }
     let from = super::head_reflog_label(repository)?;
     let reason = format!("checkout: moving from {from} to {label}");
 
@@ -1777,6 +1860,19 @@ fn checkout_new_branch(
     let exists = repository.refs().exists(&branch);
     if exists && !reset {
         anyhow::bail!("a branch named '{name}' already exists");
+    }
+    if exists
+        && let Some(path) = super::worktree::branch_in_use(
+            repository,
+            &branch.to_string(),
+            repository.worktree_path(),
+        )?
+    {
+        eprintln!(
+            "fatal: '{name}' is already used by worktree at '{}'",
+            path.display()
+        );
+        return Ok(128);
     }
     let start_oid = super::resolve_commit(repository, start).map_err(|e| {
         super::rev_error(e, || {

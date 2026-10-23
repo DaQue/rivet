@@ -173,9 +173,58 @@ fn reachable_objects(repo: &Repository, with_reflogs: bool) -> Result<HashSet<Ob
             roots.push(entry.oid);
         }
     }
+    roots.extend(other_worktree_roots(repo, with_reflogs)?);
     let mut reachable = HashSet::new();
     crate::remote::transport::collect_objects(odb, &roots, &HashSet::new(), &mut reachable)?;
     Ok(reachable)
+}
+
+/// What the other work trees of the repository keep alive: a detached `HEAD`, the blobs of the
+/// index and, if asked, the entries of the `HEAD` reflog. Branches they are on are ordinary refs.
+pub(crate) fn other_worktree_roots(repo: &Repository, with_reflogs: bool) -> Result<Vec<ObjectId>> {
+    let odb = repo.odb();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if repo.git_dir() != repo.common_dir() {
+        dirs.push(repo.common_dir().to_path_buf());
+    }
+    if let Ok(read) = std::fs::read_dir(repo.common_dir().join("worktrees")) {
+        let mut linked: Vec<std::path::PathBuf> = read
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p != repo.git_dir())
+            .collect();
+        linked.sort();
+        dirs.extend(linked);
+    }
+    let mut roots = Vec::new();
+    for dir in dirs {
+        if let Ok(text) = std::fs::read(dir.join("HEAD"))
+            && !text.starts_with(b"ref:")
+            && let Ok(oid) = ObjectId::from_hex(repo.format(), bstr::BStr::new(text.trim_ascii()))
+            && odb.contains(&oid)
+        {
+            roots.push(oid);
+        }
+        let index_path = dir.join("index");
+        if index_path.is_file() {
+            let index = crate::index::Index::load(&index_path, repo.format())?;
+            for entry in index.entries() {
+                if entry.mode != crate::object::EntryMode::Commit && odb.contains(&entry.oid) {
+                    roots.push(entry.oid);
+                }
+            }
+        }
+        if with_reflogs {
+            for entry in crate::refs::reflog::read(&dir, &RefName::head(), repo.format())? {
+                for oid in [entry.old, entry.new] {
+                    if !oid.is_zero() && odb.contains(&oid) {
+                        roots.push(oid);
+                    }
+                }
+            }
+        }
+    }
+    Ok(roots)
 }
 
 /// The starting points of the object walk in `--all --reflog` order: `HEAD`, the refs, then the
@@ -902,30 +951,60 @@ fn reflog_names(dir: &Path, prefix: &str, out: &mut Vec<String>) {
     }
 }
 
+/// The commit the `HEAD` file in `dir` names, directly or through a branch.
+fn head_file_oid(repo: &Repository, dir: &Path) -> Option<ObjectId> {
+    let text = std::fs::read(dir.join("HEAD")).ok()?;
+    let text = text.trim_ascii();
+    match text.strip_prefix(b"ref:") {
+        Some(target) => {
+            let name = RefName::from_bytes(target.trim_ascii()).ok()?;
+            repo.refs().resolve_oid(&name).ok()
+        }
+        None => ObjectId::from_hex(repo.format(), bstr::BStr::new(text)).ok(),
+    }
+}
+
 /// `reflog expire --all`: drop entries older than the cutoffs, except for `refs/stash`.
 fn expire_reflogs(repo: &Repository, options: &GcOptions) -> Result<usize> {
     if options.reflog_expire.is_none() && options.reflog_expire_unreachable.is_none() {
         return Ok(0);
     }
-    let git_dir = repo.git_dir();
+    let common = repo.common_dir();
     let mut names = Vec::new();
-    reflog_names(&git_dir.join("logs"), "", &mut names);
+    reflog_names(&common.join("logs"), "", &mut names);
     names.sort();
+    // Every log with the directory it lives in: the shared ones, and the `HEAD` log of each
+    // linked work tree (the main work tree's is `logs/HEAD` of the common directory).
+    let mut logs: Vec<(PathBuf, String)> = names
+        .into_iter()
+        .map(|text| (common.to_path_buf(), text))
+        .collect();
+    if let Ok(read) = std::fs::read_dir(common.join("worktrees")) {
+        let mut linked: Vec<PathBuf> = read.flatten().map(|e| e.path()).collect();
+        linked.sort();
+        for admin in linked {
+            if admin.join("logs/HEAD").is_file() {
+                logs.push((admin, "HEAD".to_string()));
+            }
+        }
+    }
     let mut dropped = 0;
-    for text in names {
+    for (git_dir, text) in logs {
+        let git_dir = git_dir.as_path();
         if text == "refs/stash" {
             continue;
         }
         let Ok(name) = RefName::from_bytes(text.as_bytes()) else {
             continue;
         };
-        let entries = repo.refs().reflog(&name)?;
+        let entries = crate::refs::reflog::read(git_dir, &name, repo.format())?;
         // Everything the ref's current commit reaches: what "reachable" means for an entry.
-        let tip = repo
-            .refs()
-            .resolve_oid(&name)
-            .ok()
-            .and_then(|oid| repo.refs().peel_oid(oid, repo.odb()).ok());
+        let tip = if name.is_head() {
+            head_file_oid(repo, git_dir)
+        } else {
+            repo.refs().resolve_oid(&name).ok()
+        }
+        .and_then(|oid| repo.refs().peel_oid(oid, repo.odb()).ok());
         let mut ancestors: Option<HashSet<ObjectId>> = None;
         let mut reachable = |oid: &ObjectId| -> bool {
             if oid.is_zero() {
@@ -997,7 +1076,7 @@ fn expire_reflogs(repo: &Repository, options: &GcOptions) -> Result<usize> {
 }
 
 fn pack_refs(repo: &Repository) -> Result<usize> {
-    let git_dir = repo.git_dir();
+    let git_dir = repo.common_dir();
     let mut packed = PackedRefs::new();
     packed.set_traits(vec![
         BString::from("peeled"),
@@ -1051,7 +1130,7 @@ fn pack_refs(repo: &Repository) -> Result<usize> {
 /// errors while writing the new pack likewise leave the old objects in place.
 pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
     let mut report = GcReport::default();
-    let git_dir = repo.git_dir();
+    let git_dir = repo.common_dir();
     let format = repo.format();
     let odb = repo.odb();
     let objects_dir = odb.objects_dir().to_path_buf();
@@ -1435,7 +1514,7 @@ pub struct RepackReport {
 /// errors while writing the new pack likewise leave the old objects in place.
 pub fn repack(repo: &Repository, options: &RepackOptions) -> Result<RepackReport> {
     let mut report = RepackReport::default();
-    let git_dir = repo.git_dir();
+    let git_dir = repo.common_dir();
     let format = repo.format();
     let odb = repo.odb();
     let pack_dir = odb.objects_dir().join("pack");

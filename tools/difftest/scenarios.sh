@@ -4864,6 +4864,233 @@ s_cherry() {
     v cherry -v HEAD~1 HEAD
 }
 
+# Linked work trees made by real git, then used by the implementation under test.
+s_worktree_linked() {
+    v init -q repo; cd repo
+    tick; printf 'a\nb\n' >f; v add f; v commit -q -m one
+    tick; echo two >>f; v add f; v commit -q -m two
+    v branch -q side
+    g worktree add -q ../wt side
+    g worktree add -q --detach ../wd
+    cd ../wt
+    v status -sb
+    v branch
+    v log --oneline
+    echo wt >w.txt; v add w.txt; tick; v commit -q -m "in worktree"
+    v log --oneline -2
+    v status -sb
+    v switch -q -c wtbranch
+    v branch
+    v rev-parse --git-dir HEAD
+    v rev-parse --show-toplevel HEAD
+    v config worktree.test yes
+    v stash list
+    echo more >>f; v stash -q
+    v stash list
+    v stash pop -q
+    v checkout -q --detach HEAD~1
+    v reflog -3
+    cd ../repo
+    v branch -a
+    v log --oneline --all
+    v status -sb
+    v config worktree.test
+    cd ../wd
+    v status -sb
+    v merge -q side
+    v log --oneline -3
+    cd ../wt
+    v log --oneline -3
+    v fsck
+}
+
+# What `worktree` leaves in the administrative directories.
+wt_snap() {
+    {
+        echo "## worktree admin"
+        if [ -d .git/worktrees ]; then
+            (cd .git/worktrees && find . -mindepth 1 ! -name index | sort | while read -r f; do
+                if [ -d "$f" ]; then echo "d $f"; else echo "# $f"; sed "s#$ROOT#<ROOT>#g" "$f"; fi
+            done)
+        else
+            echo "(no worktrees dir)"
+        fi
+    } >>"$TRANSCRIPT"
+}
+
+s_worktree_basic() {
+    v init -q repo; cd repo
+    tick; printf 'a\nb\n' >f; v add f; v commit -q -m one
+    tick; echo two >>f; v add f; v commit -q -m two
+    v worktree
+    v worktree frobnicate
+    v worktree list
+    v worktree list --porcelain
+    v worktree add ../w1
+    v worktree add -q ../w9
+    v worktree add -b nb ../w2 HEAD~1
+    v worktree add --detach ../w3
+    v worktree add ../w1
+    v worktree add ../w4 main
+    v worktree add -b w1 ../other
+    v worktree add ../m/w1 -b newone
+    v worktree add --lock --reason busy ../lk
+    v worktree add ../zz nosuch
+    v worktree add
+    v worktree add --no-checkout ../nc
+    wt_snap
+    v worktree list
+    v worktree list -v
+    v worktree list --porcelain
+    v worktree list --porcelain -z
+    v branch
+    (cd ../w1 && v status -sb)
+    (cd ../w2 && v log --oneline)
+}
+
+s_worktree_lock_remove() {
+    v init -q repo; cd repo
+    tick; printf 'a\nb\n' >f; v add f; v commit -q -m one
+    v worktree add -q ../c
+    v worktree add -q ../d
+    v worktree add -q ../e
+    v worktree add -q ../g
+    echo x >../c/untracked
+    v worktree remove ../c
+    echo y >>../d/f
+    v worktree remove ../d
+    v worktree remove -f ../c
+    v worktree remove -f ../d
+    wt_snap
+    v worktree remove ../nosuch
+    v worktree remove .
+    v worktree remove
+    v worktree lock ../g --reason "why not"
+    v worktree lock ../g
+    v worktree list
+    v worktree list -v
+    v worktree list --porcelain
+    v worktree remove ../g
+    v worktree remove -f ../g
+    v worktree remove -f -f ../g
+    v worktree unlock ../e
+    v worktree unlock ../e
+    v worktree lock ../e
+    v worktree lock ../nosuch
+    v worktree lock .
+    v worktree unlock .
+    v worktree unlock
+    v worktree lock
+    v worktree remove ../e
+    wt_snap
+    v branch
+    v worktree list
+}
+
+s_worktree_prune() {
+    v init -q repo; cd repo
+    tick; printf 'a\nb\n' >f; v add f; v commit -q -m one
+    v worktree add -q ../a
+    v worktree add -q ../b
+    v worktree add -q ../c
+    v worktree add -q ../d
+    v worktree lock ../c --reason keep
+    rm -rf ../a ../c
+    v worktree list
+    v worktree list -v
+    v worktree list --porcelain
+    v worktree prune -n
+    v worktree prune -n -v
+    wt_snap
+    v worktree prune -v
+    wt_snap
+    rm -rf ../b ../d
+    v worktree prune
+    v worktree unlock ../c
+    v worktree prune
+    wt_snap
+    v worktree list
+    v worktree prune extra
+    v worktree prune -v
+}
+
+s_worktree_branch_guards() {
+    v init -q repo; cd repo
+    tick; printf 'a\nb\n' >f; v add f; v commit -q -m one
+    tick; echo two >>f; v add f; v commit -q -m two
+    v branch -q spare
+    v worktree add -q -b other ../o
+    v worktree add -q --detach ../d
+    v branch
+    v branch -v
+    v branch -D other
+    v branch -d other
+    v branch -m other zzz
+    v worktree list
+    v switch zzz
+    v checkout zzz
+    v switch -q spare
+    (cd ../o && v switch main)
+    (cd ../o && v checkout main)
+    (cd ../o && v switch -q spare)
+    (cd ../d && v branch -d main)
+    (cd ../d && v branch)
+    v branch -f zzz HEAD~1
+    v branch -f spare HEAD~1
+    v branch -m spare spare2
+    v branch -m zzz yyy
+    v worktree list
+    v branch -D yyy
+    v switch -q main
+    (cd ../o && tick && echo o >o.txt && v add o.txt && v commit -q -m "on o")
+    v branch -v
+    v log --oneline --all
+    v switch --detach yyy
+    v worktree list
+}
+
+s_worktree_force_guards() {
+    v init -q repo; cd repo
+    tick; echo a >f; v add f; v commit -q -m a
+    tick; echo b >f; v add f; v commit -q -m b
+    v worktree add -q -b other ../o
+    v branch -f other HEAD~1
+    v branch -f main HEAD~1
+    v switch -C other
+    v checkout -B other HEAD
+
+
+    v branch -m other main2
+    v branch -m main other2
+    v branch --force -m other2 main2
+    v branch -M other2 other
+    v branch -m other2 spare
+    v worktree list
+    v branch
+}
+
+# `gc` in the main work tree must keep what only another work tree reaches: a detached HEAD, a
+# staged blob, and the commits behind its HEAD reflog.
+s_worktree_gc_keeps() {
+    v init -q repo; cd repo
+    tick; printf 'a\nb\n' >f; v add f; v commit -q -m one
+    v worktree add -q --detach ../d
+    (cd ../d && tick && echo x >x.txt && v add x.txt && v commit -q -m "only on the detached head")
+    (cd ../d && echo staged-only >s.txt && v add s.txt)
+    (cd ../d && v checkout -q --detach HEAD~1 && v checkout -q --detach main)
+    v worktree add -q --detach ../e
+    (cd ../e && tick && echo y >y.txt && v add y.txt && v commit -q -m "only on e")
+    (cd ../e && v checkout -q --detach main)
+    v gc --prune=now
+    (cd ../d && v fsck && v status -sb && v log --oneline)
+    (cd ../d && v diff --cached)
+    (cd ../e && v reflog)
+    v count-objects
+    v repack -a -d -q
+    (cd ../d && v fsck && v diff --cached)
+    v worktree prune
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -4871,6 +5098,12 @@ for s in "$@"; do
     case $s in
         s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
         s_pack_deltas) run_scenario "$s" origin cl cl2 ;;
+        s_worktree_linked) run_scenario "$s" repo wt wd ;;
+        s_worktree_branch_guards) run_scenario "$s" repo o d ;;
+        s_worktree_force_guards) run_scenario "$s" repo o ;;
+        s_worktree_gc_keeps) run_scenario "$s" repo d e ;;
+        s_worktree_basic) run_scenario "$s" repo w1 w2 w3 ;;
+        s_worktree_lock_remove) run_scenario "$s" repo e g ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         *) run_scenario "$s" ;;
     esac

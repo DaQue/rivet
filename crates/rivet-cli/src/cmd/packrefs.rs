@@ -49,7 +49,7 @@ pub fn run_pack_refs(global: &GlobalArgs, args: &PackRefsArgs) -> Result<i32> {
         anyhow::bail!("pack-refs: --auto is not implemented");
     }
     let repository = super::open(global)?;
-    let git_dir = repository.git_dir().to_path_buf();
+    let git_dir = repository.common_dir().to_path_buf();
     let odb = repository.odb();
 
     let mut packed = PackedRefs::new();

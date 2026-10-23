@@ -143,7 +143,7 @@ pub fn run_gc(global: &GlobalArgs, args: &GcArgs) -> Result<i32> {
             .and_then(|v| String::from_utf8_lossy(&v).trim().parse().ok())
             .unwrap_or(50);
         // Git estimates the loose count from one fan-out directory.
-        let sample = std::fs::read_dir(repository.git_dir().join("objects/17"))
+        let sample = std::fs::read_dir(repository.common_dir().join("objects/17"))
             .map(|d| {
                 d.flatten()
                     .filter(|e| e.file_name().len() == repository.format().hex_len() - 2)

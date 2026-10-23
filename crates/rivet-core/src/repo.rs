@@ -346,6 +346,9 @@ impl CommitOptions {
 pub struct Repository {
     /// The resolved git directory.
     git_dir: PathBuf,
+    /// The directory shared by all work trees: `git_dir` itself, except in a linked work tree
+    /// (`.git/worktrees/<name>`), where it is the main git directory named by `commondir`.
+    common_dir: PathBuf,
     /// The work tree, when there is one.
     work_tree: Option<PathBuf>,
     /// What kind of repository this is.
@@ -435,8 +438,28 @@ impl Repository {
             )));
         }
 
+        // A linked work tree's directory holds a `commondir` file naming the main git directory,
+        // which keeps the objects, the shared refs and the config.
+        let linked = git_dir.join("commondir").is_file();
+        let common_dir = if linked {
+            let text = std::fs::read(git_dir.join("commondir")).map_err(|e| Error::IoAtPath {
+                path: BString::from(git_dir.join("commondir").to_string_lossy().into_owned()),
+                source: e,
+            })?;
+            let text = text.trim_ascii();
+            let target = PathBuf::from(std::ffi::OsStr::from_bytes(text));
+            let target = if target.is_absolute() {
+                target
+            } else {
+                git_dir.join(target)
+            };
+            normalize_lexically(&target)
+        } else {
+            git_dir.clone()
+        };
+
         // The format comes from the config and is read before anything that parses an id.
-        let config_path = git_dir.join("config");
+        let config_path = common_dir.join("config");
         let config = if config_path.exists() {
             Config::load(&config_path)?
         } else {
@@ -451,9 +474,26 @@ impl Repository {
             None => config.object_format()?,
         };
 
-        let configured_work_tree = config.get_path(BStr::new(b"core.worktree"))?;
+        let configured_work_tree = if linked {
+            None
+        } else {
+            config.get_path(BStr::new(b"core.worktree"))?
+        };
+        let linked_work_tree = if linked && work_tree.is_none() {
+            // The `gitdir` file names the work tree's `.git` file; the work tree is its parent.
+            std::fs::read(git_dir.join("gitdir"))
+                .ok()
+                .and_then(|text| {
+                    let path = PathBuf::from(std::ffi::OsStr::from_bytes(text.trim_ascii()));
+                    path.parent().map(Path::to_path_buf)
+                })
+                .filter(|p| !p.as_os_str().is_empty())
+        } else {
+            None
+        };
         let work_tree = match work_tree {
             Some(p) => Some(absolute(p)?),
+            None if linked_work_tree.is_some() => linked_work_tree,
             None => match configured_work_tree {
                 Some(p) => {
                     // `core.worktree` is a path of bytes, not text. Decoding it lossily would
@@ -495,8 +535,8 @@ impl Repository {
             }
         };
 
-        let odb = Odb::open(&git_dir, format)?;
-        let refs = RefStore::open(&git_dir, format)?;
+        let odb = Odb::open(&common_dir, format)?;
+        let refs = RefStore::open_linked(&git_dir, &common_dir, format)?;
         let index_path = git_dir.join("index");
         let index = if index_path.exists() {
             Index::load(&index_path, format)?
@@ -519,12 +559,13 @@ impl Repository {
                 let excludes = PathBuf::from(String::from_utf8_lossy(&excludes).into_owned());
                 ignore.push_excludes_file(Some(&excludes))?;
             }
-            ignore.push_info_exclude(&git_dir)?;
+            ignore.push_info_exclude(&common_dir)?;
         }
         let worktree = Worktree::new(work_tree.as_deref(), format, &config)?;
 
         Ok(Self {
             git_dir,
+            common_dir,
             work_tree,
             kind,
             format,
@@ -792,6 +833,19 @@ impl Repository {
     /// work tree's `MERGE_HEAD` end up in the right place. See [`gitfile_target`].
     pub fn git_dir(&self) -> &Path {
         &self.git_dir
+    }
+
+    /// The directory that holds what every work tree of the repository shares: the objects, the
+    /// config, `packed-refs` and the refs outside `HEAD`, `refs/bisect/`, `refs/worktree/` and
+    /// `refs/rewritten/`.
+    ///
+    /// # Caveats
+    ///
+    /// The same path as [`Repository::git_dir`] except in a linked work tree, where `git_dir` is
+    /// `<main>/.git/worktrees/<name>` and this is the main git directory its `commondir` file names.
+    /// Per-work-tree state (`index`, `MERGE_HEAD`, `rebase-merge/`) stays under `git_dir`.
+    pub fn common_dir(&self) -> &Path {
+        &self.common_dir
     }
 
     /// Phase 4 — the work tree, or `None` for a bare repository.

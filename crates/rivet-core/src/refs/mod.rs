@@ -413,11 +413,23 @@ impl RefLock {
 pub struct RefStore {
     /// The git directory: the one containing `HEAD`, `refs/` and `config`.
     git_dir: PathBuf,
+    /// The directory shared by every work tree of the repository: the same as `git_dir` except in
+    /// a linked work tree, where it holds the shared refs, their logs and `packed-refs`.
+    common_dir: PathBuf,
     /// The repository's id width, from `extensions.objectFormat`. Every id read or written here is
     /// checked against it.
     format: ObjectFormat,
     /// The last parsed `packed-refs`, re-read by [`RefStore::refresh`].
     packed: PackedRefs,
+}
+
+/// Whether a ref belongs to one work tree rather than to the whole repository: `HEAD` and the other
+/// pseudo-refs, and the `refs/bisect/`, `refs/worktree/` and `refs/rewritten/` namespaces.
+fn is_per_worktree(name: &[u8]) -> bool {
+    !name.starts_with(b"refs/")
+        || name.starts_with(b"refs/bisect/")
+        || name.starts_with(b"refs/worktree/")
+        || name.starts_with(b"refs/rewritten/")
 }
 
 impl RefStore {
@@ -439,11 +451,35 @@ impl RefStore {
     /// [`crate::error::Error::IoAtPath`] if it exists and cannot be read, and
     /// [`crate::error::Error::InvalidRefName`] for a line naming an invalid ref.
     pub fn open(git_dir: &Path, format: ObjectFormat) -> Result<Self> {
+        Self::open_linked(git_dir, git_dir, format)
+    }
+
+    /// Phase 2 — open the refs of a linked work tree.
+    ///
+    /// `git_dir` is the work tree's own directory (`.git/worktrees/<name>`), which keeps `HEAD`, the
+    /// other pseudo-refs and the `refs/bisect/`, `refs/worktree/` and `refs/rewritten/` namespaces
+    /// with their logs; `common_dir` is the main git directory, which keeps every other ref, its log
+    /// and `packed-refs`. With the same directory twice this is [`RefStore::open`].
+    ///
+    /// # Errors
+    ///
+    /// As [`RefStore::open`].
+    pub fn open_linked(git_dir: &Path, common_dir: &Path, format: ObjectFormat) -> Result<Self> {
         Ok(Self {
             git_dir: git_dir.to_path_buf(),
+            common_dir: common_dir.to_path_buf(),
             format,
-            packed: PackedRefs::load(git_dir, format)?,
+            packed: PackedRefs::load(common_dir, format)?,
         })
+    }
+
+    /// The directory that stores `name` and its log.
+    fn home(&self, name: &RefName) -> &Path {
+        if is_per_worktree(name.as_bytes()) {
+            &self.git_dir
+        } else {
+            &self.common_dir
+        }
     }
 
     /// Phase 2 — the git directory this store reads.
@@ -481,7 +517,7 @@ impl RefStore {
     ///
     /// As [`RefStore::open`].
     pub fn refresh(&mut self) -> Result<()> {
-        self.packed = PackedRefs::load(&self.git_dir, self.format)?;
+        self.packed = PackedRefs::load(&self.common_dir, self.format)?;
         Ok(())
     }
 
@@ -503,7 +539,7 @@ impl RefStore {
     /// [`crate::error::Error::RefNotFound`] if neither storage has it, and the parse errors of
     /// [`loose::read`] and [`RefStore::open`].
     pub fn read(&self, name: &RefName) -> Result<RefTarget> {
-        if let Some(target) = loose::try_read(&self.git_dir, name, self.format)? {
+        if let Some(target) = loose::try_read(self.home(name), name, self.format)? {
             return Ok(target);
         }
         match self.packed.get(name) {
@@ -943,7 +979,7 @@ impl RefStore {
         expected: Option<ObjectId>,
         message: Option<ReflogMessage<'_>>,
     ) -> Result<()> {
-        let git_dir = self.git_dir();
+        let git_dir = self.home(name);
         let mut lock = RefLock::acquire(git_dir, name)?;
         let current = self.try_read(name)?;
         match (&expected, &current) {
@@ -1014,7 +1050,7 @@ impl RefStore {
                 name: name_bytes(name),
             });
         }
-        let git_dir = self.git_dir();
+        let git_dir = self.home(name);
         let loose_present = loose::exists(git_dir, name);
         let packed_present = self.packed.get(name).is_some();
         if !loose_present && !packed_present {
@@ -1030,7 +1066,7 @@ impl RefStore {
         if packed_present {
             let mut packed = self.packed.clone();
             packed.remove(name);
-            packed.write(git_dir, self.format)?;
+            packed.write(&self.common_dir, self.format)?;
         }
         Ok(())
     }
@@ -1058,20 +1094,19 @@ impl RefStore {
     /// [`crate::error::Error::LockHeld`] for either lock; and
     /// [`crate::error::Error::IoAtPath`] if the move fails.
     pub fn rename(&self, from: &RefName, to: &RefName) -> Result<()> {
-        let git_dir = self.git_dir();
         if self.exists(to) {
             return Err(Error::Message(format!("ref {} already exists", to)));
         }
-        let mut from_lock = RefLock::acquire(git_dir, from)?;
-        let mut to_lock = RefLock::acquire(git_dir, to)?;
+        let mut from_lock = RefLock::acquire(self.home(from), from)?;
+        let mut to_lock = RefLock::acquire(self.home(to), to)?;
         let target = self.read(from)?;
         std::fs::write(to_lock.path(), target.to_bytes(self.format))
             .map_err(|e| io_at(to_lock.path(), e))?;
         to_lock.commit()?;
-        loose::delete(git_dir, from)?;
-        let from_log = from.reflog_path(git_dir);
+        loose::delete(self.home(from), from)?;
+        let from_log = from.reflog_path(self.home(from));
         if from_log.exists() {
-            let to_log = to.reflog_path(git_dir);
+            let to_log = to.reflog_path(self.home(to));
             if let Some(parent) = to_log.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| io_at(parent, e))?;
             }
@@ -1080,7 +1115,7 @@ impl RefStore {
         if self.packed.get(from).is_some() {
             let mut packed = self.packed.clone();
             packed.remove(from);
-            packed.write(git_dir, self.format)?;
+            packed.write(&self.common_dir, self.format)?;
         }
         let _ = from_lock.release();
         Ok(())
@@ -1111,9 +1146,17 @@ impl RefStore {
     /// The walk errors of [`loose::list`] and the parse errors of [`RefStore::read`] for a ref that
     /// is present and broken.
     pub fn list(&self, prefix: &[u8]) -> Result<Vec<(RefName, RefTarget)>> {
-        let git_dir = self.git_dir();
         let mut out: Vec<(RefName, RefTarget)> =
-            loose::list(git_dir, BStr::new(prefix), self.format)?;
+            loose::list(&self.common_dir, BStr::new(prefix), self.format)?;
+        if self.git_dir != self.common_dir {
+            // A linked work tree sees its own private refs, not those of the main work tree.
+            out.retain(|(name, _)| !is_per_worktree(name.as_bytes()));
+            out.extend(
+                loose::list(&self.git_dir, BStr::new(prefix), self.format)?
+                    .into_iter()
+                    .filter(|(name, _)| is_per_worktree(name.as_bytes())),
+            );
+        }
         for entry in self.packed.iter() {
             if !entry.name.as_bytes().starts_with(prefix) {
                 continue;
@@ -1244,7 +1287,7 @@ impl RefStore {
     /// packed snapshot is consulted and is broken; it is already parsed, so in practice this is
     /// infallible.
     pub fn location(&self, name: &RefName) -> Option<RefLocation> {
-        let loose_present = loose::exists(&self.git_dir, name);
+        let loose_present = loose::exists(self.home(name), name);
         let packed_present = self.packed.get(name).is_some();
         if !loose_present && !packed_present {
             None
@@ -1278,9 +1321,12 @@ impl RefStore {
     /// [`crate::error::Error::IoAtPath`] if `refs/` cannot be walked.
     pub fn stale_locks(&self) -> Result<Vec<PathBuf>> {
         let mut out = Vec::new();
-        collect_locks(&self.git_dir.join("refs"), &mut out)?;
-        for extra in ["HEAD.lock", "packed-refs.lock"] {
-            let path = self.git_dir.join(extra);
+        collect_locks(&self.common_dir.join("refs"), &mut out)?;
+        for (dir, extra) in [
+            (&self.git_dir, "HEAD.lock"),
+            (&self.common_dir, "packed-refs.lock"),
+        ] {
+            let path = dir.join(extra);
             if path.exists() {
                 out.push(path);
             }
@@ -1318,7 +1364,7 @@ impl RefStore {
     ///
     /// [`crate::error::Error::LockHeld`], and [`crate::error::Error::IoAtPath`] if the write fails.
     pub fn write_packed(&mut self, packed: PackedRefs) -> Result<()> {
-        packed.write(&self.git_dir, self.format)?;
+        packed.write(&self.common_dir, self.format)?;
         self.packed = packed;
         Ok(())
     }
@@ -1333,7 +1379,7 @@ impl RefStore {
     ///
     /// [`crate::error::Error::CorruptReflog`] and [`crate::error::Error::IoAtPath`].
     pub fn reflog(&self, name: &RefName) -> Result<Vec<ReflogEntry>> {
-        reflog::read(&self.git_dir, name, self.format)
+        reflog::read(self.home(name), name, self.format)
     }
 
     /// Phase 2 — append to a ref's reflog without moving the ref.
@@ -1352,7 +1398,7 @@ impl RefStore {
     ///
     /// [`crate::error::Error::IoAtPath`] if the log cannot be written.
     pub fn append_reflog(&self, name: &RefName, entry: &ReflogEntry) -> Result<()> {
-        reflog::append(&self.git_dir, name, entry)
+        reflog::append(self.home(name), name, entry)
     }
 
     /// Phase 2 — decide which namespace an abbreviated name refers to.
@@ -1556,7 +1602,7 @@ impl RefStore {
         target: &RefTarget,
         message: Option<ReflogMessage<'_>>,
     ) -> Result<()> {
-        let git_dir = self.git_dir();
+        let git_dir = self.home(name);
         let old = self
             .resolve_oid(name)
             .unwrap_or_else(|_| ObjectId::zero(self.format));

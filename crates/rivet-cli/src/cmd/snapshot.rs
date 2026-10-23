@@ -857,7 +857,8 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             HeadState::Unborn { branch } => {
                 format!("On branch {}", branch.short_name())
             }
-            HeadState::Detached { oid } => super::detached_description(&repository, oid),
+            HeadState::Detached { oid } => super::detached_description(&repository, oid)
+                .unwrap_or_else(|| "Not currently on any branch.".to_string()),
         }
     };
 

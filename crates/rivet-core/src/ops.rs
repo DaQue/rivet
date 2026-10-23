@@ -222,7 +222,7 @@ impl Repository {
 
     /// Write the in-memory repository configuration back to `.git/config`.
     pub fn write_config(&self) -> Result<()> {
-        self.config().write(&self.git_dir().join("config"))
+        self.config().write(&self.common_dir().join("config"))
     }
 
     /// The identity recorded as committer (and in reflog lines).
@@ -259,6 +259,7 @@ impl Repository {
             return true;
         }
         crate::refs::reflog::exists(self.git_dir(), name)
+            || crate::refs::reflog::exists(self.common_dir(), name)
     }
 
     /// Point a ref at `new` unconditionally, logging per [`Repository::should_log_ref`].
