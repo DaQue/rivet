@@ -522,3 +522,11 @@ modulo the table size; 32 slots, doubling when it would pass half full; linear p
 (verified against the 6 ids above and 20-object table = 64 slots). Caveat: ids that collide are placed in id order, whereas git places them
 in its own object-load order, so a collision could still differ; no scenario hit one. All 144 scenarios pass 3 runs in a row with no `fsck` sort.
 Gate: fmt, clippy, doc clean; 217 tests passed / 0 failed (2 new unit tests); `scenarios.sh` 144 PASS / `failures: 0`.
+
+### Phase 1.4 — main `gc` pack write order (NOT done; known gap)
+`packshape` in `scenarios.sh` still sorts its lines, so write order is not asserted. Probe: remove the `| sort` and compare each pack's objects in
+`verify-pack -v` order (packs keyed by object set): `s_gc_delta`, `s_gc_cruft` and `s_gc_cruft_expire` all go red against git.
+Differences seen: git writes a delta base followed by its whole delta family (`bcbff6…` then its ten `blob 7 1 bcbff6…` deltas, then the
+`blob … 2 6453811d…` chain), rivet interleaves the deltas of different bases; and in `s_gc_cruft_expire` git writes commits, then the three
+`blob 2` blobs, then trees, while rivet writes trees before blobs. Matching it means porting `compute_write_order`
+(tag chains, commit recency, trees, then families) plus the traversal order of the object list; not attempted in this block.
