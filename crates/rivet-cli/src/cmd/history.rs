@@ -352,6 +352,16 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     let mut options = WalkOptions::new();
     let spec = args.revision.as_str();
     let resolve = |text: &str| super::resolve_commit(&repository, text);
+    // Git names the whole argument, not the failing side, when a range endpoint is unknown.
+    let ambiguous = || {
+        anyhow::anyhow!(
+            "ambiguous argument '{spec}': unknown revision or path not in the working tree.\n\
+             Use '--' to separate paths from revisions, like this:\n\
+             'git <command> [<revision>...] -- [<file>...]'"
+        )
+    };
+    let resolve_range = |text: &str| resolve(text).map_err(|_| ambiguous());
+
     if args.all {
         for (_, oid) in repository.refs().list_all(repository.odb())? {
             if let Ok(commit) = repository.refs().peel_oid(oid, repository.odb())
@@ -366,13 +376,13 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
             starts.insert(0, head);
         }
     } else if let Some(negated) = spec.strip_prefix('^') {
-        options.exclude(resolve(negated)?);
+        options.exclude(resolve(negated).map_err(|_| anyhow::anyhow!("bad revision '{spec}'"))?);
         starts.push(resolve("HEAD")?);
     } else if spec.contains("...") {
         let (left, right) = spec.split_once("...").expect("checked");
         let (left, right) = (
-            resolve(if left.is_empty() { "HEAD" } else { left })?,
-            resolve(if right.is_empty() { "HEAD" } else { right })?,
+            resolve_range(if left.is_empty() { "HEAD" } else { left })?,
+            resolve_range(if right.is_empty() { "HEAD" } else { right })?,
         );
         starts.push(left);
         starts.push(right);
@@ -381,20 +391,24 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         }
     } else if spec.contains("..") {
         let (left, right) = spec.split_once("..").expect("checked");
-        options.exclude(resolve(if left.is_empty() { "HEAD" } else { left })?);
-        starts.push(resolve(if right.is_empty() { "HEAD" } else { right })?);
+        options.exclude(resolve_range(if left.is_empty() { "HEAD" } else { left })?);
+        starts.push(resolve_range(if right.is_empty() {
+            "HEAD"
+        } else {
+            right
+        })?);
     } else {
         // An unborn branch has an empty history, which `git log` reports as an error.
         match super::resolve_commit(&repository, spec) {
             Ok(oid) => starts.push(oid),
-            Err(error) => {
+            Err(_) => {
                 if spec == "HEAD" {
                     anyhow::bail!(
                         "your current branch '{}' does not have any commits yet",
                         super::head_reflog_label(&repository)?
                     );
                 }
-                return Err(error);
+                return Err(ambiguous());
             }
         }
     }

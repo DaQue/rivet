@@ -642,6 +642,12 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
     }
 
     let verbose = global.verbose && !global.quiet;
+    if verbose {
+        // Git reads each tip to print its subject and silently leaves out refs whose object is missing.
+        kept.retain(|r| {
+            r.symref.is_some() || r.oid.is_some_and(|oid| repository.odb().read(&oid).is_ok())
+        });
+    }
     let width = kept
         .iter()
         .filter(|r| r.symref.is_none())

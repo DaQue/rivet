@@ -461,18 +461,20 @@ pub fn run_remote(global: &GlobalArgs, args: &RemoteArgs) -> Result<i32> {
                 let config = repository
                     .remote_config(&name.to_string())?
                     .expect("listed remote exists");
-                let fetch = config
-                    .urls
-                    .first()
-                    .map(|u| u.to_string())
-                    .unwrap_or_default();
+                let fetch = config.urls.first().map(|u| u.to_string());
                 let push = config
                     .push_urls
                     .first()
                     .map(|u| u.to_string())
-                    .unwrap_or_else(|| fetch.clone());
-                println!("{name}\t{fetch} (fetch)");
-                println!("{name}\t{push} (push)");
+                    .or_else(|| fetch.clone());
+                // Git prints a bare `<name>\t` when the remote has no url at all.
+                match &fetch {
+                    Some(url) => println!("{name}\t{url} (fetch)"),
+                    None => println!("{name}\t"),
+                }
+                if let Some(url) = push {
+                    println!("{name}\t{url} (push)");
+                }
             } else {
                 println!("{name}");
             }

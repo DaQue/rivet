@@ -31,6 +31,19 @@ s_branch_ops() {
     v branch -D nope
     v branch 'bad..name'
     v branch --list 'f*'
+    # a branch whose tip object is missing: listing must carry on, not abort partway
+    echo 1111111111111111111111111111111111111111 >.git/refs/heads/ghost-with-a-long-name
+    v branch
+    v branch -v
+    v branch -v --merged
+    # ranges naming nothing: the error quotes the whole argument, as git does
+    v log '...x'
+    v log 'x...'
+    v log 'HEAD...x'
+    v log 'x..'
+    v log '..x'
+    v log x
+    v log '^x'
 }
 
 s_switch_checkout() {
@@ -254,6 +267,11 @@ s_remote_fetch_push() {
     v remote
     v remote remove up
     v remote
+    # a remote section with no url: git lists the name and a tab, with no (fetch) label
+    g config remote.nourl.fetch '+refs/heads/*:refs/remotes/nourl/*'
+    v remote -v
+    g config remote.nourl.pushurl ../origin.git
+    v remote -v
 }
 
 s_pull() {

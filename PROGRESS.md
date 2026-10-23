@@ -505,3 +505,11 @@ After: 30/30 PASS, plus 8 more runs of `s_gc_cruft` + `s_gc_after_cruft`, all `f
 `Dropped refs/stash@{0} (...)` after `stash pop -q`; real git prints nothing (verified with `/usr/bin/git`). `-q` now
 suppresses it; the scenario also compares `stash list` and `status --short` after each. Gate: fmt, clippy clean;
 215 tests passed / 0 failed; `scenarios.sh` 144 PASS / `failures: 0`.
+
+### Phase 1.2 — `remote -v` without url, `branch -v` on a missing object, `log` unknown-revision text (landed, scenarios `s_remote_fetch_push`, `s_branch_ops` extended)
+Each was red on the base against `/usr/bin/git`:
+- `remote -v` with `remote.nourl.fetch` only: git prints one line `nourl<TAB>` (no label); rivet printed `nourl<TAB> (fetch)` and `nourl<TAB> (push)`. With a pushurl git prints `nourl<TAB>` then `nourl<TAB>../origin.git (push)`.
+- `branch -v` with `refs/heads/ghost-with-a-long-name` naming a missing object: git silently omits it (also from the column width, and with `--merged`); rivet died with `fatal: object not found: 111...`.
+- `log '...x'`, `'x...'`, `'HEAD...x'`, `'x..'`, `'..x'`, `log x`: git says `ambiguous argument '<whole arg>': unknown revision or path not in the working tree.` + the `Use '--'` hint; rivet said `not a valid object name: 'x'`. `log '^x'`: git says `bad revision '^x'`.
+Gate: fmt, clippy clean; 215 tests passed / 0 failed; `scenarios.sh` 144 PASS / `failures: 0`.
+Not done: `branch --contains` is not accepted by rivet (`error: unexpected argument '--contains'`), found while probing; `log` of an existing non-commit object now also reports `ambiguous argument` (not compared with git).
