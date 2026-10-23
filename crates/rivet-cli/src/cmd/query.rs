@@ -893,7 +893,123 @@ pub struct MergeBaseArgs {
     /// Exit 0 if the first commit is an ancestor of the second, 1 if not.
     #[arg(long = "is-ancestor")]
     pub is_ancestor: bool,
+
+    /// Find where the commit forked from the history the given ref's reflog recorded.
+    #[arg(long = "fork-point")]
+    pub fork_point: bool,
 }
+
+/// The parents of a commit, empty when the object is not a readable commit.
+fn commit_parents(repository: &Repository, oid: ObjectId) -> Vec<ObjectId> {
+    let Ok(object) = repository.odb().read(&oid) else {
+        return Vec::new();
+    };
+    if object.kind() != ObjectKind::Commit {
+        return Vec::new();
+    }
+    Commit::parse(repository.format(), object.data())
+        .map(|c| c.parents)
+        .unwrap_or_default()
+}
+
+/// `start` and everything it reaches.
+fn commit_ancestors(
+    repository: &Repository,
+    start: impl IntoIterator<Item = ObjectId>,
+) -> HashSet<ObjectId> {
+    let mut seen: HashSet<ObjectId> = HashSet::new();
+    let mut stack: Vec<ObjectId> = start.into_iter().collect();
+    while let Some(oid) = stack.pop() {
+        if seen.insert(oid) {
+            stack.extend(commit_parents(repository, oid));
+        }
+    }
+    seen
+}
+
+/// Git's `get_fork_point`: the best common ancestor of `commit` and every commit the reflog of
+/// `refname` ever recorded, provided there is exactly one and it is one of those recorded commits.
+///
+/// The recorded commits are the first entry's old value and each entry's new value; a ref with no
+/// reflog contributes its current value.
+pub(super) fn fork_point(
+    repository: &Repository,
+    refname: &rivet_core::RefName,
+    commit: ObjectId,
+) -> Result<Option<ObjectId>> {
+    let mut candidates: Vec<ObjectId> = Vec::new();
+    let add = |oid: ObjectId, candidates: &mut Vec<ObjectId>| {
+        if oid.is_zero() || candidates.contains(&oid) {
+            return;
+        }
+        if let Ok(peeled) = repository.refs().peel_oid(oid, repository.odb())
+            && repository
+                .odb()
+                .read(&peeled)
+                .is_ok_and(|o| o.kind() == ObjectKind::Commit)
+            && !candidates.contains(&peeled)
+        {
+            candidates.push(peeled);
+        }
+    };
+    for (i, entry) in repository.refs().reflog(refname)?.iter().enumerate() {
+        if i == 0 {
+            add(entry.old, &mut candidates);
+        }
+        add(entry.new, &mut candidates);
+    }
+    if candidates.is_empty()
+        && let Ok(oid) = repository.refs().resolve_oid(refname)
+    {
+        add(oid, &mut candidates);
+    }
+    let theirs = commit_ancestors(repository, candidates.iter().copied());
+    let ours = commit_ancestors(repository, [commit]);
+    let common: HashSet<ObjectId> = ours.intersection(&theirs).copied().collect();
+    // The common ancestors are closed under "parent of", so the best ones are those no other
+    // common ancestor reaches through a parent.
+    let dominated = commit_ancestors(
+        repository,
+        common
+            .iter()
+            .flat_map(|oid| commit_parents(repository, *oid)),
+    );
+    let mut best = common.iter().filter(|oid| !dominated.contains(oid));
+    match (best.next(), best.next()) {
+        (Some(only), None) if candidates.contains(only) => Ok(Some(*only)),
+        _ => Ok(None),
+    }
+}
+
+/// The reference `name` names, trying the places Git looks in order.
+pub(super) fn dwim_ref_name(repository: &Repository, name: &str) -> Option<rivet_core::RefName> {
+    let candidates = [
+        name.to_string(),
+        format!("refs/{name}"),
+        format!("refs/tags/{name}"),
+        format!("refs/heads/{name}"),
+        format!("refs/remotes/{name}"),
+        format!("refs/remotes/{name}/HEAD"),
+    ];
+    candidates
+        .iter()
+        .filter_map(|c| rivet_core::RefName::from_bytes(c.as_bytes()).ok())
+        .find(|r| repository.refs().exists(r))
+}
+
+/// What `git merge-base` prints for a usage error, options included.
+const MERGE_BASE_USAGE: &str = "usage: git merge-base [-a | --all] <commit> <commit>...
+   or: git merge-base [-a | --all] --octopus <commit>...
+   or: git merge-base --is-ancestor <commit> <commit>
+   or: git merge-base --independent <commit>...
+   or: git merge-base --fork-point <ref> [<commit>]
+
+    -a, --[no-]all        output all common ancestors
+    --octopus             find ancestors for a single n-way merge
+    --independent         list revs not reachable from others
+    --is-ancestor         is the first one ancestor of the other?
+    --fork-point          find where <commit> forked from reflog of <ref>
+";
 
 /// Handler for `rivet merge-base`.
 ///
@@ -903,10 +1019,30 @@ pub struct MergeBaseArgs {
 /// an unknown commit.
 pub fn run_merge_base(global: &GlobalArgs, args: &MergeBaseArgs) -> Result<i32> {
     let repository = super::open(global)?;
+    if args.fork_point {
+        if args.commits.is_empty() || args.commits.len() > 2 || args.is_ancestor {
+            eprintln!("{MERGE_BASE_USAGE}");
+            return Ok(129);
+        }
+        let Some(refname) = dwim_ref_name(&repository, &args.commits[0]) else {
+            eprintln!("fatal: No such ref: '{}'", args.commits[0]);
+            return Ok(128);
+        };
+        let spec = args.commits.get(1).map_or("HEAD", String::as_str);
+        let Ok(commit) = super::resolve_commit(&repository, spec) else {
+            eprintln!("fatal: Not a valid object name: '{spec}'");
+            return Ok(128);
+        };
+        return Ok(match fork_point(&repository, &refname, commit)? {
+            Some(oid) => {
+                write_stdout(format!("{oid}\n").as_bytes())?;
+                0
+            }
+            None => 1,
+        });
+    }
     if args.commits.len() < 2 {
-        eprintln!(
-            "usage: git merge-base [-a | --all] <commit> <commit>...\n   or: git merge-base [-a | --all] --octopus <commit>...\n   or: git merge-base --is-ancestor <commit> <commit>\n   or: git merge-base --independent <commit>...\n   or: git merge-base --fork-point <ref> [<commit>]\n"
-        );
+        eprintln!("{MERGE_BASE_USAGE}");
         return Ok(129);
     }
     if args.commits.len() != 2 {

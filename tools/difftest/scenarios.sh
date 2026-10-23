@@ -4276,12 +4276,81 @@ s_checkout_orphan_reflog() {
     v reflog show HEAD
 }
 
+# `pull --rebase` replays only the commits after the fork point: when upstream rewrote a commit
+# that is already in the local branch, that old commit is dropped (git's `merge-base --fork-point`
+# over the upstream branch's reflog), not replayed on top of its own rewrite.
+s_pull_rebase_fork_point() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    v clone -q origin.git repo
+    cd repo
+    (cd ../seed && tick && echo b >b && g add b && g commit -qm two && g push -q origin HEAD:main 2>/dev/null)
+    v fetch -q
+    v merge -q --ff-only origin/main
+    tick; echo l1 >l1; v add l1; v commit -q -m local1
+    tick; echo l2 >l2; v add l2; v commit -q -m local2
+    # upstream rewrites "two" and adds a commit on top of the rewrite
+    (cd ../seed && g reset -q --hard HEAD~1 && tick && echo b2 >b2 && g add b2 && g commit -qm two-rewritten && tick && echo c >c && g add c && g commit -qm three && g push -q -f origin HEAD:main 2>/dev/null)
+    v pull --rebase
+    v log --format='%h %p %s'
+    v status --short
+    v reflog
+    v ls-files
+    # rewritten once more, no local commits left to keep except the replayed ones
+    (cd ../seed && g reset -q --hard HEAD~1 && tick && echo c2 >c2 && g add c2 && g commit -qm three-rewritten && g push -q -f origin HEAD:main 2>/dev/null)
+    v pull --rebase
+    v log --format='%h %p %s'
+    v status --short
+    v reflog
+}
+
+# merge-base --fork-point: the best common ancestor of a commit and every tip the ref's reflog
+# recorded, only if there is exactly one and it is one of those recorded tips.
+s_merge_base_fork_point() {
+    g init -q repo; cd repo
+    echo 0 >f; g add f; g commit -q -m root
+    tick; echo 1 >f; g commit -q -a -m a1; a1=$(g rev-parse HEAD)
+    tick; echo 2 >f; g commit -q -a -m a2; a2=$(g rev-parse HEAD)
+    g branch up "$a1"
+    g update-ref -m step1 refs/heads/up "$a2"
+    g checkout -q -b mine "$a1"
+    tick; echo m >m; g add m; g commit -q -m mine1
+    tick; echo m2 >>m; g commit -q -a -m mine2
+    # upstream rewritten: a1 -> a2 -> b1 (unrelated to a2)
+    g checkout -q "$(g rev-parse HEAD~2)"
+    tick; echo rewritten >f; g commit -q -a -m b1; b1=$(g rev-parse HEAD)
+    g update-ref -m rewrite refs/heads/up "$b1"
+    g checkout -q mine
+    v merge-base --fork-point up
+    v merge-base --fork-point up mine
+    v merge-base --fork-point refs/heads/up HEAD~1
+    v merge-base --fork-point up "$a2"
+    v merge-base --fork-point up root 2>/dev/null
+    v merge-base --fork-point nosuchref
+    v merge-base --fork-point up nosuchcommit
+    v merge-base --fork-point
+    v merge-base --fork-point --all up
+    # a ref without a reflog uses its current value
+    g tag lone "$a1"
+    v merge-base --fork-point lone
+    v merge-base --fork-point lone "$b1"
+    # more than one best common ancestor: no fork point
+    g checkout -q -b left "$a1"; tick; echo l >l; g add l; g commit -q -m left
+    g checkout -q -b right "$a1"; tick; echo r >r; g add r; g commit -q -m right
+    g checkout -q -b crossa left; g merge -q --no-edit right >/dev/null 2>&1
+    g checkout -q -b crossb right; g merge -q --no-edit left >/dev/null 2>&1
+    g update-ref -m x refs/heads/watch crossa; g update-ref -m y refs/heads/watch crossb
+    v merge-base --fork-point watch left
+    v merge-base --fork-point watch HEAD
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
 for s in "$@"; do
     case $s in
-        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
+        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
         s_pack_deltas) run_scenario "$s" origin cl cl2 ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         *) run_scenario "$s" ;;

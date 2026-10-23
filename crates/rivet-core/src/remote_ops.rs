@@ -155,9 +155,11 @@ pub struct RefChange {
 impl RefChange {
     /// Render for `fetch`, with the source column padded to `width`.
     pub fn fetch_line(&self, width: usize) -> String {
+        // Git sets a parenthesised note off with two spaces when fetching (one when pushing).
+        let separator = if self.note.is_empty() { "" } else { " " };
         format!(
-            " {} {:<17} {:<width$} -> {}{}",
-            self.flag, self.summary, self.from, self.to, self.note
+            " {} {:<17} {:<width$} -> {}{}{}",
+            self.flag, self.summary, self.from, self.to, separator, self.note
         )
     }
 

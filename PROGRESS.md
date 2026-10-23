@@ -660,3 +660,14 @@ Caveat (approximation, not exact): git also lists the index's *cache-tree* trees
 index as cached only when it equals `HEAD`'s tree exactly (HEAD read from the walk tips, as the ref store snapshot is stale after `pack_refs`). Partially valid caches
 (some directories invalidated) are not reproduced; no scenario hits that.
 Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored (2 new unit tests for the ordering); `scenarios.sh` 162 PASS / `failures: 0`; the five gc scenarios passed 3 runs in a row.
+
+### Phase 2.1 — `pull --rebase` fork point, `merge-base --fork-point`, fetch note spacing (landed, scenarios `s_pull_rebase_fork_point`, `s_merge_base_fork_point`)
+Base, `s_pull_rebase_fork_point` (upstream rewrote `two` after two local commits were made on top of it): rivet rebased `--onto <fetched tip> <fetched tip>`, so the old `two` was
+replayed (`Rebasing (1/3)…`, log had a stray `two` commit, `ls-files` had `b`); git replays only `local1`, `local2` (`Rebasing (1/2)`). The same scenario showed fetch printing
+`(forced update)` after one space where git prints two (`main       -> origin/main  (forced update)`); push keeps one. `fetch_line` now separates a note with two spaces.
+`merge-base --fork-point <ref> [<commit>]` is implemented as git's `get_fork_point` (candidates = first reflog entry's old value + every entry's new value, or the ref itself when it has no
+reflog; exactly one best common ancestor of the commit and all of them, and it must be one of the candidates). `pull --rebase` computes it before the fetch from
+`refs/remotes/<remote>/<branch>` and uses it as the rebase upstream. The merge-base usage text now includes git's option list. `--fork-point` also accepts `-a/--all` like git (ignored).
+Not done: the fork point is only computed when `pull` has no explicit refspec arguments and the remote is the branch's configured one; `git pull --rebase <remote> <branch>` still rebases onto the
+fetched tip alone. The tracking ref is taken from the default `+refs/heads/*:refs/remotes/<remote>/*` mapping, not from a customised `remote.<name>.fetch`.
+Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored; `scenarios.sh` 164 PASS / `failures: 0`.

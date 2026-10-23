@@ -923,6 +923,23 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         pack_refs: false,
         action: command_action("pull"),
     };
+    // `git pull --rebase` replays only what follows the fork point of HEAD from the upstream
+    // branch's reflog (`merge-base --fork-point`), and reads it before the fetch moves that ref.
+    let fork_point = match (&upstream, repository.head()?.oid()) {
+        (Some((upstream_remote, merge)), Some(head_oid))
+            if rebase && args.refspecs.is_empty() && *upstream_remote == remote =>
+        {
+            rivet_core::remote::tracking_ref_name(
+                BStr::new(remote.as_bytes()),
+                BStr::new(merge.as_bytes()),
+            )
+            .and_then(|name| rivet_core::RefName::from_bstring(name).ok())
+            .map(|name| super::query::fork_point(&repository, &name, head_oid))
+            .transpose()?
+            .flatten()
+        }
+        _ => None,
+    };
     let report = repository.fetch_remote(&remote, &request)?;
     print_fetch_report(&report, global.quiet);
     if args.dry_run {
@@ -947,14 +964,15 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         anyhow::bail!("pull: merging more than one branch is not implemented");
     }
     if rebase && !repository.is_ancestor(repository.head()?.oid().unwrap_or(theirs), theirs)? {
-        // `git pull --rebase` is `git rebase --onto <fetched tip> <fetched tip>` under its own name.
+        // `git pull --rebase` is `git rebase --onto <fetched tip> <fork point or fetched tip>` under its own name.
         super::rebase::set_action(if args.rebase { "pull --rebase" } else { "pull" });
         let hex = theirs.to_string();
+        let upstream_hex = fork_point.map_or_else(|| hex.clone(), |oid| oid.to_string());
         drop(repository);
         return super::rebase::run_rebase(
             global,
             &super::rebase::RebaseArgs {
-                upstream: Some(hex.clone()),
+                upstream: Some(upstream_hex),
                 branch: None,
                 onto: Some(hex),
                 continue_rebase: false,
