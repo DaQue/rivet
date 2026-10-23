@@ -61,6 +61,14 @@ pub struct RebaseArgs {
     #[arg(long = "skip")]
     pub skip: bool,
 
+    /// Forget the rebase in progress without touching `HEAD` or the work tree.
+    #[arg(long = "quit")]
+    pub quit: bool,
+
+    /// Show the patch of the commit the rebase stopped at.
+    #[arg(long = "show-current-patch")]
+    pub show_current_patch: bool,
+
     /// Stash local changes before the rebase and apply them afterwards.
     #[arg(long = "autostash")]
     pub autostash: bool,
@@ -183,12 +191,20 @@ fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<Commit> {
 pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
     let mut repository = super::open(global)?;
     let dir = rebase_dir(&repository);
-    let controls = [args.continue_rebase, args.abort, args.skip]
-        .iter()
-        .filter(|on| **on)
-        .count();
+    let controls = [
+        args.continue_rebase,
+        args.abort,
+        args.skip,
+        args.quit,
+        args.show_current_patch,
+    ]
+    .iter()
+    .filter(|on| **on)
+    .count();
     if controls > 1 {
-        anyhow::bail!("options '--continue', '--abort' and '--skip' cannot be used together");
+        anyhow::bail!(
+            "options '--continue', '--abort', '--skip', '--quit' and '--show-current-patch' cannot be used together"
+        );
     }
     if controls == 1 {
         if !dir.is_dir() {
@@ -197,6 +213,38 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
         }
         if args.abort {
             return abort(&mut repository, &dir);
+        }
+        if args.quit {
+            // The rebase is forgotten where it stands: git leaves `REBASE_HEAD`, `MERGE_MSG` and
+            // `AUTO_MERGE` behind. An autostash is kept as a stash entry.
+            let stash = saved_autostash(&repository, &dir);
+            std::fs::remove_dir_all(&dir)?;
+            if let Some(stash) = stash {
+                super::stash::autostash_store(&repository, stash, "autostash")?;
+                eprintln!(
+                    "Autostash exists; creating a new stash entry.\nYour changes are safe in the stash.\nYou can run \"git stash pop\" or \"git stash drop\" at any time."
+                );
+            }
+            return Ok(0);
+        }
+        if args.show_current_patch {
+            drop(repository);
+            return super::history::run_show(
+                global,
+                &super::history::ShowArgs {
+                    object: "REBASE_HEAD".to_string(),
+                    paths: Vec::new(),
+                    pretty: None,
+                    no_patch: false,
+                    context: None,
+                    format: None,
+                    abbrev: None,
+                    stat: false,
+                    name_only: false,
+                    name_status: false,
+                    date: None,
+                },
+            );
         }
         if args.skip {
             let head = repository.head()?.oid();

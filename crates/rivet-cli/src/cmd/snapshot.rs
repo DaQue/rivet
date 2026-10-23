@@ -1017,7 +1017,22 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         if !rivet_core::merge_in_progress(repository.git_dir()) && !cherry_picking {
             println!("  (use \"git restore --staged <file>...\" to unstage)");
         }
-        println!("  (use \"git add <file>...\" to mark resolution)");
+        // Which verb git suggests depends on how the paths were deleted: `add` alone, `rm` alone
+        // when every path is deleted on both sides, `add/rm` as soon as one side kept a change.
+        let both_deleted = unmerged.iter().any(|(_, _, l)| *l == "both deleted:");
+        let one_deleted = unmerged
+            .iter()
+            .any(|(_, _, l)| *l == "deleted by us:" || *l == "deleted by them:");
+        let not_deleted = unmerged
+            .iter()
+            .any(|(_, _, l)| !l.starts_with("both deleted") && !l.starts_with("deleted by"));
+        if !both_deleted && !one_deleted {
+            println!("  (use \"git add <file>...\" to mark resolution)");
+        } else if both_deleted && !one_deleted && !not_deleted {
+            println!("  (use \"git rm <file>...\" as appropriate to mark resolution)");
+        } else {
+            println!("  (use \"git add/rm <file>...\" as appropriate to mark resolution)");
+        }
         for (path, _, label) in &unmerged {
             println!("\t{:<17}{}", label, q(path, false));
         }

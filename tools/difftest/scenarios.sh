@@ -4540,6 +4540,45 @@ s_checkout_head() {
     v reflog
 }
 
+# Conflict kinds other than plain content during a rebase, and the steps around them.
+s_rebase_conflict_kinds() {
+    v init -q repo; cd repo
+    printf '1\n2\n3\n' >f; printf 'x\n' >gone; printf 'r1\nr2\nr3\nr4\nr5\nr6\n' >old; echo k >keep; v add .; v commit -q -m base
+    v branch topic
+    tick; git rm -q gone; echo added >new; v add new; git mv old moved; printf 'r1\nr2\nr3\nr4\nr5\nmain\n' >moved; git add moved; v commit -q -m "main: delete, add, rename"
+    v switch -q topic
+    tick; echo changed >gone; v commit -q -a -m "topic edits gone"
+    tick; echo other >new; v add new; v commit -q -m "topic adds new"
+    tick; printf 'topic\nr2\nr3\nr4\nr5\nr6\n' >old; v commit -q -a -m "topic edits old"
+    v rebase main
+    v status
+    v status --short
+    git rm -q -f gone 2>/dev/null
+    v rebase --continue
+    v status --short
+    cat new
+    echo merged >new; git add new
+    v rebase --continue
+    v status --short
+    v diff --stat HEAD
+    ls
+    v rebase --quit
+    v rebase --abort
+    v status
+    v rebase --show-current-patch
+    v log --oneline --graph --all
+    # stop again: look at the patch, then walk away with --quit
+    v reset -q --hard "$(g rev-parse topic@{1})" 2>/dev/null || v reset -q --hard HEAD
+    v switch -q topic
+    v rebase main
+    v rebase --show-current-patch
+    v rebase --quit
+    ls .git | grep -i -E 'rebase|AUTO_MERGE|MERGE_MSG'
+    v status --short
+    v reflog -3
+    v rebase --abort
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

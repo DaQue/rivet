@@ -683,3 +683,9 @@ Reflog action of a `pull`-driven rebase is now the whole command line (`pull --r
 Found with the new pull scenario: `checkout HEAD` / `checkout @` detached `HEAD` and wrote a reflog line; git treats it as no move at all (nothing printed but `M\tpath` lines, no reflog entry, attached stays attached; `-f` resets the tree). Fixed.
 Not done: `merge --autostash` with `--squash` or `--no-commit` and `pull --autostash --squash` are refused with an explicit "not implemented" error; `rebase --autostash` with `--interactive`/`--root` does not exist yet (those are not implemented at all).
 Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored; `scenarios.sh` 168 PASS / `failures: 0`.
+
+### Phase 2.3 — rebase `--quit` / `--show-current-patch`, unmerged-path hint in `status` (landed, scenario `s_rebase_conflict_kinds`)
+Base: `rebase --quit` and `--show-current-patch` were `unexpected argument`; `status` during a rebase (and a merge) with a `deleted by us/them` path said `(use "git add <file>..." to mark resolution)` where git says
+`(use "git add/rm <file>..." as appropriate to mark resolution)` (`git rm` alone when every path is deleted on both sides). `--quit` forgets `.git/rebase-merge` and leaves `REBASE_HEAD`, `MERGE_MSG`, `AUTO_MERGE` (checked against git);
+`--show-current-patch` is `show REBASE_HEAD`. The scenario also covers modify/delete, add/add and a rename with an edit on the other side.
+Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored; `scenarios.sh` 169 PASS / `failures: 0`.

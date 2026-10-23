@@ -983,6 +983,8 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
                 continue_rebase: false,
                 abort: false,
                 skip: false,
+                quit: false,
+                show_current_patch: false,
                 autostash: args.autostash,
                 no_autostash: args.no_autostash,
             },
