@@ -638,3 +638,12 @@ Verified against ~700 random histories with `%s%n`, `%h%n%b`, `%h:%s%n%b---%n`, 
 Known gap (pre-existing, not fixed): `--graph --format=format:%s` (separator, not terminator, semantics) over a merge draws an extra `| | ` row and glues the next
 commit onto the previous text; `format:%s%n%b` matches. Not derived: git emits the separator after the next commit's graph update, rivet before.
 Gate after: fmt, clippy, doc clean; 219 passed / 0 failed / 0 ignored; `scenarios.sh` 159 PASS / `failures: 0`.
+
+### Phase 1.5 — `rm -r .` (landed, scenario `s_rm_whole_tree`, commit `dcea4e3`)
+Base had the work committed from the handoff tree: `rm -r .` was refused and emptied directories were left behind; now it matches git (same `rm 'path'` lines and order, exit 0, work-tree root never unlinked).
+
+### Phase 1.6 — `switch`/`checkout` unmerged path stream; `checkout --orphan` (landed, scenarios `s_switch_unmerged_stream`, `s_checkout_orphan_reflog`)
+- `<path>: needs merge` goes to stdout (git), only `error: you need to resolve your current index first` stays on stderr. Probed with `/usr/bin/git` (index conflict with `MERGE_HEAD` removed; with `MERGE_HEAD` present `switch` instead dies `fatal: cannot switch branch while merging`, exit 128). Base transcript showed the line under `--- stderr` for `switch`, `checkout` and `switch --detach`.
+- Orphan: git writes no reflog line at all (not in `logs/HEAD`, no `logs/refs/heads/<name>`); rivet wrote `checkout: moving from main to fresh`. Also found on the base: `checkout --orphan` emptied the index and work tree, but git keeps them (files show as `A  a`, `A  b`); only `switch --orphan` empties. Both fixed (`orphan_branch(.., empty_tree)`), and the following `checkout main` reflog label (`moving from second to main`) is compared.
+Known gaps found while probing (not fixed): with unmerged paths and no `MERGE_HEAD`, `switch -c new` makes rivet print `M\tc1` and leave `MERGE_MSG`/`MERGE_MODE` behind, while git prints nothing extra and removes them; `rev-parse --abbrev-ref HEAD` is rejected by rivet's argument parser (`<ARG>...` required); `symbolic-ref` is not implemented.
+Gate after: fmt, clippy, doc clean; 219 passed / 0 failed / 0 ignored; `scenarios.sh` 162 PASS / `failures: 0`.

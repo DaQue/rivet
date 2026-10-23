@@ -4230,6 +4230,45 @@ s_pull_squash() {
     v log --oneline
 }
 
+# Unmerged paths without MERGE_HEAD: git prints "<path>: needs merge" on stdout and only the
+# "error: you need to resolve ..." line on stderr, for both checkout and switch.
+s_switch_unmerged_stream() {
+    v init -q repo; cd repo
+    echo base >c1; v add c1; v commit -q -m base
+    v branch other; v branch side
+    echo main >c1; v commit -q -a -m main
+    v switch -q side; echo side >c1; v commit -q -a -m side
+    v switch -q main
+    v merge side
+    rm -f .git/MERGE_HEAD
+    v status --short
+    v switch other
+    v checkout other
+    v switch --detach other
+    v status --short
+}
+
+# `checkout --orphan` creates no reflog entry: neither HEAD's log nor the new branch's own log
+# gets a line (compare .git/logs/HEAD and the absence of logs/refs/heads/<name> via the state).
+s_checkout_orphan_reflog() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    tick; echo b >b; v add b; v commit -q -m two
+    v checkout --orphan fresh
+    v status --short
+    cat .git/HEAD
+    cat .git/logs/HEAD
+    test -e .git/logs/refs/heads/fresh && echo "branch log exists" || echo "no branch log"
+    tick; v commit -q -m root
+    v reflog show HEAD
+    v reflog show fresh
+    v log --oneline
+    v switch --orphan second
+    v status --short
+    v checkout main
+    v reflog show HEAD
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

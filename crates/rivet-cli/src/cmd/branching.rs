@@ -722,7 +722,7 @@ pub fn run_switch(global: &GlobalArgs, args: &SwitchArgs) -> Result<i32> {
     let mut repository = super::open(global)?;
 
     if let Some(orphan) = &args.orphan {
-        return orphan_branch(&mut repository, orphan, global.quiet);
+        return orphan_branch(&mut repository, orphan, global.quiet, true);
     }
 
     if let Some(new) = args.create.as_ref().or(args.force_create.as_ref()) {
@@ -850,7 +850,7 @@ pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
     let mut repository = super::open(global)?;
 
     if let Some(orphan) = &args.orphan {
-        return orphan_branch(&mut repository, orphan, global.quiet);
+        return orphan_branch(&mut repository, orphan, global.quiet, false);
     }
 
     if let Some(new) = args.create.as_ref().or(args.force_create.as_ref()) {
@@ -1549,7 +1549,7 @@ pub(super) fn report_checkout_refusal(error: rivet_core::Error, op: &str) -> Res
             Ok(1)
         }
         rivet_core::Error::UnmergedPath { path } => {
-            eprintln!("{path}: needs merge");
+            println!("{path}: needs merge");
             eprintln!("error: you need to resolve your current index first");
             Ok(1)
         }
@@ -1776,30 +1776,37 @@ fn checkout_new_branch(
     Ok(0)
 }
 
-fn orphan_branch(repository: &mut Repository, name: &str, quiet: bool) -> Result<i32> {
+fn orphan_branch(
+    repository: &mut Repository,
+    name: &str,
+    quiet: bool,
+    empty_tree: bool,
+) -> Result<i32> {
     let branch = valid_branch_name(name)?;
     if repository.refs().exists(&branch) {
         anyhow::bail!("a branch named '{name}' already exists");
     }
-    // `switch --orphan` starts from an empty tree: every tracked file goes.
-    let root = repository.worktree()?.require_root("switch")?.to_path_buf();
-    let paths: Vec<BString> = repository
-        .index()
-        .entries()
-        .iter()
-        .map(|e| e.path.clone())
-        .collect();
-    for path in &paths {
-        let path_ref = BStr::new(&path[..]);
-        if repository.worktree()?.stat(path_ref)?.is_some() {
-            rivet_core::worktree::checkout::remove_path(repository.worktree()?, path_ref)?;
-            rivet_core::ops::prune_empty_dirs(&root, path_ref);
+    // `switch --orphan` starts from an empty tree: every tracked file goes. `checkout --orphan`
+    // keeps the index and the work tree, so the old files show up as staged additions.
+    if empty_tree {
+        let root = repository.worktree()?.require_root("switch")?.to_path_buf();
+        let paths: Vec<BString> = repository
+            .index()
+            .entries()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        for path in &paths {
+            let path_ref = BStr::new(&path[..]);
+            if repository.worktree()?.stat(path_ref)?.is_some() {
+                rivet_core::worktree::checkout::remove_path(repository.worktree()?, path_ref)?;
+                rivet_core::ops::prune_empty_dirs(&root, path_ref);
+            }
         }
+        repository.reset_index_to_tree(None)?;
     }
-    repository.reset_index_to_tree(None)?;
-    let from = super::head_reflog_label(repository)?;
-    let reason = format!("checkout: moving from {from} to {name}");
-    repository.point_head(HeadTarget::Branch(&branch), BStr::new(reason.as_bytes()))?;
+    // Git writes no reflog line for an orphan switch: neither HEAD's nor the new branch's.
+    repository.refs().set_head(&branch, None)?;
     if !quiet {
         eprintln!("Switched to a new branch '{name}'");
     }
