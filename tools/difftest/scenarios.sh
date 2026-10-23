@@ -3938,6 +3938,9 @@ s_log_decorate() {
     g tag light side1
     g update-ref refs/remotes/origin/main main~1
     g update-ref refs/stash main~3
+    # Git decorates only branches, remote branches, tags and the stash: other namespaces stay hidden.
+    g update-ref refs/foo/bar main~2
+    g update-ref refs/notes/commits main~2
     v log --oneline --decorate
     v log --decorate
     v log --oneline --decorate=short
@@ -3952,6 +3955,79 @@ s_log_decorate() {
     v switch -q --detach main~1
     v log --oneline --decorate -4
     v log --oneline --decorate=bogus
+}
+
+s_log_color() {
+    graph_fixture
+    g config gc.auto 0
+    g tag -a annot -m "annotated" main~2
+    g tag light side1
+    g update-ref refs/remotes/origin/main main~1
+    g update-ref refs/stash main~3
+    v log --color=always --oneline --decorate
+    v log --color=always --decorate
+    v log --color=always --oneline
+    v log --color=always
+    v log --color --oneline --decorate -3
+    v log --color=always --oneline --decorate=full -4
+    v log --color=always --pretty=oneline --decorate
+    v log --color=always --pretty=short --decorate -3
+    v log --color=always --pretty=fuller -2
+    v log --color=always --format='%h%d %s'
+    v log --color=always --oneline --graph --decorate --all
+    v log --color=always --graph --decorate --all
+    v log --color=always --graph --pretty=fuller --all
+    v log --color=always --graph --format='%h %p %s' --all
+    v log --color=always --graph --oneline -3
+    v log --color=always --graph --oneline main..side1
+    v log --color=never --oneline --decorate
+    v log --color=auto --graph --oneline --decorate
+    v log --color=always --no-color --oneline
+    v log --no-color --color=always --oneline -2
+    v log --color=bogus --oneline
+    v switch -q --detach main~1
+    v log --color=always --oneline --decorate -4
+    v switch -q main
+    # color.ui and the per-slot colours
+    g config color.ui always
+    v log --oneline --decorate --graph
+    v log --oneline --no-color
+    v log --oneline --color=never
+    g config color.ui true
+    v log --oneline --decorate
+    g config color.ui false
+    v log --oneline --decorate
+    v log --oneline --decorate --color=always -2
+    g config color.ui always
+    g config color.diff.commit "bold blue"
+    g config color.decorate.tag red
+    g config color.decorate.branch "bold #ff8000"
+    g config color.decorate.head cyan
+    g config color.decorate.remotebranch 200
+    g config color.decorate.stash ul
+    v log --oneline --decorate --graph --all
+    v log --decorate -3
+    g config color.diff.commit normal
+    v log --oneline -2
+    g config color.diff.commit "ul bold italic"
+    v log --oneline -2
+    g config color.diff.commit "brightred white"
+    v log --oneline -2
+    g config color.ui bogus
+    v log --oneline -2
+}
+
+s_log_graph_roots_color() {
+    roots_fixture
+    root a; c a2 a
+    root b
+    root c; c c2 c
+    g switch -q a
+    tick; g merge -q --allow-unrelated-histories --no-ff -m "merge c into a" c >/dev/null
+    root d
+    v log --color=always --graph --oneline --all
+    v log --color=always --graph --all
+    v log --color=always --graph --oneline --decorate --all
 }
 
 s_merge_squash() {

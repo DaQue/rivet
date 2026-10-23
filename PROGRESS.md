@@ -602,3 +602,20 @@ Found while probing, NOT fixed (each reproduces without any root commit unless n
 - `log --graph --format='%h %s%n%b'` on a merge commit with an empty body: git draws the empty body line with graph columns (`| | `), rivet drops that line.
 - `log --graph --date-order` and `--first-parent` with several tips: rivet's commit order differs from git's, so the drawing differs (ordering issue in the walk, not in the graph code).
 - `rivet log` accepts a single revision only (`log a b` is `unexpected argument`).
+
+### Phase 0.2 — `log` colour (landed, scenarios `s_log_color`, `s_log_graph_roots_color`, `s_log_decorate` extended)
+Base: `rivet log --color=always …` died with `error: unexpected argument '--color' found` (exit 2) and `color.ui=always` was ignored, so
+`git -c color.ui=always log --graph --oneline --decorate` and rivet differed on every line. Now `--color[=always|never|auto]`, `--no-color` (last one wins) and
+`color.ui` (`always`/`never`/`auto`/boolean; `true`/`auto` paint only on a tty) paint exactly what git prints, byte for byte:
+- the `commit <id>` line (medium/short/full/fuller) and the id of `--oneline`/`--pretty=oneline` in the commit colour (yellow), each followed by a plain reset;
+- decorations piece by piece: `(`, `, `, `)` and ` -> ` in the commit colour, `HEAD` bold cyan, local branch bold green, remote branch bold red, `tag: ` and the tag name bold yellow, `refs/stash` bold magenta;
+- the graph columns (their colours and the `\` connector row of a shifted root were already right; 0 differences over ~400 random coloured histories);
+- `Author:`, `Date:`, `Merge:`, the message and `--format=…%d` (no `%C…` support) stay plain, as in git.
+`color.diff.commit` and `color.decorate.{HEAD,branch,remoteBranch,tag,stash}` are honoured (names, `bright*`, 0–255, `#rrggbb`, `bold dim italic ul blink reverse strike`, `normal`, `reset`;
+unit test `color_specs_match_what_git_prints` pins sequences taken from git). `--color=bogus` prints git's `error: option `color' expects …` and exits 129;
+`color.ui=bogus` dies with `bad boolean config value 'bogus' for 'color.ui'`.
+Found by the scenario and fixed on the way (red on the base against git): `--decorate` listed refs outside `refs/heads|remotes|tags|stash` (`refs/foo/bar`, `refs/notes/…`);
+git decorates none of them, so now only those four namespaces decorate.
+Known gaps: coloured diffs — `log --color=always -p|--stat|--name-*` dies with `log: coloured diff output is not implemented` rather than printing uncoloured diffs under a coloured header;
+an invalid `color.*` value dies with `unable to parse '<key>'…` (git also names the file and line); negated attributes (`no-bold`) in a colour spec are refused.
+Gate after: fmt, clippy, doc clean; 219 passed / 0 failed / 0 ignored; `scenarios.sh` 158 PASS / `failures: 0`.

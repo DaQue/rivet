@@ -138,6 +138,14 @@ pub struct LogArgs {
     /// Print the commit graph's graph, as `git log --graph` does.
     #[arg(long = "graph")]
     pub graph: bool,
+
+    /// Paint the output: `always`, `never` or `auto` (a bare `--color` means `always`).
+    #[arg(long = "color", value_name = "WHEN", require_equals = true, num_args = 0..=1, overrides_with = "no_color")]
+    pub color: Option<Option<String>>,
+
+    /// Do not paint the output.
+    #[arg(long = "no-color", overrides_with = "color")]
+    pub no_color: bool,
 }
 
 /// Arguments to `rivet show`.
@@ -490,6 +498,16 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     } else {
         Default::default()
     };
+    let palette = match log_color(&repository, args)? {
+        Ok(false) => None,
+        Ok(true) => {
+            if diff_mode.is_some() {
+                anyhow::bail!("log: coloured diff output is not implemented");
+            }
+            Some(log_palette(&repository)?)
+        }
+        Err(code) => return Ok(code),
+    };
     let shifts = if args.graph {
         root_shifts(&repository, &oids, args.first_parent)?
     } else {
@@ -497,7 +515,7 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     };
     let mut graph = args
         .graph
-        .then(|| super::graph::Graph::new(false, args.first_parent));
+        .then(|| super::graph::Graph::new(palette.is_some(), args.first_parent));
     let mut out = Vec::new();
     for (position, oid) in oids.iter().enumerate() {
         let commit = read_commit(&repository, oid)?;
@@ -524,9 +542,12 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
             &layout,
             oid,
             &commit,
-            date,
-            full_ids,
-            &decorations,
+            &Look {
+                date,
+                full_ids,
+                decorations: &decorations,
+                palette: palette.as_ref(),
+            },
         );
         match graph.as_mut() {
             Some(graph) => {
@@ -584,9 +605,12 @@ pub(super) fn squash_message(
             &pretty::Layout::Medium,
             oid,
             &commit,
-            "default",
-            false,
-            &Default::default(),
+            &Look {
+                date: "default",
+                full_ids: false,
+                decorations: &Default::default(),
+                palette: None,
+            },
         ));
     }
     Ok(out)
@@ -1162,10 +1186,11 @@ fn layout_uses_decorations(layout: &pretty::Layout) -> bool {
 fn decoration_map(
     repository: &Repository,
     full: bool,
-) -> Result<std::collections::HashMap<ObjectId, Vec<String>>> {
+) -> Result<std::collections::HashMap<ObjectId, Vec<pretty::Decoration>>> {
+    use pretty::Shade;
     let mut refs = repository.refs().list_all(repository.odb())?;
     refs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-    let mut map: std::collections::HashMap<ObjectId, Vec<String>> = Default::default();
+    let mut map: std::collections::HashMap<ObjectId, Vec<pretty::Decoration>> = Default::default();
     let head = repository.head()?;
     for (name, oid) in refs.iter().rev() {
         let bytes = name.as_bytes();
@@ -1176,24 +1201,31 @@ fn decoration_map(
                 String::from_utf8_lossy(bytes).into_owned()
             }
         };
-        let label = if bytes.starts_with(b"refs/tags/") {
-            format!("tag: {}", shown(true))
-        } else if bytes.starts_with(b"refs/heads/") || bytes.starts_with(b"refs/remotes/") {
-            shown(true)
-        } else if bytes.starts_with(b"refs/notes/") || bytes.starts_with(b"refs/prefetch/") {
+        let mut pieces = Vec::new();
+        if bytes.starts_with(b"refs/tags/") {
+            pieces.push((Shade::Tag, "tag: ".to_string()));
+            pieces.push((Shade::Tag, shown(true)));
+        } else if bytes.starts_with(b"refs/heads/") {
+            pieces.push((Shade::Branch, shown(true)));
+        } else if bytes.starts_with(b"refs/remotes/") {
+            pieces.push((Shade::Remote, shown(true)));
+        } else if bytes.starts_with(b"refs/stash") {
+            pieces.push((Shade::Stash, shown(false)));
+        } else {
+            // Git decorates only branches, remote branches, tags and the stash.
             continue;
-        } else {
-            shown(false)
-        };
-        let label = match head.branch() {
-            Some(branch) if branch == name => format!("HEAD -> {label}"),
-            _ => label,
-        };
+        }
+        let is_head = matches!(head.branch(), Some(branch) if branch == name);
+        if is_head {
+            pieces.insert(0, (Shade::Commit, " -> ".to_string()));
+            pieces.insert(0, (Shade::Head, "HEAD".to_string()));
+        }
         let list = map.entry(*oid).or_default();
-        if label.starts_with("HEAD -> ") {
-            list.insert(0, label);
+        let decoration = pretty::Decoration { pieces };
+        if is_head {
+            list.insert(0, decoration);
         } else {
-            list.push(label);
+            list.push(decoration);
         }
     }
     if let rivet_core::HeadState::Detached { oid } = head {
@@ -1201,9 +1233,84 @@ fn decoration_map(
             .refs()
             .peel_oid(oid, repository.odb())
             .unwrap_or(oid);
-        map.entry(commit).or_default().insert(0, "HEAD".to_string());
+        map.entry(commit).or_default().insert(
+            0,
+            pretty::Decoration {
+                pieces: vec![(Shade::Head, "HEAD".to_string())],
+            },
+        );
     }
     Ok(map)
+}
+
+/// Whether `log` paints its output: `--color[=when]` / `--no-color` win over `color.ui`, which
+/// says `always`, `never`, `auto` or a boolean (true meaning `auto`). `Err(status)` means a usage
+/// error was already reported.
+fn log_color(repository: &Repository, args: &LogArgs) -> Result<std::result::Result<bool, i32>> {
+    use std::io::IsTerminal;
+    let auto =
+        || std::io::stdout().is_terminal() && std::env::var_os("TERM").is_none_or(|t| t != "dumb");
+    if args.no_color {
+        return Ok(Ok(false));
+    }
+    match args.color.as_ref().map(|when| when.as_deref()) {
+        Some(None) | Some(Some("always")) => return Ok(Ok(true)),
+        Some(Some("never")) => return Ok(Ok(false)),
+        Some(Some("auto")) => return Ok(Ok(auto())),
+        Some(Some(_)) => {
+            eprintln!("error: option `color' expects \"always\", \"auto\", or \"never\"");
+            return Ok(Err(129));
+        }
+        None => {}
+    }
+    let Some(value) = repository.config_value(BStr::new(b"color.ui"))? else {
+        return Ok(Ok(auto()));
+    };
+    Ok(Ok(match &value[..] {
+        b"always" => true,
+        b"never" => false,
+        b"auto" => auto(),
+        other => match rivet_core::parse_bool(BStr::new(other)) {
+            Ok(true) => auto(),
+            Ok(false) => false,
+            Err(_) => anyhow::bail!(
+                "bad boolean config value '{}' for 'color.ui'",
+                String::from_utf8_lossy(other)
+            ),
+        },
+    }))
+}
+
+/// Git's colours for `log`, with `color.diff.commit` and `color.decorate.*` applied on top.
+fn log_palette(repository: &Repository) -> Result<pretty::Palette> {
+    let mut palette = pretty::Palette::git_default();
+    let slots: [(&str, &mut String); 6] = [
+        ("color.diff.commit", &mut palette.commit),
+        ("color.decorate.head", &mut palette.head),
+        ("color.decorate.branch", &mut palette.branch),
+        ("color.decorate.remotebranch", &mut palette.remote),
+        ("color.decorate.tag", &mut palette.tag),
+        ("color.decorate.stash", &mut palette.stash),
+    ];
+    for (key, slot) in slots {
+        if let Some(value) = repository.config_value(BStr::new(key.as_bytes()))? {
+            let text = String::from_utf8_lossy(&value).into_owned();
+            match pretty::parse_color_spec(&text) {
+                Some(sequence) => *slot = sequence,
+                None => anyhow::bail!("unable to parse '{key}': unsupported color '{text}'"),
+            }
+        }
+    }
+    Ok(palette)
+}
+
+/// How `log` and friends present each commit: the date style, whether ids are shown in full,
+/// the ref names to decorate with, and the colours (`None` prints plain text).
+struct Look<'a> {
+    date: &'a str,
+    full_ids: bool,
+    decorations: &'a std::collections::HashMap<ObjectId, Vec<pretty::Decoration>>,
+    palette: Option<&'a pretty::Palette>,
 }
 
 fn render_commit(
@@ -1211,9 +1318,7 @@ fn render_commit(
     layout: &pretty::Layout,
     oid: &ObjectId,
     commit: &LogCommit,
-    date: &str,
-    full_ids: bool,
-    decorations: &std::collections::HashMap<ObjectId, Vec<String>>,
+    look: &Look<'_>,
 ) -> Vec<u8> {
     let abbreviate = |o: &ObjectId| abbrev(repository, o, false);
     let entry = pretty::Entry {
@@ -1223,13 +1328,14 @@ fn render_commit(
         author: &commit.author,
         committer: &commit.committer,
         message: &commit.message,
-        decorations: decorations.get(oid).map_or(&[], Vec::as_slice),
+        decorations: look.decorations.get(oid).map_or(&[], Vec::as_slice),
     };
     let style = pretty::Style {
-        date,
+        date: look.date,
         now: pretty::now(),
         abbrev: &abbreviate,
-        full_ids,
+        full_ids: look.full_ids,
+        palette: look.palette,
     };
     let mut out = pretty::render(layout, &entry, &style);
     if let pretty::Layout::Format {
@@ -1354,9 +1460,12 @@ fn show_object(
                 &layout,
                 oid,
                 &commit,
-                date,
-                full_ids,
-                &decorations,
+                &Look {
+                    date,
+                    full_ids,
+                    decorations: &decorations,
+                    palette: None,
+                },
             ));
             let diff_mode = if args.no_patch {
                 None
