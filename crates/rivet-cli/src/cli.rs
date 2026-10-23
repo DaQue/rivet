@@ -39,9 +39,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    am, apply, bisect, blame, branching, cherry, clean, format_patch, grep, history, ignore,
-    maintenance, mv, notes, packrefs, plumbing, query, rebase, reflog, remote, sequencer, setup,
-    snapshot, stash, tag, worktree,
+    am, apply, archive, bisect, blame, branching, cherry, clean, format_patch, grep, history,
+    ignore, maintenance, mv, notes, packrefs, plumbing, query, rebase, reflog, remote, sequencer,
+    setup, snapshot, stash, tag, worktree,
 };
 
 /// The `rivet` command line.
@@ -166,6 +166,9 @@ pub enum Commands {
 
     /// Find commits not yet applied upstream.
     Cherry(cherry::CherryArgs),
+
+    /// Create an archive of files from a named tree.
+    Archive(archive::ArchiveArgs),
 
     /// Manage multiple working trees attached to one repository.
     Worktree(worktree::WorktreeArgs),

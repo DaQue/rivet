@@ -32,6 +32,7 @@
 
 pub mod am;
 pub mod apply;
+pub mod archive;
 pub mod bisect;
 pub mod blame;
 pub mod branching;
@@ -112,6 +113,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::CountObjects(args) => maintenance::run_count_objects(&global, &args),
         Commands::Bisect(args) => bisect::run_bisect(&global, &args),
         Commands::Cherry(args) => cherry::run_cherry(&global, &args),
+        Commands::Archive(args) => archive::run_archive(&global, &args),
         Commands::Worktree(args) => worktree::run_worktree(&global, &args),
         Commands::Repack(args) => maintenance::run_repack(&global, &args),
         Commands::PackRefs(args) => packrefs::run_pack_refs(&global, &args),

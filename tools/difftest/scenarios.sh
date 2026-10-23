@@ -5091,6 +5091,108 @@ s_worktree_gc_keeps() {
     v worktree prune
 }
 
+# What an archive file holds, as the tools that read it see it. The raw bytes are compared for
+# tar and for stored zip entries; for compressed data only what it decompresses to is.
+arch_snap() {
+    local file=$1
+    {
+        echo "## archive $(basename "$file")"
+        case $file in
+            *.tar)
+                (cd "$(dirname "$file")" && sha1sum "$(basename "$file")")
+                tar tvf "$file" ;;
+            *.tgz|*.tar.gz)
+                head -c10 "$file" | xxd -p
+                gzip -dc "$file" | sha1sum
+                gzip -dc "$file" | tar tvf - ;;
+            *.zip)
+                unzip -z "$file"
+                zipinfo "$file" | grep -E '^[-dl][-rwx]' | awk '{print $1,$2,$3,$4,$5,$7,$8,$9,$10}'
+                zipinfo -1 "$file" | while read -r n; do printf '%s ' "$n"; unzip -p "$file" "$n" | sha1sum; done ;;
+        esac
+    } >>"$TRANSCRIPT" 2>&1
+}
+
+arch_repo() {
+    v init -q repo; cd repo
+    local long="$(printf 'd%.0s' $(seq 1 60))/$(printf 'e%.0s' $(seq 1 60))/$(printf 'f%.0s' $(seq 1 30))"
+    mkdir -p "$long" docs tests build vendor/x src/deep
+    tick; echo hello >README; printf '#!/bin/sh\n' >run.sh; chmod +x run.sh
+    echo code >src/a.c; echo deep >src/deep/b.c; : >empty
+    echo deep >"$long/file.txt"; echo one >"$long/$(printf 'g%.0s' $(seq 1 120)).txt"
+    echo caf >"café.txt"
+    head -c 20000 /dev/zero | tr '\0' 'z' >docs/big.txt; seq 1 3000 >docs/nums.txt; chmod +x docs/nums.txt
+    echo t >tests/t.c; echo b >build/out.o; echo v >vendor/x/lib.c; echo keep >vendor/keep.txt
+    printf '/build export-ignore\ntests export-ignore\nvendor/x export-ignore\n*.o export-ignore\n' >.gitattributes
+    ln -s README link; ln -s "$(printf 'L%.0s' $(seq 1 150))" longlink
+    v add -A; v commit -q -m c1
+    tick; echo more >>README; v add README; v commit -q -m c2
+    g update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,sub
+    tick; v commit -q -m c3
+    v tag -a -m "tag v1" v1
+    v tag light
+}
+
+s_archive_tar() {
+    arch_repo
+    local o=../out.tar
+    v archive -o $o HEAD; arch_snap $o
+    v archive -o $o v1; arch_snap $o
+    v archive -o $o light; arch_snap $o
+    v archive -o $o HEAD~1; arch_snap $o
+    v archive -o $o --prefix=pre/ HEAD; arch_snap $o
+    v archive -o $o --prefix=a/b/ HEAD; arch_snap $o
+    v archive -o $o --prefix=pre- HEAD; arch_snap $o
+    v archive -o $o HEAD docs README; arch_snap $o
+    v archive -o $o HEAD src/deep; arch_snap $o
+    v archive -o $o HEAD 'src/*.c' README; arch_snap $o
+    v archive -o $o HEAD 'docs/*.txt'; arch_snap $o
+    v archive -o $o HEAD ':(exclude)docs' ':!src'; arch_snap $o
+    v archive -o $o --prefix=p/ HEAD src/deep empty; arch_snap $o
+    v archive -o $o --mtime=1000000000 HEAD:docs; arch_snap $o
+    v archive -o $o --mtime=1000000000 HEAD^{tree}; arch_snap $o
+    v archive -v -o $o HEAD docs
+    v archive -l
+    (cd docs && v archive -o ../$o HEAD; arch_snap ../$o)
+    v archive HEAD nosuch
+    v archive HEAD docs nosuch
+    v archive --format=rar HEAD
+    v archive nosuchrev
+    v archive
+    v archive --bogus HEAD
+}
+
+s_archive_targz() {
+    arch_repo
+    v archive -o ../a.tar.gz HEAD; arch_snap ../a.tar.gz
+    v archive -o ../b.tgz --prefix=x/ HEAD docs; arch_snap ../b.tgz
+    v archive --format=tgz -9 -o ../c.out HEAD; arch_snap ../c.out.tgz 2>/dev/null; cp ../c.out ../c.out.tgz; arch_snap ../c.out.tgz
+    v archive --format=tar.gz -1 -o ../d.out HEAD; cp ../d.out ../d.out.tgz; arch_snap ../d.out.tgz
+    v archive --format=tar.gz -0 -o ../e.out HEAD; cp ../e.out ../e.out.tgz; arch_snap ../e.out.tgz
+}
+
+s_archive_zip() {
+    arch_repo
+    v archive -o ../a.zip HEAD; arch_snap ../a.zip
+    v archive -o ../b.zip --prefix=top/ v1; arch_snap ../b.zip
+    v archive --format=zip -o ../c.zip HEAD docs README; arch_snap ../c.zip
+    v archive --format=zip -9 -o ../d.zip HEAD; arch_snap ../d.zip
+    v archive --format=zip -1 -o ../e.zip HEAD; arch_snap ../e.zip
+    # Stored entries are plain bytes, so the whole file has to match.
+    v archive --format=zip -0 -o ../f.zip HEAD; (cd .. && sha1sum f.zip) >>"$TRANSCRIPT"
+    v archive --format=zip -0 -o ../g.zip --prefix=p/ HEAD src README; (cd .. && sha1sum g.zip) >>"$TRANSCRIPT"
+}
+
+s_archive_add_file() {
+    arch_repo
+    printf 'extra\n' >../extra.txt
+    printf '#!/bin/sh\necho x\n' >../tool.sh; chmod +x ../tool.sh
+    v archive -o ../a.tar --add-file=../extra.txt HEAD src; arch_snap ../a.tar
+    v archive -o ../b.tar --prefix=a/ --add-file=../extra.txt --prefix=b/ --add-file=../tool.sh HEAD README; arch_snap ../b.tar
+    v archive -o ../c.zip --prefix=z/ --add-file ../extra.txt --add-file ../tool.sh HEAD README; arch_snap ../c.zip
+    v archive -o ../d.tar --add-file=../nosuch HEAD
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
