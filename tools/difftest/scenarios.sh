@@ -408,6 +408,32 @@ s_status_variants() {
     v ls-files -o --exclude-standard 2>/dev/null
 }
 
+s_rm_whole_tree() {
+    v init -q repo; cd repo
+    mkdir -p a/b c
+    echo one >a/one; echo two >a/b/two; echo three >c/three; echo top >top
+    v add -A; v commit -q -m one
+    v rm -r .
+    v status -s
+    v ls-files
+    # removing a single file takes the directories it empties with it
+    mkdir -p d/e/f; echo deep >d/e/f/g
+    v add -A; v commit -q -m two
+    v rm d/e/f/g
+    v status -s
+    # a directory argument, recursively
+    mkdir -p h/i; echo hi >h/i/j; echo keep >keep
+    v add -A; v commit -q -m three
+    v rm -r h
+    v status -s
+    v ls-files
+    # a pathspec-limited spelling of the same thing
+    mkdir -p k; echo kv >k/v
+    v add -A; v commit -q -m four
+    v rm -r -- k
+    v status -s
+}
+
 s_plumbing() {
     v init -q repo; cd repo
     printf 'hello\n' >f; mkdir d; echo i >d/i

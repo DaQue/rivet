@@ -496,15 +496,7 @@ pub fn rm_paths(
 
     let mut specs: Vec<BString> = Vec::new();
     for p in paths {
-        let spec = normalize_spec(BStr::new(p))?;
-        if spec.is_empty() {
-            // Removing "." would unstage and delete the entire work tree; Git has no spelling
-            // for that and neither does this.
-            return Err(Error::Message(
-                "rm: refusing to remove the whole work tree".to_string(),
-            ));
-        }
-        specs.push(spec);
+        specs.push(normalize_spec(BStr::new(p))?);
     }
 
     let mut tracked: Vec<BString> = index.entries().iter().map(|e| e.path.clone()).collect();
@@ -537,7 +529,10 @@ pub fn rm_paths(
                 )));
             }
             targets.extend(children);
-            removed_dirs.push(spec.clone());
+            // The work tree root itself is never removed, only what is in it.
+            if !spec.is_empty() {
+                removed_dirs.push(spec.clone());
+            }
         }
 
         for path in targets {
@@ -603,6 +598,16 @@ pub fn rm_paths(
                         source,
                     });
                 }
+            }
+            // A directory the removal empties goes too, up to (not including) the work tree root.
+            let mut parent: &[u8] = path.as_ref();
+            while let Some(slash) = parent.iter().rposition(|&b| b == b'/') {
+                parent = &parent[..slash];
+                let dir = worktree.join(BStr::new(parent))?;
+                if std::fs::remove_dir(&dir).is_err() {
+                    break;
+                }
+                stat_cache.remove(BStr::new(parent));
             }
         }
         for dir in &removed_dirs {
