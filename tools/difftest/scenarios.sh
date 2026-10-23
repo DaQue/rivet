@@ -1142,6 +1142,16 @@ s_stash_stack() {
     v switch -q --detach main
     tick; echo z >>b; v stash
     v stash list
+    # -q silences the "Dropped ..." line for drop and for pop's drop; the stack must still shrink
+    tick; echo q1 >>b; v stash -q
+    v stash drop -q
+    v stash list
+    v stash drop -q stash@{0}
+    v stash list
+    tick; echo q2 >>b; v stash -q
+    v stash pop -q
+    v stash list
+    v status --short
 }
 
 s_stash_conflict() {

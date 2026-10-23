@@ -498,3 +498,10 @@ run seconds apart, so the cruft pack records whichever second each side ran in. 
 (hardcoded October dates and `fsck` order were not involved).
 Fix: the scenario pins the loose files' age (`age_unreachable "$NEW"`) before `gc --cruft`; no assertion was weakened or sorted.
 After: 30/30 PASS, plus 8 more runs of `s_gc_cruft` + `s_gc_after_cruft`, all `failures: 0`. Full suite: 144 PASS / `failures: 0`.
+
+### Phase 1.1 — `stash drop -q` / `stash pop -q` silent (landed, scenario `s_stash_stack` extended)
+`drop_at` printed `Dropped ...` unconditionally. On the base the extended scenario failed: rivet printed
+`Dropped refs/stash@{0} (...)` after `stash drop -q`, `Dropped stash@{0} (...)` after `stash drop -q stash@{0}`, and
+`Dropped refs/stash@{0} (...)` after `stash pop -q`; real git prints nothing (verified with `/usr/bin/git`). `-q` now
+suppresses it; the scenario also compares `stash list` and `status --short` after each. Gate: fmt, clippy clean;
+215 tests passed / 0 failed; `scenarios.sh` 144 PASS / `failures: 0`.

@@ -136,7 +136,7 @@ pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
         Some(StashCommand::Show(show_args)) => show(&repository, show_args),
         Some(StashCommand::Apply(r)) => apply(global, &mut repository, r, false),
         Some(StashCommand::Pop(r)) => apply(global, &mut repository, r, true),
-        Some(StashCommand::Drop(r)) => drop_one(&repository, r),
+        Some(StashCommand::Drop(r)) => drop_one(global, &repository, r),
         Some(StashCommand::Clear) => {
             clear(&repository)?;
             Ok(0)
@@ -622,7 +622,7 @@ fn apply(
             return Ok(128);
         }
         if drop_after {
-            drop_at(repository, position, args.stash.as_deref())?;
+            drop_at(repository, position, args.stash.as_deref(), global.quiet)?;
         }
         return Ok(0);
     }
@@ -652,7 +652,7 @@ fn apply(
         return Ok(128);
     }
     if drop_after {
-        drop_at(repository, position, args.stash.as_deref())?;
+        drop_at(repository, position, args.stash.as_deref(), global.quiet)?;
     }
     Ok(0)
 }
@@ -703,11 +703,11 @@ fn write_untracked(
     Ok(())
 }
 
-fn drop_one(repository: &Repository, args: &RefArgs) -> Result<i32> {
+fn drop_one(global: &GlobalArgs, repository: &Repository, args: &RefArgs) -> Result<i32> {
     let Picked::Found(position, _) = pick(repository, args.stash.as_deref())? else {
         return Ok(128);
     };
-    drop_at(repository, position, args.stash.as_deref())?;
+    drop_at(repository, position, args.stash.as_deref(), global.quiet)?;
     Ok(0)
 }
 
@@ -737,7 +737,12 @@ fn remove_entry(repository: &Repository, position: usize) -> Result<ObjectId> {
 }
 
 /// [`remove_entry`], then Git's `Dropped <ref> (<id>)` line.
-fn drop_at(repository: &Repository, position: usize, spec: Option<&str>) -> Result<()> {
+fn drop_at(
+    repository: &Repository,
+    position: usize,
+    spec: Option<&str>,
+    quiet: bool,
+) -> Result<()> {
     let removed = remove_entry(repository, position)?;
     let label = match spec {
         None => format!("refs/stash@{{{position}}}"),
@@ -746,7 +751,9 @@ fn drop_at(repository: &Repository, position: usize, spec: Option<&str>) -> Resu
         }
         Some(_) => format!("refs/stash@{{{position}}}"),
     };
-    println!("Dropped {label} ({removed})");
+    if !quiet {
+        println!("Dropped {label} ({removed})");
+    }
     Ok(())
 }
 
