@@ -596,6 +596,20 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
         message = format!("{}\n\nSigned-off-by: {name} <{email}>", message.trim_end());
     }
 
+    if repository.index().has_conflicts() {
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in repository.index().entries() {
+            if entry.is_unmerged() && seen.insert(entry.path.clone()) {
+                println!("U\t{}", entry.path);
+            }
+        }
+        eprintln!("error: Committing is not possible because you have unmerged files.");
+        eprintln!("hint: Fix them up in the work tree, and then use 'git add/rm <file>'");
+        eprintln!("hint: as appropriate to mark resolution and make a commit.");
+        eprintln!("fatal: Exiting because of an unresolved conflict.");
+        return Ok(128);
+    }
+
     // Nothing to record: Git shows the status instead of failing, and exits 1.
     if !args.allow_empty && !args.amend {
         let tree = repository.write_tree()?;
@@ -628,6 +642,13 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
     options.amend = args.amend;
 
     let oid = repository.commit(&options)?;
+    // A squash merge leaves its message (and, when it conflicted, a MERGE_MSG) for this commit.
+    for name in ["SQUASH_MSG", "MERGE_MSG"] {
+        match std::fs::remove_file(repository.git_dir().join(name)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+    }
     if global.quiet {
         return Ok(0);
     }

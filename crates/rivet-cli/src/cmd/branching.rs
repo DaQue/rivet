@@ -1063,8 +1063,15 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    if args.squash {
-        anyhow::bail!("merge: --squash is not implemented");
+    if args.squash
+        && (args.no_ff
+            || matches!(
+                args.ff.as_ref().map(|v| v.as_deref()),
+                Some(Some("false")) | Some(Some("no"))
+            ))
+    {
+        eprintln!("fatal: options '--squash' and '--no-ff.' cannot be used together");
+        return Ok(128);
     }
     if args.verify_signatures {
         anyhow::bail!("merge: --verify-signatures is not implemented");
@@ -1098,8 +1105,10 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
     }
 
     let spec = resolve_previous(&repository, spec)?;
-    let theirs = super::resolve_commit(&repository, &spec)
-        .map_err(|_| anyhow::anyhow!("{spec} - not something we can merge"))?;
+    let Ok(theirs) = super::resolve_commit(&repository, &spec) else {
+        eprintln!("merge: {spec} - not something we can merge");
+        return Ok(1);
+    };
     let ff = match args.ff.as_ref().map(|v| v.as_deref()) {
         Some(Some("only")) => FastForward::Only,
         Some(Some("false")) | Some(Some("no")) => FastForward::Never,
@@ -1129,6 +1138,7 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         show_stat,
         "merge",
         args.message.is_some(),
+        args.squash,
     )
 }
 
@@ -1929,10 +1939,15 @@ pub fn merge_commit(
     show_stat: bool,
     action: &str,
     explicit_message: bool,
+    squash: bool,
 ) -> Result<i32> {
     let git_dir = repository.git_dir().to_path_buf();
     let head = repository.head()?;
     let Some(ours) = head.oid() else {
+        if squash {
+            eprintln!("fatal: Squash commit into empty head not supported yet");
+            return Ok(128);
+        }
         // Merging into an unborn branch just points it at the other side.
         let tree = repository.commit_tree(theirs)?;
         if let Err(error) = repository.checkout_tree(tree, false) {
@@ -1947,7 +1962,10 @@ pub fn merge_commit(
     rivet_core::write_orig_head(&git_dir, ours)?;
     if repository.is_ancestor(theirs, ours)? {
         if show_stat {
-            println!("Already up to date.");
+            println!(
+                "Already up to date.{}",
+                if squash { " (nothing to squash)" } else { "" }
+            );
         }
         return Ok(0);
     }
@@ -1964,6 +1982,18 @@ pub fn merge_commit(
         let new_tree = repository.commit_tree(theirs)?;
         if let Err(error) = repository.checkout_tree(new_tree, false) {
             return report_checkout_refusal(error, "merge");
+        }
+        if squash {
+            // Stage the other side's tree and say so, but leave HEAD where it is.
+            if show_stat {
+                println!("Fast-forward");
+            }
+            println!("Squash commit -- not updating HEAD");
+            write_squash_msg(repository, ours, theirs)?;
+            if show_stat {
+                super::print_diffstat(repository, Some(old_tree), new_tree)?;
+            }
+            return Ok(0);
         }
         let note = if explicit_message {
             "Fast-forward (no commit created; -m option ignored)"
@@ -2017,6 +2047,27 @@ pub fn merge_commit(
 
     let auto_merged = cleanly_content_merged(repository, base, ours, theirs, &result)?;
     let conflicted = print_merge_report(&result, label, &auto_merged);
+
+    if squash {
+        write_squash_msg(repository, ours, theirs)?;
+        println!("Squash commit -- not updating HEAD");
+        if conflicted.is_empty() {
+            eprintln!("Automatic merge went well; stopped before committing as requested");
+            return Ok(0);
+        }
+        // Unlike a real merge there is no MERGE_HEAD: the commit that follows has one parent.
+        let mut merge_msg = BString::from("\n# Conflicts:\n");
+        for path in &conflicted {
+            merge_msg.extend_from_slice(b"#\t");
+            merge_msg.extend_from_slice(path);
+            merge_msg.push(b'\n');
+        }
+        let path = git_dir.join("MERGE_MSG");
+        std::fs::write(&path, &merge_msg)
+            .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", path.display()))?;
+        println!("Automatic merge failed; fix conflicts and then commit the result.");
+        return Ok(1);
+    }
 
     if !conflicted.is_empty() || no_commit {
         let mut merge_msg = BString::from(message);
@@ -2073,6 +2124,16 @@ pub fn merge_commit(
         super::print_diffstat(repository, Some(old_tree), tree)?;
     }
     Ok(0)
+}
+
+/// Write `SQUASH_MSG`: the log of what `theirs` has that `ours` does not, as `git merge --squash`
+/// leaves it for the commit that follows.
+fn write_squash_msg(repository: &Repository, ours: ObjectId, theirs: ObjectId) -> Result<()> {
+    let text = super::history::squash_message(repository, ours, theirs)?;
+    let path = repository.git_dir().join("SQUASH_MSG");
+    std::fs::write(&path, text)
+        .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", path.display()))?;
+    Ok(())
 }
 
 /// Blob id of `path` inside `tree`, or `None` when the path is absent or not a file.

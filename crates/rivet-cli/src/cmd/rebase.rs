@@ -62,6 +62,18 @@ pub struct RebaseArgs {
     pub skip: bool,
 }
 
+/// What the reflog calls this command: `rebase`, or `pull --rebase` when `pull` drives it.
+static ACTION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Make the reflog messages of this run say `action` (Git's `GIT_REFLOG_ACTION`).
+pub(super) fn set_action(action: &str) {
+    let _ = ACTION.set(action.to_string());
+}
+
+fn action() -> &'static str {
+    ACTION.get().map_or("rebase", String::as_str)
+}
+
 fn rebase_dir(repository: &Repository) -> PathBuf {
     repository.git_dir().join("rebase-merge")
 }
@@ -192,7 +204,9 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
     start(global, &mut repository, args, &dir)
 }
 
-fn clean_tree(repository: &mut Repository) -> Result<bool> {
+/// Whether the work tree and index are clean enough to rebase; says why not on stderr, as
+/// `<what>` (`rebase`, or `pull with rebase`).
+pub(super) fn clean_tree(repository: &mut Repository, what: &str) -> Result<bool> {
     let mut options = rivet_core::StatusOptions::new();
     options.untracked_files = rivet_core::UntrackedMode::No;
     let status = repository.status(&options)?;
@@ -202,13 +216,13 @@ fn clean_tree(repository: &mut Repository) -> Result<bool> {
         .any(|e| e.kind != rivet_core::ChangeKind::Unmerged);
     let staged = !status.staged.is_empty() || repository.index().has_conflicts();
     if unstaged {
-        eprintln!("error: cannot rebase: You have unstaged changes.");
+        eprintln!("error: cannot {what}: You have unstaged changes.");
     }
     if staged {
         if unstaged {
             eprintln!("error: additionally, your index contains uncommitted changes.");
         } else {
-            eprintln!("error: cannot rebase: Your index contains uncommitted changes.");
+            eprintln!("error: cannot {what}: Your index contains uncommitted changes.");
         }
     }
     if unstaged || staged {
@@ -291,7 +305,7 @@ fn start(
         None => upstream,
     };
 
-    if !clean_tree(repository)? {
+    if !clean_tree(repository, "rebase")? {
         return Ok(1);
     }
 
@@ -390,7 +404,7 @@ fn start(
     rivet_core::write_orig_head(repository.git_dir(), orig_head)?;
     let onto_tree = repository.commit_tree(onto)?;
     repository.reset_hard_to_tree(onto_tree)?;
-    let reason = format!("rebase (start): checkout {onto_name}");
+    let reason = format!("{} (start): checkout {onto_name}", action());
     repository.point_head(HeadTarget::Detached(onto), BStr::new(reason.as_bytes()))?;
 
     write_state(dir, "head-name", &format!("{head_name}\n"))?;
@@ -445,10 +459,10 @@ fn abort(repository: &mut Repository, dir: &Path) -> Result<i32> {
     repository.reset_hard_to_tree(tree)?;
     if let Some(branch) = head_name.strip_prefix("refs/heads/") {
         let name = RefName::from_bytes(format!("refs/heads/{branch}").as_bytes())?;
-        let reason = format!("rebase (abort): returning to {head_name}");
+        let reason = format!("{} (abort): returning to {head_name}", action());
         repository.point_head(HeadTarget::Branch(&name), BStr::new(reason.as_bytes()))?;
     } else {
-        let reason = format!("rebase (abort): returning to {orig}");
+        let reason = format!("{} (abort): returning to {orig}", action());
         repository.point_head(HeadTarget::Detached(orig), BStr::new(reason.as_bytes()))?;
     }
     clear_pick_state(repository);
@@ -587,7 +601,7 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
 
         // A commit that already sits on the current head is reused, not rewritten.
         if original.parents.first() == Some(&head) {
-            let reason = format!("rebase (pick): {subject}");
+            let reason = format!("{} (pick): {subject}", action());
             repository.move_head(oid, BStr::new(reason.as_bytes()))?;
             let tree = repository.commit_tree(oid)?;
             repository.reset_hard_to_tree(tree)?;
@@ -661,7 +675,7 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             head,
             original.author,
             &original.message,
-            "rebase (pick)",
+            &format!("{} (pick)", action()),
             None,
         )?;
     }
@@ -682,9 +696,9 @@ fn finish(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Resul
     if let Some(branch) = head_name.strip_prefix("refs/heads/") {
         let name = RefName::from_bytes(format!("refs/heads/{branch}").as_bytes())?;
         let who = repository.committer_signature()?;
-        let reason = format!("rebase (finish): {head_name} onto {onto}");
+        let reason = format!("{} (finish): {head_name} onto {onto}", action());
         repository.set_ref_logged(&name, head, &who, BStr::new(reason.as_bytes()))?;
-        let reason = format!("rebase (finish): returning to {head_name}");
+        let reason = format!("{} (finish): returning to {head_name}", action());
         repository.point_head(HeadTarget::Branch(&name), BStr::new(reason.as_bytes()))?;
         if !global.quiet {
             eprintln!("Successfully rebased and updated {head_name}.");

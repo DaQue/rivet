@@ -3855,12 +3855,146 @@ s_log_decorate() {
     v log --oneline --decorate=bogus
 }
 
+s_merge_squash() {
+    v init -q repo; cd repo
+    echo base >a; v add a; tick; v commit -q -m base
+    v branch ff
+    v switch -q -c side
+    echo b >b; v add b; tick; v commit -q -m s1 -m body1
+    echo c >>b; tick; v commit -q -a -m s2
+    v switch -q main
+    echo m >m; v add m; tick; v commit -q -m m1
+    # diverged and clean: stage the result, move nothing, leave SQUASH_MSG
+    v merge --squash side
+    v status --short
+    v log --oneline
+    v commit -q -m "squashed side"
+    v log --format='%h %p %s'
+    v status --short
+    # nothing new to squash
+    v merge --squash side
+    v status --short
+    # the branch is behind the other: fast-forward-able, still not committed
+    v switch -q ff
+    v merge --squash side
+    v status --short
+    v log --oneline
+    v reset -q --hard
+    # option clashes and usage
+    v merge --squash --no-ff side
+    v merge --squash --ff-only side
+    v merge --squash --no-commit side
+    v status --short
+    v reset -q --hard
+    v merge --squash -q side
+    v status --short
+    v reset -q --hard
+    v merge --squash nosuchbranch
+    # a conflict: the index keeps the stages, no MERGE_HEAD, and a plain commit finishes it
+    v switch -q main
+    v switch -q -c clash
+    echo one >c1; v add c1; tick; v commit -q -m c1base
+    v switch -q -c clash-side
+    echo two >c1; tick; v commit -q -a -m c1side
+    v switch -q clash
+    echo three >c1; tick; v commit -q -a -m c1here
+    v merge --squash clash-side
+    v status --short
+    v ls-files -s
+    v commit -q -m "unresolved"
+    echo resolved >c1; v add c1
+    v commit -q -m "resolved squash"
+    v log --format='%h %p %s' -3
+    v status --short
+    # up to date, quietly; and SQUASH_MSG does not survive a branch switch
+    v merge --squash -q main
+    v switch -q ff
+    v merge --squash -q side
+    v switch -q -c elsewhere
+    v status --short
+    v commit -q -m "after the switch"
+    v log --format='%h %p %s' -2
+}
+
+s_pull_rebase() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    v clone -q origin.git repo
+    cd repo
+    v pull --rebase
+    # upstream moved, nothing local to replay
+    (cd ../seed && tick && echo b >b && g add b && g commit -qm two && g push -q origin HEAD:main 2>/dev/null)
+    v pull --rebase
+    v log --format='%h %p %s'
+    # upstream moved and two local commits are replayed on top
+    (cd ../seed && tick && echo c >c && g add c && g commit -qm three && g push -q origin HEAD:main 2>/dev/null)
+    tick; echo l1 >l1; v add l1; v commit -q -m local1
+    tick; echo l2 >l2; v add l2; v commit -q -m local2
+    v pull --rebase
+    v log --format='%h %p %s'
+    v status --short
+    v reflog
+    # a dirty tree is refused, with git's wording
+    echo dirty >>a
+    (cd ../seed && tick && echo d >d && g add d && g commit -qm four && g push -q origin HEAD:main 2>/dev/null)
+    v pull --rebase
+    v checkout -q -- a
+    # nothing upstream, local commits only
+    v pull --rebase
+    v log --format='%h %p %s' -3
+    # without a policy a divergent pull is refused; --ff-only refuses too
+    tick; echo l3 >l3; v add l3; v commit -q -m local3
+    (cd ../seed && tick && echo e >e && g add e && g commit -qm five && g push -q origin HEAD:main 2>/dev/null)
+    v pull
+    v pull --no-rebase --ff-only
+    g config pull.rebase true
+    v pull
+    v log --format='%h %p %s' -3
+    v status --short
+}
+
+s_pull_rebase_conflict() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo base >f && g add f && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    v clone -q origin.git repo
+    cd repo
+    (cd ../seed && tick && echo upstream >f && g commit -qam up && g push -q origin HEAD:main 2>/dev/null)
+    tick; echo mine >f; v commit -q -a -m mine
+    tick; echo more >g; v add g; v commit -q -m more
+    v pull --rebase
+    v status --short
+    echo resolved >f; v add f
+    GIT_EDITOR=true v rebase --continue
+    v log --format='%h %p %s'
+    v status --short
+}
+
+s_pull_squash() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    v clone -q origin.git repo
+    (cd seed && tick && echo b >b && g add b && g commit -qm two && g push -q origin HEAD:main 2>/dev/null)
+    cd repo
+    v pull --squash
+    v status --short
+    v log --oneline
+    v commit -q -m "squashed pull"
+    (cd ../seed && tick && echo c >c && g add c && g commit -qm three && g push -q origin HEAD:main 2>/dev/null)
+    tick; echo l >l; v add l; v commit -q -m local
+    v pull --squash
+    v status --short
+    v log --oneline
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
 for s in "$@"; do
     case $s in
-        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags) run_scenario "$s" repo origin.git ;;
+        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
         s_pack_deltas) run_scenario "$s" origin cl cl2 ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         *) run_scenario "$s" ;;

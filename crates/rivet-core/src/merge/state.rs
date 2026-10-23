@@ -286,7 +286,8 @@ pub fn read_merge_state(
     Ok(Some(state))
 }
 
-/// Phase 9 — remove `MERGE_HEAD` and `MERGE_MSG`.
+/// Phase 9 — remove `MERGE_HEAD` and `MERGE_MSG` (and their companions `MERGE_MODE`,
+/// `AUTO_MERGE` and the `SQUASH_MSG` that `merge --squash` leaves).
 ///
 /// # Caveats
 ///
@@ -316,9 +317,10 @@ pub fn clear_merge_state(git_dir: &Path) -> Result<()> {
             source: e,
         })?;
     }
-    // Git's companions to `MERGE_HEAD`; leaving them makes the next `git commit` think a merge
+    // Git's companions to `MERGE_HEAD` (`SQUASH_MSG` is dropped by every command that drops the
+    // merge state); leaving them makes the next `git commit` think a merge
     // with the old mode or `AUTO_MERGE` tree is still in progress.
-    for name in ["MERGE_MODE", "AUTO_MERGE"] {
+    for name in ["MERGE_MODE", "AUTO_MERGE", "SQUASH_MSG"] {
         let path = git_dir.join(name);
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| crate::error::Error::IoAtPath {

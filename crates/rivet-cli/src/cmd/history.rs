@@ -572,6 +572,33 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     Ok(0)
 }
 
+/// The text of `SQUASH_MSG`: every commit reachable from `theirs` but not from `ours`, newest
+/// first, as `log` prints them, under Git's fixed heading.
+pub(super) fn squash_message(
+    repository: &Repository,
+    ours: ObjectId,
+    theirs: ObjectId,
+) -> Result<Vec<u8>> {
+    let mut options = WalkOptions::new();
+    options.exclude(ours);
+    let oids = rivet_core::revwalk::walk_oids(repository.odb(), &[theirs], &options)?;
+    let mut out = b"Squashed commit of the following:\n".to_vec();
+    for oid in &oids {
+        let commit = read_commit(repository, oid)?;
+        out.push(b'\n');
+        out.extend_from_slice(&render_commit(
+            repository,
+            &pretty::Layout::Medium,
+            oid,
+            &commit,
+            "default",
+            false,
+            &Default::default(),
+        ));
+    }
+    Ok(out)
+}
+
 /// Append `text` to `out` with the graph's prefix in front of each line. The first line is left
 /// bare when `first_is_open` (the commit line was already started by `show_commit`).
 fn push_with_graph(

@@ -244,6 +244,10 @@ pub struct PullArgs {
     #[arg(long = "no-ff")]
     pub no_ff: bool,
 
+    /// Accept the automatic merge message without starting an editor. The default here.
+    #[arg(long = "no-edit")]
+    pub no_edit: bool,
+
     /// Stage the merge result and leave `HEAD` alone, for a single later commit.
     #[arg(long = "squash")]
     pub squash: bool,
@@ -825,14 +829,45 @@ pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
 ///   current branch point at one, and a handler that found "the newest tag" and merged it would
 ///   be inventing an upstream.
 pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
-    if args.rebase || args.autostash || args.interactive || args.squash || args.gpg_sign.is_some() {
-        anyhow::bail!(
-            "pull: --rebase, --autostash, --interactive, --squash and --gpg-sign are not implemented"
-        );
+    if args.autostash || args.interactive || args.gpg_sign.is_some() {
+        anyhow::bail!("pull: --autostash, --interactive and --gpg-sign are not implemented");
     }
     let mut repository = super::open(global)?;
     let head = repository.head()?;
     let branch = head.branch().map(|b| b.short_name().to_string());
+    // `--rebase`/`--no-rebase` win; then `branch.<name>.rebase`, then `pull.rebase`.
+    let configured_bool = |key: String| -> Option<bool> {
+        let value = repository
+            .config_value(BStr::new(key.as_bytes()))
+            .ok()
+            .flatten()?;
+        rivet_core::parse_bool(BStr::new(&value[..])).ok()
+    };
+    let configured_rebase = branch
+        .as_ref()
+        .and_then(|b| configured_bool(format!("branch.{b}.rebase")))
+        .or_else(|| configured_bool("pull.rebase".to_string()));
+    let rebase = if args.no_rebase {
+        false
+    } else {
+        args.rebase || configured_rebase == Some(true)
+    };
+    if rebase && args.squash {
+        anyhow::bail!("pull: --squash cannot be combined with --rebase");
+    }
+    let how_is_decided = args.rebase
+        || args.no_rebase
+        || args.ff_only
+        || args.no_ff
+        || configured_rebase.is_some()
+        || repository
+            .config_value(BStr::new(b"pull.ff"))
+            .ok()
+            .flatten()
+            .is_some();
+    if rebase && !super::rebase::clean_tree(&mut repository, "pull with rebase")? {
+        return Ok(128);
+    }
     let upstream = match &branch {
         Some(b) => repository.branch_upstream(b)?,
         None => None,
@@ -911,7 +946,59 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
     if merge_heads.len() > 1 {
         anyhow::bail!("pull: merging more than one branch is not implemented");
     }
-    let ff = if args.ff_only {
+    if rebase && !repository.is_ancestor(repository.head()?.oid().unwrap_or(theirs), theirs)? {
+        // `git pull --rebase` is `git rebase --onto <fetched tip> <fetched tip>` under its own name.
+        super::rebase::set_action(if args.rebase { "pull --rebase" } else { "pull" });
+        let hex = theirs.to_string();
+        drop(repository);
+        return super::rebase::run_rebase(
+            global,
+            &super::rebase::RebaseArgs {
+                upstream: Some(hex.clone()),
+                branch: None,
+                onto: Some(hex),
+                continue_rebase: false,
+                abort: false,
+                skip: false,
+            },
+        );
+    }
+    if !rebase && !how_is_decided {
+        let ours = repository.head()?.oid();
+        let divergent = match ours {
+            Some(ours) => {
+                !repository.is_ancestor(ours, theirs)? && !repository.is_ancestor(theirs, ours)?
+            }
+            None => false,
+        };
+        if divergent {
+            eprintln!(
+                "hint: You have divergent branches and need to specify how to reconcile them."
+            );
+            eprintln!(
+                "hint: You can do so by running one of the following commands sometime before"
+            );
+            eprintln!("hint: your next pull:");
+            eprintln!("hint:");
+            eprintln!("hint:   git config pull.rebase false  # merge");
+            eprintln!("hint:   git config pull.rebase true   # rebase");
+            eprintln!("hint:   git config pull.ff only       # fast-forward only");
+            eprintln!("hint:");
+            eprintln!(
+                "hint: You can replace \"git config\" with \"git config --global\" to set a default"
+            );
+            eprintln!(
+                "hint: preference for all repositories. You can also pass --rebase, --no-rebase,"
+            );
+            eprintln!(
+                "hint: or --ff-only on the command line to override the configured default per"
+            );
+            eprintln!("hint: invocation.");
+            eprintln!("fatal: Need to specify how to reconcile divergent branches.");
+            return Ok(128);
+        }
+    }
+    let ff = if args.ff_only || rebase {
         super::branching::FastForward::Only
     } else if args.no_ff {
         super::branching::FastForward::Never
@@ -933,6 +1020,7 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         !global.quiet,
         &command_action("pull"),
         false,
+        args.squash,
     )
 }
 

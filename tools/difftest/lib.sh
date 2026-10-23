@@ -96,7 +96,7 @@ state_of() {
         for log in $(cd "$gd" && find logs -type f 2>/dev/null | sort); do
             echo "## $log"; cut -d' ' -f1,2 "$gd/$log"; cut -f2 "$gd/$log"
         done
-        for f in ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE CHERRY_PICK_HEAD REVERT_HEAD FETCH_HEAD packed-refs config; do
+        for f in ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE SQUASH_MSG CHERRY_PICK_HEAD REVERT_HEAD FETCH_HEAD packed-refs config; do
             [ -f "$gd/$f" ] && { echo "## $f"; cat "$gd/$f"; }
         done
         echo "## fsck"; g fsck --strict --no-progress 2>&1 | grep -v '^dangling tree'; echo "fsck exit $?"

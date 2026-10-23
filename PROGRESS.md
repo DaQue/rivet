@@ -554,3 +554,25 @@ Known gaps (all refuse or are untested rather than wrong, except colour):
 - `log --graph` with a path limit, `--boundary`, `--left-right`, `--simplify-by-decoration` and `--graph` with `-m` merge diffs are not covered by a scenario.
 - Found while probing, unrelated to the graph: `rivet rm -rq -f .` dies with `refusing to remove the whole work tree` (git removes everything);
   `rivet checkout --orphan` writes a `checkout: moving from main to other` reflog line that git does not.
+
+### Phase 2.2 — `merge --squash` (landed, scenario `s_merge_squash`)
+Base: `fatal: merge: --squash is not implemented`. Now: clean/diverged, fast-forward-able (`Updating…`, `Fast-forward`, index and work tree
+updated, HEAD not moved), already up to date (`Already up to date. (nothing to squash)`), and conflicted (stages kept, `MERGE_MSG`
+with the `# Conflicts:` list, exit 1) cases match git, including `SQUASH_MSG` (heading + `log`-style medium entries, newest first), which is
+now part of the compared state (`lib.sh`). No `MERGE_HEAD` is written, so the commit that follows has one parent; `commit` removes
+`SQUASH_MSG`/`MERGE_MSG`, `clear_merge_state` (used by `reset`) removes `SQUASH_MSG`. `--squash --no-ff` dies with git's
+`options '--squash' and '--no-ff.' cannot be used together`. Side fixes found by the scenario (each red on the base): `merge <unknown>` exits 1 with
+`merge: X - not something we can merge` (was 128/`fatal:`); `commit` with unmerged paths prints `U\t<path>` and git's four-line refusal, exit 128
+(was `fatal: path is unmerged`).
+
+### Phase 2.3 — `pull --rebase`, `pull --squash` (landed, scenarios `s_pull_rebase`, `s_pull_rebase_conflict`, `s_pull_squash`)
+Base: `fatal: pull: --rebase, --autostash, --interactive, --squash and --gpg-sign are not implemented`.
+`pull --rebase` (or `pull.rebase`/`branch.<name>.rebase` = true) refuses a dirty tree before fetching (`error: cannot pull with rebase: …`, exit 128),
+fast-forwards through the merge machinery when nothing local needs replaying (reflog `pull --rebase: Fast-forward`), otherwise runs the rebase machinery
+with reflog action `pull --rebase` (`pull` when it came from config); conflicts stop in `rebase-merge/` and `rebase --continue` finishes.
+`pull --squash` goes through `merge --squash`. Also: a divergent `pull` with no `--rebase/--no-rebase/--ff-only/--no-ff` and no `pull.rebase`/`pull.ff` is now refused
+with git's `Need to specify how to reconcile divergent branches.` hint block (exit 128; base merged silently); `--no-edit` is accepted.
+Gate: fmt, clippy, doc clean; 218 tests passed / 0 failed / 0 ignored; `scenarios.sh` 152 PASS / `failures: 0`.
+Known gaps: `pull --rebase` uses the fetched tip as both `--onto` and upstream (git also computes a `--fork-point` from the remote-tracking reflog, which only
+matters when the upstream was rewritten); `--rebase=merges|interactive`, `--autostash`, `rebase.autoStash` are not implemented; `pull.ff=only` config is accepted
+as "decided" but not applied; `rivet switch` with unmerged paths writes `c1: needs merge` to stderr where git writes it to stdout.
