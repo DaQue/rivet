@@ -493,6 +493,7 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
                 name,
                 force,
                 args.remotes,
+                global.quiet,
             )?);
         }
         return Ok(code);
@@ -1397,6 +1398,7 @@ fn delete_branch(
     name: &str,
     force: bool,
     remote: bool,
+    quiet: bool,
 ) -> Result<i32> {
     let reference = if remote {
         RefName::from_bytes(format!("refs/remotes/{name}").as_bytes())?
@@ -1451,17 +1453,21 @@ fn delete_branch(
     }
     repository.refs().delete(&reference)?;
     if remote {
-        println!(
-            "Deleted remote-tracking branch {name} (was {}).",
-            super::short_oid(&oid)
-        );
+        if !quiet {
+            println!(
+                "Deleted remote-tracking branch {name} (was {}).",
+                super::short_oid(&oid)
+            );
+        }
     } else {
         // The branch's own config section goes with it, as in Git.
         let mut config = rivet_core::Config::load(&repository.git_dir().join("config"))?;
         if config.remove_section(BStr::new("branch"), Some(BStr::new(name.as_bytes()))) {
             config.write(&repository.git_dir().join("config"))?;
         }
-        println!("Deleted branch {name} (was {}).", super::short_oid(&oid));
+        if !quiet {
+            println!("Deleted branch {name} (was {}).", super::short_oid(&oid));
+        }
     }
     Ok(0)
 }

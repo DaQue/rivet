@@ -4579,6 +4579,134 @@ s_rebase_conflict_kinds() {
     v rebase --abort
 }
 
+# pack-refs: tags by default, everything with --all, loose files pruned unless --no-prune.
+s_pack_refs() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    v tag light; v tag -a ann -m annotated; v tag -a nested -m nested ann
+    v branch b1; v branch b2; v branch feature/x
+    g update-ref refs/notes/x HEAD; g update-ref refs/remotes/o/main HEAD
+    refs_on_disk() { { echo "## loose"; find .git/refs -type f | sort; echo "## packed"; cat .git/packed-refs 2>/dev/null; } >>"$TRANSCRIPT"; }
+    v pack-refs
+    refs_on_disk
+    v pack-refs --all
+    refs_on_disk
+    tick; echo b >b; v add b; v commit -q -m two
+    v branch b3
+    v tag newtag
+    v pack-refs --no-prune
+    refs_on_disk
+    v pack-refs
+    refs_on_disk
+    v tag -d newtag
+    v branch -D b1
+    refs_on_disk
+    v for-each-ref
+    v pack-refs --all --exclude 'refs/heads/b*'
+    refs_on_disk
+    v pack-refs --include 'refs/heads/b*'
+    refs_on_disk
+    v log --oneline --all
+    v show-ref
+    v pack-refs --all --no-prune
+    v pack-refs --all
+    refs_on_disk
+    v fsck
+    v gc
+    refs_on_disk
+}
+
+# repack: loose objects into a pack, everything with -a/-A, -d dropping what is replaced.
+s_repack() {
+    g config --global gc.cruftPacks false
+    g config --global pack.threads 1
+    v init -q repo; cd repo
+    seq 1 200 | sed 's/^/line /' >big.txt; cp big.txt copy.txt
+    mkdir src; for i in 1 2 3; do seq 1 80 | sed "s/^/mod$i /" >src/m$i.c; done
+    v add .; v commit -q -m one
+    for n in 2 3 4 5; do
+        tick; sed -i "$((n * 10))s/.*/changed at rev $n/" big.txt; echo "extra $n" >>copy.txt
+        v commit -q -a -m "rev $n"
+    done
+    v tag -a v1 -m annotated
+    g gc -q
+    packshape
+    # new loose history; an unreachable object; a blob only the index knows
+    for n in 6 7; do
+        tick; sed -i "$((n * 10))s/.*/changed at rev $n/" big.txt; echo "extra $n" >>copy.txt
+        v commit -q -a -m "rev $n"
+    done
+    v tag light
+    echo unreachable-blob | g hash-object -w --stdin >/dev/null
+    echo index-only >idx.txt; v add idx.txt
+    allobjects
+    v repack
+    packshape; allobjects
+    v repack
+    v repack -q
+    v repack -d
+    packshape; allobjects
+    # everything into one pack, the old ones kept
+    v repack -a
+    packshape; allobjects
+    v repack -a -d
+    packshape; allobjects
+    v fsck
+    v count-objects -v
+    # unreachable objects of a replaced pack: dropped, loosened (-A) or kept (-k)
+    tick; echo x >x; v add x; v commit -q -m x
+    v repack -d
+    v reset -q --hard HEAD~1
+    g reflog expire --expire=now --all
+    v repack -a -d
+    packshape; allobjects
+    tick; echo y >y; v add y; v commit -q -m y
+    v repack -d
+    v reset -q --hard HEAD~1
+    g reflog expire --expire=now --all
+    v repack -A -d
+    packshape; allobjects
+    tick; echo z >z; v add z; v commit -q -m z
+    v repack -d
+    v reset -q --hard HEAD~1
+    g reflog expire --expire=now --all
+    v repack -a -d -k
+    packshape; allobjects
+    v repack -a -d -f
+    packshape
+    v fsck
+}
+
+# repack -A with unreachable objects spread over several packs and loose objects; .keep packs.
+s_repack_keep_multi() {
+    g config --global gc.cruftPacks false
+    g config --global pack.threads 1
+    v init -q repo; cd repo
+    seq 1 100 | sed 's/^/line /' >f; v add f; v commit -q -m base
+    v branch -q keepme
+    for round in 1 2 3; do
+        v switch -q -c r$round
+        for n in 1 2 3; do tick; echo "round $round n $n" >>f; echo "r${round}n$n" >"file$round$n"; v add .; v commit -q -m "r$round-$n"; done
+        v repack -q -d
+        v switch -q main; v branch -q -D r$round
+    done
+    for i in 1 2; do echo "loose $i" | g hash-object -w --stdin >/dev/null; done
+    g reflog expire --expire=now --all
+    packshape; allobjects
+    v repack -A -d
+    packshape; allobjects
+    v fsck
+    # a .keep pack stays and its objects are not repacked
+    seq 1 50 >g1; v add g1; v commit -q -m g1
+    v repack -q -d
+    for k in .git/objects/pack/*.pack; do : >"${k%.pack}.keep"; done
+    tick; echo g2 >g2; v add g2; v commit -q -m g2
+    v repack -a -d
+    packshape; allobjects
+    v repack -A
+    packshape; allobjects
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

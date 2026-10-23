@@ -45,6 +45,7 @@ pub mod ignore;
 pub mod maintenance;
 pub mod mv;
 pub mod notes;
+pub mod packrefs;
 pub mod patch;
 pub mod plumbing;
 pub mod pretty;
@@ -106,6 +107,8 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Log(args) => history::run_log(&global, &args),
         Commands::Gc(args) => maintenance::run_gc(&global, &args),
         Commands::CountObjects(args) => maintenance::run_count_objects(&global, &args),
+        Commands::Repack(args) => maintenance::run_repack(&global, &args),
+        Commands::PackRefs(args) => packrefs::run_pack_refs(&global, &args),
         Commands::Mv(args) => mv::run_mv(&global, &args),
         Commands::Clean(args) => clean::run_clean(&global, &args),
         Commands::Stash(args) => stash::run_stash(&global, &args),

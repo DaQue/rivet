@@ -1,4 +1,4 @@
-//! Repository maintenance: `gc` and `count-objects`.
+//! Repository maintenance: `gc`, `repack` and `count-objects`.
 
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
@@ -38,6 +38,42 @@ pub struct GcArgs {
     /// Leave such objects loose instead.
     #[arg(long = "no-cruft", overrides_with = "cruft")]
     pub no_cruft: bool,
+}
+
+/// Arguments to `rivet repack`.
+#[derive(Debug, clap::Args)]
+pub struct RepackArgs {
+    /// Pack everything reachable into one pack.
+    #[arg(short = 'a')]
+    pub all: bool,
+
+    /// Like `-a`, but turn the unreachable objects of the replaced packs loose.
+    #[arg(short = 'A')]
+    pub loosen: bool,
+
+    /// Remove the packs the new one replaces, and the loose objects it now holds.
+    #[arg(short = 'd')]
+    pub delete: bool,
+
+    /// With `-a`/`-A`: also pack the unreachable objects of the replaced packs.
+    #[arg(short = 'k', long = "keep-unreachable")]
+    pub keep_unreachable: bool,
+
+    /// Compute deltas again instead of reusing the stored ones.
+    #[arg(short = 'f')]
+    pub no_reuse_delta: bool,
+
+    /// Compute deltas and compress objects again.
+    #[arg(short = 'F')]
+    pub no_reuse_object: bool,
+
+    /// Accepted for compatibility: objects from alternates are never packed here.
+    #[arg(short = 'l')]
+    pub local: bool,
+
+    /// Accepted for compatibility: no server info files are written.
+    #[arg(short = 'n')]
+    pub no_update_server_info: bool,
 }
 
 /// Arguments to `rivet count-objects`.
@@ -155,6 +191,33 @@ pub fn run_gc(global: &GlobalArgs, args: &GcArgs) -> Result<i32> {
     options.reflog_expire = reflog_setting("gc.reflogExpire", "90.days")?;
     options.reflog_expire_unreachable = reflog_setting("gc.reflogExpireUnreachable", "30.days")?;
     rivet_core::gc::gc(&repository, &options)?;
+    Ok(0)
+}
+
+/// Handler for `rivet repack`.
+///
+/// Packs the loose reachable objects into a new pack (`-a`/`-A`: everything reachable) and, with
+/// `-d`, removes what the new pack makes redundant.
+///
+/// # Exit codes
+///
+/// `0`; `128` outside a repository.
+pub fn run_repack(global: &GlobalArgs, args: &RepackArgs) -> Result<i32> {
+    let repository = super::open(global)?;
+    if args.all && args.loosen {
+        anyhow::bail!("repack: -a and -A cannot be combined");
+    }
+    let options = rivet_core::gc::RepackOptions {
+        all: args.all,
+        loosen_unreachable: args.loosen,
+        delete_redundant: args.delete,
+        keep_unreachable: args.keep_unreachable,
+        no_reuse_delta: args.no_reuse_delta || args.no_reuse_object,
+    };
+    let report = rivet_core::gc::repack(&repository, &options)?;
+    if report.objects_packed == 0 && !global.quiet {
+        println!("Nothing new to pack.");
+    }
     Ok(0)
 }
 

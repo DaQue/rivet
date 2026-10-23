@@ -40,7 +40,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
     am, apply, blame, branching, clean, format_patch, grep, history, ignore, maintenance, mv,
-    notes, plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot, stash, tag,
+    notes, packrefs, plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot, stash,
+    tag,
 };
 
 /// The `rivet` command line.
@@ -159,6 +160,13 @@ pub enum Commands {
     /// Count unpacked objects and report pack statistics.
     #[command(name = "count-objects")]
     CountObjects(maintenance::CountObjectsArgs),
+
+    /// Pack objects into packs.
+    Repack(maintenance::RepackArgs),
+
+    /// Pack loose refs into packed-refs.
+    #[command(name = "pack-refs")]
+    PackRefs(packrefs::PackRefsArgs),
 
     /// Move or rename a file, a directory or a symlink.
     Mv(mv::MvArgs),
