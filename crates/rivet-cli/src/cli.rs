@@ -39,9 +39,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    am, apply, blame, branching, clean, format_patch, grep, history, ignore, maintenance, mv,
-    notes, packrefs, plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot, stash,
-    tag,
+    am, apply, bisect, blame, branching, clean, format_patch, grep, history, ignore, maintenance,
+    mv, notes, packrefs, plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot,
+    stash, tag,
 };
 
 /// The `rivet` command line.
@@ -160,6 +160,9 @@ pub enum Commands {
     /// Count unpacked objects and report pack statistics.
     #[command(name = "count-objects")]
     CountObjects(maintenance::CountObjectsArgs),
+
+    /// Find the commit that introduced a change by binary search.
+    Bisect(bisect::BisectArgs),
 
     /// Pack objects into packs.
     Repack(maintenance::RepackArgs),

@@ -4707,6 +4707,130 @@ s_repack_keep_multi() {
     packshape; allobjects
 }
 
+# The bisect state git keeps: refs and files.
+bisect_snap() {
+    {
+        echo "## bisect state"
+        g for-each-ref refs/bisect
+        for f in BISECT_START BISECT_LOG BISECT_TERMS BISECT_NAMES BISECT_EXPECTED_REV BISECT_ANCESTORS_OK; do
+            if [ -e ".git/$f" ]; then echo "# $f"; cat ".git/$f"; fi
+        done
+        echo "# HEAD"; cat .git/HEAD
+    } >>"$TRANSCRIPT"
+}
+
+bisect_repo() {
+    v init -q repo; cd repo
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        tick; echo $i >f
+        if [ $i -ge 8 ]; then echo bug >bug; fi
+        if [ $i = 5 ]; then echo extra >extra; fi
+        v add -A; v commit -q -m "c$i"
+    done
+}
+
+s_bisect_basic() {
+    bisect_repo
+    v bisect good
+    v bisect reset
+    v bisect log
+    v bisect terms
+    v bisect start
+    bisect_snap
+    v bisect bad HEAD
+    v bisect log
+    v bisect good main~11
+    bisect_snap
+    v bisect good
+    bisect_snap
+    v bisect bad
+    v bisect good
+    bisect_snap
+    v bisect bad
+    v bisect good
+    bisect_snap
+    v bisect log
+    v bisect reset
+    bisect_snap
+    v status -sb
+    v bisect reset
+    v bisect
+    v bisect frobnicate
+}
+
+s_bisect_start_args() {
+    bisect_repo
+    v bisect start main main~11 main~10
+    bisect_snap
+    v bisect skip
+    v bisect skip
+    bisect_snap
+    v bisect good
+    v bisect bad
+    v bisect log
+    v bisect reset main~3
+    bisect_snap
+    v status -sb
+    v switch -q main
+    v bisect start main~1 main~9 --
+    v bisect bad main~4
+    v bisect skip main~7..main~5
+    bisect_snap
+    v bisect next
+    v bisect reset
+    v bisect start --bogus
+    v bisect bad 1 2
+}
+
+s_bisect_terms() {
+    bisect_repo
+    v bisect start --term-old=fast --term-new=slow
+    v bisect terms
+    v bisect slow main
+    v bisect fast main~11
+    v bisect terms --term-new
+    v bisect terms --term-old
+    v bisect bad
+    v bisect new
+    bisect_snap
+    v bisect fast
+    v bisect log
+    v bisect reset
+    v bisect start
+    v bisect new HEAD
+    v bisect old main~11
+    v bisect terms
+    v bisect good
+    v bisect old
+    bisect_snap
+    v bisect new
+    v bisect reset
+}
+
+s_bisect_run() {
+    bisect_repo
+    printf '#!/bin/sh\n[ "$(cat f)" -lt 8 ]\n' >../check.sh; chmod +x ../check.sh
+    v bisect start main main~11
+    v bisect run ../check.sh
+    bisect_snap
+    v bisect log
+    v bisect log >../saved.log
+    cp .git/BISECT_LOG ../saved.log
+    v bisect reset
+    v bisect replay ../saved.log
+    bisect_snap
+    v bisect reset
+    printf '#!/bin/sh\ntest -e bug && exit 125; [ "$(cat f)" -lt 6 ]\n' >../skip.sh; chmod +x ../skip.sh
+    v bisect start main main~11
+    v bisect run ../skip.sh
+    v bisect reset
+    v bisect run true
+    v bisect start main main~11
+    v bisect run
+    v bisect run sh -c 'exit 130'
+    v bisect reset
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

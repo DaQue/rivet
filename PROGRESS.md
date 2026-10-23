@@ -698,3 +698,11 @@ Base: neither command existed (`error: unrecognized subcommand`).
 - Side findings fixed on the way: `branch -D -q` printed `Deleted branch …` (git is silent with `-q`). The harness now writes `maintenance.auto = false` and `gc.auto = 0` into the per-run global config: git 2.56's own post-command auto maintenance wrote a multi-pack-index and a cruft pack in the middle of `s_repack_keep_multi`.
 Known gaps: `repack -k` lists the unreachable objects of *several* replaced packs in an order I could not reproduce (git's order is neither pack mtime, directory listing nor name; single-pack `-k` and loose ones match, see `s_repack`); `--cruft`, `--cruft-expiration`, `-b`, `--write-midx`, `--geometric`, `--window/--depth`, `--max-pack-size`, `--keep-pack` are not accepted; `pack-refs --auto` and `repack`'s `update-server-info` step are not done.
 Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored; `scenarios.sh` 172 PASS / `failures: 0`.
+
+### Phase 3.2 — `bisect` start/good/bad/skip/next/run/replay/log/terms/reset (landed, scenarios `s_bisect_basic`, `s_bisect_start_args`, `s_bisect_terms`, `s_bisect_run`)
+Base: `bisect` did not exist. The half-written implementation found in the tree (`cmd/bisect.rs`, CLI wiring, four scenarios) had two red scenarios, both fixed against real git:
+- `s_bisect_start_args`: `bisect bad 1 2` without a bisection in progress printed `error: 'git bisect bad' can take only one argument.`; git checks "started" first and prints `You need to start by "git bisect start"` (exit 1).
+- `s_bisect_run`: `bisect replay <log>` replays `start` with its auto-next step (prints `Bisecting: …`, checks out the midpoint, writes `BISECT_EXPECTED_REV`) and the `good`/`bad` lines with refs and log only, then runs the final next-step. rivet skipped the first and cleared `BISECT_EXPECTED_REV`/`BISECT_ANCESTORS_OK` while replaying.
+Also fixed two clippy errors in the file (`format!` inside `println!`, manual range check).
+Known gaps (each refuses with an explicit "not implemented" error): `bisect start --first-parent`, `--reset-when-found`, and path arguments after `--`; `bisect visualize`/`view` and `bisect --no-checkout` beyond writing `BISECT_HEAD` are not covered by a scenario.
+Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored; `scenarios.sh` 176 PASS / `failures: 0`.
