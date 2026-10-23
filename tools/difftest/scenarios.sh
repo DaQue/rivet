@@ -3957,6 +3957,39 @@ s_log_decorate() {
     v log --oneline --decorate=bogus
 }
 
+# An octopus merge whose parents already own columns: git draws the dashes over the columns in use;
+# rivet used to index past them and panic (index out of bounds in draw_octopus_merge).
+s_log_graph_octopus_shared() {
+    v init -q repo; cd repo
+    g config gc.auto 0
+    local tree
+    tree=$(g hash-object -t tree -w /dev/null)
+    mk() {
+        local name=$1; shift
+        local args=() p
+        for p in "$@"; do args+=(-p "$(g rev-parse "refs/heads/$p")"); done
+        tick
+        g update-ref "refs/heads/$name" "$(g commit-tree "$tree" "${args[@]}" -m "$name")"
+    }
+    mk z
+    mk r1c0 z
+    mk r0c0 z
+    mk r0c1 r0c0
+    mk m0 r1c0 r0c1 r0c0
+    mk m1 r0c1 r0c0
+    v log --graph --oneline --all
+    v log --graph --all
+    v log --graph --format='%h %p %s' --all
+    v log --graph --oneline --topo-order --all
+    # more shared columns: two octopus merges stacked over the same branches
+    mk b1 r1c0
+    mk b2 r0c0
+    mk m2 b1 b2 r0c1 m1
+    mk m3 m2 r0c1 b1
+    v log --graph --oneline --all
+    v log --graph --format='%h %p %s' --all
+}
+
 s_log_color() {
     graph_fixture
     g config gc.auto 0

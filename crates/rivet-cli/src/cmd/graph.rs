@@ -487,10 +487,21 @@ impl Graph {
         // `*---.` : the edges labelled 0 and 1 need no dashes, the rest do.
         let dashless_parents = 3 - self.merge_layout;
         let dashful_parents = self.num_parents as i32 - dashless_parents;
-        let parent_in_old_cols = self.num_parents as i32 - self.edges_added;
+        // Some parents may already own a column; only the columns actually added count.
+        let added_cols = self.new_columns.len() as i32 - self.columns.len() as i32;
+        let parent_in_old_cols = self.num_parents as i32 - added_cols;
         let first_col = self.commit_index as i32 + dashless_parents - parent_in_old_cols;
         for i in 0..dashful_parents {
-            let column = self.new_columns[(i + first_col) as usize];
+            // Git's `first_col` can fall outside the columns when parents already own columns; it
+            // then reads memory beside its array, and only the colour of the dashes depends on it.
+            let index = usize::try_from(i + first_col).ok();
+            let Some(column) = index
+                .and_then(|n| self.new_columns.get(n))
+                .or(self.new_columns.last())
+                .copied()
+            else {
+                continue;
+            };
             line.write_column(&column, '-', self.colored);
             line.write_column(
                 &column,

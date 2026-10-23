@@ -619,3 +619,13 @@ git decorates none of them, so now only those four namespaces decorate.
 Known gaps: coloured diffs — `log --color=always -p|--stat|--name-*` dies with `log: coloured diff output is not implemented` rather than printing uncoloured diffs under a coloured header;
 an invalid `color.*` value dies with `unable to parse '<key>'…` (git also names the file and line); negated attributes (`no-bold`) in a colour spec are refused.
 Gate after: fmt, clippy, doc clean; 219 passed / 0 failed / 0 ignored; `scenarios.sh` 158 PASS / `failures: 0`.
+
+### Phase 0.3 — octopus merge over shared columns no longer panics (landed, scenario `s_log_graph_octopus_shared`)
+Base: `z <- r1c0, r0c0; r0c1 <- r0c0; m0 = merge(r1c0, r0c1, r0c0); m1 = merge(r0c1, r0c0)` then `rivet log --graph --all --oneline` panicked in
+`draw_octopus_merge` (`index out of bounds: the len is 3 but the index is 3`); git prints `| | *-.   m0` / `| | |\ \`. `draw_octopus_merge` now counts the
+columns actually added (`new_columns - columns`, as `graph.c` does) instead of `edges_added`, and clamps an index that falls outside the columns in use
+(git reads memory beside its array there; only the colour of the `-.` depends on it). Uncoloured output matches git on 1,200+ octopus-heavy random histories;
+the colour of the `-.` of an octopus whose parents already own columns can still differ (git reads uninitialised memory; ~25% of the most extreme coloured random histories).
+Remaining difference seen with a seeded octopus-heavy history (1 in 300 uncoloured): the row between a commit line and the pre-commit expansion of the next octopus
+prints `\` where git prints `|` (`output_pre_commit_line`, `prev_state == PostMerge` test); not investigated further.
+Gate after: fmt, clippy, doc clean; 219 passed / 0 failed / 0 ignored; `scenarios.sh` 159 PASS / `failures: 0`.
