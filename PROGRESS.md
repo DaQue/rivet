@@ -513,3 +513,12 @@ Each was red on the base against `/usr/bin/git`:
 - `log '...x'`, `'x...'`, `'HEAD...x'`, `'x..'`, `'..x'`, `log x`: git says `ambiguous argument '<whole arg>': unknown revision or path not in the working tree.` + the `Use '--'` hint; rivet said `not a valid object name: 'x'`. `log '^x'`: git says `bad revision '^x'`.
 Gate: fmt, clippy clean; 215 tests passed / 0 failed; `scenarios.sh` 144 PASS / `failures: 0`.
 Not done: `branch --contains` is not accepted by rivet (`error: unexpected argument '--contains'`), found while probing; `log` of an existing non-commit object now also reports `ambiguous argument` (not compared with git).
+
+### Phase 1.3 — `fsck` dangling/unreachable order (landed, every `fsck` call in `scenarios.sh` is now unsorted)
+Previously the scenarios used `vs fsck` (sorted output) and rivet listed ids in ascending order. With the sort removed, git's order
+after a cruft pack was not ascending: `s_gc_cruft_expire` on the base showed git `commit c1a14e…, commit 4e7fb7…, blob 94510b…,
+tag 341663…, blob 7972c0…, blob 7d4fa7…` vs rivet in id order. Git walks its in-memory object table (slot = first 4 id bytes, little-endian,
+modulo the table size; 32 slots, doubling when it would pass half full; linear probing). `git_table_order` in `fsck.rs` reproduces that
+(verified against the 6 ids above and 20-object table = 64 slots). Caveat: ids that collide are placed in id order, whereas git places them
+in its own object-load order, so a collision could still differ; no scenario hit one. All 144 scenarios pass 3 runs in a row with no `fsck` sort.
+Gate: fmt, clippy, doc clean; 217 tests passed / 0 failed (2 new unit tests); `scenarios.sh` 144 PASS / `failures: 0`.

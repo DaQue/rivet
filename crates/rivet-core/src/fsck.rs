@@ -298,7 +298,7 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
     let referenced: HashSet<ObjectId> = edges.values().flatten().map(|(_, t)| *t).collect();
     let mut all: Vec<ObjectId> = kinds.keys().copied().collect();
     all.sort();
-    for oid in all {
+    for oid in git_table_order(&all) {
         if reachable.contains(&oid) {
             continue;
         }
@@ -309,4 +309,71 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
         }
     }
     Ok(report)
+}
+
+/// `ids` in the order Git's in-memory object table hands them to `fsck`: slot order of an open
+/// addressing table indexed by the first four id bytes (little-endian) modulo its size, which
+/// starts at 32 and doubles whenever it would pass half full. Ids that collide land in the order
+/// given, so `ids` should be sorted for a stable answer.
+fn git_table_order(ids: &[ObjectId]) -> Vec<ObjectId> {
+    fn slot(id: &ObjectId, size: usize) -> usize {
+        let b = id.as_bytes();
+        u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize % size
+    }
+    fn insert(table: &mut [Option<ObjectId>], id: ObjectId) {
+        let mut j = slot(&id, table.len());
+        while table[j].is_some() {
+            j = (j + 1) % table.len();
+        }
+        table[j] = Some(id);
+    }
+    let mut table: Vec<Option<ObjectId>> = Vec::new();
+    for (count, id) in ids.iter().enumerate() {
+        if table.len() <= count * 2 + 1 {
+            let mut grown = vec![None; (table.len() * 2).max(32)];
+            for old in table.iter().flatten() {
+                insert(&mut grown, *old);
+            }
+            table = grown;
+        }
+        insert(&mut table, *id);
+    }
+    table.into_iter().flatten().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(first: u8, second: u8) -> ObjectId {
+        let mut bytes = [0u8; 20];
+        bytes[0] = first;
+        bytes[1] = second;
+        ObjectId::Sha1(bytes)
+    }
+
+    #[test]
+    fn table_order_is_little_endian_slot_order_with_linear_probing() {
+        // Size 32. Slots: 0x05 -> 5, 0x03 -> 3, 0x28 -> 8, then 0x01 -> 1 and 0x21 -> 1 collide,
+        // so (inserted in sorted order) 0x01 keeps slot 1 and 0x21 moves to slot 2. A second byte
+        // of 1 contributes 256, which is 0 modulo 32 and must not change the slot.
+        let mut ids = vec![id(5, 1), id(3, 0), id(0x28, 0), id(1, 0), id(0x21, 0)];
+        ids.sort();
+        let order = git_table_order(&ids);
+        assert_eq!(
+            order,
+            vec![id(1, 0), id(0x21, 0), id(3, 0), id(5, 1), id(0x28, 0)]
+        );
+    }
+
+    #[test]
+    fn table_doubles_once_it_would_pass_half_full() {
+        // The 17th insert is the first to find 32 slots too few (16 * 2 >= 31) and moves to 64.
+        // Slot = first byte % size, so ids up to 49 stay in ascending order only in 64 slots.
+        let ids: Vec<ObjectId> = (0..17u8).map(|i| id(i * 3 + 1, 0)).collect();
+        assert_eq!(git_table_order(&ids), ids);
+        // Sixteen of them still use 32 slots: 34 and 37 wrap round to slots 2 and 5.
+        let order = git_table_order(&ids[..16]);
+        assert_eq!(order[..4], [id(1, 0), id(34, 0), id(4, 0), id(37, 0)]);
+    }
 }

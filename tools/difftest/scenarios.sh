@@ -216,24 +216,24 @@ s_fsck_verify_pack() {
     tick; seq 1 400 | sed 's/^200$/changed/' >big; echo extra >small; g add .; g commit -qm two
     tick; seq 1 400 | sed 's/^100$/other/;s/^200$/changed/' >big; g commit -qam three
     g repack -adq --depth=10 --window=10
-    vs fsck
-    vs fsck --strict
+    v fsck
+    v fsck --strict
     v verify-pack .git/objects/pack/*.idx
     v verify-pack --verbose .git/objects/pack/*.idx
     v verify-pack -s .git/objects/pack/*.idx
     echo orphan | g hash-object -w --stdin >/dev/null
     g commit-tree -m orphan HEAD^{tree} >/dev/null
-    vs fsck
-    vs fsck --unreachable --no-reflogs
-    vs fsck --root
-    vs fsck --no-dangling
+    v fsck
+    v fsck --unreachable --no-reflogs
+    v fsck --root
+    v fsck --no-dangling
 }
 
 s_fsck_missing() {
     g init -q repo; cd repo
     echo a >a; mkdir d; echo b >d/b; g add .; g commit -qm one
     blob=$(g rev-parse HEAD:d/b); rm .git/objects/${blob:0:2}/${blob:2}
-    vs fsck
+    v fsck
 }
 
 s_cross_read() {
@@ -1473,7 +1473,7 @@ s_gc_cruft() {
     # default: unreachable objects go to a cruft pack, the reflogs are expired first
     v gc --prune=$CUT
     cruftshape; packshape; allobjects
-    vs fsck
+    v fsck
     DROP_OUT='^size-pack' v count-objects -v
     # nothing changed: the same cruft pack again
     v gc --prune=$CUT
@@ -1485,7 +1485,7 @@ s_gc_cruft() {
     g branch resurrected "$pick"
     v gc --prune=$CUT
     cruftshape; packshape; allobjects
-    vs fsck
+    v fsck
     v log --oneline resurrected
     # the other direction: --no-cruft explodes the cruft pack into loose objects again
     g branch -D resurrected -q
@@ -1493,13 +1493,13 @@ s_gc_cruft() {
     v gc --no-cruft --prune=$CUT
     age_unreachable "$NEW"
     cruftshape; allobjects
-    vs fsck
+    v fsck
     # and back, then everything goes
     v gc --cruft --prune=$CUT
     cruftshape; allobjects
     v gc --cruft --prune=now
     cruftshape; allobjects
-    vs fsck
+    v fsck
     v log --oneline
 }
 
@@ -1531,7 +1531,7 @@ s_gc_cruft_expire() {
     tg=$(g fsck --unreachable --no-reflogs --no-progress 2>/dev/null | awk '$2 == "tag" { print $3 }'); [ -n "$tg" ] && age "$tg" "$MID"
     v gc --prune=$CUT
     cruftshape; packshape; allobjects
-    vs fsck
+    v fsck
     # a later cutoff expires the middle-aged ones; what the newest still reaches stays
     v gc --prune=2026-10-15T00:00:00Z
     cruftshape; allobjects
@@ -1557,7 +1557,7 @@ s_gc_cruft_expire() {
     g config gc.cruftPacks true
     v gc --no-cruft
     cruftshape; allobjects
-    vs fsck
+    v fsck
 }
 
 s_gc_after_cruft() {
