@@ -486,3 +486,15 @@ Landed: `apply` `--stat/--numstat/--summary/-z/--apply`, `--reject`, `--3way`, b
 with `.mtimes`/`.rev`, `gc.cruftPacks` default true, retention of what young unreachable objects need (B); panic fixes + 9 tests (C).
 Left undone on purpose: `GIT binary patch` data (see Known gaps under A), `gc --max-cruft-size/--expire-to/--keep-largest-pack`,
 `log --graph`, `checkout -m` with paths, `merge.conflictStyle=diff3` markers in `merge`.
+
+## Block 4 (autonomous run, base `91bf98e`)
+
+### Phase 0 — `s_gc_cruft_expire` nondeterminism (fixed, scenario `s_gc_cruft_expire`)
+Base gate re-derived: fmt, clippy, doc clean; `cargo test --workspace` all `ok`, 0 failed; `scenarios.sh` 144 PASS / `failures: 0`.
+Looped `s_gc_cruft_expire` 10x on the base commit: 8 PASS, 2 FAIL (iterations 5 and 8). Both failures had the identical diff:
+the `.mtimes` block of the `gc --cruft` step differed by one second on all 11 ids (git `1792742524`, rivet `1792742525`).
+Cause: the preceding `gc.cruftPacks=false` gc loosens the unreachable objects with mtime = wall clock, and git and rivet
+run seconds apart, so the cruft pack records whichever second each side ran in. Not a `gc` bug and not an ordering issue
+(hardcoded October dates and `fsck` order were not involved).
+Fix: the scenario pins the loose files' age (`age_unreachable "$NEW"`) before `gc --cruft`; no assertion was weakened or sorted.
+After: 30/30 PASS, plus 8 more runs of `s_gc_cruft` + `s_gc_after_cruft`, all `failures: 0`. Full suite: 144 PASS / `failures: 0`.

@@ -1520,6 +1520,10 @@ s_gc_cruft_expire() {
     g config gc.cruftPacks false
     v gc
     cruftshape; allobjects
+    # The gc above loosened the unreachable objects with mtime = wall clock, and git and rivet run
+    # seconds apart, so the .mtimes written next would differ by whichever second each one ran in.
+    # Pin the loose files' age so the cruft pack records a value both sides can reproduce.
+    age_unreachable "$NEW"
     v gc --cruft
     cruftshape; allobjects
     g config gc.cruftPacks true
