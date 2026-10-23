@@ -552,12 +552,16 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         match graph.as_mut() {
             Some(graph) => {
                 graph.show_commit(&mut out);
-                push_with_graph(graph, &text, true, &mut out);
+                let terminator_row = push_with_graph(graph, &text, true, &mut out);
                 if !graph.is_commit_finished() {
                     if !text.ends_with(b"\n") {
                         out.push(b'\n');
                     }
                     graph.show_remainder(&mut out);
+                }
+                if terminator_row {
+                    graph.padding_line(&mut out);
+                    out.push(b'\n');
                 }
             }
             None => out.extend_from_slice(&text),
@@ -576,7 +580,9 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 }
                 write_diff(&repository, mode, &diff, &mut chunk)?;
                 match graph.as_mut() {
-                    Some(graph) => push_with_graph(graph, &chunk, false, &mut out),
+                    Some(graph) => {
+                        push_with_graph(graph, &chunk, false, &mut out);
+                    }
                     None => out.extend_from_slice(&chunk),
                 }
             }
@@ -617,19 +623,27 @@ pub(super) fn squash_message(
 }
 
 /// Append `text` to `out` with the graph's prefix in front of each line. The first line is left
-/// bare when `first_is_open` (the commit line was already started by `show_commit`).
+/// bare when `first_is_open` (the commit line was already started by `show_commit`). Returns
+/// whether git's line terminator needs a padding row of its own once the commit's remaining graph
+/// rows are out: that is so when the message ends in a newline of its own (a format ending in
+/// `%n`) and that empty last line used up a branch-joining row (post-merge or collapsing).
 fn push_with_graph(
     graph: &mut super::graph::Graph,
     text: &[u8],
     first_is_open: bool,
     out: &mut Vec<u8>,
-) {
-    for (n, line) in text.split_inclusive(|&b| b == b'\n').enumerate() {
+) -> bool {
+    let mut terminator_row = false;
+    let mut lines = text.split_inclusive(|&b| b == b'\n').enumerate().peekable();
+    while let Some((n, line)) = lines.next() {
+        let pending = !graph.is_commit_finished();
         if n > 0 || !first_is_open {
             graph.padding_line(out);
         }
         out.extend_from_slice(line);
+        terminator_row = n > 0 && pending && line == b"\n" && lines.peek().is_none();
     }
+    terminator_row
 }
 
 /// Phase 4 — print one object in its human-readable form.

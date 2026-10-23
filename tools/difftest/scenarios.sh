@@ -3801,6 +3801,13 @@ s_log_graph_merges() {
     v log --graph --oneline --first-parent
     v log --graph --oneline main..side1
     v log --graph --oneline -3 --all
+    # A message ending in its own newline (%n) after a merge or a collapsing row: git adds a row.
+    v log --graph --format='%h %s%n' --all
+    v log --graph --format='%h %s%n%b' --all
+    v log --graph --format='%s%n%n' --all
+    v log --graph --format='%h %s%nX%n' --all
+    v log --graph --format='tformat:%h%n%b---%n' --all
+    v log --graph --format='format:%h %s%n%b' --all
 }
 
 s_log_graph_random() {

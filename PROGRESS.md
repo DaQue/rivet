@@ -629,3 +629,12 @@ the colour of the `-.` of an octopus whose parents already own columns can still
 Remaining difference seen with a seeded octopus-heavy history (1 in 300 uncoloured): the row between a commit line and the pre-commit expansion of the next octopus
 prints `\` where git prints `|` (`output_pre_commit_line`, `prev_state == PostMerge` test); not investigated further.
 Gate after: fmt, clippy, doc clean; 219 passed / 0 failed / 0 ignored; `scenarios.sh` 159 PASS / `failures: 0`.
+
+### Phase 0.4 — `log --graph --format=…%n` after a merge or collapsing row (landed, scenario `s_log_graph_merges` extended)
+Base: `--graph --format='%h %s%n%b'` (and any `tformat` ending in `%n`) over a merge commit lost one graph row that git prints: after the post-merge (or
+collapsing) row the empty last message line used up, git's line terminator adds a padding row of its own once the commit's remaining graph rows are out
+(`| | ` after `|\`, `|   ` after `|/`). The extended scenario failed on the base with exactly those rows missing (transcript diff: 6 rows, `| | `/`|   `).
+Verified against ~700 random histories with `%s%n`, `%h%n%b`, `%h:%s%n%b---%n`, `--format=medium`, `--oneline`.
+Known gap (pre-existing, not fixed): `--graph --format=format:%s` (separator, not terminator, semantics) over a merge draws an extra `| | ` row and glues the next
+commit onto the previous text; `format:%s%n%b` matches. Not derived: git emits the separator after the next commit's graph update, rivet before.
+Gate after: fmt, clippy, doc clean; 219 passed / 0 failed / 0 ignored; `scenarios.sh` 159 PASS / `failures: 0`.
