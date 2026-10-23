@@ -128,8 +128,12 @@ pub struct LogArgs {
     pub no_abbrev_commit: bool,
 
     /// Print the decorate ref names beside each commit.
-    #[arg(long = "decorate", value_name = "WHEN")]
+    #[arg(long = "decorate", value_name = "WHEN", require_equals = true, num_args = 0..=1)]
     pub decorate: Option<Option<String>>,
+
+    /// Do not print ref names beside commits.
+    #[arg(long = "no-decorate")]
+    pub no_decorate: bool,
 
     /// Print the commit graph's graph, as `git log --graph` does.
     #[arg(long = "graph")]
@@ -343,8 +347,11 @@ pub struct DiffArgs {
 ///   `--all`-with-no-refs case rather than both returning early.
 pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     let repository = super::open(global)?;
-    if args.graph {
-        anyhow::bail!("log: --graph is not implemented");
+    if args.graph && args.reverse {
+        anyhow::bail!("options '--graph' and '--reverse' cannot be used together");
+    }
+    if args.graph && !args.paths.is_empty() {
+        anyhow::bail!("log: --graph with a path limit is not implemented");
     }
 
     // Revisions: `A..B`, `A...B`, `^A`, or a single revision; `--all` adds every ref.
@@ -420,7 +427,7 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     if let Some(n) = args.skip {
         options.skip(n);
     }
-    if args.topo_order {
+    if args.topo_order || (args.graph && !args.author_date_order) {
         options.sort(SortOrder::Topo);
     } else if args.author_date_order {
         options.sort(SortOrder::AuthorDate);
@@ -471,24 +478,55 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     } else {
         None
     };
-    let decorations = if layout_uses_decorations(&layout) {
-        decoration_map(&repository)?
+    // `--decorate[=short|full|auto|no]`; with no tty to ask, `auto` means no.
+    let (decorate, decorate_full) = match args.decorate.as_ref().map(|d| d.as_deref()) {
+        None | Some(Some("no")) | Some(Some("auto")) => (false, false),
+        Some(None) | Some(Some("short")) => (true, false),
+        Some(Some("full")) => (true, true),
+        Some(Some(other)) => anyhow::bail!("invalid --decorate option: {other}"),
+    };
+    let decorations = if decorate && !args.no_decorate || layout_uses_decorations(&layout) {
+        decoration_map(&repository, decorate_full)?
     } else {
         Default::default()
     };
+    if args.graph {
+        // Git draws a root commit that is not the last one shown shifted to the right (and may add
+        // a `\` connector line); that layout rule is not ported, so refuse rather than draw it wrong.
+        for oid in oids.iter().take(oids.len().saturating_sub(1)) {
+            if read_commit(&repository, oid)?.parents.is_empty() {
+                anyhow::bail!(
+                    "log: --graph over several root commits is not implemented ({} is a root that is not shown last)",
+                    abbrev(&repository, oid, false)
+                );
+            }
+        }
+    }
+    let mut graph = args
+        .graph
+        .then(|| super::graph::Graph::new(false, args.first_parent));
     let mut out = Vec::new();
     for (position, oid) in oids.iter().enumerate() {
         let commit = read_commit(&repository, oid)?;
+        if let Some(graph) = graph.as_mut() {
+            graph.update(*oid, &commit.parents);
+        }
         if position > 0 {
-            match &layout {
-                l if l.is_block() => out.push(b'\n'),
+            let separated = match &layout {
+                l if l.is_block() => true,
                 pretty::Layout::Format {
                     terminator: false, ..
-                } => out.push(b'\n'),
-                _ => {}
+                } => true,
+                _ => false,
+            };
+            if separated {
+                if let Some(graph) = graph.as_mut() {
+                    graph.padding_line(&mut out);
+                }
+                out.push(b'\n');
             }
         }
-        out.extend_from_slice(&render_commit(
+        let text = render_commit(
             &repository,
             &layout,
             oid,
@@ -496,7 +534,20 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
             date,
             full_ids,
             &decorations,
-        ));
+        );
+        match graph.as_mut() {
+            Some(graph) => {
+                graph.show_commit(&mut out);
+                push_with_graph(graph, &text, true, &mut out);
+                if !graph.is_commit_finished() {
+                    if !text.ends_with(b"\n") {
+                        out.push(b'\n');
+                    }
+                    graph.show_remainder(&mut out);
+                }
+            }
+            None => out.extend_from_slice(&text),
+        }
         if let Some(mode) = diff_mode {
             let diff = commit_diff(
                 &repository,
@@ -505,15 +556,36 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 &args.paths_as_specs(&repository)?,
             )?;
             if !diff.is_empty() && commit.parents.len() < 2 {
+                let mut chunk = Vec::new();
                 if layout.blank_before_diff() {
-                    out.push(b'\n');
+                    chunk.push(b'\n');
                 }
-                write_diff(&repository, mode, &diff, &mut out)?;
+                write_diff(&repository, mode, &diff, &mut chunk)?;
+                match graph.as_mut() {
+                    Some(graph) => push_with_graph(graph, &chunk, false, &mut out),
+                    None => out.extend_from_slice(&chunk),
+                }
             }
         }
     }
     write_stdout(&out)?;
     Ok(0)
+}
+
+/// Append `text` to `out` with the graph's prefix in front of each line. The first line is left
+/// bare when `first_is_open` (the commit line was already started by `show_commit`).
+fn push_with_graph(
+    graph: &mut super::graph::Graph,
+    text: &[u8],
+    first_is_open: bool,
+    out: &mut Vec<u8>,
+) {
+    for (n, line) in text.split_inclusive(|&b| b == b'\n').enumerate() {
+        if n > 0 || !first_is_open {
+            graph.padding_line(out);
+        }
+        out.extend_from_slice(line);
+    }
 }
 
 /// Phase 4 — print one object in its human-readable form.
@@ -1010,6 +1082,7 @@ fn layout_uses_decorations(layout: &pretty::Layout) -> bool {
 /// refs in reverse name order (tags, remote branches, local branches).
 fn decoration_map(
     repository: &Repository,
+    full: bool,
 ) -> Result<std::collections::HashMap<ObjectId, Vec<String>>> {
     let mut refs = repository.refs().list_all(repository.odb())?;
     refs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
@@ -1017,12 +1090,21 @@ fn decoration_map(
     let head = repository.head()?;
     for (name, oid) in refs.iter().rev() {
         let bytes = name.as_bytes();
+        let shown = |short: bool| {
+            if short && !full {
+                name.short_name().to_string()
+            } else {
+                String::from_utf8_lossy(bytes).into_owned()
+            }
+        };
         let label = if bytes.starts_with(b"refs/tags/") {
-            format!("tag: {}", name.short_name())
+            format!("tag: {}", shown(true))
         } else if bytes.starts_with(b"refs/heads/") || bytes.starts_with(b"refs/remotes/") {
-            name.short_name().to_string()
-        } else {
+            shown(true)
+        } else if bytes.starts_with(b"refs/notes/") || bytes.starts_with(b"refs/prefetch/") {
             continue;
+        } else {
+            shown(false)
         };
         let label = match head.branch() {
             Some(branch) if branch == name => format!("HEAD -> {label}"),
@@ -1184,7 +1266,7 @@ fn show_object(
             pretty::check_date_style(date)?;
             let full_ids = layout == pretty::Layout::Oneline;
             let decorations = if layout_uses_decorations(&layout) {
-                decoration_map(repository)?
+                decoration_map(repository, false)?
             } else {
                 Default::default()
             };

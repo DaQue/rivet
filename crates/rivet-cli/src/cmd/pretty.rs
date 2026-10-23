@@ -168,7 +168,11 @@ pub fn render(layout: &Layout, e: &Entry<'_>, style: &Style<'_>) -> Vec<u8> {
     };
     match layout {
         Layout::Oneline => {
-            out.extend_from_slice(format!("{} ", id(&e.oid)).as_bytes());
+            out.extend_from_slice(id(&e.oid).as_bytes());
+            if !e.decorations.is_empty() {
+                out.extend_from_slice(format!(" ({})", e.decorations.join(", ")).as_bytes());
+            }
+            out.push(b' ');
             out.extend_from_slice(&subject(e.message));
             out.push(b'\n');
         }

@@ -3757,6 +3757,104 @@ s_blame_porcelain() {
     DROP_OUT='^0{8} ' v blame -s c.txt
 }
 
+# A history with side branches and an octopus merge (one root: several roots are a known gap).
+graph_fixture() {
+    v init -q repo; cd repo
+    c() { echo "$1" >>"$2"; v add "$2"; tick; v commit -q -m "$1"; }
+    c base a
+    v branch side1; v branch side2; v branch side3
+    c main1 a
+    v switch -q side1; c s1a b; c s1b b
+    v switch -q side2; c s2a c
+    v switch -q main; c main2 a
+    tick; v merge -q --no-ff -m "merge side1" side1 >/dev/null
+    v switch -q side3; c s3a d; c s3b d
+    v switch -q main; c main3 a
+    tick; v merge -q --no-ff -m "merge side2" side2 >/dev/null
+    tick; v merge -q --no-ff -m "octopus" side3 >/dev/null 2>&1
+    c main4 a
+    v switch -q main
+}
+
+s_log_graph_linear() {
+    v init -q repo; cd repo
+    for i in 1 2 3 4; do echo "line $i" >f; echo "$i" >>g; v add f g; tick; v commit -q -m "commit $i" -m "body $i"; done
+    v log --graph
+    v log --graph --oneline
+    v log --graph --format='%h %s'
+    v log --graph --format='tformat:%h|%s'
+    v log --graph --oneline -2
+    v log --graph --oneline --skip=1 -2
+    v log --graph --stat --oneline
+    v log --graph --stat
+    v log --graph -p
+    v log --graph --name-status --oneline
+    v log --graph --reverse
+}
+
+s_log_graph_merges() {
+    graph_fixture
+    v log --graph --oneline
+    v log --graph --oneline --all
+    v log --graph --all
+    v log --graph --format='%h %p %s' --all
+    v log --graph --oneline --first-parent
+    v log --graph --oneline main..side1
+    v log --graph --oneline -3 --all
+}
+
+s_log_graph_random() {
+    v init -q repo; cd repo
+    g config gc.auto 0
+    RANDOM=7
+    echo base >f; v add f; tick; v commit -q -m base
+    local n=0 i br k other
+    local -a branches=(main)
+    for i in $(seq 40); do
+        br=${branches[$((RANDOM % ${#branches[@]}))]}
+        v switch -q "$br"
+        case $((RANDOM % 6)) in
+            0|1) n=$((n + 1)); v branch -q "b$n"; branches+=("b$n") ;;
+            2|3|4) echo "$i" >>"f$((i % 5))"; v add -A; tick; v commit -q -m "c$i on $br" ;;
+            5)
+                other=${branches[$((RANDOM % ${#branches[@]}))]}
+                if [ "$other" != "$br" ]; then
+                    k=${branches[$((RANDOM % ${#branches[@]}))]}
+                    tick; g merge -q --no-ff -m "merge $other into $br" "$other" >/dev/null 2>&1 || g merge --abort >/dev/null 2>&1
+                    if [ "$k" != "$br" ] && [ "$k" != "$other" ]; then
+                        tick; g merge -q --no-ff -m "octopus $other $k into $br" "$other" "$k" >/dev/null 2>&1 || g merge --abort >/dev/null 2>&1
+                    fi
+                fi ;;
+        esac
+    done
+    v log --graph --oneline --all
+    v log --graph --format='%h %p %s' --all
+    v log --graph --all
+}
+
+s_log_decorate() {
+    graph_fixture
+    g config gc.auto 0
+    g tag -a annot -m "annotated" main~2
+    g tag light side1
+    g update-ref refs/remotes/origin/main main~1
+    g update-ref refs/stash main~3
+    v log --oneline --decorate
+    v log --decorate
+    v log --oneline --decorate=short
+    v log --oneline --decorate=full
+    v log --oneline --decorate=no
+    v log --oneline --no-decorate
+    v log --oneline --decorate --all
+    v log --decorate --format='%h %s'
+    v log --graph --oneline --decorate --all
+    v log --graph --decorate --all
+    v log --graph --oneline --decorate --stat -3
+    v switch -q --detach main~1
+    v log --oneline --decorate -4
+    v log --oneline --decorate=bogus
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

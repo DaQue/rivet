@@ -530,3 +530,27 @@ Differences seen: git writes a delta base followed by its whole delta family (`b
 `blob … 2 6453811d…` chain), rivet interleaves the deltas of different bases; and in `s_gc_cruft_expire` git writes commits, then the three
 `blob 2` blobs, then trees, while rivet writes trees before blobs. Matching it means porting `compute_write_order`
 (tag chains, commit recency, trees, then families) plus the traversal order of the object list; not attempted in this block.
+
+### Phase 2.1 — `log --graph`, `--decorate` (landed in part; scenarios `s_log_graph_linear`, `s_log_graph_merges`, `s_log_graph_random`, `s_log_decorate`)
+New `crates/rivet-cli/src/cmd/graph.rs`: the `graph.c` state machine (padding / skip / pre-commit / commit / post-merge / collapsing
+lines, octopus `*-.` merges, merge layouts, `_` runs, `/` carry-over). `--graph` implies topo order; `--reverse` is refused with git's text.
+Compared with git on linear history (`--oneline`, medium, `--format`, `--stat`, `-p`, `--name-status`, `-n`, `--skip`), a hand-built history with
+side branches and an octopus merge, and a random merge-heavy history (`s_log_graph_random`, fixed seed 7; I also ran seeds 1–140 by hand, all identical to git).
+Things the oracle taught me that are not in my memory of `graph.c`: the collapsing row's cross-over branch also records the horizontal
+run; the commit row prints `/` when the previous row slid into that column; the blank separator row between entries (padding in the
+commit state) hides the previous row's state from those checks; a far-left parent is reached by `_` in the post-merge row.
+`--decorate[=short|full|auto|no]` / `--no-decorate` were accepted but ignored; they now decorate `--oneline`, the medium layouts and `%d`
+(`refs/stash`-style refs print their full name; `refs/notes/` and `refs/prefetch/` are skipped — the notes skip is my guess, not checked).
+`--decorate=bogus` dies with git's `invalid --decorate option: bogus`. Also: `KEEP=1` keeps a passing scenario's directory (`lib.sh`).
+Gate: fmt, clippy, doc clean; 218 tests passed / 0 failed / 0 ignored; `scenarios.sh` 148 PASS / `failures: 0`.
+
+Known gaps (all refuse or are untested rather than wrong, except colour):
+- **Several roots**: git 2.56 draws a root commit that is not shown last one column to the right (sometimes with a ` \ ` connector row);
+  I could not derive the rule from probes (`git log --graph --all` over `main: m1<-m2` and `other: r1<-r2<-r3` gives `r3, r2, " \ ", "  * r1", m2, m1`).
+  `rivet log --graph` exits 128 with `log: --graph over several root commits is not implemented (<id> is a root that is not shown last)`;
+  test `log_graph_refuses_a_root_that_is_not_shown_last_and_prints_nothing`.
+- **Colour** (`color.ui`, `--color`): not implemented anywhere in `log` (the graph code can paint columns, but nothing turns it on and the
+  `commit`/decoration colours are not produced). `git -c color.ui=always log --graph --oneline --decorate` differs from rivet.
+- `log --graph` with a path limit, `--boundary`, `--left-right`, `--simplify-by-decoration` and `--graph` with `-m` merge diffs are not covered by a scenario.
+- Found while probing, unrelated to the graph: `rivet rm -rq -f .` dies with `refusing to remove the whole work tree` (git removes everything);
+  `rivet checkout --orphan` writes a `checkout: moving from main to other` reflog line that git does not.

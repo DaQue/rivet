@@ -38,6 +38,7 @@ pub mod clean;
 mod foreachref;
 pub mod format_patch;
 mod gitwalk;
+mod graph;
 pub mod grep;
 pub mod history;
 pub mod ignore;

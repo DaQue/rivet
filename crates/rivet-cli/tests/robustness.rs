@@ -395,3 +395,32 @@ fn gc_cruft_packs_the_young_commit_with_its_old_tree_and_blob_and_records_their_
     assert_eq!(ages, [CUTOFF, CUTOFF, YOUNG]);
     git(p, &["fsck", "--no-dangling"]);
 }
+
+#[test]
+fn log_graph_refuses_a_root_that_is_not_shown_last_and_prints_nothing() {
+    let dir = repo();
+    let p = dir.path();
+    // One root: the graph is exactly git's.
+    let ours = rivet(p, &["log", "--graph", "--oneline", "--all"]);
+    assert_eq!(
+        String::from_utf8_lossy(&ours.stdout),
+        git(p, &["log", "--graph", "--oneline", "--all"]) + "\n"
+    );
+    // A second, unrelated root: git indents it, rivet declines instead of drawing it wrong.
+    git(p, &["checkout", "-q", "--orphan", "other"]);
+    git(p, &["rm", "-rqf", "."]);
+    std::fs::write(p.join("z.txt"), "z\n").unwrap();
+    git(p, &["add", "z.txt"]);
+    git(p, &["commit", "-qm", "second root"]);
+    git(p, &["checkout", "-q", "main"]);
+    let out = rivet(p, &["log", "--graph", "--oneline", "--all"]);
+    assert_eq!(out.status.code(), Some(128), "{}", stderr(&out));
+    assert!(out.stdout.is_empty());
+    assert!(
+        stderr(&out).contains("several root commits"),
+        "{}",
+        stderr(&out)
+    );
+    // Without --graph the same walk is fine.
+    assert!(rivet(p, &["log", "--oneline", "--all"]).status.success());
+}

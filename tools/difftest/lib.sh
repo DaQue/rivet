@@ -127,7 +127,7 @@ run_scenario() {
     if ! diff -u "$base/git.state" "$base/rivet.state" >"$base/state.diff"; then ok=0; fi
     if [ $ok = 1 ]; then
         echo "PASS $name"
-        rm -rf "$base"
+        [ -n "${KEEP:-}" ] || rm -rf "$base"
     else
         echo "FAIL $name  ($base)"
         FAILURES=$((FAILURES + 1))
