@@ -576,3 +576,29 @@ Gate: fmt, clippy, doc clean; 218 tests passed / 0 failed / 0 ignored; `scenario
 Known gaps: `pull --rebase` uses the fetched tip as both `--onto` and upstream (git also computes a `--fork-point` from the remote-tracking reflog, which only
 matters when the upstream was rewritten); `--rebase=merges|interactive`, `--autostash`, `rebase.autoStash` are not implemented; `pull.ff=only` config is accepted
 as "decided" but not applied; `rivet switch` with unmerged paths writes `c1: needs merge` to stderr where git writes it to stdout.
+
+## Block 5 (autonomous run, base `6a816f8`)
+
+Base gate re-derived before touching anything: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 218 passed / 0 failed / 0 ignored;
+`scenarios.sh` 152 PASS / `failures: 0`.
+
+### Phase 0.1 — `log --graph` over several roots (landed, scenarios `s_log_graph_roots`, `s_log_graph_roots_chains`, `s_log_graph_roots_merges`, `s_log_graph_roots_random`)
+Base: `rivet log --graph --all --oneline` over three lone roots exited 128 with `log: --graph over several root commits is not implemented (f77edd5 is a root that is not shown last)`
+(git: `* f77edd5 r3`, `  * d052965 c2 b`, `* 5ddf3bd r1`). The bail is gone; `history.rs::root_shifts` decides how far right each root is drawn and `graph.rs` draws it.
+The rule was derived by experiment (no `graph.c` source for 2.56 on this machine), then checked against ~3,000 random forests/merge histories
+(`--oneline`, `%s`, `--format=medium`, `fuller`, `%n%b`, `--topo-order`, `-n`, `--skip`, bigger shapes with up to 6 roots and 4 merges); the last sweep had 0 differences. The rule:
+- A root that is not the last row is *eligible* unless it was reached as the second or later parent of a merge shown above it (those are never moved).
+- An eligible root is moved one column right when the next row is a new tip (not an existing column) and not itself a shifted root; otherwise it stays.
+  A root that had a child above is led into its new column by a ` \ ` connector row (before it, after any collapsing rows).
+- A root that opens a *new* column goes right of the blank columns left by the roots just above it, so a run of lone roots climbs one column per row (0,1,2,…) and the last row returns to 0;
+  a root that continues an existing column leaves one blank column for the next row but does not accumulate.
+- Columns right of a shifted root are pushed along with it; the blank separator row between entries is padded to the *unshifted* width.
+Replaced the robustness test `log_graph_refuses_a_root_that_…` by `log_graph_draws_a_root_that_is_not_shown_last_one_column_to_the_right` (compares with git and pins the shifted shape).
+Gate after: fmt, clippy, doc clean; 218 passed / 0 failed / 0 ignored; `scenarios.sh` 156 PASS / `failures: 0`.
+
+Found while probing, NOT fixed (each reproduces without any root commit unless noted):
+- `log --graph` with an octopus merge whose parents already sit in columns panics in `draw_octopus_merge` (`graph.rs`, index out of bounds):
+  `z<-r1c0,r0c0; r0c1<-r0c0; m0 = merge(r1c0, r0c1, r0c0); m1 = merge(r0c1, r0c0)`, then `rivet log --graph --all --oneline`. Real git draws it.
+- `log --graph --format='%h %s%n%b'` on a merge commit with an empty body: git draws the empty body line with graph columns (`| | `), rivet drops that line.
+- `log --graph --date-order` and `--first-parent` with several tips: rivet's commit order differs from git's, so the drawing differs (ordering issue in the walk, not in the graph code).
+- `rivet log` accepts a single revision only (`log a b` is `unexpected argument`).

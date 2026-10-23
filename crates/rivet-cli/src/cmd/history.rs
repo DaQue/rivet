@@ -490,18 +490,11 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     } else {
         Default::default()
     };
-    if args.graph {
-        // Git draws a root commit that is not the last one shown shifted to the right (and may add
-        // a `\` connector line); that layout rule is not ported, so refuse rather than draw it wrong.
-        for oid in oids.iter().take(oids.len().saturating_sub(1)) {
-            if read_commit(&repository, oid)?.parents.is_empty() {
-                anyhow::bail!(
-                    "log: --graph over several root commits is not implemented ({} is a root that is not shown last)",
-                    abbrev(&repository, oid, false)
-                );
-            }
-        }
-    }
+    let shifts = if args.graph {
+        root_shifts(&repository, &oids, args.first_parent)?
+    } else {
+        Vec::new()
+    };
     let mut graph = args
         .graph
         .then(|| super::graph::Graph::new(false, args.first_parent));
@@ -509,7 +502,7 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     for (position, oid) in oids.iter().enumerate() {
         let commit = read_commit(&repository, oid)?;
         if let Some(graph) = graph.as_mut() {
-            graph.update(*oid, &commit.parents);
+            graph.update(*oid, &commit.parents, shifts[position]);
         }
         if position > 0 {
             let separated = match &layout {
@@ -908,6 +901,65 @@ struct LogCommit {
     author: rivet_core::Signature,
     committer: rivet_core::Signature,
     message: Vec<u8>,
+}
+
+/// How far right `log --graph` draws each commit. Git moves a root commit that is not shown last
+/// off the column the next row would reuse (a run of root commits climbs one column per row), but
+/// leaves it alone when the next row continues an existing column or when the root was reached
+/// through a merge's second or later parent.
+fn root_shifts(
+    repository: &Repository,
+    oids: &[ObjectId],
+    first_parent: bool,
+) -> Result<Vec<usize>> {
+    let mut layout = super::graph::Graph::new(false, first_parent);
+    let mut is_root = Vec::with_capacity(oids.len());
+    let mut merge_parent = Vec::with_capacity(oids.len());
+    let mut rows = Vec::with_capacity(oids.len());
+    let mut merge_parents = std::collections::HashSet::new();
+    for oid in oids {
+        let commit = read_commit(repository, oid)?;
+        layout.update(*oid, &commit.parents, 0);
+        rows.push(layout.row_layout());
+        is_root.push(commit.parents.is_empty());
+        merge_parent.push(merge_parents.contains(oid));
+        if !first_parent {
+            merge_parents.extend(commit.parents.iter().skip(1).copied());
+        }
+        // Drive the state machine to the end of the commit as the real pass will.
+        let mut scratch = Vec::new();
+        layout.show_commit(&mut scratch);
+        layout.show_remainder(&mut scratch);
+    }
+    let last = oids.len().saturating_sub(1);
+    let mut shifts = vec![0; oids.len()];
+    // A root (one not reached through a merge) leaves a blank column behind; a run of roots that
+    // each open a new column leaves one more for each root in the run.
+    let mut ghosts_above = 0;
+    for i in 0..last {
+        let (base, _, has_column) = rows[i];
+        let ghosts = if has_column { 0 } else { ghosts_above };
+        let eligible = is_root[i] && !merge_parent[i];
+        ghosts_above = match (eligible, has_column) {
+            (false, _) => 0,
+            (true, true) => 1,
+            (true, false) => ghosts + 1,
+        };
+        if !eligible {
+            continue;
+        }
+        let mut col = base + ghosts;
+        // A root drawn above a row that reuses its column would read as that row's parent, unless
+        // that row is itself a root about to be shifted away, or just carries on an existing column.
+        let next = i + 1;
+        let next_shifted_root = is_root[next] && next != last;
+        let next_continues = rows[next].2;
+        if ghosts == 0 && !next_shifted_root && !next_continues {
+            col += 1;
+        }
+        shifts[i] = col - base;
+    }
+    Ok(shifts)
 }
 
 fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<LogCommit> {

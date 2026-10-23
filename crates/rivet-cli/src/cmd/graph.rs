@@ -34,6 +34,8 @@ enum State {
     Commit,
     PostMerge,
     Collapsing,
+    /// The connector line leading a shifted root commit into its column.
+    Shift,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -92,6 +94,10 @@ pub struct Graph {
     prev_state: State,
     commit_index: usize,
     prev_commit_index: usize,
+    /// How many columns the current root commit is drawn to the right of its own column.
+    shift: usize,
+    /// Whether the current commit already had a column (a child above it) before this row.
+    commit_in_columns: bool,
     merge_layout: i32,
     /// Screen column where a merge's left parent edge starts (`mapping_idx` for layout 0).
     left_edge: i32,
@@ -119,6 +125,8 @@ impl Graph {
             prev_state: State::Padding,
             commit_index: 0,
             prev_commit_index: 0,
+            shift: 0,
+            commit_in_columns: false,
             merge_layout: 0,
             left_edge: 0,
             edges_added: 0,
@@ -131,9 +139,21 @@ impl Graph {
         }
     }
 
-    /// Move to the next commit to be shown, whose parents are `parents`.
-    pub fn update(&mut self, commit: ObjectId, parents: &[ObjectId]) {
+    /// For the commit passed to the last [`Graph::update`]: the column it sits in with no shift,
+    /// how many columns carry on below it, and whether a child above it already had a column for it.
+    pub fn row_layout(&self) -> (usize, usize, bool) {
+        (
+            self.commit_index,
+            self.new_columns.len(),
+            self.commit_in_columns,
+        )
+    }
+
+    /// Move to the next commit to be shown, whose parents are `parents`. A root commit is drawn
+    /// `shift` columns to the right of the column it would normally take.
+    pub fn update(&mut self, commit: ObjectId, parents: &[ObjectId], shift: usize) {
         self.commit = Some(commit);
+        self.shift = shift;
         self.parents = if self.first_parent {
             parents.iter().take(1).copied().collect()
         } else {
@@ -148,7 +168,17 @@ impl Graph {
         } else if self.needs_pre_commit_line() {
             self.state = State::PreCommit;
         } else {
-            self.state = State::Commit;
+            self.state = self.state_before_commit();
+        }
+    }
+
+    /// The state that precedes the commit line: a shifted root that had a column first needs a
+    /// connector line leading into its new column.
+    fn state_before_commit(&self) -> State {
+        if self.shift > 0 && self.commit_in_columns {
+            State::Shift
+        } else {
+            State::Commit
         }
     }
 
@@ -203,7 +233,11 @@ impl Graph {
                 line.addch(' ');
             }
         }
-        self.pad_horizontally(&mut line);
+        // The room a shifted root will take is not claimed until its own row.
+        let width = self.width - 2 * self.shift;
+        if line.width < width {
+            line.addchars(' ', width - line.width);
+        }
         out.extend_from_slice(&line.bytes);
     }
 
@@ -233,6 +267,10 @@ impl Graph {
             }
             State::Collapsing => {
                 self.output_collapsing_line(&mut line);
+                false
+            }
+            State::Shift => {
+                self.output_shift_line(&mut line);
                 false
             }
         };
@@ -333,6 +371,7 @@ impl Graph {
         let commit = self.commit.expect("update sets the commit");
         let mut seen_this = false;
         let mut is_commit_in_columns = true;
+        self.commit_in_columns = self.columns.iter().any(|c| c.commit == commit);
         let num_columns = self.columns.len();
         for i in 0..=num_columns {
             let col_commit = if i == num_columns {
@@ -367,6 +406,10 @@ impl Graph {
             mapping_size -= 1;
         }
         self.mapping.truncate(mapping_size);
+        // The room a shifted root takes is padding only; the columns below it map as if it had not moved.
+        if self.num_parents == 0 {
+            self.width += 2 * self.shift;
+        }
     }
 
     fn is_mapping_correct(&self) -> bool {
@@ -392,8 +435,24 @@ impl Graph {
         if self.num_parents >= 3 && self.commit_index + 1 < self.columns.len() {
             self.set_state(State::PreCommit);
         } else {
-            self.set_state(State::Commit);
+            let next = self.state_before_commit();
+            self.set_state(next);
         }
+    }
+
+    fn output_shift_line(&mut self, line: &mut Line) {
+        let commit = self.commit.expect("a commit is being shown");
+        for column in &self.columns {
+            if column.commit == commit {
+                line.addch(' ');
+                line.write_column(column, '\\', self.colored);
+                line.addch(' ');
+            } else {
+                line.write_column(column, '|', self.colored);
+                line.addch(' ');
+            }
+        }
+        self.set_state(State::Commit);
     }
 
     fn output_pre_commit_line(&mut self, line: &mut Line) {
@@ -456,6 +515,7 @@ impl Graph {
             };
             if col_commit == commit {
                 seen_this = true;
+                line.addchars(' ', 2 * self.shift);
                 line.addch('*');
                 if self.num_parents > 2 {
                     self.draw_octopus_merge(line);

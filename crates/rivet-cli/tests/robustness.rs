@@ -397,7 +397,7 @@ fn gc_cruft_packs_the_young_commit_with_its_old_tree_and_blob_and_records_their_
 }
 
 #[test]
-fn log_graph_refuses_a_root_that_is_not_shown_last_and_prints_nothing() {
+fn log_graph_draws_a_root_that_is_not_shown_last_one_column_to_the_right() {
     let dir = repo();
     let p = dir.path();
     // One root: the graph is exactly git's.
@@ -406,7 +406,7 @@ fn log_graph_refuses_a_root_that_is_not_shown_last_and_prints_nothing() {
         String::from_utf8_lossy(&ours.stdout),
         git(p, &["log", "--graph", "--oneline", "--all"]) + "\n"
     );
-    // A second, unrelated root: git indents it, rivet declines instead of drawing it wrong.
+    // A second, unrelated root: git indents the one that is not shown last.
     git(p, &["checkout", "-q", "--orphan", "other"]);
     git(p, &["rm", "-rqf", "."]);
     std::fs::write(p.join("z.txt"), "z\n").unwrap();
@@ -414,13 +414,18 @@ fn log_graph_refuses_a_root_that_is_not_shown_last_and_prints_nothing() {
     git(p, &["commit", "-qm", "second root"]);
     git(p, &["checkout", "-q", "main"]);
     let out = rivet(p, &["log", "--graph", "--oneline", "--all"]);
-    assert_eq!(out.status.code(), Some(128), "{}", stderr(&out));
-    assert!(out.stdout.is_empty());
-    assert!(
-        stderr(&out).contains("several root commits"),
-        "{}",
-        stderr(&out)
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        text,
+        git(p, &["log", "--graph", "--oneline", "--all"]) + "\n"
     );
+    // Guard against the oracle and rivet agreeing on an unshifted drawing: the root shown first is
+    // drawn two characters in, with the other root back in column zero below it.
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(lines[0].starts_with("  * "), "{text}");
+    assert!(lines[1].starts_with("* "), "{text}");
     // Without --graph the same walk is fine.
     assert!(rivet(p, &["log", "--oneline", "--all"]).status.success());
 }

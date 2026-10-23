@@ -3757,7 +3757,7 @@ s_blame_porcelain() {
     DROP_OUT='^0{8} ' v blame -s c.txt
 }
 
-# A history with side branches and an octopus merge (one root: several roots are a known gap).
+# A history with side branches and an octopus merge (one root; see roots_fixture for several).
 graph_fixture() {
     v init -q repo; cd repo
     c() { echo "$1" >>"$2"; v add "$2"; tick; v commit -q -m "$1"; }
@@ -3825,6 +3825,105 @@ s_log_graph_random() {
                         tick; g merge -q --no-ff -m "octopus $other $k into $br" "$other" "$k" >/dev/null 2>&1 || g merge --abort >/dev/null 2>&1
                     fi
                 fi ;;
+        esac
+    done
+    v log --graph --oneline --all
+    v log --graph --format='%h %p %s' --all
+    v log --graph --all
+}
+
+# Histories with several root commits: git draws a root that is not shown last shifted to the right.
+# Roots are made with real git (`g`); the log under test is `v log`.
+roots_fixture() {
+    v init -q repo; cd repo
+    g config gc.auto 0
+    c() { echo "$1" >>"$2"; v add "$2"; tick; v commit -q -m "$1"; }
+    root() { g switch -q --orphan "$1"; g rm -rqf . 2>/dev/null; c "$1" "$1"; }
+}
+
+s_log_graph_roots() {
+    roots_fixture
+    # Two, three and four lone roots: the shift climbs one column per root and the last stays put.
+    root r1
+    root r2
+    v log --graph --oneline --all
+    root r3
+    v log --graph --oneline --all
+    root r4
+    v log --graph --oneline --all
+    v log --graph --all
+    v log --graph --format='%h %s%n%b' --all
+    v log --graph --oneline --all --topo-order
+    v log --graph --oneline --all -3
+    v log --graph --oneline --all --skip=1
+}
+
+s_log_graph_roots_chains() {
+    roots_fixture
+    # Roots with a history above them are reached through a column: the connector line leads into
+    # the shifted column, and a root followed by a row that continues a column stays where it is.
+    root a; c a2 a; c a3 a
+    root b; c b2 b
+    root c
+    g switch -q b; c b3 b
+    g switch -q a; c a4 a
+    root d; c d2 d; c d3 d
+    v log --graph --oneline --all
+    v log --graph --all
+    v log --graph --format='%h %s%n%b' --all
+    v log --graph --stat --oneline --all
+    v log --graph --oneline --all -5
+}
+
+s_log_graph_roots_merges() {
+    roots_fixture
+    # Unrelated histories joined by merges: a root reached as a merge's later parent is not shifted,
+    # one reached as its first parent is, and lanes beside a shifted root are pushed along with it.
+    root a; c a2 a; c a3 a
+    root b; c b2 b; c b3 b
+    root c; c c2 c
+    g switch -q a
+    tick; g merge -q --allow-unrelated-histories --no-ff -m "merge b into a" b >/dev/null
+    c a4 a
+    root d
+    g switch -q c
+    tick; g merge -q --allow-unrelated-histories --no-ff -m "merge a into c" a >/dev/null
+    c c3 c
+    g switch -q d; c d2 d
+    tick; g merge -q --allow-unrelated-histories --no-ff -m "merge c into d" c >/dev/null
+    root e; c e2 e
+    v log --graph --oneline --all
+    v log --graph --all
+    v log --graph --format='%h %p %s' --all
+    v log --graph --oneline --all --topo-order
+    v log --graph --oneline d
+    v log --graph --oneline -6 --all
+}
+
+s_log_graph_roots_random() {
+    roots_fixture
+    c() { echo "$1" >>"$2"; v add "$2"; tick; v commit -q -m "$1"; }
+    # A seeded forest: random chains grown on random branches, some joined by merges of unrelated
+    # histories, so roots land beside live columns in every arrangement.
+    RANDOM=11
+    local n=0 i br other
+    local -a branches=()
+    for i in $(seq 60); do
+        case $((RANDOM % 7)) in
+            0|1)
+                n=$((n + 1)); g switch -q --orphan "t$n"; g rm -rqf . 2>/dev/null
+                c "root $n" "f$n"; branches+=("t$n") ;;
+            2|3|4)
+                [ ${#branches[@]} -gt 0 ] || continue
+                br=${branches[$((RANDOM % ${#branches[@]}))]}
+                g switch -q "$br"; c "c$i on $br" "f$((i % 4))" ;;
+            5|6)
+                [ ${#branches[@]} -gt 1 ] || continue
+                br=${branches[$((RANDOM % ${#branches[@]}))]}
+                other=${branches[$((RANDOM % ${#branches[@]}))]}
+                [ "$other" != "$br" ] || continue
+                g switch -q "$br"
+                tick; g merge -q --allow-unrelated-histories --no-ff -m "merge $other into $br" "$other" >/dev/null 2>&1 || g merge --abort >/dev/null 2>&1 ;;
         esac
     done
     v log --graph --oneline --all
