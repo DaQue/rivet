@@ -35,6 +35,7 @@ pub mod apply;
 pub mod bisect;
 pub mod blame;
 pub mod branching;
+pub mod cherry;
 pub mod clean;
 mod foreachref;
 pub mod format_patch;
@@ -109,6 +110,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Gc(args) => maintenance::run_gc(&global, &args),
         Commands::CountObjects(args) => maintenance::run_count_objects(&global, &args),
         Commands::Bisect(args) => bisect::run_bisect(&global, &args),
+        Commands::Cherry(args) => cherry::run_cherry(&global, &args),
         Commands::Repack(args) => maintenance::run_repack(&global, &args),
         Commands::PackRefs(args) => packrefs::run_pack_refs(&global, &args),
         Commands::Mv(args) => mv::run_mv(&global, &args),

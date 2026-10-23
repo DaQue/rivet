@@ -478,7 +478,9 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
         }
         let target = resolve_upstream(&repository, upstream)?;
         let message = set_upstream(&mut repository, &branch, &target)?;
-        println!("{message}");
+        if !global.quiet {
+            println!("{message}");
+        }
         return Ok(0);
     }
 

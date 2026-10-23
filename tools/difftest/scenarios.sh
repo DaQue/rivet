@@ -4831,6 +4831,39 @@ s_bisect_run() {
     v bisect reset
 }
 
+s_cherry() {
+    v init -q repo; cd repo
+    tick; printf 'a\nb\nc\nd\ne\nf\n' >f; v add f; v commit -q -m base
+    v branch -q topic
+    tick; echo main1 >m1; v add m1; v commit -q -m "main only"
+    v switch -q topic
+    tick; echo one >t1; v add t1; v commit -q -m "topic one"
+    tick; sed -i 's/^c$/C/' f; v add f; v commit -q -m "topic two: upcase c"
+    tick; echo three >t3; v add t3; v commit -q -m "topic three"
+    v switch -q main
+    v cherry-pick topic~1
+    tick; echo main2 >m2; v add m2; v commit -q -m "main two"
+    v cherry-pick topic~2
+    v switch -q topic
+    v cherry main
+    v cherry -v main
+    v cherry -v main topic
+    v cherry main topic~1
+    v cherry main topic topic~2
+    v cherry topic main
+    v cherry -v topic main
+    v cherry
+    v cherry main topic topic~2 extra
+    v cherry nosuch
+    v cherry main nosuch
+    v branch -q --set-upstream-to=main
+    v cherry
+    v cherry -v
+    tick; v merge -q --no-ff -m "merge main" main
+    v cherry -v main
+    v cherry -v HEAD~1 HEAD
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

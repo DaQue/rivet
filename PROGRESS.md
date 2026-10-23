@@ -706,3 +706,11 @@ Base: `bisect` did not exist. The half-written implementation found in the tree 
 Also fixed two clippy errors in the file (`format!` inside `println!`, manual range check).
 Known gaps (each refuses with an explicit "not implemented" error): `bisect start --first-parent`, `--reset-when-found`, and path arguments after `--`; `bisect visualize`/`view` and `bisect --no-checkout` beyond writing `BISECT_HEAD` are not covered by a scenario.
 Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored; `scenarios.sh` 176 PASS / `failures: 0`.
+
+### Phase 3.3 — `cherry` (landed, scenario `s_cherry`)
+Base: `cherry` was `unrecognized subcommand`. New `cmd/cherry.rs`: `cherry [-v] [<upstream> [<head> [<limit>]]]` lists the non-merge commits of `<upstream>..<head>` (minus `<limit>`'s history), oldest first, `-` when the patch-id also occurs among the non-merge commits of `<head>..<upstream>`, else `+`; `-v` appends the subject. It reuses `rebase`'s patch-id (whitespace-squeezed changed and context lines plus paths and modes; equality is what matters, the hash value is not git's). With no upstream argument it uses the branch's tracked upstream; without one (or with four or more arguments) it prints `Could not find a tracked remote branch, please specify <upstream> manually.` plus git's usage text and exits 129; unknown revisions are `fatal: unknown commit <rev>` / 128 (all checked against `/usr/bin/git`).
+The scenario covers cherry-picked (`-`) and unique (`+`) commits in both directions, `-v`, a limit, explicit and tracked upstream, a merge commit on the head side, and the error paths.
+Found with the scenario: `branch -q --set-upstream-to=<x>` printed `branch '<b>' set up to track '<x>'.`; git is silent with `-q`. Fixed.
+Process note: a first version of the scenario was appended after the runner loop at the end of `scenarios.sh`, so it never ran and "passed" with two empty transcripts. Scenarios must be added above the `if [ $# -eq 0 ]` runner block.
+Known gaps: `--abbrev[=<n>]` is not accepted; a subject spanning several lines is shown as its first line, where git joins the paragraph with spaces.
+Gate after: fmt, clippy, doc clean; 221 passed / 0 failed / 0 ignored; `scenarios.sh` 177 PASS / `failures: 0`.

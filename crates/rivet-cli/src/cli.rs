@@ -39,9 +39,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    am, apply, bisect, blame, branching, clean, format_patch, grep, history, ignore, maintenance,
-    mv, notes, packrefs, plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot,
-    stash, tag,
+    am, apply, bisect, blame, branching, cherry, clean, format_patch, grep, history, ignore,
+    maintenance, mv, notes, packrefs, plumbing, query, rebase, reflog, remote, sequencer, setup,
+    snapshot, stash, tag,
 };
 
 /// The `rivet` command line.
@@ -163,6 +163,9 @@ pub enum Commands {
 
     /// Find the commit that introduced a change by binary search.
     Bisect(bisect::BisectArgs),
+
+    /// Find commits not yet applied upstream.
+    Cherry(cherry::CherryArgs),
 
     /// Pack objects into packs.
     Repack(maintenance::RepackArgs),

@@ -108,7 +108,7 @@ fn write_state(dir: &Path, name: &str, text: &str) -> Result<()> {
 
 /// The hash two commits share when they make the same change: file names, modes and the changed
 /// and context lines with all whitespace removed. Hunk positions do not take part.
-fn patch_id(repository: &Repository, oid: &ObjectId) -> Result<Vec<u8>> {
+pub(super) fn patch_id(repository: &Repository, oid: &ObjectId) -> Result<Vec<u8>> {
     let tree = repository.commit_tree(*oid)?;
     let parents = repository.commit_parents(*oid)?;
     let base = match parents.first() {
@@ -154,7 +154,7 @@ fn patch_id(repository: &Repository, oid: &ObjectId) -> Result<Vec<u8>> {
     Ok(hasher.finish()?.as_bytes().to_vec())
 }
 
-fn subject_of(repository: &Repository, oid: &ObjectId) -> Result<String> {
+pub(super) fn subject_of(repository: &Repository, oid: &ObjectId) -> Result<String> {
     let object = repository.odb().read_typed(oid, ObjectKind::Commit)?;
     let commit = rivet_core::Commit::parse(repository.format(), object.data())?;
     Ok(commit
@@ -557,7 +557,10 @@ fn start(
 }
 
 /// The configured upstream of the current branch, as a name `resolve_commit` understands.
-fn tracked_upstream(repository: &Repository, head: &HeadState) -> Result<Option<String>> {
+pub(super) fn tracked_upstream(
+    repository: &Repository,
+    head: &HeadState,
+) -> Result<Option<String>> {
     let HeadState::Attached { branch, .. } = head else {
         return Ok(None);
     };
