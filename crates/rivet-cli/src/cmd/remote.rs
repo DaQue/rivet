@@ -1161,13 +1161,65 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
     }
 
     let mut specs = Vec::new();
+    let mut missing_sources = Vec::new();
     for spec in &args.refspecs {
         let mut parsed = rivet_core::remote_ops::Refspec::parse(BStr::new(spec.as_bytes()))?;
+        if !args.delete {
+            // A malformed refspec is the `fatal:` class (128); a well-formed one whose source does
+            // not exist is a per-ref `error:` that fails the push with status 1.
+            let colon = spec.contains(':');
+            // One-level names such as `main` are fine in a refspec: judge them under a prefix.
+            let name_ok = |name: &[u8]| {
+                let mut full = Vec::new();
+                if !name.starts_with(b"refs/") {
+                    full.extend_from_slice(b"refs/x/");
+                }
+                full.extend_from_slice(name);
+                rivet_core::refs::is_valid_ref_name(&full)
+            };
+            let dst_ok = parsed.dst.is_empty() && !colon
+                || parsed.src.is_empty() && parsed.dst.is_empty()
+                || parsed.dst.contains(&b'*')
+                || !parsed.dst.is_empty() && name_ok(&parsed.dst);
+            let src_known = parsed.src.is_empty()
+                || parsed.src.contains(&b'*')
+                || rivet_core::revparse::resolve(
+                    repository.format(),
+                    repository.refs(),
+                    repository.odb(),
+                    parsed.src.as_ref(),
+                )
+                .is_ok();
+            let src_ok = src_known || name_ok(&parsed.src);
+            if spec.is_empty() || !dst_ok || !src_ok {
+                eprintln!("fatal: invalid refspec '{spec}'");
+                return Ok(128);
+            }
+            if !src_known {
+                missing_sources.push(parsed.src.to_string());
+            }
+        }
         if args.delete {
             parsed.dst = parsed.src.clone();
             parsed.src = bstr::BString::default();
         }
         specs.push(parsed);
+    }
+    if !missing_sources.is_empty() {
+        let url = match repository.remote_config(&remote)? {
+            Some(config) => config
+                .push_urls
+                .first()
+                .or_else(|| config.urls.first())
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| remote.clone()),
+            None => remote.clone(),
+        };
+        for source in &missing_sources {
+            eprintln!("error: src refspec {source} does not match any");
+        }
+        eprintln!("error: failed to push some refs to '{url}'");
+        return Ok(1);
     }
     let mut set_upstream_to: Option<(String, String)> = None;
     if specs.is_empty() && !args.all && !args.tags {

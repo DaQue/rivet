@@ -890,3 +890,10 @@ Base `76635db`: `credential.helper` was never consulted and a `401` was a bare "
 - Not compared on purpose: the number of upload-pack POSTs and repeated receive-pack advertisements (git sends one more POST per fetch; rivet asks a push for two advertisements) — see `GAPS.md`.
 Not done: see `GAPS.md` (multi-round `authtype`/`state`, helper-supplied fields beyond `username`/`password`, `git credential`, ssh).
 Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 220 PASS / `failures: 0`.
+
+## Block 5 (hook coverage / sparse-checkout)
+
+### Phase 5.1 — `push <missing-ref>` exit code (landed, extends scenario `s_push_cases`)
+Base `d61f192`: `push origin nope`, `nope:refs/heads/x` and `main:refs/heads/ok nope` printed `fatal: src refspec nope does not match any` and exited 128. Git 2.56: one `error: src refspec <src> does not match any` per missing source, then `error: failed to push some refs to '<url>'`, exit 1, and nothing is pushed (the valid refspec in `main:refs/heads/ok nope` is not sent). A malformed refspec is the `fatal: invalid refspec '<spec>'` class, exit 128: an empty argument, `a b`, `main:` (empty destination), `main:bad..name`. One-level names (`nope`, `main`) are valid names. Done in `run_push` (`rivet-cli`), before any transport work; no core API change.
+Not done (in `GAPS.md`): `x:y:z` splits at the first colon (git: the last); the matching refspec `:`.
+Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 220 PASS / `failures: 0`.

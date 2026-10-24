@@ -80,8 +80,9 @@ The command works for the common case; the listed options or edge cases are miss
   `clone` and `worktree add`; `pre-auto-gc`, `reference-transaction`, `applypatch-msg`,
   `pre-applypatch`, `post-applypatch`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` is not implemented. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
   source (and `merge`). `GIT_DIR`/`GIT_WORK_TREE` are not exported to hooks (git does not either
-  for the common layout; linked work trees are untested). Related, not a hook: `push <remote>
-  <missing-ref>` exits 128 with `fatal:` where git prints two `error:` lines and exits 1.
+  for the common layout; linked work trees are untested). Related, not a hook: `push` with
+  a refspec `x:y:z` splits at the first colon (git: the last), and the matching refspec `:` is
+  rejected where git pushes all matching branches.
 * **Credential helpers** — `credential.helper` (global, per URL, `!shell`, absolute path,
   `git-credential-<name>`; an empty value resets), `credential.useHttpPath`, `credential.username`,
   URL userinfo, `GIT_ASKPASS`/`core.askPass`/`SSH_ASKPASS` and a terminal prompt (`/dev/tty`,

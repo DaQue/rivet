@@ -798,6 +798,14 @@ s_push_cases() {
     v fetch origin
     v status
     v push --dry-run origin main
+    # a missing source is a per-ref error (exit 1, nothing pushed); a malformed refspec is fatal (128)
+    v push origin nope
+    v push origin nope:refs/heads/x
+    v push origin main:refs/heads/ok nope
+    v push origin 'a b'
+    v push origin 'main:'
+    v push origin ''
+    (cd ../origin.git && v for-each-ref)
 }
 
 s_pull_merge() {
