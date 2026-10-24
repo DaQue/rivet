@@ -1,9 +1,9 @@
-//! `submodule`: `status`, `init`, `sync`, `add` and `update`, and `.gitmodules` read-only.
+//! `submodule`: `status`, `init`, `sync`, `add`, `update` and `deinit`, and `.gitmodules` read-only.
 //!
 //! Each gitlink of the index prints as `<state><commit> <path>[ (<description>)]`, where the state
 //! is `-` for a submodule that is not checked out, `+` when its `HEAD` is not the recorded commit,
 //! `U` for a merge conflict and a blank otherwise. Every other subcommand (
-//! `foreach`, `deinit`, `summary`, `absorbgitdirs`, …) is refused by name.
+//! `foreach`, `summary`, `absorbgitdirs`, …) is refused by name.
 
 use std::path::Path;
 
@@ -44,6 +44,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "sync" => return submodule_sync(global, quiet, rest),
             "add" => return submodule_add(global, quiet, rest),
             "update" => return submodule_update(global, quiet, rest),
+            "deinit" => return submodule_deinit(global, quiet, rest),
             _ => {}
         }
     }
@@ -66,7 +67,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "status" if !seen_sub => seen_sub = true,
             other if !seen_sub && !other.starts_with('-') => {
                 anyhow::bail!(
-                    "submodule: '{other}' is not implemented (only 'status', 'init', 'sync', 'add' and 'update' are)"
+                    "submodule: '{other}' is not implemented (only 'status', 'init', 'sync', 'add', 'update' and 'deinit' are)"
                 )
             }
             other if other.starts_with('-') => {
@@ -604,6 +605,17 @@ fn init_in(
         repository.write_config()?;
     }
     Ok(0)
+}
+
+fn canonical(path: &Path) -> std::path::PathBuf {
+    // The module directory may not exist yet: resolve its parent and re-append the name.
+    match path.file_name() {
+        Some(name) if !path.exists() => path
+            .parent()
+            .map(|parent| canonical(parent).join(name))
+            .unwrap_or_else(|| path.to_path_buf()),
+        _ => std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+    }
 }
 
 fn is_relative_url(url: &str) -> bool {
@@ -1525,4 +1537,140 @@ fn checkout_detached(sub: &mut Repository, oid: ObjectId, force: bool, fresh: bo
         BStr::new(format!("checkout: moving from {from} to {oid}").as_bytes()),
     )?;
     Ok(())
+}
+
+const USAGE_DEINIT: &str =
+    "usage: git submodule deinit [--quiet] [-f | --force] [--all | [--] [<path>...]]
+
+    -q, --[no-]quiet      suppress submodule status output
+    -f, --[no-]force      remove submodule working trees even if they contain local changes
+    --[no-]all            unregister all submodules
+
+";
+
+fn submodule_deinit(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Result<i32> {
+    let mut force = false;
+    let mut all = false;
+    let mut paths: Vec<String> = Vec::new();
+    let mut only_paths = false;
+    for word in args {
+        match word.as_str() {
+            _ if only_paths => paths.push(word.clone()),
+            "-q" | "--quiet" => quiet = true,
+            "-f" | "--force" => force = true,
+            "--all" => all = true,
+            "--" => only_paths = true,
+            other if other.starts_with('-') => {
+                eprint!("{USAGE}");
+                return Ok(1);
+            }
+            other => paths.push(other.to_string()),
+        }
+    }
+    if all && !paths.is_empty() {
+        eprintln!("error: pathspec and --all are incompatible");
+        eprint!("{USAGE_DEINIT}");
+        return Ok(129);
+    }
+    if !all && paths.is_empty() {
+        eprintln!("fatal: Use '--all' if you really want to deinitialize all submodules");
+        return Ok(128);
+    }
+    let mut repository = super::open(global)?;
+    let Some(root) = repository.worktree_path().map(Path::to_path_buf) else {
+        return Ok(0);
+    };
+    let prefix = cwd_prefix(&root);
+    let links = match module_list(&repository, &prefix, &paths) {
+        Ok(links) => links,
+        Err(code) => return Ok(code),
+    };
+    let gitmodules = gitmodules_config(&repository, &root);
+    if let Some(message) = check_update_settings(&gitmodules) {
+        eprintln!("fatal: {message}");
+        return Ok(128);
+    }
+    for link in links {
+        let display = display_path(&prefix, link.path.as_ref());
+        let name = name_of(&gitmodules, link.path.as_ref()).unwrap_or_else(|| link.path.clone());
+        let dir = root.join(link.path.to_os_str_lossy());
+        if !force && let Some(problem) = removal_problem(&repository, &link.path, &dir) {
+            eprintln!("error: {problem}");
+            eprintln!("    {}", link.path);
+            eprintln!("(use --cached to keep the file, or -f to force removal)");
+            eprintln!(
+                "fatal: Submodule work tree '{display}' contains local modifications; use '-f' to discard them"
+            );
+            return Ok(128);
+        }
+        // The module directory stops pointing at a work tree that is about to be emptied.
+        let git_dir = repository
+            .common_dir()
+            .join("modules")
+            .join(name.to_os_str_lossy());
+        let unset = Repository::open_with(&git_dir, None, None)
+            .ok()
+            .and_then(|mut module| {
+                let removed = module
+                    .config_mut()
+                    .remove(BStr::new("core.worktree"))
+                    .ok()?;
+                removed.then(|| module.write_config().ok()).flatten()
+            });
+        if unset.is_none() {
+            if !git_dir.exists() {
+                let from = std::env::current_dir().unwrap_or_else(|_| root.clone());
+                eprintln!(
+                    "error: could not lock config file {}: No such file or directory",
+                    relative_path(&canonical(&from), &canonical(&git_dir.join("config"))).display()
+                );
+            }
+            eprintln!("warning: Could not unset core.worktree setting in submodule '{name}'");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        if !quiet {
+            println!("Cleared directory '{display}'");
+        }
+        let removed = repository
+            .config_mut()
+            .remove_section(BStr::new("submodule"), Some(name.as_ref()));
+        if removed {
+            repository.write_config()?;
+            if !quiet {
+                let url = setting(&gitmodules, name.as_ref(), "url").unwrap_or_default();
+                println!("Submodule '{name}' ({url}) unregistered for path '{display}'");
+            }
+        }
+    }
+    Ok(0)
+}
+
+/// Why `git rm` would refuse to remove the submodule at `path` (its work tree is `dir`).
+fn removal_problem(repository: &Repository, path: &BString, dir: &Path) -> Option<&'static str> {
+    let in_head = repository
+        .head_commit()
+        .ok()
+        .flatten()
+        .and_then(|commit| repository.commit_tree(commit).ok())
+        .and_then(|tree| rivet_core::ops::flatten_tree(repository.odb(), tree).ok())
+        .and_then(|files| files.get(path).map(|(_, oid)| *oid));
+    let staged = repository
+        .index()
+        .entry(path.as_ref())
+        .is_some_and(|entry| in_head != Some(entry.oid));
+    if staged {
+        return Some("the following file has changes staged in the index:");
+    }
+    if !dir.join(".git").exists() {
+        return None;
+    }
+    let mut sub = Repository::open_or_discover(dir).ok()?;
+    let recorded = repository.index().entry(path.as_ref()).map(|e| e.oid);
+    let moved = sub.head().ok().and_then(|h| h.oid()) != recorded;
+    let dirty = sub
+        .status(&rivet_core::StatusOptions::new())
+        .map(|s| !s.is_clean())
+        .unwrap_or(false);
+    (moved || dirty).then_some("the following file has local modifications:")
 }

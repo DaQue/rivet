@@ -5674,6 +5674,50 @@ s_submodule_update_recursive() {
     v submodule status --recursive
 }
 
+s_submodule_deinit() {
+    sm_nested_top
+    g clone -q top clone
+    g clone -q --recurse-submodules top clone2
+    cd clone
+    v submodule deinit nosuch
+    v submodule deinit --bogus
+    v submodule deinit
+    v submodule deinit --
+    v submodule deinit --all vendor/lib
+    v submodule deinit vendor/lib
+    cd ../clone2
+    v submodule deinit vendor/lib
+    sm_snap vendor/lib other
+    v submodule deinit vendor/lib
+    v submodule status
+    echo dirty >>other/l.txt
+    v submodule deinit other
+    echo u >other/u.txt
+    v submodule deinit other
+    (cd other && g checkout -q -- l.txt)
+    v submodule deinit other
+    v submodule deinit -f other
+    v submodule status
+    sm_snap other
+    v submodule update --init other
+    (cd other && tick && echo c >>l.txt && g commit -q -a -m c)
+    v submodule deinit other
+    g add other
+    v submodule deinit other
+    v submodule deinit -q -f other
+    v status -s
+    ls -a other >>"$TRANSCRIPT"
+    v submodule update --init --recursive
+    v submodule deinit --all
+    v submodule status
+    v submodule update --init
+    v submodule deinit -f --all
+    v submodule status
+    v submodule deinit -q --all
+    sed "s#$ROOT#<ROOT>#g" .git/config >>"$TRANSCRIPT"
+    sm_snap other vendor/lib
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -5694,6 +5738,7 @@ for s in "$@"; do
         s_submodule_add_urls) run_scenario "$s" none ;;
         s_submodule_update) run_scenario "$s" clone clone/vendor/lib ;;
         s_submodule_update_recursive) run_scenario "$s" clone ;;
+        s_submodule_deinit) run_scenario "$s" clone clone2 ;;
         s_worktree_move) run_scenario "$s" repo ;;
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
