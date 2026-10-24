@@ -5596,6 +5596,84 @@ s_submodule_add_urls() {
     v submodule status
 }
 
+# `top` (vendor/lib, other) whose submodules each have a nested submodule `in`; nothing is cloned.
+sm_nested_top() {
+    g config --global protocol.file.allow always
+    g init -q inner; (cd inner && tick && echo i >i.txt && g add i.txt && g commit -q -m i1)
+    g init -q lib; (cd lib && tick && echo l >l.txt && g add l.txt && g commit -q -m l1 &&
+        g submodule add -q ../inner in && tick && g commit -q -m "add in")
+    g init -q top; cd top
+    tick; echo t >t; g add t; g commit -q -m t1
+    g submodule add -q ../lib vendor/lib
+    g submodule add -q ../lib other
+    tick; g commit -q -m "add submodules"
+    cd ..
+}
+
+# Move `lib` forward and point `top` at it (top's own checkouts are made by real git).
+sm_bump() {
+    (cd "$ROOT/lib" && tick && echo "$1" >>l.txt && g commit -q -a -m "$1")
+    (cd "$ROOT/top" && g -C vendor/lib pull -q && g add vendor/lib && tick && g commit -q -m "bump $1")
+    (cd "$ROOT/clone" && g pull -q --no-recurse-submodules)
+}
+
+s_submodule_update() {
+    sm_nested_top
+    g clone -q top clone
+    cd clone
+    v submodule update
+    v submodule update vendor/lib
+    v submodule update --init vendor/lib
+    sm_snap vendor/lib
+    v submodule update --init
+    sm_snap other
+    v submodule update
+    v submodule status
+    (cd vendor/lib && v status -sb && v log --oneline)
+    sm_bump two
+    v submodule update vendor/lib
+    v submodule status
+    sm_bump three
+    v submodule update -N vendor/lib
+    v submodule update -q vendor/lib
+    sm_snap vendor/lib other
+    echo dirty >>vendor/lib/l.txt
+    sm_bump four
+    v submodule update vendor/lib
+    v submodule update -f vendor/lib
+    v submodule update -f vendor/lib
+    v submodule status
+    (cd other && g checkout -q main)
+    v submodule update other
+    (cd other && v branch --show-current)
+    rm -rf other
+    v submodule update other
+    ls other >>"$TRANSCRIPT"
+    v submodule update nosuch
+    v submodule update --bogus
+    g config submodule.vendor/lib.update none
+    sm_bump five
+    v submodule update vendor/lib
+    v submodule update other
+}
+
+s_submodule_update_recursive() {
+    sm_nested_top
+    g clone -q top clone
+    cd clone
+    v submodule update --init vendor/lib
+    v submodule update vendor/lib
+    v submodule update --recursive
+    v submodule update --init --recursive
+    v submodule status --recursive
+    sm_snap vendor/lib other
+    (cd vendor/lib && v submodule status && v status -s)
+    rm -rf vendor/lib/in
+    v submodule update --recursive vendor/lib
+    v submodule update --init --recursive -q
+    v submodule status --recursive
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -5614,6 +5692,8 @@ for s in "$@"; do
         s_submodule_sync) run_scenario "$s" clone ;;
         s_submodule_add) run_scenario "$s" top top/vendor/lib top/dev/lib2 ;;
         s_submodule_add_urls) run_scenario "$s" none ;;
+        s_submodule_update) run_scenario "$s" clone clone/vendor/lib ;;
+        s_submodule_update_recursive) run_scenario "$s" clone ;;
         s_worktree_move) run_scenario "$s" repo ;;
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;

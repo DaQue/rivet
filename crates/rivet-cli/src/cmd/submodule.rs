@@ -1,8 +1,8 @@
-//! `submodule`: `status`, `init`, `sync` and `add`, and `.gitmodules` read-only.
+//! `submodule`: `status`, `init`, `sync`, `add` and `update`, and `.gitmodules` read-only.
 //!
 //! Each gitlink of the index prints as `<state><commit> <path>[ (<description>)]`, where the state
 //! is `-` for a submodule that is not checked out, `+` when its `HEAD` is not the recorded commit,
-//! `U` for a merge conflict and a blank otherwise. Every other subcommand (`update`,
+//! `U` for a merge conflict and a blank otherwise. Every other subcommand (
 //! `foreach`, `deinit`, `summary`, `absorbgitdirs`, …) is refused by name.
 
 use std::path::Path;
@@ -43,6 +43,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "init" => return submodule_init(global, quiet, rest),
             "sync" => return submodule_sync(global, quiet, rest),
             "add" => return submodule_add(global, quiet, rest),
+            "update" => return submodule_update(global, quiet, rest),
             _ => {}
         }
     }
@@ -65,7 +66,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "status" if !seen_sub => seen_sub = true,
             other if !seen_sub && !other.starts_with('-') => {
                 anyhow::bail!(
-                    "submodule: '{other}' is not implemented (only 'status', 'init', 'sync' and 'add' are)"
+                    "submodule: '{other}' is not implemented (only 'status', 'init', 'sync', 'add' and 'update' are)"
                 )
             }
             other if other.starts_with('-') => {
@@ -527,11 +528,24 @@ fn submodule_init(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Resu
         return Ok(0);
     };
     let prefix = cwd_prefix(&root);
-    let links = match module_list(&repository, &prefix, &paths) {
+    init_in(&mut repository, &root, &prefix, "", &paths, quiet)
+}
+
+/// Register the submodules of `repository` (see [`submodule_init`]); `shown` prefixes the paths
+/// in messages when `repository` is itself a submodule.
+fn init_in(
+    repository: &mut Repository,
+    root: &Path,
+    prefix: &str,
+    shown_prefix: &str,
+    paths: &[String],
+    quiet: bool,
+) -> Result<i32> {
+    let links = match module_list(repository, prefix, paths) {
         Ok(links) => links,
         Err(code) => return Ok(code),
     };
-    let gitmodules = gitmodules_config(&repository, &root);
+    let gitmodules = gitmodules_config(repository, root);
     if let Some(message) = check_update_settings(&gitmodules) {
         eprintln!("fatal: {message}");
         return Ok(128);
@@ -545,11 +559,11 @@ fn submodule_init(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Resu
     for link in links {
         if narrowed
             && !name_of(&gitmodules, link.path.as_ref())
-                .is_some_and(|name| is_active(&repository, name.as_ref(), link.path.as_ref()))
+                .is_some_and(|name| is_active(repository, name.as_ref(), link.path.as_ref()))
         {
             continue;
         }
-        let shown = display_path(&prefix, link.path.as_ref());
+        let shown = format!("{shown_prefix}{}", display_path(prefix, link.path.as_ref()));
         let name = name_of(&gitmodules, link.path.as_ref());
         let declared = name
             .as_ref()
@@ -559,7 +573,7 @@ fn submodule_init(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Resu
             return Ok(128);
         };
         let name_ref: &BStr = name.as_ref();
-        if !is_active(&repository, name_ref, link.path.as_ref()) {
+        if !is_active(repository, name_ref, link.path.as_ref()) {
             repository
                 .config_mut()
                 .set(key_of(name_ref, "active").as_ref(), b"true")?;
@@ -568,7 +582,7 @@ fn submodule_init(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Resu
         if repository.config_value(url_key.as_ref())?.is_none() {
             let declared = declared.to_string();
             let url = if declared.starts_with("./") || declared.starts_with("../") {
-                resolve_relative_url(&repository, &root, &declared, None, false)?
+                resolve_relative_url(repository, root, &declared, None, false)?
             } else {
                 declared
             };
@@ -1254,4 +1268,261 @@ fn config_value(value: &str) -> String {
         .replace('\n', "\\n")
         .replace('\t', "\\t");
     format!("\"{escaped}\"")
+}
+
+fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Result<i32> {
+    let mut init = false;
+    let mut recursive = false;
+    let mut force = false;
+    let mut no_fetch = false;
+    let mut paths: Vec<String> = Vec::new();
+    let mut only_paths = false;
+    for word in args {
+        match word.as_str() {
+            _ if only_paths => paths.push(word.clone()),
+            "-q" | "--quiet" => quiet = true,
+            "--init" => init = true,
+            "--recursive" => recursive = true,
+            "-f" | "--force" => force = true,
+            "-N" | "--no-fetch" => no_fetch = true,
+            "--checkout" => {}
+            "--remote"
+            | "--merge"
+            | "--rebase"
+            | "--depth"
+            | "--reference"
+            | "--filter"
+            | "--single-branch"
+            | "--no-single-branch"
+            | "--dissociate"
+            | "--jobs"
+            | "-j"
+            | "--recommend-shallow"
+            | "--no-recommend-shallow"
+            | "--progress" => {
+                anyhow::bail!("submodule update: {word} is not implemented")
+            }
+            "--" => only_paths = true,
+            other if other.starts_with('-') => {
+                eprint!("{USAGE}");
+                return Ok(1);
+            }
+            other => paths.push(other.to_string()),
+        }
+    }
+    let mut repository = super::open(global)?;
+    let Some(root) = repository.worktree_path().map(Path::to_path_buf) else {
+        return Ok(0);
+    };
+    let prefix = cwd_prefix(&root);
+    let options = UpdateOptions {
+        init,
+        recursive,
+        force,
+        no_fetch,
+        quiet,
+    };
+    update_in(&mut repository, &root, &prefix, "", &paths, &options)
+}
+
+struct UpdateOptions {
+    init: bool,
+    recursive: bool,
+    force: bool,
+    no_fetch: bool,
+    quiet: bool,
+}
+
+/// Bring the submodules of `repository` to the commits its index records.
+fn update_in(
+    repository: &mut Repository,
+    root: &Path,
+    prefix: &str,
+    shown_prefix: &str,
+    paths: &[String],
+    options: &UpdateOptions,
+) -> Result<i32> {
+    if options.init {
+        let code = init_in(repository, root, prefix, shown_prefix, paths, options.quiet)?;
+        if code != 0 {
+            return Ok(code);
+        }
+    }
+    let links = match module_list(repository, prefix, paths) {
+        Ok(links) => links,
+        Err(code) => return Ok(code),
+    };
+    let gitmodules = gitmodules_config(repository, root);
+    if let Some(message) = check_update_settings(&gitmodules) {
+        eprintln!("fatal: {message}");
+        return Ok(128);
+    }
+    let recorded: Vec<(BString, ObjectId)> = repository
+        .index()
+        .entries()
+        .iter()
+        .filter(|e| e.mode == EntryMode::Commit && !e.is_unmerged())
+        .map(|e| (e.path.clone(), e.oid))
+        .collect();
+    for link in links {
+        let display = format!("{shown_prefix}{}", display_path(prefix, link.path.as_ref()));
+        let Some(name) = name_of(&gitmodules, link.path.as_ref()) else {
+            eprintln!("fatal: no submodule mapping found in .gitmodules for path '{display}'");
+            return Ok(128);
+        };
+        let Some(oid) = recorded
+            .iter()
+            .find(|(path, _)| *path == link.path)
+            .map(|(_, oid)| *oid)
+        else {
+            continue;
+        };
+        if !is_active(repository, name.as_ref(), link.path.as_ref()) {
+            if !paths.is_empty() {
+                eprintln!("Submodule path '{display}' not initialized");
+                eprintln!("Maybe you want to use 'update --init'?");
+            }
+            continue;
+        }
+        let strategy = repository
+            .config_value(key_of(name.as_ref(), "update").as_ref())?
+            .map(|v| v.to_string())
+            .or_else(|| setting(&gitmodules, name.as_ref(), "update").map(|v| v.to_string()));
+        match strategy.as_deref() {
+            None | Some("checkout") => {}
+            Some("none") => {
+                eprintln!("Skipping submodule '{display}'");
+                continue;
+            }
+            Some(other) => {
+                anyhow::bail!("submodule update: update strategy '{other}' is not implemented")
+            }
+        }
+        let dest = root.join(link.path.to_os_str_lossy());
+        let git_dir = repository
+            .common_dir()
+            .join("modules")
+            .join(name.to_os_str_lossy());
+        let mut fresh = false;
+        if !dest.join(".git").exists() {
+            fresh = true;
+            if git_dir.exists() {
+                connect_module(&dest, &git_dir)?;
+            } else {
+                let Some(url) = repository.config_value(key_of(name.as_ref(), "url").as_ref())?
+                else {
+                    eprintln!("Submodule path '{display}' not initialized");
+                    eprintln!("Maybe you want to use 'update --init'?");
+                    continue;
+                };
+                if let Err(code) = clone_submodule(&dest, &git_dir, &url.to_string(), options.quiet)
+                {
+                    return Ok(code);
+                }
+            }
+        }
+        let mut sub = Repository::open_with(&git_dir, Some(&dest), None)
+            .or_else(|_| Repository::open_or_discover(&dest))?;
+        let current = sub.head().ok().and_then(|head| head.oid());
+        if fresh || current != Some(oid) || options.force {
+            if !sub.odb().contains(&oid) && !options.no_fetch {
+                fetch_origin(&mut sub, options.quiet)?;
+            }
+            if !sub.odb().contains(&oid) {
+                if options.no_fetch {
+                    eprintln!("fatal: unable to read tree ({oid})");
+                    eprintln!("fatal: Unable to checkout '{oid}' in submodule path '{display}'");
+                } else {
+                    eprintln!(
+                        "fatal: Fetched in submodule path '{display}', but it did not contain {oid}. Direct fetching of that commit failed."
+                    );
+                }
+                return Ok(128);
+            }
+            if let Err(error) = checkout_detached(&mut sub, oid, options.force, fresh) {
+                match error.downcast::<rivet_core::Error>() {
+                    Ok(core) => {
+                        if let Err(other) =
+                            super::branching::report_checkout_refusal(core, "checkout")
+                        {
+                            eprintln!("error: {other}");
+                        }
+                    }
+                    Err(other) => eprintln!("error: {other}"),
+                }
+                eprintln!("fatal: Unable to checkout '{oid}' in submodule path '{display}'");
+                return Ok(1);
+            }
+            if !options.quiet {
+                println!("Submodule path '{display}': checked out '{oid}'");
+            }
+        }
+        if options.recursive {
+            let nested = format!("{display}/");
+            let sub_root = sub.worktree_path().map(Path::to_path_buf).unwrap_or(dest);
+            let code = update_in(&mut sub, &sub_root, "", &nested, &[], options)?;
+            if code != 0 {
+                return Ok(code);
+            }
+        }
+    }
+    Ok(0)
+}
+
+/// Re-attach an existing module directory to a work tree that lost its `.git` file.
+fn connect_module(dest: &Path, git_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest)?;
+    let link = relative_path(dest, git_dir);
+    std::fs::write(dest.join(".git"), format!("gitdir: {}\n", link.display()))?;
+    let mut module = Repository::open_with(git_dir, None, None)?;
+    let worktree = relative_path(git_dir, dest);
+    module.config_mut().set(
+        BStr::new("core.worktree"),
+        worktree.to_string_lossy().as_bytes(),
+    )?;
+    module.write_config()?;
+    Ok(())
+}
+
+/// `git fetch` in a submodule, from its default remote.
+fn fetch_origin(sub: &mut Repository, quiet: bool) -> Result<()> {
+    use rivet_core::remote_ops::{FetchRequest, TagMode};
+    let request = FetchRequest {
+        refspecs: Vec::new(),
+        tags: TagMode::Auto,
+        prune: false,
+        force: false,
+        dry_run: false,
+        write_fetch_head: true,
+        pack_refs: false,
+        action: if quiet { "fetch --quiet" } else { "fetch" }.to_string(),
+    };
+    let report = sub.fetch_remote("origin", &request)?;
+    super::remote::print_fetch_report(&report, quiet);
+    Ok(())
+}
+
+/// `git checkout -q <oid>` in a submodule: detach `HEAD` there and bring the work tree along.
+fn checkout_detached(sub: &mut Repository, oid: ObjectId, force: bool, fresh: bool) -> Result<()> {
+    let from = match sub.head()? {
+        rivet_core::HeadState::Attached { branch, .. } => branch.short_name().to_string(),
+        rivet_core::HeadState::Detached { oid, .. } => oid.to_string(),
+        rivet_core::HeadState::Unborn { branch } => branch.short_name().to_string(),
+    };
+    let tree = sub.commit_tree(oid)?;
+    // A just-cloned module has no index and no files yet; a forced update throws local changes away.
+    if fresh || sub.head()?.oid().is_none() {
+        sub.reset_hard_to_tree(tree)?;
+    } else {
+        sub.checkout_tree(tree, force)?;
+    }
+    // Staying on the commit `HEAD` already detaches at writes no reflog line.
+    if matches!(sub.head()?, rivet_core::HeadState::Detached { oid: at, .. } if at == oid) {
+        return Ok(());
+    }
+    sub.point_head(
+        rivet_core::ops::HeadTarget::Detached(oid),
+        BStr::new(format!("checkout: moving from {from} to {oid}").as_bytes()),
+    )?;
+    Ok(())
 }

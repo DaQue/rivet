@@ -513,6 +513,14 @@ impl Repository {
         for (path, (mode, oid)) in &target {
             let path_ref = BStr::new(&path[..]);
             if *mode == EntryMode::Commit {
+                // Git leaves an empty directory where a submodule will be checked out.
+                let full = self.worktree()?.join(path_ref)?;
+                if full.symlink_metadata().is_err() {
+                    std::fs::create_dir_all(&full).map_err(|e| Error::IoAtPath {
+                        path: path.clone(),
+                        source: e,
+                    })?;
+                }
                 fresh.insert(make_index_entry(path_ref, *mode, *oid, None));
                 continue;
             }
