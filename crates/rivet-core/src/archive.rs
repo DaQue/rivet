@@ -12,8 +12,8 @@
 //! * **Compressed output is not byte-identical to Git's.** Git pipes a tar through `gzip -cn`,
 //!   whose deflate encoder is not zlib's, and deflates zip entries with zlib. The decompressed
 //!   tar and the extracted zip entries are identical; the compressed bytes may differ.
-//! * `export-ignore` is honoured, read from the `.gitattributes` files of the archived tree and
-//!   from `info/attributes`. `export-subst` is refused rather than ignored, so a file that wants
+//! * `export-ignore` is honoured, read from the `.gitattributes` files of the archived tree (of the
+//!   work tree with [`ArchiveOptions::worktree_attributes`]) and from `info/attributes`. `export-subst` is refused rather than ignored, so a file that wants
 //!   `$Format:...$` expansion is never written out unexpanded.
 //! * Pathspecs are literal paths and `*`/`?`/`[...]` globs; pathspec magic (`:(exclude)`, …) is
 //!   refused.
@@ -72,6 +72,9 @@ pub struct ArchiveOptions {
     /// Archive only this directory of the tree (`/`-separated, no leading or trailing slash), as
     /// `git archive` does when run from a subdirectory; empty for the whole tree.
     pub base: BString,
+    /// Read `.gitattributes` from the work tree instead of from the archived tree (a directory
+    /// without one has no attributes): `--worktree-attributes`. Ignored for a bare repository.
+    pub worktree_attributes: bool,
 }
 
 impl ArchiveOptions {
@@ -86,6 +89,7 @@ impl ArchiveOptions {
             extra_files: Vec::new(),
             verbose: false,
             base: BString::default(),
+            worktree_attributes: false,
         }
     }
 }
@@ -142,7 +146,7 @@ pub fn archive(
     let time = options.time.or(commit_time).unwrap_or_else(now);
     let specs = parse_specs(&options.paths)?;
 
-    let mut attrs = Attributes::new(repo)?;
+    let mut attrs = Attributes::new(repo, options)?;
     let mut items: Vec<Item> = Vec::new();
     let prefix: &[u8] = options.prefix.as_ref();
     if prefix.ends_with(b"/") {
@@ -393,6 +397,8 @@ struct Attributes {
     /// Lowest priority first: the tree's files from the root down, then `info/attributes`.
     frames: Vec<Vec<Rule>>,
     info: Vec<Rule>,
+    /// The work tree directory whose `.gitattributes` files take the place of the tree's.
+    worktree: Option<std::path::PathBuf>,
 }
 
 fn parse_attribute_file(data: &[u8], base: &[u8]) -> Vec<Rule> {
@@ -428,8 +434,9 @@ fn parse_attribute_file(data: &[u8], base: &[u8]) -> Vec<Rule> {
         if export_ignore.is_none() && export_subst.is_none() {
             continue;
         }
-        // Attribute patterns have no negation and no directory-only form.
-        if pattern.starts_with(b"!") || pattern.ends_with(b"/") || pattern.starts_with(b"[attr]") {
+        // Attribute patterns have no negation; a trailing slash matches the directory itself (and
+        // so, for an archive, everything below it) but nothing inside it on its own.
+        if pattern.starts_with(b"!") || pattern.starts_with(b"[attr]") {
             continue;
         }
         if let Ok(Some(pattern)) = Pattern::parse(
@@ -449,7 +456,18 @@ fn parse_attribute_file(data: &[u8], base: &[u8]) -> Vec<Rule> {
 }
 
 impl Attributes {
-    fn new(repo: &Repository) -> Result<Self> {
+    fn new(repo: &Repository, options: &ArchiveOptions) -> Result<Self> {
+        let worktree = options
+            .worktree_attributes
+            .then(|| repo.worktree_path())
+            .flatten()
+            .map(|root| {
+                let mut dir = root.to_path_buf();
+                for part in options.base.split(|b| *b == b'/').filter(|p| !p.is_empty()) {
+                    dir.push(part.to_str_lossy().as_ref());
+                }
+                dir
+            });
         let path = repo.common_dir().join("info/attributes");
         let info = match std::fs::read(&path) {
             Ok(data) => parse_attribute_file(&data, b""),
@@ -458,6 +476,7 @@ impl Attributes {
         Ok(Self {
             frames: Vec::new(),
             info,
+            worktree,
         })
     }
 
@@ -506,18 +525,32 @@ fn walk(
     let object = repo.odb().read_typed(&tree, ObjectKind::Tree)?;
     let parsed = Tree::parse(repo.format(), object.data())?;
     // This directory's `.gitattributes` applies to all of it, whatever the entry order.
-    let pushed = match parsed
+    let from_worktree = attrs.worktree.as_ref().and_then(|root| {
+        let mut path = root.clone();
+        for part in dir.split(|b| *b == b'/').filter(|p| !p.is_empty()) {
+            path.push(part.to_str_lossy().as_ref());
+        }
+        std::fs::read(path.join(".gitattributes")).ok()
+    });
+    let in_tree = parsed
         .entries
         .iter()
-        .find(|e| e.name == ".gitattributes" && !matches!(e.mode, EntryMode::Tree))
-    {
-        Some(entry) => {
+        .find(|e| e.name == ".gitattributes" && !matches!(e.mode, EntryMode::Tree));
+    let pushed = match (from_worktree, in_tree) {
+        (Some(data), _) => {
+            let base = dir.strip_suffix(b"/").unwrap_or(dir);
+            attrs.frames.push(parse_attribute_file(&data, base));
+            true
+        }
+        // With work tree attributes the tree's own files are not consulted at all.
+        (None, Some(_)) if attrs.worktree.is_some() => false,
+        (None, Some(entry)) => {
             let blob = repo.odb().read_typed(&entry.oid, ObjectKind::Blob)?;
             let base = dir.strip_suffix(b"/").unwrap_or(dir);
             attrs.frames.push(parse_attribute_file(blob.data(), base));
             true
         }
-        None => false,
+        (None, None) => false,
     };
     for entry in &parsed.entries {
         let base_len = dir.len();

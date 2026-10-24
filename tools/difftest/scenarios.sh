@@ -5946,6 +5946,49 @@ s_reflog_index_edges() {
     v show -s HEAD@{1}
 }
 
+s_archive_remote() {
+    arch_repo
+    cd ..
+    g init -q other; cd other
+    v archive --remote=../repo HEAD -o ../a.tar; arch_snap ../a.tar
+    v archive --remote=../repo v1 -o ../b.tar; arch_snap ../b.tar
+    v archive --remote=../repo light --prefix=p/ -o ../c.tar src; arch_snap ../c.tar
+    v archive --remote=../repo --format=zip HEAD -o ../d.zip; arch_snap ../d.zip
+    vq archive --remote=../repo HEAD~1 -o ../e.tar.gz; ls -l ../e.tar.gz | awk '{print $5}' >>"$TRANSCRIPT"
+    v archive --remote "file://$ROOT/repo" HEAD docs -o ../f.tar; arch_snap ../f.tar
+    v archive --remote=../repo --exec=git-upload-archive HEAD -o ../g.tar; arch_snap ../g.tar
+    v archive --remote=../repo/.git HEAD -o ../i.tar; arch_snap ../i.tar
+    v archive --remote=../repo -l
+    vq archive --remote=../repo nosuch -o ../x.tar
+    vq archive --remote=../repo HEAD nosuchdir -o ../x.tar
+    vq archive --remote=../nosuchrepo HEAD -o ../x.tar
+    vq archive --remote=../repo/src HEAD -o ../x.tar
+    v archive --remote=../repo --exec=/nonexistent HEAD -o ../x.tar
+    vq archive --remote=../repo HEAD~1 -o ../y.tar
+    v archive --remote=../repo HEAD:src --format=zip -o ../z.zip
+}
+
+s_archive_worktree_attributes() {
+    arch_repo
+    v archive -o ../a.tar HEAD; arch_snap ../a.tar
+    printf 'README export-ignore\n' >.gitattributes
+    printf 'src/a.c export-ignore\n' >src/.gitattributes
+    v archive -o ../b.tar HEAD; arch_snap ../b.tar
+    v archive --worktree-attributes -o ../c.tar HEAD; arch_snap ../c.tar
+    v archive --worktree-attributes --no-worktree-attributes -o ../d.tar HEAD; arch_snap ../d.tar
+    v archive --worktree-attributes -o ../e.tar HEAD~1 docs src; arch_snap ../e.tar
+    rm .gitattributes
+    v archive --worktree-attributes -o ../f.tar HEAD; arch_snap ../f.tar
+    (cd src && v archive --worktree-attributes -o ../g.tar HEAD; arch_snap ../g.tar)
+    printf 'deep/ export-ignore\n' >src/.gitattributes
+    v archive --worktree-attributes --format=zip -o ../h.zip HEAD; arch_snap ../h.zip
+    # A directory-only pattern in the committed attributes drops the whole directory.
+    printf 'docs/ export-ignore\nsrc/deep/ export-ignore\n' >.gitattributes
+    rm src/.gitattributes
+    v add .gitattributes; tick; v commit -q -m attrs
+    v archive -o ../i.tar HEAD; arch_snap ../i.tar
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

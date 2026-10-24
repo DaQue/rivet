@@ -2,8 +2,9 @@
 //!
 //! The option grammar is Git's own: `--prefix` applies to what follows it (so it also decides the
 //! path of a later `--add-file`), options and paths may be mixed after the tree-ish, and `-0`…`-9`
-//! set the compression level. Not implemented, and refused by name: `--remote`, `--exec`,
-//! `--worktree-attributes`, `--add-virtual-file`.
+//! set the compression level. `--remote` works for local repositories only (the archive is made
+//! in place, without a daemon), `--exec` only as `git-upload-archive`, `--worktree-attributes` reads
+//! `.gitattributes` from the work tree. Refused by name: `--add-virtual-file`, network remotes.
 
 use std::io::Write;
 
@@ -95,6 +96,9 @@ pub fn run_archive(global: &GlobalArgs, args: &ArchiveArgs) -> Result<i32> {
     let mut verbose = global.verbose;
     let mut extra: Vec<ArchiveFile> = Vec::new();
     let mut positional: Vec<String> = Vec::new();
+    let mut remote: Option<String> = None;
+    let mut exec: Option<String> = None;
+    let mut worktree_attributes = false;
 
     let mut iter = args.args.iter();
     let mut only_paths = false;
@@ -183,7 +187,20 @@ pub fn run_archive(global: &GlobalArgs, args: &ArchiveArgs) -> Result<i32> {
                     data,
                 });
             }
-            "--remote" | "--exec" | "--worktree-attributes" | "--add-virtual-file" => {
+            "--remote" | "--exec" => {
+                let Some(v) = value_of(&name[2..]) else {
+                    eprint!("{USAGE}");
+                    return Ok(129);
+                };
+                if name == "--remote" {
+                    remote = Some(v);
+                } else {
+                    exec = Some(v);
+                }
+            }
+            "--worktree-attributes" => worktree_attributes = true,
+            "--no-worktree-attributes" => worktree_attributes = false,
+            "--add-virtual-file" => {
                 anyhow::bail!("archive: {name} is not implemented")
             }
             a if a.len() == 2 && a.starts_with('-') && a.as_bytes()[1].is_ascii_digit() => {
@@ -220,7 +237,79 @@ pub fn run_archive(global: &GlobalArgs, args: &ArchiveArgs) -> Result<i32> {
             .unwrap_or(ArchiveFormat::Tar),
     };
 
-    let repository = super::open(global)?;
+    let repository = if let Some(remote) = &remote {
+        if let Some(command) = exec.as_deref().filter(|e| *e != "git-upload-archive") {
+            // The command is run through the shell with the repository as its argument. A command
+            // that does not exist fails the way git's does; any other would need the wire
+            // protocol, which is not spoken here.
+            let script = format!("{command} '{remote}'");
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&script)
+                .arg(&script)
+                .stdin(std::process::Stdio::null())
+                .output()?;
+            if output.status.code() == Some(127) {
+                eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                eprintln!("fatal: the remote end hung up unexpectedly");
+                return Ok(128);
+            }
+            anyhow::bail!(
+                "archive: --exec with a command other than git-upload-archive is not implemented"
+            );
+        }
+        if !extra.is_empty() || worktree_attributes {
+            anyhow::bail!(
+                "archive: --remote with --add-file or --worktree-attributes is not implemented"
+            );
+        }
+        let path = remote.strip_prefix("file://").unwrap_or(remote);
+        if path.contains("://") || (path.contains(':') && !path.contains('/')) {
+            anyhow::bail!(
+                "archive: --remote with a network url is not implemented (local paths only)"
+            );
+        }
+        // What `git upload-archive` answers over the wire, minus the wire: the repository is
+        // opened in place and its own refs, attributes and objects decide the archive.
+        // The output file exists as soon as the request is made, whatever the server answers.
+        if let Some(out) = &output {
+            std::fs::write(out, b"")?;
+        }
+        let candidate = std::path::Path::new(path);
+        let repository = (candidate.join(".git").exists()
+            || (candidate.join("HEAD").exists() && candidate.join("objects").exists()))
+        .then(|| rivet_core::Repository::discover(candidate).ok())
+        .flatten();
+        let Some(repository) = repository else {
+            return Ok(remote_died(&format!(
+                "fatal: '{remote}' does not appear to be a git repository"
+            )));
+        };
+        // The server only takes names of refs (optionally followed by `:<path>`), not expressions.
+        let name = treeish.split(':').next().unwrap_or_default();
+        let named = name == "HEAD" || super::query::dwim_ref_name(&repository, name).is_some();
+        let oid = named.then(|| resolve(&repository, treeish)).flatten();
+        let Some(oid) = oid else {
+            return Ok(remote_died(&format!("fatal: no such ref: {treeish}")));
+        };
+        return write_archive(
+            &repository,
+            oid,
+            format,
+            &prefix,
+            String::new(),
+            level,
+            mtime,
+            paths,
+            Vec::new(),
+            verbose,
+            false,
+            output,
+            true,
+        );
+    } else {
+        super::open(global)?
+    };
     let oid = match resolve(&repository, treeish) {
         Some(oid) => oid,
         None => {
@@ -235,10 +324,51 @@ pub fn run_archive(global: &GlobalArgs, args: &ArchiveArgs) -> Result<i32> {
     {
         base = rel.to_string_lossy().into_owned();
     }
+    write_archive(
+        &repository,
+        oid,
+        format,
+        &prefix,
+        base,
+        level,
+        mtime,
+        paths,
+        extra,
+        verbose,
+        worktree_attributes,
+        output,
+        false,
+    )
+}
 
+/// What a remote `git upload-archive` sends back when it dies, as the client prints it.
+fn remote_died(message: &str) -> i32 {
+    eprintln!("remote: {message}        ");
+    eprintln!("remote: git upload-archive: archiver died with error");
+    eprintln!("fatal: sent error to the client: git upload-archive: archiver died with error");
+    1
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_archive(
+    repository: &rivet_core::Repository,
+    oid: rivet_core::ObjectId,
+    format: ArchiveFormat,
+    prefix: &str,
+    base: String,
+    level: Option<u32>,
+    mtime: Option<i64>,
+    paths: &[String],
+    extra: Vec<ArchiveFile>,
+    verbose: bool,
+    worktree_attributes: bool,
+    output: Option<String>,
+    remote: bool,
+) -> Result<i32> {
     let mut options = ArchiveOptions::new(format);
     options.prefix = BString::from(prefix);
     options.base = BString::from(base);
+    options.worktree_attributes = worktree_attributes;
     options.level = level;
     options.time = mtime;
     options.paths = paths.iter().map(|p| BString::from(p.as_str())).collect();
@@ -247,7 +377,10 @@ pub fn run_archive(global: &GlobalArgs, args: &ArchiveArgs) -> Result<i32> {
     options.verbose = verbose;
 
     let mut bytes: Vec<u8> = Vec::new();
-    if let Err(error) = archive(&repository, oid, &options, &mut bytes) {
+    if let Err(error) = archive(repository, oid, &options, &mut bytes) {
+        if remote {
+            return Ok(remote_died(&format!("fatal: {error}")));
+        }
         eprintln!("fatal: {error}");
         return Ok(128);
     }
