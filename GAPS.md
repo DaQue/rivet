@@ -83,11 +83,18 @@ The command works for the common case; the listed options or edge cases are miss
   lacks the `#` status template git puts there (the scenario hides those lines). `stash` runs none (as in git, which
   creates its commits without hooks; only `stash branch`, missing, runs `post-checkout`). `post-checkout` for `clone` (the
   status becomes the exit status) and `worktree add`; `core.hooksPath` is also read from the global and
-  system config. Not run yet: `pre-auto-gc`, `reference-transaction`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` is not implemented. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
+  system config. Not run yet: `pre-auto-gc`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` is not implemented. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
   source (and `merge`). `GIT_DIR`/`GIT_WORK_TREE` are not exported to hooks (git does not either
   for the common layout; linked work trees are untested). Related, not a hook: `push` with
   a refspec `x:y:z` splits at the first colon (git: the last), and the matching refspec `:` is
   rejected where git pushes all matching branches.
+* **`reference-transaction`** — deliberately not implemented: git 2.56 runs it for every ref write with
+  four states (`preparing`, `prepared`, `committed`, `aborted`), `ref:<target>` in the stdin for
+  symbolic updates (`switch` writes `<null> ref:refs/heads/x HEAD`), a `HEAD` entry next to the branch
+  entry in `preparing` for a commit, and internal transactions on pseudo-refs (`AUTO_MERGE` is
+  prepared, aborted and committed again around every commit and switch; `branch -m` aborts one
+  transaction and redoes it). A hook that saw only some of those events would mislead whoever relies
+  on it (replication, auditing), so rivet runs none until the whole set can be matched.
 * **Found by `s_hooks_clone`, not hooks** — `worktree add <path> <name>` does not create a local branch
   from a unique remote-tracking branch (`fatal: invalid reference`), and `worktree add -b <new>
   origin/<x>` does not set up `branch.<new>.remote`/`merge`; `clone` of an empty repository does not
