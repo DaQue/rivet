@@ -3965,6 +3965,9 @@ s_notes_fanout_small() {
 }
 
 s_notes_fanout_deep() {
+    # 70000 notes in a debug build: the default 60 seconds per command is too tight when the suite
+    # runs in parallel with the cargo tests.
+    local V_TIMEOUT=300
     notes_fill 70000
     tick; v notes add -m extra "$(echo extra | g hash-object -w --stdin)"
     v cat-file -p "$(g rev-parse refs/notes/commits^{tree})"

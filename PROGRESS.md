@@ -950,4 +950,13 @@ Base `ec13a41`: only `status` knew about `skip-worktree`. Found by the scenarios
 - `sparse-checkout set` warns `directory 'c/' contains untracked files, but is not in the sparse-checkout cone` for a cone-boundary directory whose tracked files are all gone but that still exists.
 - `worktree add` copies the definition and the two settings into the new work tree's own `config.worktree` and checks it out sparse.
 Found, not sparse: `rebase -q` prints `warning: skipped previously applied commit` where git is silent (recorded in `GAPS.md` below).
+### Phase 5.10 — the two flake sources from block 4 (landed)
+Left uncommitted when the session limit hit; gated and committed here.
+- `robustness.rs`: `write_blob` wrote `blob.tmp` next to the repository, so every test in the parallel
+  suite shared one path — the short read on `gc_cruft_packs_the_young_commit…`. It now writes inside the
+  test's own `.git`.
+- `tools/difftest/lib.sh`: the per-command timeout was hard-coded at 60 s; it is now `${V_TIMEOUT:-60}`,
+  and `s_notes_fanout_deep` (70,000 notes against a debug build) sets 300 s. That was the `exit 124`.
+
 Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 234 PASS / `failures: 0`.
+

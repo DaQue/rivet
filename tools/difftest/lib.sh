@@ -34,9 +34,9 @@ v() {
     if [ -n "${STOP_ON:-}" ] && [ "$IMPL" = rivet ]; then rm -rf "$base_stop.prev"; cp -a "$PWD" "$base_stop.prev"; fi
     echo "\$ v $*" | sed -e "s#$ROOT#<ROOT>#g" >>"$TRANSCRIPT"
     if [ "$IMPL" = git ]; then
-        timeout 60 "$GIT" "$@" <"${STDIN_FILE:-/dev/null}" >"$TMPOUT" 2>"$TMPERR"; rc=$?
+        timeout "${V_TIMEOUT:-60}" "$GIT" "$@" <"${STDIN_FILE:-/dev/null}" >"$TMPOUT" 2>"$TMPERR"; rc=$?
     else
-        timeout 60 "$RIVET" "$@" <"${STDIN_FILE:-/dev/null}" >"$TMPOUT" 2>"$TMPERR"; rc=$?
+        timeout "${V_TIMEOUT:-60}" "$RIVET" "$@" <"${STDIN_FILE:-/dev/null}" >"$TMPOUT" 2>"$TMPERR"; rc=$?
     fi
     # Normalise the implementation's own name and the per-run root out of the text.
     if [ "${SORT_OUT:-0}" = 1 ]; then sort -o "$TMPOUT" "$TMPOUT"; fi

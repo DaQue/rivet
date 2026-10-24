@@ -294,7 +294,8 @@ const CUTOFF: u32 = 1_791_158_400; // 2026-10-05T00:00:00Z
 const YOUNG: u32 = 1_792_454_400; // 2026-10-20
 
 fn write_blob(p: &Path, text: &str) -> String {
-    let file = p.parent().unwrap().join("blob.tmp");
+    // Inside the repository, so tests running in parallel never share the file.
+    let file = p.join(".git").join("blob.tmp");
     std::fs::write(&file, text).unwrap();
     git(p, &["hash-object", "-w", file.to_str().unwrap()])
 }
