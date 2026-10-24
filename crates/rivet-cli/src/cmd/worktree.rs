@@ -1165,10 +1165,7 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             who,
             bstr::BString::from(""),
         );
-        // Git writes no tab when there is no message; `to_bytes` always writes one.
-        let mut line = created.to_bytes();
-        line.truncate(line.len() - 2);
-        line.push(b'\n');
+        let line = created.to_bytes();
         let mut log = std::fs::OpenOptions::new()
             .append(true)
             .open(admin.join("logs/HEAD"))?;

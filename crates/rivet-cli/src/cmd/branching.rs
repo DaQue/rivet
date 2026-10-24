@@ -597,7 +597,25 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
                 elsewhere.insert(name);
             }
         }
-        for (name, oid) in repository.refs().list_branches()? {
+        for (name, target) in repository.refs().list(b"refs/heads/")? {
+            // A symbolic branch lists as `alias -> target`; one whose target is gone is skipped.
+            let (oid, symref) = match &target {
+                rivet_core::RefTarget::Direct(oid) => (*oid, None),
+                rivet_core::RefTarget::Symbolic(to) => match repository.refs().resolve_oid(to) {
+                    Ok(oid) => (
+                        oid,
+                        Some(
+                            String::from_utf8_lossy(
+                                to.as_bytes()
+                                    .strip_prefix(b"refs/heads/")
+                                    .unwrap_or(to.as_bytes()),
+                            )
+                            .into_owned(),
+                        ),
+                    ),
+                    Err(_) => continue,
+                },
+            };
             let current = head.branch() == Some(&name);
             let other = elsewhere.contains(&name.to_string());
             rows.push(Row {
@@ -610,7 +628,7 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
                 },
                 label: name.short_name().to_string(),
                 oid: Some(oid),
-                symref: None,
+                symref,
             });
         }
     }

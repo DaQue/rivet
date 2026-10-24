@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 211 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 212 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-24, gate: 229 tests / 0 failed, 211 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-24, gate: 229 tests / 0 failed, 212 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -26,7 +26,6 @@ The command or subsystem is absent; it either fails at the argument parser or re
   records the `skip-worktree` bit (see `IndexEntry::skip_worktree`), but no command sets it.
 * **`rebase --interactive`** — also `--root`, `--rebase-merges`, `--exec`, `--keep-base` and
   signing. The grammar rejects them.
-* **`symbolic-ref`** — not implemented.
 * **`bundle-uri`**, SHA-256 bundles, and `clone`/`ls-remote` from a bundle file. Creating,
   listing, verifying and unbundling bundles works; fetching *from* a bundle works only as a
   remote URL.
@@ -72,6 +71,10 @@ The command works for the common case; the listed options or edge cases are miss
   missing is reported as git does, but submodule `HEAD` discovery outside
   `Repository::open_or_discover` (`core.worktree` variants) and the
   `submodule.<name>.active`/`ignore` settings are not consulted.
+* **`symbolic-ref`** — read, `--short`, `-q`, `--[no-]recurse`, write (with `-m`) and
+  `--delete` work. A one-level lowercase *target* (`symbolic-ref FOO foo`) is refused because
+  `RefName` cannot hold it, and git's quirk of writing a ref with a malformed *name*
+  (`refs/heads/a..b`) is not reproduced (rivet reports `error: refusing to update ref`).
 * **`pull --rebase <remote> <branch>`** — with an explicit refspec, rebases onto the fetched
   tip rather than the fork point.
 * **Network protocol** — v2 capabilities other than `object-format=sha1` are not implemented;

@@ -6192,6 +6192,81 @@ s_submodule_summary() {
     v submodule summary
 }
 
+s_symbolic_ref() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    v branch dev
+    # reads
+    v symbolic-ref HEAD
+    v symbolic-ref --short HEAD
+    v symbolic-ref -q HEAD
+    v symbolic-ref --no-short HEAD
+    v symbolic-ref refs/heads/main
+    v symbolic-ref -q refs/heads/main
+    v symbolic-ref --short refs/heads/main
+    v symbolic-ref nonsense
+    v symbolic-ref -q nonsense
+    v symbolic-ref refs/nope
+    v symbolic-ref 'bad name'
+    v symbolic-ref
+    v symbolic-ref a b c
+    # write, read back, with and without a reason
+    v symbolic-ref HEAD refs/heads/dev
+    v symbolic-ref HEAD
+    v symbolic-ref --short HEAD
+    v symbolic-ref -m switching HEAD refs/heads/main
+    v symbolic-ref HEAD refs/heads/main
+    v symbolic-ref HEAD foo
+    v symbolic-ref HEAD refs/heads/a..b
+    v symbolic-ref HEAD refs/tags/t
+    v symbolic-ref HEAD refs/heads/main
+    # an unborn target reads fine
+    v symbolic-ref HEAD refs/heads/unborn
+    v symbolic-ref HEAD
+    v symbolic-ref --short HEAD
+    v symbolic-ref HEAD refs/heads/main
+    # other symbolic refs, chains, and a dangling target
+    v symbolic-ref refs/heads/alias refs/heads/main
+    v symbolic-ref refs/heads/alias
+    v symbolic-ref --short refs/heads/alias
+    v symbolic-ref refs/heads/alias2 refs/heads/alias
+    v symbolic-ref refs/heads/alias2
+    v symbolic-ref --recurse refs/heads/alias2
+    v symbolic-ref --no-recurse refs/heads/alias2
+    v symbolic-ref -m why refs/heads/alias3 refs/heads/dev
+    v symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+    v symbolic-ref refs/remotes/origin/HEAD
+    v symbolic-ref --short refs/remotes/origin/HEAD
+    v symbolic-ref refs/heads/dangling refs/heads/gone
+    v symbolic-ref refs/heads/dangling
+    v log --oneline refs/heads/alias
+    # a name that is also a tag is shortened with its prefix
+    v tag main
+    v symbolic-ref --short HEAD
+    v tag -d main
+    # delete
+    v symbolic-ref -d refs/heads/alias
+    v symbolic-ref --delete refs/heads/alias
+    v symbolic-ref --delete -q refs/heads/alias
+    v symbolic-ref --delete refs/heads/dev
+    v symbolic-ref --delete refs/heads/nope
+    v symbolic-ref --delete HEAD
+    v symbolic-ref --delete
+    v symbolic-ref --delete a b
+    v symbolic-ref --delete refs/remotes/origin/HEAD
+    v symbolic-ref --delete refs/heads/alias2
+    v symbolic-ref --delete refs/heads/dangling
+    v symbolic-ref refs/heads/dev
+    v branch
+    # detached HEAD
+    g checkout -q --detach
+    v symbolic-ref HEAD
+    v symbolic-ref -q HEAD
+    v symbolic-ref --short HEAD
+    v symbolic-ref HEAD refs/heads/main
+    v symbolic-ref HEAD
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

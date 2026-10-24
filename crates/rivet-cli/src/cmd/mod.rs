@@ -63,6 +63,7 @@ pub mod setup;
 pub mod snapshot;
 pub mod stash;
 pub mod submodule;
+pub mod symbolicref;
 pub mod tag;
 pub mod worktree;
 
@@ -160,6 +161,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Describe(args) => query::run_describe(&global, &args),
         Commands::Shortlog(args) => query::run_shortlog(&global, &args),
         Commands::Notes(args) => notes::run_notes(&global, &args),
+        Commands::SymbolicRef(args) => symbolicref::run_symbolic_ref(&global, &args),
     }
 }
 

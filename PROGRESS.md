@@ -847,3 +847,16 @@ Base `b217163`. The block hit its session limit mid-unit: the handler and scenar
 - Fixed while landing: an unknown subcommand word printed a stale `submodule: '<x>' is not implemented (all but 'summary' are)`; it now prints the same usage block as git and exits 1, byte-for-byte identical for `submodule frobnicate`.
 - Added `GAPS.md` — missing subsystems (hooks, credential helpers, sparse checkout/partial clone, `rebase --interactive`, `symbolic-ref`, bundle-uri, advanced submodule update modes), partial commands, and deliberate divergences — and linked it from the README's Status section, which pointed at `.claude/PRIORITIES.md`, a path excluded from git and therefore dead on GitHub. The `submodule` module doc no longer says summary is refused.
 Gate after: fmt, clippy, doc clean; 229 passed / 0 failed / 0 ignored; `scenarios.sh` 211 PASS / `failures: 0`.
+
+## Block 4 (hooks / symbolic-ref)
+
+Base `bf5d17d`. Gate at the base: fmt, clippy, doc clean; 229 passed / 0 failed; `scenarios.sh` 211 PASS / `failures: 0` on the second run. The first run had one failure, `s_notes_fanout_deep` (`notes add` timed out with exit 124 inside the harness while the machine was busy); it passed in 4 isolated runs and in the full rerun, so it is a load-dependent timeout, not a regression.
+
+### Phase 4.1 — `symbolic-ref` (landed, scenario `s_symbolic_ref`)
+Base: the subcommand did not exist. Compared with `/usr/bin/git` 2.56 in scratch repositories:
+- Read: `symbolic-ref [--short] [-q] [--[no-]recurse] <name>`; a ref that is direct, missing or detached is `fatal: ref <name> is not a symbolic ref` (128), `-q` is silent with exit 1; a malformed name is `fatal: No such ref: <name>`; `--short` uses the same unambiguous shortening as `for-each-ref :short`; a dangling target still reads.
+- Write: `symbolic-ref [-m <reason>] <name> <ref>`: `HEAD` outside `refs/` is `Refusing to point HEAD outside of refs/`, an invalid target `Refusing to set '<n>' to invalid ref '<t>'`. A write logs to the reflog of the name (when the ref keeps one) only if the new target resolves, with an empty message unless `-m` is given; that empty message is written with no tab.
+- Delete: `-d/--delete <name>`: `Cannot delete <name>, not a symbolic ref` and `deleting 'HEAD' is not allowed` (128); wrong argument counts print git's usage block, exit 129.
+- Found by the scenario and fixed: `ReflogEntry::to_bytes` wrote a tab after the signature for an empty message (its doc claimed git does); git writes none. The `worktree add` workaround that cut the tab off afterwards was removed (the worktree scenarios caught the double fix). `branch` listed a symbolic branch as a plain one and failed on a dangling one; it now prints `alias -> target` and skips the dangling ref, as git does (scenario `s_symbolic_ref`).
+Not done: a one-level lowercase target (`symbolic-ref FOO foo`) is refused, and git's writing of a ref with a malformed name (`refs/heads/a..b`) is not reproduced; both are in `GAPS.md`.
+Gate after: fmt, clippy, doc clean; 229 passed / 0 failed / 0 ignored; `scenarios.sh` 212 PASS / `failures: 0`.

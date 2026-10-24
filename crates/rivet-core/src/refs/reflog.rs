@@ -104,7 +104,7 @@ impl ReflogEntry {
     ///   implementation must therefore not simply call the strict commit parser if it rejects that
     ///   case; Git writes such lines and `git reflog` reads them.
     /// * A line with no tab at all is a signature with an empty message, not a corrupt line. Git
-    ///   writes the tab even for an empty message, but logs from other tools do not always.
+    ///   itself writes no tab for an empty message.
     ///
     /// # Errors
     ///
@@ -174,8 +174,9 @@ impl ReflogEntry {
     ///   produces a file whose second line fails to parse on the next read, which turns one bad
     ///   update into an unreadable reflog. Git strips such characters from reflog messages before
     ///   writing; Rivet must do the same rather than trusting the caller.
-    /// * The separator between the signature and the message is exactly one tab, even when the
-    ///   message is empty. That is what Git writes and what a byte-for-byte comparison expects.
+    /// * The separator between the signature and the message is exactly one tab, and **an empty
+    ///   message writes no tab at all** (`git symbolic-ref HEAD refs/heads/x` leaves such a line).
+    ///   That is what Git writes and what a byte-for-byte comparison expects.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&self.old.to_hex());
@@ -183,7 +184,9 @@ impl ReflogEntry {
         out.extend_from_slice(&self.new.to_hex());
         out.push(b' ');
         out.extend_from_slice(&self.who.to_bytes());
-        out.push(b'\t');
+        if !self.message.is_empty() {
+            out.push(b'\t');
+        }
         for byte in self.message.iter() {
             if *byte == b'\n' || *byte == b'\r' {
                 out.push(b' ');
