@@ -563,6 +563,9 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
         repository.add(&[], &options)?;
     }
 
+    // Without `-m`/`-F`, a merge in progress supplies its own message (what `merge --continue`
+    // commits); the editor is never started, so the hooks see it as it stands in `MERGE_MSG`.
+    let mut from_merge = false;
     let raw = if !args.message.is_empty() {
         args.message.join("\n\n")
     } else if let Some(path) = &args.file {
@@ -579,6 +582,11 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
             })?
         };
         String::from_utf8_lossy(&bytes).into_owned()
+    } else if rivet_core::merge_in_progress(repository.git_dir())
+        && let Ok(saved) = std::fs::read(repository.git_dir().join("MERGE_MSG"))
+    {
+        from_merge = true;
+        String::from_utf8_lossy(&saved).into_owned()
     } else {
         anyhow::bail!("commit: no message given (use -m or -F; the editor is not implemented)");
     };
@@ -657,7 +665,10 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
     if commit_hook(
         &repository,
         "prepare-commit-msg",
-        &[shown.as_os_str(), "message".as_ref()],
+        &[
+            shown.as_os_str(),
+            if from_merge { "merge" } else { "message" }.as_ref(),
+        ],
         None,
     )
     .is_some_and(|c| c != 0)
@@ -671,8 +682,14 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
         return Ok(1);
     }
     let hooked = std::fs::read(&editmsg)?;
+    if from_merge {
+        message =
+            String::from_utf8_lossy(&super::branching::strip_comment_lines(&hooked)).into_owned();
+    }
     if hooked != staged.as_bytes() {
-        message = String::from_utf8_lossy(&hooked).into_owned();
+        if !from_merge {
+            message = String::from_utf8_lossy(&hooked).into_owned();
+        }
         if clean_commit_message(&message).trim().is_empty() && !args.allow_empty_message {
             eprintln!("Aborting commit due to empty commit message.");
             return Ok(1);

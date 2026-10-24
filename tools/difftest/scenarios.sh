@@ -15,7 +15,10 @@ n=$(basename "$0")
     echo "== $n [$*] cwd=$(basename "$(pwd)") idx=${GIT_INDEX_FILE-unset} prefix=${GIT_PREFIX-unset} editor=${GIT_EDITOR-unset} action=${GIT_REFLOG_ACTION-unset} dir=${GIT_DIR-unset} wt=${GIT_WORK_TREE-unset}"
     case $n in
         post-rewrite|pre-push) sed "s/^/  stdin: /" ;;
-        prepare-commit-msg|commit-msg) sed "s/^/  msg: /" "$1" ;;
+        prepare-commit-msg|commit-msg)
+            # (a `hook-nocomments` file hides the "#" template lines git adds when it would start
+            # an editor; rivet never does — see GAPS.md)
+            if [ -f hook-nocomments ]; then grep -v "^#" "$1" | grep -v "^$" | sed "s/^/  msg: /"; else sed "s/^/  msg: /" "$1"; fi ;;
     esac
 } >>hooks.log
 echo "out:$n"
@@ -450,6 +453,45 @@ s_hooks_am() {
     v am --continue
     v am --skip
     v log --format=%s
+    dump_hooklog
+}
+
+s_hooks_merge_continue() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m base
+    v switch -q -c c1; echo one >cf; v add cf; tick; v commit -q -m c1
+    v switch -q -c c2 main; echo two >cf; v add cf; tick; v commit -q -m c2
+    install_hooks pre-commit prepare-commit-msg commit-msg post-commit pre-merge-commit post-merge post-rewrite
+    rm -f hooks.log
+    touch hook-nocomments
+    # --continue concludes with the hooks of `git commit` for a merge, source "merge"
+    v merge c1
+    echo resolved >cf; v add cf
+    v merge --continue
+    v log --format=%s -3
+    v reset -q --hard HEAD~1
+    # the hooks may rewrite the message
+    v merge c1
+    echo resolved >cf; v add cf
+    echo "from prepare" >hook-append-prepare-commit-msg
+    echo "from commit-msg" >hook-append-commit-msg
+    v merge --continue
+    v log -1 --format=%B
+    rm hook-append-prepare-commit-msg hook-append-commit-msg
+    v reset -q --hard HEAD~1
+    # each refusing hook leaves the merge in progress
+    v merge c1
+    echo resolved >cf; v add cf
+    for h in pre-commit prepare-commit-msg commit-msg; do
+        echo 2 >hook-fail-$h
+        v merge --continue
+        v status --short
+        rm hook-fail-$h
+    done
+    echo 2 >hook-fail-post-commit
+    v merge --continue
+    rm hook-fail-post-commit
+    v log --format=%s -3
     dump_hooklog
 }
 

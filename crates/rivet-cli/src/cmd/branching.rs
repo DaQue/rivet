@@ -1119,18 +1119,28 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
             eprintln!("fatal: Exiting because of an unresolved conflict.");
             return Ok(128);
         }
-        let message = std::fs::read(git_dir.join("MERGE_MSG")).unwrap_or_default();
-        let message = strip_comment_lines(&message);
-        let options = rivet_core::repo::CommitOptions::new(BStr::new(&message));
-        let oid = repository.commit(&options)?;
-        let branch = super::head_reflog_label(&repository)?;
-        println!(
-            "[{branch} {}] {}",
-            super::short_oid(&oid),
-            super::commit_subject(&repository, &oid)?
+        // This is `git commit` with the message of the merge.
+        return super::snapshot::run_commit(
+            global,
+            &super::snapshot::CommitArgs {
+                message: Vec::new(),
+                reuse_message: None,
+                reedit_message: None,
+                file: None,
+                author: None,
+                paths: Vec::new(),
+                amend: false,
+                allow_empty: false,
+                allow_empty_message: false,
+                all: false,
+                signoff: false,
+                gpg_sign: None,
+                dry_run: false,
+                no_verify: false,
+                with_status: false,
+                porcelain: false,
+            },
         );
-        conclude_merge_autostash(&mut repository)?;
-        return Ok(0);
     }
 
     if args.squash
