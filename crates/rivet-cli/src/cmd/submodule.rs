@@ -32,6 +32,7 @@ fn describe_args(tags: bool, all: bool) -> DescribeArgs {
         long: false,
         abbrev: None,
         exact_match: false,
+        contains: false,
     }
 }
 
@@ -224,20 +225,12 @@ fn describe_for_status(sub: &Repository, oid: ObjectId) -> Result<Option<String>
             return Ok(Some(name));
         }
     }
-    // `--contains` names a commit by a tag that descends from it; that naming is not implemented.
-    for (name, tag) in sub.refs().list(b"refs/tags/")? {
-        let Ok(tag) = sub.refs().resolve_oid(&name) else {
-            let _ = tag;
-            continue;
-        };
-        if let Ok(commit) = sub.refs().peel_oid(tag, sub.odb())
-            && commit != oid
-            && sub.is_ancestor(oid, commit)?
-        {
-            anyhow::bail!(
-                "submodule status: describing a commit by a later tag is not implemented"
-            );
-        }
+    // A tag that comes after the commit names it (`v1~2`).
+    let mut contains = describe_args(true, false);
+    contains.contains = true;
+    contains.always = false;
+    if let Described::Name(name) = describe_commit(sub, oid, &contains)? {
+        return Ok(Some(name));
     }
     match describe_commit(sub, oid, &describe_args(false, true))? {
         Described::Name(name) => Ok(Some(name)),

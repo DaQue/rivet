@@ -5226,6 +5226,11 @@ s_submodule_status() {
     v submodule status
     (cd other && v checkout -q --detach HEAD~1)
     v submodule status
+    # A tag that comes after the commit and none before it: `describe --contains` names it.
+    (cd other && v checkout -q main && tick && echo l4 >>l.txt && v commit -q -am l4 && tick && v tag -a -m later later && v checkout -q --detach HEAD~2)
+    v submodule status
+    (cd other && tick && v tag -a -m nearer nearer HEAD~1 && v checkout -q --detach HEAD~1)
+    v submodule status
     # Not checked out.
     g clone -q . ../clone
     (cd ../clone && v submodule status)
@@ -5987,6 +5992,61 @@ s_archive_worktree_attributes() {
     rm src/.gitattributes
     v add .gitattributes; tick; v commit -q -m attrs
     v archive -o ../i.tar HEAD; arch_snap ../i.tar
+}
+
+s_describe_contains() {
+    v init -q repo; cd repo
+    local i
+    for i in 1 2 3 4 5; do tick; echo $i >>f; v add f; v commit -q -m "c$i"; done
+    v describe --contains HEAD
+    v describe --contains --always HEAD
+    v describe --contains HEAD~1
+    v tag light HEAD~1
+    v describe --contains HEAD~1
+    v describe --contains HEAD~3
+    v describe --contains --tags HEAD~4
+    v describe --contains --all HEAD~2
+    v describe --contains --long --exact-match --abbrev=3 HEAD~2
+    tick; v tag -a -m ann ann HEAD~1
+    v describe --contains HEAD~1
+    v describe --contains HEAD~2
+    tick; v tag -a -m onlyann annonly HEAD
+    v describe --contains HEAD
+    v describe --contains --always HEAD~4
+    v tag v2 HEAD
+    v describe --contains HEAD~3
+    v describe --contains HEAD
+    v describe --contains nosuch
+    # A second, newer tag at the same distance does not take the name; a nearer one does.
+    tick; v tag -a -m z zlater HEAD~2
+    v describe --contains HEAD~3
+    v tag a-nearer HEAD~3
+    v describe --contains HEAD~3
+    v describe --contains HEAD~4
+    # Merges.
+    g checkout -q -b side HEAD~3
+    tick; echo s >s; v add s; v commit -q -m side1
+    tick; echo s2 >s; v commit -q -a -m side2
+    g checkout -q main
+    tick; v merge -q --no-ff side -m merge
+    tick; v tag -a -m m mergetag
+    v describe --contains side
+    v describe --contains side~1
+    v describe --contains HEAD~1
+    v describe --contains HEAD~2
+    v describe --contains HEAD^2~1
+    v describe --contains --all side~1
+    v describe --contains --all HEAD~1
+    tick; echo six >>f; v commit -q -a -m c6
+    v describe --contains HEAD
+    v describe --contains --all HEAD
+    v describe --contains --all HEAD~1
+    v branch old HEAD~3
+    v describe --contains --all old
+    v describe --contains old~1
+    v describe --contains HEAD~4
+    v describe
+    v describe --tags
 }
 
 if [ $# -eq 0 ]; then

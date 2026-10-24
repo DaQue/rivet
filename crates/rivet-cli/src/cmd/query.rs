@@ -1100,6 +1100,10 @@ pub struct DescribeArgs {
     /// Fail unless a tag points exactly at the commit.
     #[arg(long = "exact-match")]
     pub exact_match: bool,
+
+    /// Name the commit by a tag that comes after it (`v1.0~3`), as `name-rev` does.
+    #[arg(long = "contains")]
+    pub contains: bool,
 }
 
 struct TagName {
@@ -1126,7 +1130,15 @@ pub(super) enum Described {
 pub fn run_describe(global: &GlobalArgs, args: &DescribeArgs) -> Result<i32> {
     let repository = super::open(global)?;
     let spec = args.commit.as_deref().unwrap_or("HEAD");
-    let target = super::resolve_commit(&repository, spec).map_err(|_| not_valid(spec))?;
+    let target = match super::resolve_commit(&repository, spec) {
+        Ok(target) => target,
+        // `name-rev`, which `--contains` runs, skips what it cannot resolve and still succeeds.
+        Err(_) if args.contains => {
+            eprintln!("Could not get sha1 for {spec}. Skipping.");
+            return Ok(0);
+        }
+        Err(_) => return Err(not_valid(spec)),
+    };
     match describe_commit(&repository, target, args)? {
         Described::Name(name) => {
             write_stdout(format!("{name}\n").as_bytes())?;
@@ -1145,6 +1157,9 @@ pub(super) fn describe_commit(
     target: ObjectId,
     args: &DescribeArgs,
 ) -> Result<Described> {
+    if args.contains {
+        return contains_name(repository, target, args);
+    }
     // Tag names by the commit they peel to; the best name per commit wins.
     let mut names: HashMap<ObjectId, TagName> = HashMap::new();
     let mut lightweight_commits: HashSet<ObjectId> = HashSet::new();
@@ -1279,6 +1294,177 @@ pub(super) fn describe_commit(
         "{name}-{depth}-g{}",
         abbreviate(&target)
     )))
+}
+
+/// One name `name-rev` has found for a commit.
+struct RevName {
+    /// The tip's name, or the tip's name with the merge steps (`v1^2`) taken so far.
+    tip: String,
+    taggerdate: i64,
+    /// First-parent steps from `tip`.
+    generation: u32,
+    /// Steps from the tip; a step to a non-first parent costs [`MERGE_TRAVERSAL_WEIGHT`].
+    distance: u64,
+    from_tag: bool,
+}
+
+/// What `name-rev` charges for going through a merge's second (or later) parent.
+const MERGE_TRAVERSAL_WEIGHT: u64 = 65535;
+
+/// `git describe --contains`: `name-rev --tags --no-undefined [--always]` for one commit.
+fn contains_name(
+    repository: &Repository,
+    target: ObjectId,
+    args: &DescribeArgs,
+) -> Result<Described> {
+    struct Tip {
+        short: String,
+        commit: ObjectId,
+        taggerdate: i64,
+        from_tag: bool,
+        deref: bool,
+    }
+    let mut tips: Vec<Tip> = Vec::new();
+    for (refname, oid) in refs_sorted(repository)? {
+        let is_tag = refname.starts_with("refs/tags/");
+        if !args.all && !is_tag {
+            continue;
+        }
+        let short = if args.all {
+            // Branches lose `refs/heads/`, everything else only `refs/`.
+            refname
+                .strip_prefix("refs/heads/")
+                .or_else(|| refname.strip_prefix("refs/"))
+                .unwrap_or(&refname)
+                .to_string()
+        } else {
+            refname.trim_start_matches("refs/tags/").to_string()
+        };
+        let object = repository.odb().read(&oid)?;
+        let (taggerdate, deref) = if object.kind() == ObjectKind::Tag {
+            (
+                Tag::parse(repository.format(), object.data())?.tagger.when,
+                true,
+            )
+        } else {
+            (0, false)
+        };
+        let Ok(commit) = repository.refs().peel_oid(oid, repository.odb()) else {
+            continue;
+        };
+        let Ok(commit_object) = repository.odb().read_typed(&commit, ObjectKind::Commit) else {
+            continue;
+        };
+        let taggerdate = if deref {
+            taggerdate
+        } else {
+            Commit::parse(repository.format(), commit_object.data())?
+                .committer
+                .when
+        };
+        tips.push(Tip {
+            short,
+            commit,
+            taggerdate,
+            from_tag: is_tag,
+            deref,
+        });
+    }
+    // Tags before other refs, older before newer (a stable sort keeps the name order within ties).
+    tips.sort_by(|a, b| {
+        b.from_tag
+            .cmp(&a.from_tag)
+            .then(a.taggerdate.cmp(&b.taggerdate))
+    });
+
+    let mut names: HashMap<ObjectId, RevName> = HashMap::new();
+    let better = |old: &RevName, taggerdate: i64, distance: u64, from_tag: bool| -> bool {
+        if old.from_tag != from_tag {
+            return from_tag;
+        }
+        if old.distance != distance {
+            return distance < old.distance;
+        }
+        taggerdate < old.taggerdate
+    };
+    let parents_of = |oid: &ObjectId| -> Result<Vec<ObjectId>> {
+        let object = repository.odb().read_typed(oid, ObjectKind::Commit)?;
+        Ok(Commit::parse(repository.format(), object.data())?.parents)
+    };
+    for tip in &tips {
+        let tip_name = if tip.deref {
+            format!("{}^0", tip.short)
+        } else {
+            tip.short.clone()
+        };
+        if names
+            .get(&tip.commit)
+            .is_some_and(|old| !better(old, tip.taggerdate, 0, tip.from_tag))
+        {
+            continue;
+        }
+        names.insert(
+            tip.commit,
+            RevName {
+                tip: tip_name,
+                taggerdate: tip.taggerdate,
+                generation: 0,
+                distance: 0,
+                from_tag: tip.from_tag,
+            },
+        );
+        let mut stack = vec![tip.commit];
+        while let Some(commit) = stack.pop() {
+            let (tip_name, generation, distance) = {
+                let name = &names[&commit];
+                (name.tip.clone(), name.generation, name.distance)
+            };
+            let stripped = tip_name.strip_suffix("^0").unwrap_or(&tip_name).to_string();
+            for (index, parent) in parents_of(&commit)?.into_iter().enumerate() {
+                let (new_tip, new_generation, new_distance) = if index == 0 {
+                    (tip_name.clone(), generation + 1, distance + 1)
+                } else {
+                    let n = index + 1;
+                    let text = if generation > 0 {
+                        format!("{stripped}~{generation}^{n}")
+                    } else {
+                        format!("{stripped}^{n}")
+                    };
+                    (text, 0, distance + MERGE_TRAVERSAL_WEIGHT)
+                };
+                let take = names
+                    .get(&parent)
+                    .is_none_or(|old| better(old, tip.taggerdate, new_distance, tip.from_tag));
+                if take {
+                    names.insert(
+                        parent,
+                        RevName {
+                            tip: new_tip,
+                            taggerdate: tip.taggerdate,
+                            generation: new_generation,
+                            distance: new_distance,
+                            from_tag: tip.from_tag,
+                        },
+                    );
+                    stack.push(parent);
+                }
+            }
+        }
+    }
+    match names.get(&target) {
+        Some(name) => {
+            let stripped = name.tip.strip_suffix("^0").unwrap_or(&name.tip);
+            Ok(Described::Name(if name.generation == 0 {
+                name.tip.clone()
+            } else {
+                format!("{stripped}~{}", name.generation)
+            }))
+        }
+        None if args.always => Ok(Described::Name(super::history::abbrev(
+            repository, &target, false,
+        ))),
+        None => Ok(Described::Failed(format!("cannot describe '{target}'"))),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
