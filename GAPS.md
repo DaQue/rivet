@@ -15,9 +15,12 @@ only the first two are defects.
 
 The command or subsystem is absent; it either fails at the argument parser or refuses by name.
 
-* **Sparse checkout and partial clone** — `sparse-checkout`, `--filter`, promisor/partial
-  clones and `checkout` honouring `skip_worktree` entries are not implemented. The index
-  records the `skip-worktree` bit (see `IndexEntry::skip_worktree`), but no command sets it.
+* **Partial clone** — `--filter` and promisor/partial clones are not implemented.
+* **Sparse checkout** — `sparse-checkout init`/`set`/`add`/`list`/`reapply`/`disable` exist (cone mode
+  and `--no-cone`, `--stdin`, `--skip-checks`); `check-rules`, `clean` and the sparse index
+  (`--sparse-index`) do not. Paths given to `set`/`add` are taken relative to the work tree root,
+  whatever the current directory. A cone file that is not in the shape git writes is read as
+  free-form patterns, with git's two warnings printed once (git prints them twice).
 * **`rebase --interactive`** — also `--root`, `--rebase-merges`, `--exec`, `--keep-base` and
   signing. The grammar rejects them.
 * **`bundle-uri`**, SHA-256 bundles, and `clone`/`ls-remote` from a bundle file. Creating,

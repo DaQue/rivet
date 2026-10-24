@@ -556,6 +556,124 @@ s_hooks_clone() {
     ls wt4 wt5
 }
 
+# Sparse checkout: a tree with directories at several depths, and a dump of what a sparse checkout
+# changes: the files present, the skip-worktree flags (read by real git), both configuration files
+# and the pattern file.
+sparse_fixture() {
+    v init -q repo; cd repo
+    mkdir -p a/sub b c/d/e f
+    echo r1 >r1; echo r2 >r2; echo a1 >a/a1; echo as >a/sub/as; echo b1 >b/b1
+    echo cd >c/d/cd; echo ce >c/d/e/ce; echo f1 >f/f1; echo c0 >c/c0
+    v add .; tick; v commit -q -m one
+}
+dump_sparse() {
+    {
+        echo "--- sparse: $*"
+        find . -path ./.git -prune -o -type f -print | sort
+        g ls-files -t
+        cat .git/config.worktree 2>&1
+        cat .git/info/sparse-checkout 2>&1
+    } >>"$TRANSCRIPT"
+}
+
+s_sparse_cone() {
+    sparse_fixture
+    v sparse-checkout list
+    v sparse-checkout init
+    dump_sparse init
+    v sparse-checkout list
+    v sparse-checkout set a b
+    dump_sparse "set a b"
+    v sparse-checkout list
+    v sparse-checkout add c/d
+    dump_sparse "add c/d"
+    v sparse-checkout reapply
+    v sparse-checkout set --cone c/d/e a/sub
+    dump_sparse "set c/d/e a/sub"
+    v sparse-checkout list
+    v sparse-checkout set c c/d
+    dump_sparse "set c c/d"
+    v sparse-checkout set nothing/here a/
+    dump_sparse "set nothing/here a/"
+    v sparse-checkout set
+    dump_sparse "set (nothing)"
+    printf 'a\nb\n' | v sparse-checkout set --stdin
+    printf 'c/d\n' | v sparse-checkout add --stdin
+    v sparse-checkout list
+    v sparse-checkout set ./f a//sub
+    v sparse-checkout list
+    v sparse-checkout disable
+    dump_sparse disable
+    v sparse-checkout list
+    v sparse-checkout disable
+    v sparse-checkout reapply
+    v sparse-checkout add a
+}
+
+s_sparse_errors() {
+    sparse_fixture
+    v sparse-checkout
+    v sparse-checkout bogus
+    v sparse-checkout set --bogus
+    # a refused path still leaves sparse checkout switched on, without a pattern file
+    v sparse-checkout set 'a*'
+    dump_sparse "set a*"
+    v sparse-checkout list
+    v sparse-checkout set /a
+    v sparse-checkout set r1 a
+    v sparse-checkout set --skip-checks r1 'a*'
+    dump_sparse "set --skip-checks"
+    v sparse-checkout list
+    v sparse-checkout set a
+    dump_sparse "set a"
+    v sparse-checkout disable
+    v sparse-checkout set b
+    dump_sparse "set b after disable"
+}
+
+s_sparse_noncone() {
+    sparse_fixture
+    v sparse-checkout init --no-cone
+    dump_sparse "init --no-cone"
+    v sparse-checkout init
+    v sparse-checkout set --no-cone '/a/*' '!/a/sub/' '/r*'
+    dump_sparse "set --no-cone"
+    v sparse-checkout list
+    v sparse-checkout add '/b/'
+    dump_sparse "add /b/"
+    # without a flag the mode stays
+    v sparse-checkout set f
+    dump_sparse "set f"
+    v sparse-checkout set --no-cone '/c/' '!/c/d/' '/c/d/e/'
+    dump_sparse "nested include and exclude"
+    v sparse-checkout set --no-cone '*.txt' 'b1'
+    dump_sparse "unanchored"
+    v sparse-checkout reapply --no-cone
+    v sparse-checkout disable
+    dump_sparse disable
+}
+
+s_sparse_dirty() {
+    sparse_fixture
+    v sparse-checkout set a b
+    # a modified file outside the new definition stays, with a warning; untracked files stay too
+    echo changed >>b/b1; echo new >b/new
+    v sparse-checkout set a
+    dump_sparse "set a with b/b1 modified"
+    v status --short
+    v sparse-checkout set a b
+    dump_sparse "set a b again"
+    cat b/b1
+    # a deleted file outside the definition is just skipped
+    rm a/a1
+    v sparse-checkout set b
+    dump_sparse "set b with a/a1 deleted"
+    v sparse-checkout reapply
+    v sparse-checkout disable
+    dump_sparse disable
+    v status --short
+}
+
 s_hooks_run() {
     v init -q repo; cd repo
     mkdir sub

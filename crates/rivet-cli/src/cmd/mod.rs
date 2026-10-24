@@ -62,6 +62,7 @@ pub mod remote;
 pub mod sequencer;
 pub mod setup;
 pub mod snapshot;
+pub mod sparse;
 pub mod stash;
 pub mod submodule;
 pub mod symbolicref;
@@ -121,6 +122,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Bundle(args) => bundle::run_bundle(&global, &args),
         Commands::Submodule(args) => submodule::run_submodule(&global, &args),
         Commands::Worktree(args) => worktree::run_worktree(&global, &args),
+        Commands::SparseCheckout(args) => sparse::run_sparse_checkout(&global, &args),
         Commands::Repack(args) => maintenance::run_repack(&global, &args),
         Commands::PackRefs(args) => packrefs::run_pack_refs(&global, &args),
         Commands::Mv(args) => mv::run_mv(&global, &args),

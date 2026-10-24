@@ -113,6 +113,7 @@ pub mod remote_ops;
 pub mod repo;
 pub mod revparse;
 pub mod revwalk;
+pub mod sparse;
 pub mod worktree;
 
 // `repo::Repository` deliberately has no `clone` / `fetch` / `pull` / `push` entry points yet.

@@ -408,6 +408,12 @@ impl Pattern {
         }
     }
 
+    /// Whether this pattern matches exactly `path` (relative to the base), with no ancestor
+    /// expansion: the question a sparse-checkout definition asks one directory at a time.
+    pub(crate) fn exact_match(&self, path: &BStr, is_dir: bool) -> bool {
+        self.core_match(path, is_dir)
+    }
+
     /// Phase 5 — whether this pattern has no effect on a path of the given kind.
     ///
     /// # Caveats
