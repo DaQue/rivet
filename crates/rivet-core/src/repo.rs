@@ -1379,8 +1379,18 @@ impl Repository {
 
         // Identity: the options if given, then the environment, then the configuration
         // (repository, global, system — Git's precedence).
+        // An amend keeps the author of the commit it replaces, whatever `GIT_AUTHOR_*` says.
         let author = match &options.author {
             Some(signature) => signature.clone(),
+            None if options.amend => match &head {
+                HeadState::Attached { oid, .. } | HeadState::Detached { oid } => {
+                    match self.odb.read_typed(oid, ObjectKind::Commit)?.parse()? {
+                        AnyObject::Commit(commit) => commit.author.clone(),
+                        _ => self.author_signature()?,
+                    }
+                }
+                HeadState::Unborn { .. } => self.author_signature()?,
+            },
             None => self.author_signature()?,
         };
         let committer = match &options.committer {

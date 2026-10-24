@@ -7242,6 +7242,143 @@ s_symbolic_ref() {
     v symbolic-ref HEAD
 }
 
+# `rebase -i` over D, E, G (topic) onto main. `SEQ` is a sed script the sequence editor applies to the
+# todo list; `../msg.sh` is the message editor (it prefixes the first line of the message).
+rebase_i_helpers() {
+    printf '#!/bin/sh\nprintf "reworded %%s\\n" "$(head -n1 "$1")" >"$1"\n' >../msg.sh
+    printf '#!/bin/sh\nsed -i -e "$SEQ" "$1"\n' >../seq.sh
+    chmod +x ../msg.sh ../seq.sh
+}
+
+# Run `rebase -i main` on a fresh topic with the todo edited by `$1`; show what is left behind.
+rebase_i_run() {
+    [ -d .git/rebase-merge ] && v rebase --abort
+    v switch -q topic
+    v reset -q --hard orig
+    SEQ="$1" GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" GIT_EDITOR="$PWD/../msg.sh" v rebase -i main
+    echo "rc=$?"
+    v log --format='%H %an %s%n%b' main..topic
+    v status
+}
+
+s_rebase_i() {
+    rebase_repo
+    g branch orig topic
+    rebase_i_helpers
+    # The todo list the editor sees, and a run that changes nothing.
+    GIT_SEQUENCE_EDITOR=cat v rebase -i main topic
+    echo "rc=$?"
+    v log --oneline --graph
+    v reflog
+    cat .git/ORIG_HEAD
+    # Reword, squash, fixup, drop and a deleted line.
+    for edit in '1s/^pick/reword/' '2s/^pick/reword/' '2s/^pick/squash/' '3s/^pick/fixup/' '2s/^pick/drop/' '2d' \
+        '2s/^pick/squash/;3s/^pick/squash/' '2s/^pick/fixup/;3s/^pick/squash/' '2s/^pick/squash/;3s/^pick/fixup/' \
+        '2s/^pick/fixup/;3s/^pick/fixup/' '1s/^pick/reword/;2s/^pick/squash/' '1s/^pick/drop/;2s/^pick/squash/' \
+        '2s/^pick/squash/;3s/^pick/drop/' '1,2d' '3s/^pick/drop/;2s/^pick/fixup/' '1,3d' '1s/^pick/p/;2s/^pick/r/;3s/^pick/s/'; do
+        rebase_i_run "$edit"
+    done
+    v reflog
+    # Reordering, and a todo that is empty from the start.
+    rebase_i_run '1{h;d};3{G}'
+    v switch -q topic
+    v reset -q --hard orig
+    v rebase -i topic
+    echo "rc=$?"
+    v status
+}
+
+s_rebase_i_stops() {
+    rebase_repo
+    g branch orig topic
+    rebase_i_helpers
+    # A first command that cannot work stops before anything is applied.
+    rebase_i_run '1s/^pick/fixup/'
+    v rebase --abort
+    v status
+    rebase_i_run '1s/^pick/foo/'
+    v rebase --abort
+    v log --oneline
+    # edit: stop, continue untouched, with a staged change, with an unstaged one, after an amend.
+    rebase_i_run '2s/^pick/edit/'
+    ls .git/rebase-merge
+    v rebase --continue
+    v log --format='%H %s' main..topic
+    rebase_i_run '2s/^pick/edit/'
+    echo more >>e
+    v rebase --continue
+    v add e
+    v rebase --continue
+    v log --format='%H %s' main..topic
+    v reflog
+    rebase_i_run '2s/^pick/edit/'
+    echo more >>e
+    v commit -q -a --amend -m "amended e"
+    v rebase --continue
+    v log --format='%H %s' main..topic
+    rebase_i_run '2s/^pick/edit/'
+    echo new >nn; v add nn
+    v commit -q -m extra
+    echo more >>nn; v add nn
+    v rebase --continue
+    v rebase --abort
+    v log --format='%H %s' main..topic
+    # edit on the first command, and a fast-forward edit.
+    rebase_i_run '1s/^pick/edit/'
+    v rebase --continue
+    v reflog
+}
+
+s_rebase_i_conflict() {
+    rebase_repo
+    g branch orig topic
+    rebase_i_helpers
+    v switch -q main
+    tick; echo "main f" >>f; v commit -q -a -m "main f"
+    rebase_i_run '1s/^pick/reword/'
+    v diff
+    v rebase --continue
+    printf 'f\nresolved\n' >f
+    v add f
+    v rebase --continue
+    v log --format='%H %s%n%b' main..topic
+    v status
+    rebase_i_run 's/^pick/squash/;1s/^squash/pick/'
+    v rebase --skip
+    v log --format='%H %s%n%b' main..topic
+    rebase_i_run '2s/^pick/squash/'
+    v rebase --abort
+    v log --format='%H %s' main..topic
+    cat .git/ORIG_HEAD
+    rebase_i_run '3s/^pick/fixup/'
+    printf 'f\nresolved\n' >f
+    v add f
+    v rebase --continue
+    v log --format='%H %s%n%b' main..topic
+    # reword and edit on the conflicting commit, squash as the third link of a chain.
+    rebase_i_run '2s/^pick/reword/'
+    printf 'f\nresolved\n' >f
+    v add f
+    v rebase --continue
+    v log --format='%H %s%n%b' main..topic
+    rebase_i_run '2s/^pick/edit/'
+    printf 'f\nresolved\n' >f
+    v add f
+    v rebase --continue
+    v status
+    v rebase --continue
+    v log --format='%H %s%n%b' main..topic
+    rebase_i_run '2{h;d};3{G;s/^pick/squash/;s/\npick/\nsquash/}'
+    v rebase --skip
+    v log --format='%H %s%n%b' main..topic
+    rebase_i_run '2{h;d};3{G;s/^pick/fixup/;s/\npick/\nsquash/}'
+    printf 'f\nresolved\n' >f
+    v add f
+    v rebase --continue
+    v log --format='%H %s%n%b' main..topic
+    v reflog
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

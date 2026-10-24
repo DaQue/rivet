@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 220 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 237 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-24, gate: 229 tests / 0 failed, 220 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-24, gate: 235 tests / 0 failed, 237 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -30,8 +30,13 @@ The command or subsystem is absent; it either fails at the argument parser or re
   subdirectory, `am`, `bisect`, `merge --abort` and conflicts that land outside the definition (the
   files stay in the work tree), `git sparse-checkout set` leaving a directory that holds untracked
   files (the warning is printed, git also tries to remove it).
-* **`rebase --interactive`** — also `--root`, `--rebase-merges`, `--exec`, `--keep-base` and
-  signing. The grammar rejects them.
+* **`rebase --interactive`** — `pick`/`reword`/`edit`/`squash`/`fixup`/`drop`/`noop`, the editable todo list,
+  `--continue`/`--skip`/`--abort` work (`s_rebase_i`, `s_rebase_i_stops`, `s_rebase_i_conflict`).
+  Refused by name, before anything is touched: `--root`, `--rebase-merges`, `--exec`/`-x`, `--keep-base`,
+  `--autosquash`, `--edit-todo`, signing, and the todo commands `exec`, `break`, `label`, `reset`, `merge`,
+  `update-ref` and `fixup -C`/`-c`. An empty message from the editor aborts the whole rebase back to the
+  original tip (git stops with the commit pending). The editor sees the message plus git's `#` footer, not
+  the `git status` template. `post-rewrite` lines for a squash chain are not compared with git.
 * **`bundle-uri`**, SHA-256 bundles, and `clone`/`ls-remote` from a bundle file. Creating,
   listing, verifying and unbundling bundles works; fetching *from* a bundle works only as a
   remote URL.

@@ -856,7 +856,14 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
     };
     let subject = super::commit_subject(&repository, &oid)?;
     println!("[{branch}{root} {}] {subject}", short_oid(&oid));
-    let author = repository.author_signature()?;
+    let author = {
+        let object = repository
+            .odb()
+            .read_typed(&oid, rivet_core::ObjectKind::Commit)?;
+        rivet_core::Commit::parse(repository.format(), object.data())?
+            .author
+            .clone()
+    };
     let committer = repository.committer_signature()?;
     if author.name != committer.name || author.email != committer.email {
         println!(" Author: {} <{}>", author.name, author.email);
@@ -1815,6 +1822,8 @@ struct RebaseProgress {
     branch: Option<String>,
     done: Vec<String>,
     todo: Vec<String>,
+    /// `MERGE_MSG` exists: a conflicted pick was resolved but not yet committed.
+    merge_msg: bool,
 }
 
 fn rebase_progress(repository: &rivet_core::Repository) -> Option<RebaseProgress> {
@@ -1847,13 +1856,16 @@ fn rebase_progress(repository: &rivet_core::Repository) -> Option<RebaseProgress
             .map(str::to_string),
         done: lines("done"),
         todo: lines("git-rebase-todo"),
+        merge_msg: repository.git_dir().join("MERGE_MSG").exists(),
     })
 }
 
 impl RebaseProgress {
     fn describe(&self, conflicted: bool) -> String {
         let mut out = format!("interactive rebase in progress; onto {}\n", self.onto);
-        if !self.done.is_empty() {
+        if self.done.is_empty() {
+            out.push_str("No commands done.\n");
+        } else {
             let n = self.done.len();
             if n == 1 {
                 out.push_str("Last command done (1 command done):\n");
@@ -1879,10 +1891,22 @@ impl RebaseProgress {
             for line in self.todo.iter().take(2) {
                 out.push_str(&format!("   {line}\n"));
             }
-            if n > 2 {
-                out.push_str("  (see more in file .git/rebase-merge/git-rebase-todo)\n");
-            }
             out.push_str("  (use \"git rebase --edit-todo\" to view and edit)\n");
+        }
+        if !conflicted && !self.merge_msg {
+            // Stopped by `edit` (or by a bad todo list): the commit can be amended.
+            match &self.branch {
+                Some(branch) => out.push_str(&format!(
+                    "You are currently editing a commit while rebasing branch '{branch}' on '{}'.\n",
+                    self.onto
+                )),
+                None => out.push_str("You are currently editing a commit during a rebase.\n"),
+            }
+            out.push_str("  (use \"git commit --amend\" to amend the current commit)\n");
+            out.push_str(
+                "  (use \"git rebase --continue\" once you are satisfied with your changes)\n",
+            );
+            return out;
         }
         match &self.branch {
             Some(branch) => out.push_str(&format!(

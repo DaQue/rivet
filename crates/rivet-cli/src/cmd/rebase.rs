@@ -6,15 +6,17 @@
 //!   `<upstream>..<branch>` are replayed one at a time, merge commits are flattened away, and a
 //!   commit whose patch already exists upstream is dropped, exactly as Git's merge backend does.
 //! * `--continue`, `--skip` and `--abort` over a stopped rebase.
+//! * `--interactive`, a usable subset: see [`interactive`].
 //! * The state lives in `.git/rebase-merge/` with Git's file names (`head-name`, `onto`,
 //!   `orig-head`, `done`, `git-rebase-todo`, `msgnum`, `end`, `stopped-sha`, `message`,
 //!   `author-script`), so `status` can describe it.
 //!
 //! # What is refused
 //!
-//! `--interactive`, `--root`, `--rebase-merges`, `--exec`, `--keep-base`, signing
-//! and the other options Git has; the grammar does not accept them, so they fail at the command
-//! line instead of being ignored.
+//! `--root`, `--rebase-merges`, `--exec`, `--keep-base`, `--autosquash`, `--edit-todo` and signing
+//! are accepted by the grammar only to be refused by name; the other options Git has are not in the
+//! grammar, so they fail at the command line instead of being ignored. What `--interactive` refuses
+//! is listed in [`interactive`].
 //!
 //! # Caveats
 //!
@@ -34,8 +36,10 @@ use rivet_core::{HeadState, ObjectId, ObjectKind, RefName, ReflogEntry, Reposito
 
 use crate::cli::GlobalArgs;
 
+mod interactive;
+
 /// Arguments of `rebase`.
-#[derive(Debug, clap::Args)]
+#[derive(Debug, Default, clap::Args)]
 pub struct RebaseArgs {
     /// The upstream to rebase onto (default: the branch's configured upstream).
     #[arg(value_name = "UPSTREAM")]
@@ -80,6 +84,38 @@ pub struct RebaseArgs {
     /// Skip the `pre-rebase` hook.
     #[arg(long = "no-verify")]
     pub no_verify: bool,
+
+    /// Let the todo list be edited before the commits are replayed.
+    #[arg(short = 'i', long = "interactive")]
+    pub interactive: bool,
+
+    /// Refused: rebase every commit down to the root.
+    #[arg(long = "root")]
+    pub root: bool,
+
+    /// Refused: recreate merge commits.
+    #[arg(short = 'r', long = "rebase-merges", num_args = 0..=1, require_equals = true)]
+    pub rebase_merges: Option<Option<String>>,
+
+    /// Refused: run a command after each commit.
+    #[arg(short = 'x', long = "exec", value_name = "CMD")]
+    pub exec: Vec<String>,
+
+    /// Refused: keep the merge base of the branch and its upstream.
+    #[arg(long = "keep-base")]
+    pub keep_base: bool,
+
+    /// Refused: sign the rewritten commits.
+    #[arg(short = 'S', long = "gpg-sign", num_args = 0..=1, require_equals = true)]
+    pub gpg_sign: Option<Option<String>>,
+
+    /// Refused: move `fixup!` and `squash!` commits into place.
+    #[arg(long = "autosquash")]
+    pub autosquash: bool,
+
+    /// Refused: edit the remaining todo list.
+    #[arg(long = "edit-todo")]
+    pub edit_todo: bool,
 }
 
 /// What the reflog calls this command: `rebase`, or `pull --rebase` when `pull` drives it.
@@ -221,6 +257,19 @@ fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<Commit> {
 pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
     let mut repository = super::open(global)?;
     let dir = rebase_dir(&repository);
+    for (given, what) in [
+        (args.root, "--root"),
+        (args.rebase_merges.is_some(), "--rebase-merges"),
+        (!args.exec.is_empty(), "--exec"),
+        (args.keep_base, "--keep-base"),
+        (args.gpg_sign.is_some(), "--gpg-sign"),
+        (args.autosquash, "--autosquash"),
+        (args.edit_todo, "--edit-todo"),
+    ] {
+        if given {
+            anyhow::bail!("rebase {what} is not implemented");
+        }
+    }
     let controls = [
         args.continue_rebase,
         args.abort,
@@ -283,6 +332,12 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
                 repository.reset_hard_to_tree(tree)?;
             }
             clear_pick_state(&repository);
+            if interactive::is_interactive(&dir) {
+                let _ = std::fs::remove_file(dir.join("stopped-sha"));
+                if !interactive::finish_chain_after_skip(global, &mut repository, &dir)? {
+                    return interactive::give_up_on_message(&mut repository, &dir);
+                }
+            }
             return run_todo(global, &mut repository, &dir);
         }
         return continue_rebase(global, &mut repository, &dir);
@@ -468,7 +523,7 @@ fn start(
     // Already based on the target with a linear history: nothing to do.
     let odb = repository.odb();
     let bases = rivet_core::merge_bases(odb, onto, orig_head).unwrap_or_default();
-    if onto == upstream && bases.first() == Some(&onto) {
+    if !args.interactive && onto == upstream && bases.first() == Some(&onto) {
         let mut options = WalkOptions::new();
         options.exclude(onto);
         let between = rivet_core::revwalk::walk_oids(odb, &[orig_head], &options)?;
@@ -577,6 +632,20 @@ fn start(
         );
     }
 
+    if args.interactive {
+        let plan = interactive::Plan {
+            head_state: &head_state,
+            orig_head,
+            head_name: &head_name,
+            upstream,
+            onto,
+            onto_name: &onto_name,
+            commits: &todo,
+            autostash,
+        };
+        return interactive::begin(global, repository, &plan, dir);
+    }
+
     // Detach at the new base.
     std::fs::create_dir_all(dir)?;
     rivet_core::write_orig_head(repository.git_dir(), orig_head)?;
@@ -682,6 +751,43 @@ fn continue_rebase(global: &GlobalArgs, repository: &mut Repository, dir: &Path)
         println!("You must edit all merge conflicts and then\nmark them as resolved using git add");
         return Ok(1);
     }
+    if !read_state(dir, "amend").is_empty() {
+        // Stopped by `edit`: staged changes amend the commit, anything else just goes on.
+        let mut options = rivet_core::StatusOptions::new();
+        options.untracked_files = rivet_core::UntrackedMode::No;
+        let status = repository.status(&options)?;
+        if !status.unstaged.is_empty() {
+            println!(
+                "You must edit all merge conflicts and then\nmark them as resolved using git add"
+            );
+            return Ok(1);
+        }
+        if !status.staged.is_empty() {
+            let Some(head) = repository.head()?.oid() else {
+                anyhow::bail!("rebase: HEAD is unborn");
+            };
+            if head.to_string() != read_state(dir, "amend") {
+                eprintln!(
+                    "error: \nYou have uncommitted changes in your working tree. Please, commit them\nfirst and then run 'git rebase --continue' again."
+                );
+                return Ok(1);
+            }
+            let message = read_commit(repository, &head)?.message;
+            let tree = repository.write_tree()?;
+            interactive::commit_amend(
+                repository,
+                tree,
+                &message,
+                "rebase (continue)",
+                Some(global.quiet),
+            )?;
+        }
+        clear_pick_state(repository);
+        for name in ["amend", "stopped-sha"] {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+        return run_todo(global, repository, dir);
+    }
     let stopped = read_state(dir, "stopped-sha");
     if !stopped.is_empty() {
         let oid = ObjectId::from_hex(repository.format(), BStr::new(stopped.as_bytes()))?;
@@ -698,6 +804,22 @@ fn continue_rebase(global: &GlobalArgs, repository: &mut Repository, dir: &Path)
         let tree = repository.write_tree()?;
         if repository.head_tree_oid()? == Some(tree) {
             // Resolved to nothing: the commit is dropped and the rebase goes on.
+            clear_pick_state(repository);
+            let _ = std::fs::remove_file(dir.join("stopped-sha"));
+            return run_todo(global, repository, dir);
+        }
+        let stopped_cmd = read_state(dir, "done")
+            .lines()
+            .last()
+            .and_then(|l| l.split_whitespace().next())
+            .and_then(interactive::Cmd::parse);
+        if let Some(cmd) = stopped_cmd.filter(|c| c.is_fixup()) {
+            interactive::chain_add(repository, dir, oid, cmd)?;
+            let action = "rebase (continue)";
+            if !interactive::chain_commit(global, repository, dir, tree, cmd, action)? {
+                return interactive::give_up_on_message(repository, dir);
+            }
+            interactive::note_pending(dir, oid)?;
             clear_pick_state(repository);
             let _ = std::fs::remove_file(dir.join("stopped-sha"));
             return run_todo(global, repository, dir);
@@ -771,10 +893,44 @@ fn commit_pick(
     Ok(oid)
 }
 
+/// `GIT_AUTHOR_*` assignments for `author-script`, the author the stopped commit keeps.
+fn author_script(author: &Signature) -> String {
+    format!(
+        "GIT_AUTHOR_NAME='{}'\nGIT_AUTHOR_EMAIL='{}'\nGIT_AUTHOR_DATE='@{} {}'\n",
+        author.name,
+        author.email,
+        author.when,
+        tz_text(author.tz_offset_minutes)
+    )
+}
+
+/// Stop after an `edit` command has put its commit in place.
+fn stop_for_edit(
+    repository: &Repository,
+    dir: &Path,
+    oid: ObjectId,
+    original: &Commit,
+) -> Result<i32> {
+    let Some(head) = repository.head()?.oid() else {
+        anyhow::bail!("rebase: HEAD is unborn");
+    };
+    write_state(dir, "amend", &format!("{head}\n"))?;
+    write_state(dir, "stopped-sha", &format!("{oid}\n"))?;
+    write_state(dir, "message", &String::from_utf8_lossy(&original.message))?;
+    write_state(dir, "author-script", &author_script(&original.author))?;
+    eprintln!(
+        "Stopped at {}...  # {}\nYou can amend the commit now, with\n\n  git commit --amend \n\nOnce you are satisfied with your changes, run\n\n  git rebase --continue",
+        super::history::abbrev(repository, &oid, false),
+        subject_of(repository, &oid)?
+    );
+    Ok(0)
+}
+
 /// Run the remaining todo lines; finish the rebase when none are left.
 fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Result<i32> {
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(repository, "merge.renames");
+    let interactive = interactive::is_interactive(dir);
     loop {
         let todo_text = read_state(dir, "git-rebase-todo");
         let mut lines: Vec<&str> = todo_text.lines().collect();
@@ -782,6 +938,15 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             break;
         }
         let line = lines.remove(0).to_string();
+        let word = line.split_whitespace().next().unwrap_or_default();
+        let Some(cmd) = interactive::Cmd::parse(word) else {
+            eprintln!("error: invalid command '{word}'");
+            eprintln!("error: invalid line 1: {line}");
+            eprintln!(
+                "You can fix this with 'git rebase --edit-todo' and then run 'git rebase --continue'.\nOr you can abort the rebase with 'git rebase --abort'."
+            );
+            return Ok(1);
+        };
         let rest: String = lines.iter().map(|l| format!("{l}\n")).collect();
         let mut done = read_state(dir, "done");
         if !done.is_empty() {
@@ -789,11 +954,18 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
         }
         done.push_str(&line);
         done.push('\n');
-        let msgnum: usize = read_state(dir, "msgnum").parse().unwrap_or(0) + 1;
+        let counted = cmd != interactive::Cmd::Noop;
+        let msgnum: usize = read_state(dir, "msgnum").parse().unwrap_or(0) + usize::from(counted);
         let end = read_state(dir, "end");
         write_state(dir, "git-rebase-todo", &rest)?;
         write_state(dir, "done", &done)?;
         write_state(dir, "msgnum", &format!("{msgnum}\n"))?;
+        if !counted {
+            continue;
+        }
+        if interactive && !cmd.is_fixup() {
+            interactive::flush_pending(repository, dir)?;
+        }
 
         let hex = line
             .split_whitespace()
@@ -805,16 +977,33 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
         if !global.quiet {
             eprint!("Rebasing ({msgnum}/{end})\r");
         }
+        if cmd == interactive::Cmd::Drop {
+            continue;
+        }
         let Some(head) = repository.head()?.oid() else {
             anyhow::bail!("rebase: HEAD is unborn");
         };
 
         // A commit that already sits on the current head is reused, not rewritten.
-        if original.parents.first() == Some(&head) {
-            let reason = format!("{} (pick): {subject}", action());
+        if !cmd.is_fixup() && original.parents.first() == Some(&head) {
+            let reason = if interactive {
+                format!("{}: fast-forward", action())
+            } else {
+                format!("{} (pick): {subject}", action())
+            };
             repository.move_head(oid, BStr::new(reason.as_bytes()))?;
             let tree = repository.commit_tree(oid)?;
             repository.reset_hard_to_tree(tree)?;
+            match cmd {
+                interactive::Cmd::Reword => {
+                    if !interactive::reword_head(global, repository)? {
+                        return interactive::give_up_on_message(repository, dir);
+                    }
+                    interactive::note_pending(dir, oid)?;
+                }
+                interactive::Cmd::Edit => return stop_for_edit(repository, dir, oid, &original),
+                _ => {}
+            }
             continue;
         }
 
@@ -846,17 +1035,7 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             std::fs::write(git_dir.join("REBASE_HEAD"), format!("{oid}\n"))?;
             write_state(dir, "stopped-sha", &format!("{oid}\n"))?;
             write_state(dir, "message", &String::from_utf8_lossy(&merge_msg))?;
-            write_state(
-                dir,
-                "author-script",
-                &format!(
-                    "GIT_AUTHOR_NAME='{}'\nGIT_AUTHOR_EMAIL='{}'\nGIT_AUTHOR_DATE='@{} {}'\n",
-                    original.author.name,
-                    original.author.email,
-                    original.author.when,
-                    tz_text(original.author.tz_offset_minutes)
-                ),
-            )?;
+            write_state(dir, "author-script", &author_script(&original.author))?;
             eprintln!("error: could not apply {short}... {subject}");
             eprintln!("hint: Resolve all conflicts manually, mark them as resolved with");
             eprintln!(
@@ -869,10 +1048,25 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             eprintln!(
                 "hint: Disable this message with \"git config set advice.mergeConflict false\""
             );
-            eprintln!("Could not apply {short}... # {subject}");
+            if cmd.is_fixup() {
+                eprintln!(
+                    "You can amend the commit now, with\n\n  git commit --amend \n\nOnce you are satisfied with your changes, run\n\n  git rebase --continue"
+                );
+            } else {
+                eprintln!("Could not apply {short}... # {subject}");
+            }
             return Ok(1);
         }
         let tree = repository.write_tree()?;
+        if cmd.is_fixup() {
+            interactive::chain_add(repository, dir, oid, cmd)?;
+            let action = format!("{} ({})", action(), cmd.name());
+            if !interactive::chain_commit(global, repository, dir, tree, cmd, &action)? {
+                return interactive::give_up_on_message(repository, dir);
+            }
+            interactive::note_pending(dir, oid)?;
+            continue;
+        }
         if repository.head_tree_oid()? == Some(tree) {
             if !global.quiet {
                 eprintln!("dropping {oid} {subject} -- patch contents already upstream");
@@ -883,12 +1077,25 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             repository,
             tree,
             head,
-            original.author,
+            original.author.clone(),
             &original.message,
-            &format!("{} (pick)", action()),
+            &format!("{} ({})", action(), cmd.name()),
             None,
         )?;
-        record_rewrite(dir, oid, new)?;
+        if interactive {
+            interactive::note_pending(dir, oid)?;
+        } else {
+            record_rewrite(dir, oid, new)?;
+        }
+        match cmd {
+            interactive::Cmd::Reword => {
+                if !interactive::reword_head(global, repository)? {
+                    return interactive::give_up_on_message(repository, dir);
+                }
+            }
+            interactive::Cmd::Edit => return stop_for_edit(repository, dir, oid, &original),
+            _ => {}
+        }
     }
     finish(global, repository, dir)
 }
@@ -919,11 +1126,15 @@ fn finish(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Resul
         let name = RefName::from_bytes(format!("refs/heads/{branch}").as_bytes())?;
         let who = repository.committer_signature()?;
         let reason = format!("{} (finish): {head_name} onto {onto}", action());
-        repository.set_ref_logged(&name, head, &who, BStr::new(reason.as_bytes()))?;
+        // A branch that already points at the result gets no reflog line.
+        if repository.refs().resolve_oid(&name).ok() != Some(head) {
+            repository.set_ref_logged(&name, head, &who, BStr::new(reason.as_bytes()))?;
+        }
         let reason = format!("{} (finish): returning to {head_name}", action());
         repository.point_head(HeadTarget::Branch(&name), BStr::new(reason.as_bytes()))?;
     }
     clear_pick_state(repository);
+    interactive::flush_pending(repository, dir)?;
     let rewritten = std::fs::read(dir.join("rewritten-list")).unwrap_or_default();
     if !rewritten.is_empty() {
         rebase_hook(

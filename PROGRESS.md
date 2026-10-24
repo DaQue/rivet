@@ -960,3 +960,14 @@ Left uncommitted when the session limit hit; gated and committed here.
 
 Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 234 PASS / `failures: 0`.
 
+## Block 6
+
+### Phase 6.1 — `rebase --interactive`, a usable subset (landed, scenarios `s_rebase_i`, `s_rebase_i_stops`, `s_rebase_i_conflict`)
+Base `97343f9`: the parser rejected `-i`. Compared against git 2.56 (transcripts, reflogs, object ids, `status` in every stopped state):
+- `rebase -i` writes the todo (`pick <abbrev> # <subject>` plus git's help footer, `noop` when empty), runs `GIT_SEQUENCE_EDITOR` / `sequence.editor` / the editor chain, honours `core.commentChar`, and accepts `pick`/`reword`/`edit`/`squash`/`fixup`/`drop`/`noop` and their one-letter forms. Leading picks whose parent is already the head are stepped over (the `start` reflog line lands on the last of them), later ones that sit on the head are fast-forwarded (`rebase: fast-forward`). `drop` counts in `Rebasing (n/m)`, a deleted line does not.
+- `squash`/`fixup` build git's combined message (`# This is a combination of N commits.`, `# This is the commit message #N:`, `# The commit message #N will be skipped:`); intermediate links are committed with that text verbatim, the last gets the edited, comment-stripped message (a fixup-only chain keeps the first message and prints no summary); `--skip` of a link finishes the chain as `rebase (continue)`.
+- `edit` stops with git's text, `amend`/`stopped-sha` state; `--continue` amends staged changes (`rebase (continue)`), refuses unstaged ones and a moved `HEAD` with git's messages. A bad first `fixup`/unknown command stops after the checkout with the todo as edited; `nothing to do` leaves nothing behind.
+- Found by the scenarios and fixed outside the new files: `commit --amend` replaced the author with `GIT_AUTHOR_*` (git keeps the amended commit's author, date included); `status` during a rebase now says `No commands done.`, drops a `(see more…)` line git does not print for the todo, and distinguishes `You are currently editing a commit` from `all conflicts fixed`; the branch reflog line `rebase (finish)` is not written when the branch already points at the result.
+- Refusals are checked in `crates/rivet-cli/tests/rebase_interactive.rs` (options, todo commands, empty message restores the tip). They cannot be differential: git runs those commands.
+Not done: `--autosquash`, `--edit-todo`, `--exec`, `--root`, `--rebase-merges`, `--keep-base`, signing; an empty message does not leave a resumable stop; `git rebase --continue` run by real git over a rivet-made state is untested (extra marker file `rivet-interactive`).
+Gate after (Items 1–2 not started yet): fmt, clippy, doc clean; 235 passed / 0 failed / 0 ignored; `scenarios.sh` 237 PASS / `failures: 0`.

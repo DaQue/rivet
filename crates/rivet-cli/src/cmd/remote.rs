@@ -991,6 +991,7 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
                 autostash: args.autostash,
                 no_autostash: args.no_autostash,
                 no_verify: false,
+                ..Default::default()
             },
         );
     }
