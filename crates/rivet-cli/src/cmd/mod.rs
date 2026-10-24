@@ -193,6 +193,28 @@ pub fn open(global: &GlobalArgs) -> Result<Repository> {
         Err(rivet_core::Error::NotARepository(_)) => Err(anyhow::anyhow!(
             "not a git repository (or any of the parent directories): .git"
         )),
+        Err(rivet_core::Error::InvalidPath(target)) => {
+            // A `.git` file whose target is gone (a moved main repository or work tree): Git names
+            // the file, the core only knows the missing target.
+            let absolute = std::path::absolute(&start).unwrap_or(start);
+            let stale = absolute
+                .ancestors()
+                .map(|dir| dir.join(".git"))
+                .find(|dot_git| {
+                    dot_git.is_file()
+                        && matches!(
+                            rivet_core::gitfile_target(dot_git),
+                            Err(rivet_core::Error::InvalidPath(t)) if t == target
+                        )
+                });
+            match stale {
+                Some(dot_git) => Err(anyhow::anyhow!(
+                    "gitfile does not point to a valid repository: {}",
+                    dot_git.display()
+                )),
+                None => Err(rivet_core::Error::InvalidPath(target).into()),
+            }
+        }
         Err(error) => Err(error.into()),
     }
 }

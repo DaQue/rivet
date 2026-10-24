@@ -6,8 +6,8 @@
 //! other per-work-tree state. Objects, config and the shared refs stay in the main git directory;
 //! [`rivet_core::Repository`] follows `commondir` when it opens such a directory.
 //!
-//! Implemented: `add`, `list`, `lock`, `unlock`, `remove`, `prune`. Refused by name: `move`,
-//! `repair`, `add --orphan`, and `add --track`/`--guess-remote`/`--relative-paths`.
+//! Implemented: `add`, `list`, `lock`, `unlock`, `remove`, `prune`, `move`, `repair`. Refused by
+//! name: `add --orphan`, and `add --track`/`--guess-remote` and `--relative-paths` everywhere.
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +20,7 @@ use crate::cli::GlobalArgs;
 /// Arguments of `worktree`: the subcommand and everything after it, parsed in Git's own grammar.
 #[derive(Debug, clap::Args)]
 pub struct WorktreeArgs {
-    /// `add`, `list`, `lock`, `unlock`, `remove` or `prune`, then its arguments.
+    /// `add`, `list`, `lock`, `unlock`, `remove`, `prune`, `move` or `repair`, then its arguments.
     #[arg(value_name = "SUBCOMMAND", num_args = 0.., allow_hyphen_values = true, trailing_var_arg = true)]
     pub args: Vec<String>,
 }
@@ -72,6 +72,19 @@ const USAGE_UNLOCK: &str = "usage: git worktree unlock <worktree>
 const USAGE_REMOVE: &str = "usage: git worktree remove [-f] <worktree>
 
     -f, --[no-]force      force removal even if worktree is dirty or locked
+
+";
+
+const USAGE_MOVE: &str = "usage: git worktree move <worktree> <new-path>
+
+    -f, --[no-]force      force move even if worktree is dirty or locked
+    --[no-]relative-paths use relative paths for worktrees
+
+";
+
+const USAGE_REPAIR: &str = "usage: git worktree repair [<path>...]
+
+    --[no-]relative-paths use relative paths for worktrees
 
 ";
 
@@ -246,7 +259,8 @@ pub fn run_worktree(global: &GlobalArgs, args: &WorktreeArgs) -> Result<i32> {
         "unlock" => worktree_unlock(global, rest),
         "remove" => worktree_remove(global, rest),
         "prune" => worktree_prune(global, rest),
-        "move" | "repair" => anyhow::bail!("worktree: '{sub}' is not implemented"),
+        "move" => worktree_move(global, rest),
+        "repair" => worktree_repair(global, rest),
         other => {
             eprintln!("error: unknown subcommand: `{other}'");
             eprint!("{USAGE_ALL}");
@@ -561,6 +575,275 @@ fn worktree_remove(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     std::fs::remove_dir_all(&entry.admin)?;
     remove_worktrees_dir_if_empty(&repository);
     Ok(0)
+}
+
+/// The text of an I/O error without the `(os error N)` suffix, as `strerror` would print it.
+fn errno_text(error: &std::io::Error) -> String {
+    let text = error.to_string();
+    text.split(" (os error")
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Read a `.git` file. On failure: Git's `READ_GITFILE_ERR_*` code (2 not a file, 5 bad format,
+/// 6 no path, 7 not a repository) and the directory the file names, when it names one.
+fn read_gitfile(dotgit: &Path) -> std::result::Result<PathBuf, (u8, Option<PathBuf>)> {
+    if dotgit.is_dir() {
+        return Err((2, None));
+    }
+    let Some(text) = read_text(dotgit) else {
+        return Err((1, None));
+    };
+    let Some(target) = text.strip_prefix("gitdir: ") else {
+        return Err((5, None));
+    };
+    let target = target.trim_end_matches(['\n', '\r']);
+    if target.is_empty() {
+        return Err((6, None));
+    }
+    let mut target = PathBuf::from(target);
+    if target.is_relative() {
+        target = dotgit.parent().unwrap_or(Path::new("")).join(target);
+    }
+    if target.is_dir() && target.join("HEAD").exists() {
+        Ok(canonical(&target))
+    } else {
+        Err((7, Some(target)))
+    }
+}
+
+/// Point `admin/gitdir` and the work tree's `.git` file at each other.
+fn write_links(admin: &Path, dotgit: &Path) -> Result<()> {
+    std::fs::write(admin.join("gitdir"), format!("{}\n", dotgit.display()))?;
+    std::fs::write(dotgit, format!("gitdir: {}\n", admin.display()))?;
+    Ok(())
+}
+
+fn worktree_move(global: &GlobalArgs, args: &[String]) -> Result<i32> {
+    let mut force = 0;
+    let mut positional: Vec<&String> = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "-f" | "--force" => force += 1,
+            "--no-force" => force = 0,
+            "--no-relative-paths" => {}
+            "--relative-paths" => {
+                anyhow::bail!("worktree move: --relative-paths is not implemented")
+            }
+            a if a.starts_with('-') && a.len() > 1 => {
+                eprintln!("error: unknown option `{}'", a.trim_start_matches('-'));
+                eprint!("{USAGE_MOVE}");
+                return Ok(129);
+            }
+            _ => positional.push(arg),
+        }
+    }
+    if positional.len() != 2 {
+        eprint!("{USAGE_MOVE}");
+        return Ok(129);
+    }
+    let (spec, target) = (positional[0], positional[1]);
+    let repository = super::open(global)?;
+    let list = entries(&repository)?;
+    let Some(entry) = find_entry(&list, spec) else {
+        eprintln!("fatal: '{spec}' is not a working tree");
+        return Ok(128);
+    };
+    if entry.main {
+        eprintln!("fatal: '{spec}' is a main working tree");
+        return Ok(128);
+    }
+    let mut dst = target.clone();
+    if Path::new(&dst).is_dir() {
+        let Some(name) = entry.path.file_name() else {
+            eprintln!(
+                "fatal: could not figure out destination name from '{}'",
+                entry.path.display()
+            );
+            return Ok(128);
+        };
+        dst = format!("{}/{}", dst.trim_end_matches('/'), name.to_string_lossy());
+    }
+    let dst_path = Path::new(&dst);
+    let empty_dir =
+        dst_path.is_dir() && std::fs::read_dir(dst_path).is_ok_and(|mut d| d.next().is_none());
+    if dst_path.symlink_metadata().is_ok() && !empty_dir {
+        eprintln!("fatal: '{dst}' already exists");
+        return Ok(128);
+    }
+    if let Some(reason) = &entry.locked
+        && force < 2
+    {
+        if reason.is_empty() {
+            eprintln!("fatal: cannot move a locked working tree;");
+        } else {
+            eprintln!("fatal: cannot move a locked working tree, lock reason: {reason}");
+        }
+        eprintln!("use 'move -f -f' to override or unlock first");
+        return Ok(128);
+    }
+    let dotgit = entry.path.join(".git");
+    let invalid = if dotgit.symlink_metadata().is_err() {
+        Some(format!("'{}' does not exist", dotgit.display()))
+    } else {
+        match read_gitfile(&dotgit) {
+            Err((code, _)) => Some(format!(
+                "'{}' is not a .git file, error code {code}",
+                dotgit.display()
+            )),
+            Ok(back) if back != canonical(&entry.admin) => {
+                let id = entry
+                    .admin
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let at_top = std::env::current_dir()
+                    .is_ok_and(|cwd| canonical(&cwd) == canonical(&list[0].path));
+                let shown = if at_top {
+                    format!(".git/worktrees/{id}")
+                } else {
+                    entry.admin.display().to_string()
+                };
+                Some(format!(
+                    "'{}' does not point back to '{shown}'",
+                    entry.path.display()
+                ))
+            }
+            Ok(_) => None,
+        }
+    };
+    if let Some(why) = invalid {
+        eprintln!("fatal: validation failed, cannot move working tree: {why}");
+        return Ok(128);
+    }
+    if let Err(e) = std::fs::rename(&entry.path, &dst) {
+        eprintln!(
+            "fatal: failed to move '{}' to '{dst}': {}",
+            entry.path.display(),
+            errno_text(&e)
+        );
+        return Ok(128);
+    }
+    write_links(&canonical(&entry.admin), &canonical(dst_path).join(".git"))?;
+    Ok(0)
+}
+
+fn worktree_repair(global: &GlobalArgs, args: &[String]) -> Result<i32> {
+    let mut paths: Vec<&String> = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "--no-relative-paths" => {}
+            "--relative-paths" => {
+                anyhow::bail!("worktree repair: --relative-paths is not implemented")
+            }
+            a if a.starts_with('-') && a.len() > 1 => {
+                eprintln!("error: unknown option `{}'", a.trim_start_matches('-'));
+                eprint!("{USAGE_REPAIR}");
+                return Ok(129);
+            }
+            _ => paths.push(arg),
+        }
+    }
+    let repository = super::open(global)?;
+    let common = canonical(repository.common_dir());
+    let mut failed = false;
+    for arg in paths {
+        failed |= !repair_path(&common, arg)?;
+    }
+    // Then every registered work tree whose `.git` file does not lead back to its admin directory.
+    if let Ok(dir) = std::fs::read_dir(common.join("worktrees")) {
+        for item in dir.flatten() {
+            let admin = canonical(&item.path());
+            let Some(gitdir) = read_text(&admin.join("gitdir")) else {
+                continue;
+            };
+            let Some(path) = Path::new(gitdir.trim()).parent().map(Path::to_path_buf) else {
+                continue;
+            };
+            if !path.exists() {
+                continue;
+            }
+            if !path.is_dir() {
+                eprintln!("error: not a directory: {}", path.display());
+                failed = true;
+                continue;
+            }
+            let dotgit = canonical(&path).join(".git");
+            if dotgit.is_dir() {
+                eprintln!("error: .git is not a file: {}", path.display());
+                failed = true;
+                continue;
+            }
+            let reason = match read_gitfile(&dotgit) {
+                Err(_) => "broken",
+                Ok(back) if back != admin => "incorrect",
+                Ok(_) => continue,
+            };
+            eprintln!("repair: .git file {reason}: {}", path.display());
+            write_links(&admin, &dotgit)?;
+        }
+    }
+    Ok(i32::from(failed))
+}
+
+/// Repair the link between the work tree at `arg` and its administrative directory. `false` when
+/// the path cannot be repaired (the diagnostic has been printed).
+fn repair_path(common: &Path, arg: &str) -> Result<bool> {
+    let Ok(abs) = std::path::absolute(arg) else {
+        eprintln!("error: not a valid path: {arg}");
+        return Ok(false);
+    };
+    if !abs.is_dir() {
+        eprintln!("error: not a valid path: {arg}");
+        return Ok(false);
+    }
+    let dotgit = canonical(&abs).join(".git");
+    let admin = match read_gitfile(&dotgit) {
+        Ok(admin) => admin,
+        Err((code, target)) => {
+            // A moved main repository leaves a stale target; its last component still names the
+            // administrative directory of this repository.
+            let inferred = target
+                .as_deref()
+                .and_then(Path::file_name)
+                .map(|name| canonical(&common.join("worktrees").join(name)))
+                .filter(|dir| dir.is_dir());
+            match inferred {
+                Some(admin) => admin,
+                None => {
+                    let why = if code == 7 {
+                        "does not reference a repository"
+                    } else {
+                        "broken"
+                    };
+                    eprintln!(
+                        "error: unable to locate repository; .git file {why}: {}",
+                        dotgit.display()
+                    );
+                    return Ok(false);
+                }
+            }
+        }
+    };
+    let gitdir_file = admin.join("gitdir");
+    let recorded = read_text(&gitdir_file)
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    let reason = match recorded {
+        None => Some("gitdir unreadable"),
+        Some(path) if canonical(Path::new(&path)) != dotgit => Some("gitdir incorrect"),
+        Some(_) => None,
+    };
+    if let Some(reason) = reason {
+        eprintln!("repair: {reason}: {}", gitdir_file.display());
+        write_links(&admin, &dotgit)?;
+    }
+    Ok(true)
 }
 
 fn worktree_prune(global: &GlobalArgs, args: &[String]) -> Result<i32> {

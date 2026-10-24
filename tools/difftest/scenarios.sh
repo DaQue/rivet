@@ -5282,6 +5282,141 @@ s_describe_all() {
     v describe --all --tags HEAD~1
 }
 
+# The `.git` file of every given work tree directory, as the transcript sees it.
+wt_gitfiles() {
+    local d
+    for d in "$@"; do
+        echo "## gitfile $d" >>"$TRANSCRIPT"
+        if [ -e "$d/.git" ]; then sed "s#$ROOT#<ROOT>#g" "$d/.git" >>"$TRANSCRIPT"; else echo "(none)" >>"$TRANSCRIPT"; fi
+    done
+}
+
+# Reproduces on the base commit: `worktree move` was refused by name there.
+s_worktree_move() {
+    v init -q repo; cd repo
+    tick; printf 'a\nb\n' >f; v add f; v commit -q -m one
+    v worktree add -q ../a
+    v worktree add -q ../b
+    v worktree add -q ../c
+    v worktree add -q ../d
+    v worktree lock ../b --reason "in use"
+    v worktree lock ../c
+    echo y >../a/untracked
+    mkdir -p ../emptydir ../fulldir/a ../nest
+    echo q >../fulldir/a/z
+    echo q >../afile
+    v worktree move
+    v worktree move ../a
+    v worktree move ../a ../x ../y
+    v worktree move --bogus ../a ../x
+    v worktree move ../nosuch ../x
+    v worktree move . ../x
+    v worktree move ../a ../afile
+    v worktree move ../a ../fulldir
+    v worktree move ../b ../afile
+    v worktree move ../b ../bn
+    v worktree move ../c ../cn
+    v worktree move -f ../b ../bn
+    v worktree move ../a ../missing/parent/x
+    wt_snap
+    v worktree move ../a ../emptydir
+    v worktree move ../b ../bn -f -f
+    v worktree move ../c ../nest
+    wt_snap
+    wt_gitfiles ../emptydir/a ../bn ../nest/c ../d
+    v worktree list
+    v worktree list --porcelain
+    v worktree move ../d ../dn/
+    v worktree move d ../dm
+    v worktree unlock ../c
+    v worktree move ../c ../nest
+    (cd ../nest/c && v worktree move . "$ROOT/fromself"; v status -sb)
+    (cd ../fromself && v worktree move ../fromself ../c2; v worktree list)
+    wt_gitfiles ../c2
+    v worktree list
+    rm ../dn/.git
+    v worktree move ../dn ../d2
+    echo "gitdir: ../elsewhere" >../dn/.git
+    v worktree move ../dn ../d2
+    echo "gitdir: $PWD/.git/worktrees/b" >../dn/.git
+    v worktree move ../dn ../d2
+    v worktree list
+    wt_snap
+    (cd ../emptydir/a && v log --oneline && v status -sb)
+}
+
+# Reproduces on the base commit: `worktree repair` was refused by name there.
+s_worktree_repair() {
+    v init -q repo; cd repo
+    tick; printf 'a\nb\n' >f; v add f; v commit -q -m one
+    v worktree add -q ../a
+    v worktree add -q ../b
+    v worktree add -q ../c
+    v worktree add -q ../gone
+    v worktree repair
+    v worktree repair ../a ../b
+    v worktree repair --bogus
+    mv ../a ../a2
+    mv ../b ../b2
+    v worktree list
+    v worktree repair
+    wt_snap
+    v worktree repair ../a2
+    wt_snap
+    v worktree repair ../b2 ../a2
+    wt_snap
+    v worktree list
+    echo "--- .git file damaged"
+    echo "gitdir: ../nowhere" >../c/.git
+    v worktree repair
+    wt_gitfiles ../c
+    rm ../c/.git
+    v worktree repair ../c
+    wt_gitfiles ../c
+    v worktree repair
+    wt_gitfiles ../c
+    echo "--- bad arguments"
+    mkdir ../plain
+    echo x >../afile
+    v worktree repair ../plain
+    v worktree repair ../afile
+    v worktree repair ../nosuch
+    rm -rf ../gone
+    v worktree repair
+    echo "--- from a linked work tree"
+    mv ../c ../c2
+    (cd ../a2 && v worktree repair ../c2 && v worktree list)
+    wt_snap
+    wt_gitfiles ../a2 ../b2 ../c2
+    v fsck
+}
+
+# Moving the main repository breaks every `.git` file; repairing from it restores them.
+s_worktree_repair_main() {
+    v init -q repo; cd repo
+    tick; printf 'a\nb\n' >f; v add f; v commit -q -m one
+    v worktree add -q ../a
+    v worktree add -q ../b
+    cd ..; mv repo moved; cd moved
+    v worktree list
+    (cd ../a && v status -sb)
+    v worktree repair
+    wt_snap
+    wt_gitfiles ../a ../b
+    v worktree list
+    (cd ../a && v status -sb && v log --oneline)
+    echo "--- both main and a linked tree moved"
+    cd ..; mv moved moved2; mv a a2; cd moved2
+    v worktree repair
+    wt_gitfiles ../a2 ../b
+    v worktree repair ../a2
+    v worktree list
+    wt_snap
+    wt_gitfiles ../a2 ../b
+    (cd ../a2 && v status -sb)
+    v fsck
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -5296,6 +5431,9 @@ for s in "$@"; do
         s_submodule_status) run_scenario "$s" top ;;
         s_worktree_basic) run_scenario "$s" repo w1 w2 w3 ;;
         s_worktree_lock_remove) run_scenario "$s" repo e g ;;
+        s_worktree_move) run_scenario "$s" repo ;;
+        s_worktree_repair) run_scenario "$s" repo ;;
+        s_worktree_repair_main) run_scenario "$s" moved2 ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         *) run_scenario "$s" ;;
     esac
