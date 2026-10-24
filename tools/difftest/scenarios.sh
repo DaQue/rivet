@@ -5417,6 +5417,59 @@ s_worktree_repair_main() {
     v fsck
 }
 
+# A superproject whose submodules are all registered in `.gitmodules` but not yet in `.git/config`:
+# `lib` (url `../lib`), `other` (url `./rel/`), `cmd` (update = merge), `sub/deep/x` (url `../../up`).
+# Built with real git; the clones are what the commands under test work on.
+sm_fixture() {
+    g init -q lib; (cd lib && tick && echo l >l.txt && g add l.txt && g commit -q -m l1)
+    g init -q top; cd top
+    tick; echo t >t; g add t; g commit -q -m t1
+    g -c protocol.file.allow=always submodule add -q ../lib vendor/lib
+    g -c protocol.file.allow=always submodule add -q ../lib other
+    g -c protocol.file.allow=always submodule add -q ../lib sub/deep/x
+    g -c protocol.file.allow=always submodule add -q ../lib cmd
+    g config -f .gitmodules submodule.cmd.update merge
+    g config -f .gitmodules submodule.other.url ./rel/
+    g config -f .gitmodules submodule.sub/deep/x.url ../../up
+    g add .gitmodules; tick; g commit -q -m "add submodules"
+    cd ..
+}
+
+s_submodule_init() {
+    sm_fixture
+    g clone -q top clone; g clone -q top clone2; g clone -q top clone3; g clone -q top clone4
+    cd clone
+    v submodule init nosuch
+    v submodule init --bogus
+    v submodule init vendor/lib
+    v submodule init vendor/lib
+    v submodule init -q other
+    sed "s#$ROOT#<ROOT>#g" .git/config >>"$TRANSCRIPT"
+    (cd sub && v submodule init)
+    g config --unset submodule.vendor/lib.url; g config --unset submodule.vendor/lib.active
+    g config --unset submodule.cmd.update
+    v submodule init -- vendor
+    v submodule init
+    g config --unset submodule.other.active
+    v submodule init other
+    cd ../clone2
+    g remote remove origin
+    v submodule init
+    cd ../clone3
+    g config submodule.active .
+    g config submodule.other.active false
+    v submodule init
+    v submodule --quiet init
+    cd ../clone4
+    g update-index --add --cacheinfo 160000,"$(g -C ../lib rev-parse HEAD)",ghost
+    v submodule init other
+    v submodule init ghost
+    v submodule init
+    g config --unset submodule.vendor/lib.url
+    g config -f .gitmodules submodule.cmd.update '!run'
+    v submodule init vendor/lib
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -5431,6 +5484,7 @@ for s in "$@"; do
         s_submodule_status) run_scenario "$s" top ;;
         s_worktree_basic) run_scenario "$s" repo w1 w2 w3 ;;
         s_worktree_lock_remove) run_scenario "$s" repo e g ;;
+        s_submodule_init) run_scenario "$s" clone clone2 clone3 clone4 ;;
         s_worktree_move) run_scenario "$s" repo ;;
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
