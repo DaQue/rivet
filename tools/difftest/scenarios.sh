@@ -6049,6 +6049,46 @@ s_describe_contains() {
     v describe --tags
 }
 
+s_submodule_set() {
+    sm_nested_top
+    g clone -q --recurse-submodules top clone
+    cd clone
+    printf '# kept comment\n' >>.gitmodules
+    v submodule set-branch -b dev vendor/lib
+    sed "s#$ROOT#<ROOT>#g" .gitmodules >>"$TRANSCRIPT"
+    v status -s
+    v submodule set-branch --branch=dev2 other
+    v submodule set-branch -q -b dev3 other
+    v submodule set-branch -d vendor/lib
+    v submodule set-branch -d vendor/lib
+    v submodule set-branch vendor/lib
+    v submodule set-branch -b dev
+    v submodule set-branch -b dev -d vendor/lib
+    v submodule set-branch -b dev nosuch
+    v submodule set-branch -b dev t
+    v submodule set-branch -b dev -- vendor/lib other
+    v submodule set-branch -b
+    v submodule set-branch --bogus x
+    sed "s#$ROOT#<ROOT>#g" .gitmodules >>"$TRANSCRIPT"
+    v submodule set-url vendor/lib ../lib2
+    sed "s#$ROOT#<ROOT>#g" .gitmodules .git/config >>"$TRANSCRIPT"
+    v submodule set-url -q other ../lib3
+    v submodule set-url vendor/lib
+    v submodule set-url nosuch ../x
+    v submodule set-url other /abs/path
+    v submodule set-url -- other ./rel
+    v submodule set-url --bogus a b
+    g config --unset submodule.other.active
+    g config --unset submodule.other.url
+    v submodule set-url other ../lib4
+    sed "s#$ROOT#<ROOT>#g" .gitmodules .git/config >>"$TRANSCRIPT"
+    sm_snap vendor/lib other
+    v submodule status
+    mv .gitmodules ../gm.bak
+    v submodule set-url vendor/lib ../zz
+    v submodule set-branch -b dev vendor/lib
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -6072,6 +6112,7 @@ for s in "$@"; do
         s_submodule_deinit) run_scenario "$s" clone clone2 ;;
         s_submodule_foreach) run_scenario "$s" none ;;
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;
+        s_submodule_set) run_scenario "$s" clone ;;
         s_worktree_move) run_scenario "$s" repo ;;
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;

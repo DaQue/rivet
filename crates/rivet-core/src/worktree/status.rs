@@ -682,6 +682,25 @@ pub fn untracked_paths(
         }
     }
 
+    // Whatever lies inside a tracked gitlink belongs to the submodule's own repository (a nested
+    // submodule included), never to this one.
+    let gitlinks: Vec<BString> = index
+        .entries()
+        .iter()
+        .filter(|e| e.mode == crate::object::EntryMode::Commit)
+        .map(|e| {
+            let mut prefix = e.path.clone();
+            prefix.push(b'/');
+            prefix
+        })
+        .collect();
+    if !gitlinks.is_empty() {
+        let inside = |path: &BString| gitlinks.iter().any(|g| path.starts_with(&g[..]));
+        untracked_files.retain(|p| !inside(p));
+        untracked_dirs.retain(|p| !inside(p));
+        ignored_paths.retain(|p| !inside(p));
+    }
+
     // An untracked directory that is itself a repository (it has a `.git`) is reported as one
     // `dir/` entry in every mode and never descended into; a tracked gitlink is not untracked
     // content at all.

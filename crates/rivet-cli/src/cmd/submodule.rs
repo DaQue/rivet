@@ -1,10 +1,10 @@
-//! `submodule`: `status`, `init`, `sync`, `add`, `update`, `deinit` and `foreach`; `.gitmodules` is
-//! read directly and only `add` appends to it.
+//! `submodule`: `status`, `init`, `sync`, `add`, `update`, `deinit`, `foreach`, `set-branch` and
+//! `set-url`. `.gitmodules` is read directly; `add`, `set-branch` and `set-url` edit it as text.
 //!
 //! Each gitlink of the index prints as `<state><commit> <path>[ (<description>)]`, where the state
 //! is `-` for a submodule that is not checked out, `+` when its `HEAD` is not the recorded commit,
 //! `U` for a merge conflict and a blank otherwise. Every other subcommand (`summary`,
-//! `absorbgitdirs`, `set-branch`, `set-url`) is refused by name.
+//! `absorbgitdirs`) is refused by name.
 
 use std::path::Path;
 
@@ -48,6 +48,8 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "update" => return submodule_update(global, quiet, rest),
             "deinit" => return submodule_deinit(global, quiet, rest),
             "foreach" => return submodule_foreach(global, quiet, rest),
+            "set-branch" => return submodule_set_branch(global, quiet, rest),
+            "set-url" => return submodule_set_url(global, quiet, rest),
             _ => {}
         }
     }
@@ -70,7 +72,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "status" if !seen_sub => seen_sub = true,
             other if !seen_sub && !other.starts_with('-') => {
                 anyhow::bail!(
-                    "submodule: '{other}' is not implemented (only 'status', 'init', 'sync', 'add', 'update', 'deinit' and 'foreach' are)"
+                    "submodule: '{other}' is not implemented (only 'status', 'init', 'sync', 'add', 'update', 'deinit', 'foreach', 'set-branch' and 'set-url' are)"
                 )
             }
             other if other.starts_with('-') => {
@@ -652,11 +654,21 @@ fn submodule_sync(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Resu
         &paths,
         quiet,
         recursive,
+        None,
     )
+}
+
+/// A submodule whose name and url the caller has just written to `.gitmodules`; `sync` takes them
+/// as they are when the file no longer says (git's `set-url` keeps what it loaded before editing).
+struct KnownUrl {
+    path: BString,
+    name: BString,
+    url: String,
 }
 
 /// Rewrite the recorded urls of the submodules of `repository`. `prefix` is the cwd inside it
 /// (for pathspecs and display), `shown` what the work tree itself is called in messages.
+#[allow(clippy::too_many_arguments)]
 fn sync_in(
     repository: &mut Repository,
     root: &Path,
@@ -665,6 +677,7 @@ fn sync_in(
     paths: &[String],
     quiet: bool,
     recursive: bool,
+    known: Option<&KnownUrl>,
 ) -> Result<i32> {
     let links = match module_list(repository, prefix, paths) {
         Ok(links) => links,
@@ -676,14 +689,19 @@ fn sync_in(
         return Ok(128);
     }
     for link in links {
-        let Some(name) = name_of(&gitmodules, link.path.as_ref()) else {
+        let known = known.filter(|k| k.path == link.path);
+        let Some(name) =
+            name_of(&gitmodules, link.path.as_ref()).or_else(|| known.map(|k| k.name.clone()))
+        else {
             continue;
         };
         if !is_active(repository, name.as_ref(), link.path.as_ref()) {
             continue;
         }
         let display = format!("{shown}{}", display_path(prefix, link.path.as_ref()));
-        let Some(declared) = setting(&gitmodules, name.as_ref(), "url") else {
+        let Some(declared) = setting(&gitmodules, name.as_ref(), "url")
+            .or_else(|| known.map(|k| BString::from(k.url.as_str())))
+        else {
             eprintln!("fatal: No url found for submodule path '{display}' in .gitmodules");
             return Ok(128);
         };
@@ -739,7 +757,7 @@ fn sync_in(
                 .worktree_path()
                 .map(Path::to_path_buf)
                 .unwrap_or(sub_dir);
-            let code = sync_in(&mut sub, &sub_root, "", &nested, &[], quiet, true)?;
+            let code = sync_in(&mut sub, &sub_root, "", &nested, &[], quiet, true, None)?;
             if code != 0 {
                 return Ok(code);
             }
@@ -1783,4 +1801,204 @@ fn foreach_in(
         }
     }
     Ok(0)
+}
+
+const USAGE_SET_BRANCH: &str = "usage: git submodule set-branch [-q|--quiet] (-d|--default) <path>
+   or: git submodule set-branch [-q|--quiet] (-b|--branch) <branch> <path>
+
+    -d, --[no-]default    set the default tracking branch to master
+    -b, --[no-]branch <branch>
+                          set the default tracking branch
+
+";
+
+const USAGE_SET_URL: &str = "usage: git submodule set-url [--quiet] <path> <newurl>
+
+    -q, --[no-]quiet      suppress output for setting url of a submodule
+
+";
+
+/// Set (`Some`), replace or remove (`None`) `key` in the `[submodule "<name>"]` section of a
+/// `.gitmodules` text, leaving everything else of the file as it is. `false` when `key` was to
+/// be removed and was not there.
+fn edit_gitmodules(text: &mut String, name: &str, key: &str, value: Option<&str>) -> bool {
+    let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
+    let header = format!("[submodule \"{escaped}\"]");
+    let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
+    let Some(start) = lines.iter().position(|l| l.trim() == header) else {
+        // A key that is not there cannot be removed; a new one starts its section at the end.
+        let Some(value) = value else {
+            return false;
+        };
+        if let Some(last) = lines.last_mut()
+            && !last.ends_with('\n')
+        {
+            last.push('\n');
+        }
+        lines.push(format!("{header}\n"));
+        lines.push(format!("\t{key} = {}\n", config_value(value)));
+        *text = lines.concat();
+        return true;
+    };
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| l.trim_start().starts_with('['))
+        .map_or(lines.len(), |i| start + 1 + i);
+    let found = (start + 1..end).find(|&i| {
+        let line = lines[i].trim_start();
+        line.split('=')
+            .next()
+            .is_some_and(|k| k.trim().eq_ignore_ascii_case(key))
+            && line.contains('=')
+    });
+    match (found, value) {
+        (Some(i), Some(value)) => lines[i] = format!("\t{key} = {}\n", config_value(value)),
+        (Some(i), None) => {
+            lines.remove(i);
+        }
+        (None, Some(value)) => {
+            let last = (start + 1..end)
+                .rev()
+                .find(|&i| {
+                    let line = lines[i].trim();
+                    !line.is_empty() && !line.starts_with('#') && !line.starts_with(';')
+                })
+                .unwrap_or(start);
+            if !lines[last].ends_with('\n') {
+                lines[last].push('\n');
+            }
+            lines.insert(last + 1, format!("\t{key} = {}\n", config_value(value)));
+        }
+        (None, None) => return false,
+    }
+    *text = lines.concat();
+    true
+}
+
+/// The submodule name for `path` (given relative to the cwd), or git's fatal text.
+fn gitmodules_name_for(
+    repository: &Repository,
+    root: &Path,
+    typed: &str,
+) -> std::result::Result<BString, String> {
+    let prefix = cwd_prefix(root);
+    let wanted = from_root(&prefix, typed.trim_end_matches('/'));
+    let gitmodules = gitmodules_config(repository, root);
+    name_of(&gitmodules, BStr::new(wanted.as_bytes()))
+        .ok_or_else(|| format!("no submodule mapping found in .gitmodules for path '{typed}'"))
+}
+
+fn submodule_set_branch(global: &GlobalArgs, _quiet: bool, args: &[String]) -> Result<i32> {
+    let mut default = false;
+    let mut branch: Option<String> = None;
+    let mut positional: Vec<&String> = Vec::new();
+    let mut iter = args.iter();
+    let mut only_paths = false;
+    while let Some(word) = iter.next() {
+        match word.as_str() {
+            _ if only_paths => positional.push(word),
+            "-q" | "--quiet" => {}
+            "-d" | "--default" => default = true,
+            "-b" | "--branch" => match iter.next() {
+                Some(value) => branch = Some(value.clone()),
+                None => {
+                    eprint!("{USAGE}");
+                    return Ok(1);
+                }
+            },
+            w if w.starts_with("--branch=") => branch = Some(w["--branch=".len()..].to_string()),
+            "--" => only_paths = true,
+            w if w.starts_with('-') && w.len() > 1 => {
+                eprint!("{USAGE}");
+                return Ok(1);
+            }
+            _ => positional.push(word),
+        }
+    }
+    if positional.len() != 1 {
+        eprint!("{USAGE_SET_BRANCH}");
+        return Ok(129);
+    }
+    if default && branch.is_some() {
+        eprintln!("fatal: options '--branch' and '--default' cannot be used together");
+        return Ok(128);
+    }
+    if !default && branch.is_none() {
+        eprintln!("fatal: --branch or --default required");
+        return Ok(128);
+    }
+    let repository = super::open(global)?;
+    let Some(root) = repository.worktree_path().map(Path::to_path_buf) else {
+        return Ok(0);
+    };
+    let name = match gitmodules_name_for(&repository, &root, positional[0]) {
+        Ok(name) => name,
+        Err(message) => {
+            eprintln!("fatal: {message}");
+            return Ok(128);
+        }
+    };
+    let file = root.join(".gitmodules");
+    let mut text = std::fs::read_to_string(&file).unwrap_or_default();
+    let changed = edit_gitmodules(&mut text, &name.to_string(), "branch", branch.as_deref());
+    if !changed {
+        // `git config --unset` of a key that is not there.
+        return Ok(1);
+    }
+    std::fs::write(&file, text)?;
+    Ok(0)
+}
+
+fn submodule_set_url(global: &GlobalArgs, quiet: bool, args: &[String]) -> Result<i32> {
+    let mut quiet = quiet;
+    let mut positional: Vec<&String> = Vec::new();
+    let mut only_paths = false;
+    for word in args {
+        match word.as_str() {
+            _ if only_paths => positional.push(word),
+            "-q" | "--quiet" => quiet = true,
+            "--" => only_paths = true,
+            w if w.starts_with('-') && w.len() > 1 => {
+                eprint!("{USAGE}");
+                return Ok(1);
+            }
+            _ => positional.push(word),
+        }
+    }
+    if positional.len() != 2 {
+        eprint!("{USAGE_SET_URL}");
+        return Ok(129);
+    }
+    let mut repository = super::open(global)?;
+    let Some(root) = repository.worktree_path().map(Path::to_path_buf) else {
+        return Ok(0);
+    };
+    let name = match gitmodules_name_for(&repository, &root, positional[0]) {
+        Ok(name) => name,
+        Err(message) => {
+            eprintln!("fatal: {message}");
+            return Ok(128);
+        }
+    };
+    let file = root.join(".gitmodules");
+    let mut text = std::fs::read_to_string(&file).unwrap_or_default();
+    edit_gitmodules(&mut text, &name.to_string(), "url", Some(positional[1]));
+    std::fs::write(&file, text)?;
+    // Then the url is carried into the config the way `submodule sync` does it.
+    let prefix = cwd_prefix(&root);
+    let known = KnownUrl {
+        path: BString::from(from_root(&prefix, positional[0].trim_end_matches('/'))),
+        name,
+        url: positional[1].clone(),
+    };
+    sync_in(
+        &mut repository,
+        &root,
+        &prefix,
+        "",
+        &[positional[0].clone()],
+        quiet,
+        false,
+        Some(&known),
+    )
 }

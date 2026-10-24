@@ -828,3 +828,10 @@ Base `568c5b2`: `--contains` was not in the grammar, and `submodule status` refu
 - `submodule status` now uses it for its third step (`describe`, `--tags`, `--contains`, `--all --always`) instead of refusing; covered with a submodule detached before a later annotated tag (`(later~2)`).
 Not done: `--match`/`--exclude` (not in the grammar), several commits per call, and the commit-date cutoff `name-rev` uses as an optimisation (it never changes the name of the target).
 Gate after: fmt, clippy, doc clean; 229 passed / 0 failed / 0 ignored; `scenarios.sh` 208 PASS / `failures: 0`.
+
+### Phase 3.19 — `submodule set-branch` and `set-url`; status no longer lists what is inside a gitlink (landed, scenario `s_submodule_set`)
+Base `c7f7ae0`: both subcommands refused by name.
+- `set-branch (-b|--branch <b> | -d|--default) [-q] [--] <path>` edits `.gitmodules` as text (comments and layout of the rest are kept; the key goes after the section's last entry, `-d` removes it and exits 1 when it was not there). Errors as git: no flag `--branch or --default required`, both `options '--branch' and '--default' cannot be used together` (128), a path with no mapping `no submodule mapping found in .gitmodules for path '<p>'` (128), wrong argument count the two-line `set-branch` usage (129). The file is left modified, not staged.
+- `set-url [-q] [--] <path> <newurl>` rewrites `url` in `.gitmodules` the same way (creating the section, or the file, when it is missing) and then runs `sync` for that path, which prints `Synchronizing submodule url for '<p>'` and updates `.git/config` and the submodule's remote. When the edited file no longer maps the path (it was just created with the url alone) git still syncs with the name and url it holds; so does this.
+- Found with the scenario and fixed in the core: `status` listed the nested repositories of a checked-out submodule (`?? vendor/lib/in/`) as untracked content of the superproject. Anything below a tracked gitlink is now left out of the untracked and ignored lists.
+Gate after: fmt, clippy, doc clean; 229 passed / 0 failed / 0 ignored; `scenarios.sh` 209 PASS / `failures: 0`.
