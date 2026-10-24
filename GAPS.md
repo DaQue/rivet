@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 237 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 239 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-24, gate: 235 tests / 0 failed, 237 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-24, gate: 235 tests / 0 failed, 239 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -50,7 +50,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
 
 The command works for the common case; the listed options or edge cases are missing or refused.
 
-* **`log`** — one revision only (`log a b` is an argument error); `--color` is not implemented
+* **`log`** — takes any number of revisions and ranges (`s_log_multi`); `--color` is not implemented
   (`-p`, `--stat`, `--name-*` under `--color=always` refuse rather than degrade);
   `--graph` over several root commits exits 128 by design; `--graph` with `--date-order` or
   `--first-parent` orders differently from git, and `--graph --format=format:%s` draws an
@@ -102,9 +102,10 @@ The command works for the common case; the listed options or edge cases are miss
   status becomes the exit status) and `worktree add`; `core.hooksPath` is also read from the global and
   system config. Not run yet: `pre-auto-gc`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` is not implemented. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
   source (and `merge`). `GIT_DIR`/`GIT_WORK_TREE` are not exported to hooks (git does not either
-  for the common layout; linked work trees are untested). Related, not a hook: `push` with
-  a refspec `x:y:z` splits at the first colon (git: the last), and the matching refspec `:` is
-  rejected where git pushes all matching branches.
+  for the common layout; linked work trees are untested).
+* **`push`** — a delete naming a ref the remote does not have (`push origin :nosuch`) fails with git's
+  two `error:` lines and status 1, but the other refs of the same command line are not pushed (git pushes
+  them and fails only that ref).
 * **`reference-transaction`** — deliberately not implemented: git 2.56 runs it for every ref write with
   four states (`preparing`, `prepared`, `committed`, `aborted`), `ref:<target>` in the stdin for
   symbolic updates (`switch` writes `<null> ref:refs/heads/x HEAD`), a `HEAD` entry next to the branch

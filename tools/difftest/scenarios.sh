@@ -7379,12 +7379,87 @@ s_rebase_i_conflict() {
     v reflog
 }
 
+# `log` over several revisions: tips on two branches whose dates force one interleaving that is
+# neither "left first" nor "right first", ranges mixed with plain revisions, and `--` paths.
+s_log_multi() {
+    v init -q repo; cd repo
+    tick; echo 1 >a; v add a; v commit -q -m base
+    v branch left; v branch right
+    v switch -q left; tick; echo l1 >l; v add l; v commit -q -m L1
+    v switch -q right; tick; echo r1 >r; v add r; v commit -q -m R1
+    v switch -q left; tick; echo l2 >>l; v commit -q -a -m L2
+    v switch -q right; tick; echo r2 >>r; v commit -q -a -m R2
+    tick; echo r3 >>r; v commit -q -a -m R3
+    v switch -q left; echo l3 >>l; v commit -q -a -m L3
+    v switch -q main; tick; echo m >m; v add m; v commit -q -m M1
+    v log --oneline left right
+    v log --oneline right left
+    v log --oneline left right main
+    v log --oneline main left
+    v log --oneline main..left right
+    v log --oneline left main..right
+    v log --oneline ^left right
+    v log --oneline right ^left
+    v log --oneline left...right right
+    v log --oneline left right -- l
+    v log --oneline left right -- r
+    v log --oneline -n3 left right
+    v log --oneline --skip=2 left right
+    v log --oneline --reverse left right
+    v log --oneline --topo-order left right
+    v log --oneline --first-parent left right
+    v log --format='%s %p' left right main
+    v log --oneline HEAD left
+    v log --oneline left left
+    v log --oneline left nosuch
+    v log --oneline nosuch left
+    v log --oneline left right --
+    v log --oneline --graph left right
+    v log --oneline --all left
+    v log --oneline ^left
+    v log --oneline ^left ^right
+}
+
+# Push refspec forms: the last colon splits, `:` pushes the branches both sides have, `+` forces,
+# and a dry run prints the same markers as a real push.
+s_push_refspec_forms() {
+    g init -q --bare origin.git
+    v init -q repo; cd repo
+    v remote add origin file://$ROOT/origin.git
+    echo a >a; v add a; v commit -q -m one
+    v push origin main
+    v branch topic; v branch other
+    v push origin topic
+    v push origin main:feature
+    v push origin 'main:topic:z'
+    v push origin 'main:refs/heads/a:b'
+    v push origin 'x:y:z'
+    v push origin 'refs/heads/main:refs/heads/dst:'
+    v push origin ':'
+    tick; echo b >b; v add b; v commit -q -m two
+    v push --dry-run origin :
+    v push origin :
+    v push --dry-run origin :
+    tick; v switch -q topic; echo t >t; v add t; v commit -q -m three
+    v push --dry-run origin :
+    v push origin :
+    v switch -q main
+    v push --dry-run origin main:fresh topic:other :feature main
+    v push --dry-run origin +topic:main
+    v push --dry-run origin topic:main
+    v push origin --delete feature
+    v push origin :nosuch
+    v push --dry-run origin :
+    v push origin +:
+    (cd ../origin.git && v for-each-ref)
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
 for s in "$@"; do
     case $s in
-        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
+        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash|s_push_refspec_forms) run_scenario "$s" repo origin.git ;;
         s_credential) run_scenario "$s" c_ok c5 ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
         s_sparse_linked) run_scenario "$s" repo wt ;;

@@ -37,7 +37,8 @@ impl Refspec {
             Some(rest) => (true, rest),
             None => (false, text.as_bytes()),
         };
-        let (src, dst) = match rest.find_byte(b':') {
+        // The last colon splits, as in Git: `a:b:c` is the source `a:b` and the destination `c`.
+        let (src, dst) = match rest.rfind_byte(b':') {
             Some(i) => (&rest[..i], &rest[i + 1..]),
             None => (rest, &b""[..]),
         };
@@ -885,6 +886,31 @@ impl Repository {
                 });
             }
         }
+        // The matching refspec `:` stands for every local branch the remote has under the same name.
+        if !request.delete {
+            let mut expanded = Vec::with_capacity(specs.len());
+            for spec in specs {
+                if !spec.src.is_empty() || !spec.dst.is_empty() {
+                    expanded.push(spec);
+                    continue;
+                }
+                for (name, _) in self.refs().list_branches()? {
+                    let short = name
+                        .as_bytes()
+                        .strip_prefix(b"refs/heads/")
+                        .unwrap_or(name.as_bytes());
+                    let on_remote = format!("refs/heads/{}", short.as_bstr());
+                    if remote_value(on_remote.as_bytes()).is_some() {
+                        expanded.push(Refspec {
+                            force: spec.force,
+                            src: BString::from(name.as_bytes()),
+                            dst: BString::from(name.as_bytes()),
+                        });
+                    }
+                }
+            }
+            specs = expanded;
+        }
         for spec in &specs {
             if request.delete || spec.src.is_empty() {
                 let dst = qualify_remote_ref(&spec.dst, &advertisement, None);
@@ -942,6 +968,8 @@ impl Repository {
             });
         }
 
+        // Git reports and sends the refs ordered by their destination name.
+        plans.sort_by(|a, b| a.dst.cmp(&b.dst));
         let mut changes = Vec::new();
         let mut updates = Vec::new();
         // Which plans `pre-push` is told about: those that will be sent, not the ones already up

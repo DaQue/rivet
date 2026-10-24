@@ -971,3 +971,15 @@ Base `97343f9`: the parser rejected `-i`. Compared against git 2.56 (transcripts
 - Refusals are checked in `crates/rivet-cli/tests/rebase_interactive.rs` (options, todo commands, empty message restores the tip). They cannot be differential: git runs those commands.
 Not done: `--autosquash`, `--edit-todo`, `--exec`, `--root`, `--rebase-merges`, `--keep-base`, signing; an empty message does not leave a resumable stop; `git rebase --continue` run by real git over a rivet-made state is untested (extra marker file `rivet-interactive`).
 Gate after (Items 1–2 not started yet): fmt, clippy, doc clean; 235 passed / 0 failed / 0 ignored; `scenarios.sh` 237 PASS / `failures: 0`.
+
+### Phase 6.2 — `log` over several revisions (landed, scenario `s_log_multi`)
+Base `5b6e70b`: `log a b` was an argument error. `LogArgs` now takes any number of revisions (`revisions: Vec<String>`, default `HEAD`); each is a plain revision, `A..B`, `A...B` or `^A`, added by `add_revision`. The walk order already was git's (date order, ties by argument order) — the scenario's tips `L3`/`R3` share a date so `left right` and `right left` differ, and `R2` is newer than `L2` so the result is neither "left first" nor "right first". Compared: ranges mixed with plain revisions, `--` paths, `-n`, `--skip`, `--reverse`, `--topo-order`, `--first-parent`, `--graph`, `--all`, duplicate and unknown revisions (exit 128, git's message), a trailing `--`.
+Found and fixed by the scenario: `log ^A` alone printed `HEAD`'s history; git prints nothing.
+
+### Phase 6.3 — `push` refspec forms (landed, scenario `s_push_refspec_forms`)
+Base `5b6e70b`. `Refspec::parse` splits at the last colon (`x:y:z` is source `x:y`, destination `z`); with a colon only the destination is syntax-checked (a bad source is `src refspec … does not match any`, status 1, as in git; `^x:y` stays fatal). The matching refspec `:` (and `+:`) pushes every local branch the remote has under the same name. Found by the scenario and fixed in the same area: refs are reported and sent ordered by destination name; refs already current are not listed in a mixed report; the "tip of your current branch is behind" hint depends on the rejected *destination* being the checked-out branch; `push origin :nosuch` is `error: unable to delete…` + `failed to push some refs`, status 1 (was `fatal:`, 128).
+Not done: other refs on the same command line as a missing-ref delete are not pushed (recorded in `GAPS.md`).
+Gate after: fmt, clippy `-D warnings`, doc clean; 235 passed / 0 failed / 0 ignored; `scenarios.sh` 239 PASS / `failures: 0`.
+
+Items 3 (`stash branch`, `clean -i`, `sparse-checkout check-rules`) were not started: the brief says to stop after a green unit rather than start a subsystem that cannot be finished.
+

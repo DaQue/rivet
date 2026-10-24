@@ -1191,7 +1191,9 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
                     parsed.src.as_ref(),
                 )
                 .is_ok();
-            let src_ok = src_known || name_ok(&parsed.src);
+            // With a colon only the destination is judged; a bad source just matches nothing.
+            let src_ok =
+                src_known || colon && !parsed.src.starts_with(b"^") || name_ok(&parsed.src);
             if spec.is_empty() || !dst_ok || !src_ok {
                 eprintln!("fatal: invalid refspec '{spec}'");
                 return Ok(128);
@@ -1296,7 +1298,25 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
         dry_run: args.dry_run,
         no_verify: args.no_verify,
     };
-    let report = repository.push_remote(&remote, &request)?;
+    let report = match repository.push_remote(&remote, &request) {
+        Ok(report) => report,
+        // Deleting a ref the remote does not have fails that ref, not the command line.
+        Err(error) if error.to_string().starts_with("unable to delete '") => {
+            let url = match repository.remote_config(&remote)? {
+                Some(config) => config
+                    .push_urls
+                    .first()
+                    .or_else(|| config.urls.first())
+                    .map(|u| u.to_string())
+                    .unwrap_or_else(|| remote.clone()),
+                None => remote.clone(),
+            };
+            eprintln!("error: {error}");
+            eprintln!("error: failed to push some refs to '{url}'");
+            return Ok(1);
+        }
+        Err(error) => return Err(error.into()),
+    };
     if report.hook_refused {
         eprintln!("error: failed to push some refs to '{}'", report.url);
         return Ok(1);
@@ -1308,7 +1328,8 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
             eprintln!("Everything up-to-date");
         } else {
             eprintln!("To {}", display_url(&report.url, false));
-            for change in &report.changes {
+            // Refs that are already current are listed only by `--verbose`.
+            for change in report.changes.iter().filter(|c| c.flag != '=') {
                 eprintln!("{}", change.push_line());
             }
         }
@@ -1326,9 +1347,11 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
             eprintln!("hint: 'git pull' before pushing again.");
             eprintln!("hint: See the 'Note about fast-forwards' in 'git push --help' for details.");
         } else if report.non_fast_forward {
-            let current = report.changes.iter().any(|c| {
-                c.flag == '!' && Some(c.from.as_str()) == branch.as_deref() && c.from == c.to
-            });
+            // Git asks whether the rejected destination is the branch that is checked out.
+            let current = report
+                .changes
+                .iter()
+                .any(|c| c.flag == '!' && Some(c.to.as_str()) == branch.as_deref());
             if current {
                 eprintln!(
                     "hint: Updates were rejected because the tip of your current branch is behind"

@@ -43,9 +43,9 @@ use crate::cli::{DiffAlgorithmArg, GlobalArgs};
 ///   require the simplification, but the doc comment here must say which one was chosen.
 #[derive(Debug, clap::Args)]
 pub struct LogArgs {
-    /// The revision, range or ref to start from. Defaults to `HEAD`.
-    #[arg(value_name = "REVISION", default_value = "HEAD")]
-    pub revision: String,
+    /// The revisions, ranges or refs to start from. Defaults to `HEAD`.
+    #[arg(value_name = "REVISION")]
+    pub revisions: Vec<String>,
 
     /// Show only the named paths.
     #[arg(value_name = "PATHSPEC", last = true)]
@@ -362,21 +362,15 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         anyhow::bail!("log: --graph with a path limit is not implemented");
     }
 
-    // Revisions: `A..B`, `A...B`, `^A`, or a single revision; `--all` adds every ref.
+    // Revisions: any number of `A..B`, `A...B`, `^A` and plain revisions; `--all` adds every ref.
     let mut starts: Vec<ObjectId> = Vec::new();
     let mut options = WalkOptions::new();
-    let spec = args.revision.as_str();
-    let resolve = |text: &str| super::resolve_commit(&repository, text);
-    // Git names the whole argument, not the failing side, when a range endpoint is unknown.
-    let ambiguous = || {
-        anyhow::anyhow!(
-            "ambiguous argument '{spec}': unknown revision or path not in the working tree.\n\
-             Use '--' to separate paths from revisions, like this:\n\
-             'git <command> [<revision>...] -- [<file>...]'"
-        )
+    let given: Vec<&str> = args.revisions.iter().map(String::as_str).collect();
+    let specs = if given.is_empty() && !args.all {
+        vec!["HEAD"]
+    } else {
+        given
     };
-    let resolve_range =
-        |text: &str| resolve(text).map_err(|error| super::rev_error(error, ambiguous));
 
     if args.all {
         for (_, oid) in repository.refs().list_all(repository.odb())? {
@@ -391,42 +385,9 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         {
             starts.insert(0, head);
         }
-    } else if let Some(negated) = spec.strip_prefix('^') {
-        options.exclude(resolve(negated).map_err(|_| anyhow::anyhow!("bad revision '{spec}'"))?);
-        starts.push(resolve("HEAD")?);
-    } else if spec.contains("...") {
-        let (left, right) = spec.split_once("...").expect("checked");
-        let (left, right) = (
-            resolve_range(if left.is_empty() { "HEAD" } else { left })?,
-            resolve_range(if right.is_empty() { "HEAD" } else { right })?,
-        );
-        starts.push(left);
-        starts.push(right);
-        for base in rivet_core::merge_bases(repository.odb(), left, right).unwrap_or_default() {
-            options.exclude(base);
-        }
-    } else if spec.contains("..") {
-        let (left, right) = spec.split_once("..").expect("checked");
-        options.exclude(resolve_range(if left.is_empty() { "HEAD" } else { left })?);
-        starts.push(resolve_range(if right.is_empty() {
-            "HEAD"
-        } else {
-            right
-        })?);
-    } else {
-        // An unborn branch has an empty history, which `git log` reports as an error.
-        match super::resolve_commit(&repository, spec) {
-            Ok(oid) => starts.push(oid),
-            Err(error) => {
-                if spec == "HEAD" {
-                    anyhow::bail!(
-                        "your current branch '{}' does not have any commits yet",
-                        super::head_reflog_label(&repository)?
-                    );
-                }
-                return Err(super::rev_error(error, ambiguous));
-            }
-        }
+    }
+    for spec in &specs {
+        add_revision(&repository, spec, &mut starts, &mut options)?;
     }
 
     options.first_parent(args.first_parent);
@@ -1373,6 +1334,70 @@ impl crate::cmd::history::LogArgs {
         }
         Ok(specs)
     }
+}
+
+/// Add one revision argument of `log` to the walk: a start point, or an exclusion. A walk that is
+/// given only exclusions (`log ^A`) has no start and prints nothing, as in Git.
+fn add_revision(
+    repository: &Repository,
+    spec: &str,
+    starts: &mut Vec<ObjectId>,
+    options: &mut WalkOptions,
+) -> Result<()> {
+    let resolve = |text: &str| super::resolve_commit(repository, text);
+    // Git names the whole argument, not the failing side, when a range endpoint is unknown.
+    let ambiguous = || {
+        anyhow::anyhow!(
+            "ambiguous argument '{spec}': unknown revision or path not in the working tree.\n\
+             Use '--' to separate paths from revisions, like this:\n\
+             'git <command> [<revision>...] -- [<file>...]'"
+        )
+    };
+    let resolve_range =
+        |text: &str| resolve(text).map_err(|error| super::rev_error(error, ambiguous));
+    let mut start = |oid: ObjectId| {
+        if !starts.contains(&oid) {
+            starts.push(oid);
+        }
+    };
+
+    if let Some(negated) = spec.strip_prefix('^') {
+        options.exclude(resolve(negated).map_err(|_| anyhow::anyhow!("bad revision '{spec}'"))?);
+        return Ok(());
+    }
+    if let Some((left, right)) = spec.split_once("...") {
+        let (left, right) = (
+            resolve_range(if left.is_empty() { "HEAD" } else { left })?,
+            resolve_range(if right.is_empty() { "HEAD" } else { right })?,
+        );
+        start(left);
+        start(right);
+        for base in rivet_core::merge_bases(repository.odb(), left, right).unwrap_or_default() {
+            options.exclude(base);
+        }
+    } else if let Some((left, right)) = spec.split_once("..") {
+        options.exclude(resolve_range(if left.is_empty() { "HEAD" } else { left })?);
+        start(resolve_range(if right.is_empty() {
+            "HEAD"
+        } else {
+            right
+        })?);
+    } else {
+        // An unborn branch has an empty history, which `git log` reports as an error.
+        match resolve(spec) {
+            Ok(oid) => start(oid),
+            Err(error) => {
+                if spec == "HEAD" {
+                    anyhow::bail!(
+                        "your current branch '{}' does not have any commits yet",
+                        super::head_reflog_label(repository)?
+                    );
+                }
+                return Err(super::rev_error(error, ambiguous));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The diff a commit introduces against its first parent (or the empty tree).
