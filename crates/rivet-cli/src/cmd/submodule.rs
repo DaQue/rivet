@@ -1,9 +1,9 @@
-//! `submodule`: `status` and `init`, and `.gitmodules` read-only.
+//! `submodule`: `status`, `init` and `sync`, and `.gitmodules` read-only.
 //!
 //! Each gitlink of the index prints as `<state><commit> <path>[ (<description>)]`, where the state
 //! is `-` for a submodule that is not checked out, `+` when its `HEAD` is not the recorded commit,
 //! `U` for a merge conflict and a blank otherwise. Every other subcommand (`update`, `add`,
-//! `foreach`, `sync`, `deinit`, `summary`, `absorbgitdirs`, …) is refused by name.
+//! `foreach`, `deinit`, `summary`, `absorbgitdirs`, …) is refused by name.
 
 use std::path::Path;
 
@@ -39,8 +39,10 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
     if let Some(at) = args.args.iter().position(|w| !w.starts_with('-')) {
         let quiet = global.quiet || args.args[..at].iter().any(|w| w == "-q" || w == "--quiet");
         let rest = &args.args[at + 1..];
-        if args.args[at] == "init" {
-            return submodule_init(global, quiet, rest);
+        match args.args[at].as_str() {
+            "init" => return submodule_init(global, quiet, rest),
+            "sync" => return submodule_sync(global, quiet, rest),
+            _ => {}
         }
     }
     let mut quiet = global.quiet;
@@ -61,7 +63,9 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "--" => only_paths = true,
             "status" if !seen_sub => seen_sub = true,
             other if !seen_sub && !other.starts_with('-') => {
-                anyhow::bail!("submodule: '{other}' is not implemented (only 'status' and 'init' are)")
+                anyhow::bail!(
+                    "submodule: '{other}' is not implemented (only 'status', 'init' and 'sync' are)"
+                )
             }
             other if other.starts_with('-') => {
                 eprintln!("error: unknown option `{}'", other.trim_start_matches('-'));
@@ -430,7 +434,11 @@ fn chop_last_dir(remote: &mut String, is_relative: bool) -> std::result::Result<
 
 /// A `./` or `../` url of `.gitmodules` resolved against the superproject's own url (git's
 /// `relative_url`).
-fn relative_url(remote: &str, url: &str) -> std::result::Result<String, String> {
+fn relative_url(
+    remote: &str,
+    url: &str,
+    up_path: Option<&str>,
+) -> std::result::Result<String, String> {
     let mut remote = remote.to_string();
     if remote.ends_with('/') {
         remote.pop();
@@ -455,12 +463,22 @@ fn relative_url(remote: &str, url: &str) -> std::result::Result<String, String> 
     if url.ends_with('/') {
         out.pop();
     }
-    Ok(out.strip_prefix("./").map(str::to_string).unwrap_or(out))
+    let out = out.strip_prefix("./").map(str::to_string).unwrap_or(out);
+    match up_path {
+        Some(up) if is_relative => Ok(format!("{up}{out}")),
+        _ => Ok(out),
+    }
 }
 
 /// The url a `./` or `../` entry of `.gitmodules` stands for, from the url of the superproject's
 /// remote (or its own location when it has none).
-fn resolve_relative_url(repository: &Repository, root: &Path, url: &str) -> Result<String> {
+fn resolve_relative_url(
+    repository: &Repository,
+    root: &Path,
+    url: &str,
+    up_path: Option<&str>,
+    quiet: bool,
+) -> Result<String> {
     let branch_remote = repository
         .head()
         .ok()
@@ -477,13 +495,15 @@ fn resolve_relative_url(repository: &Repository, root: &Path, url: &str) -> Resu
     let remote = match repository.config_value(BStr::new(key.as_bytes()))? {
         Some(remote) => remote.to_string(),
         None => {
-            eprintln!(
-                "warning: could not look up configuration '{key}'. Assuming this repository is its own authoritative upstream."
-            );
+            if !quiet {
+                eprintln!(
+                    "warning: could not look up configuration '{key}'. Assuming this repository is its own authoritative upstream."
+                );
+            }
             root.to_string_lossy().into_owned()
         }
     };
-    relative_url(&remote, url).map_err(|e| anyhow::anyhow!(e))
+    relative_url(&remote, url, up_path).map_err(|e| anyhow::anyhow!(e))
 }
 
 fn submodule_init(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Result<i32> {
@@ -547,7 +567,7 @@ fn submodule_init(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Resu
         if repository.config_value(url_key.as_ref())?.is_none() {
             let declared = declared.to_string();
             let url = if declared.starts_with("./") || declared.starts_with("../") {
-                resolve_relative_url(&repository, &root, &declared)?
+                resolve_relative_url(&repository, &root, &declared, None, false)?
             } else {
                 declared
             };
@@ -567,6 +587,141 @@ fn submodule_init(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Resu
                 .set(update_key.as_ref(), &update.to_ascii_lowercase())?;
         }
         repository.write_config()?;
+    }
+    Ok(0)
+}
+
+fn is_relative_url(url: &str) -> bool {
+    url.starts_with("./") || url.starts_with("../")
+}
+
+/// `../` once per component of `path`, the way back from a submodule to its superproject.
+fn up_path(path: &str) -> String {
+    "../".repeat(path.trim_end_matches('/').matches('/').count() + 1)
+}
+
+fn submodule_sync(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Result<i32> {
+    let mut recursive = false;
+    let mut paths: Vec<String> = Vec::new();
+    let mut only_paths = false;
+    for word in args {
+        match word.as_str() {
+            _ if only_paths => paths.push(word.clone()),
+            "-q" | "--quiet" => quiet = true,
+            "--recursive" => recursive = true,
+            "--" => only_paths = true,
+            other if other.starts_with('-') => {
+                eprint!("{USAGE}");
+                return Ok(1);
+            }
+            other => paths.push(other.to_string()),
+        }
+    }
+    let mut repository = super::open(global)?;
+    let Some(root) = repository.worktree_path().map(Path::to_path_buf) else {
+        return Ok(0);
+    };
+    let prefix = cwd_prefix(&root);
+    sync_in(
+        &mut repository,
+        &root,
+        &prefix,
+        "",
+        &paths,
+        quiet,
+        recursive,
+    )
+}
+
+/// Rewrite the recorded urls of the submodules of `repository`. `prefix` is the cwd inside it
+/// (for pathspecs and display), `shown` what the work tree itself is called in messages.
+fn sync_in(
+    repository: &mut Repository,
+    root: &Path,
+    prefix: &str,
+    shown: &str,
+    paths: &[String],
+    quiet: bool,
+    recursive: bool,
+) -> Result<i32> {
+    let links = match module_list(repository, prefix, paths) {
+        Ok(links) => links,
+        Err(code) => return Ok(code),
+    };
+    let gitmodules = gitmodules_config(repository, root);
+    if let Some(message) = check_update_settings(&gitmodules) {
+        eprintln!("fatal: {message}");
+        return Ok(128);
+    }
+    for link in links {
+        let Some(name) = name_of(&gitmodules, link.path.as_ref()) else {
+            continue;
+        };
+        if !is_active(repository, name.as_ref(), link.path.as_ref()) {
+            continue;
+        }
+        let display = format!("{shown}{}", display_path(prefix, link.path.as_ref()));
+        let Some(declared) = setting(&gitmodules, name.as_ref(), "url") else {
+            eprintln!("fatal: No url found for submodule path '{display}' in .gitmodules");
+            return Ok(128);
+        };
+        let declared = declared.to_string();
+        let path_text = link.path.to_string();
+        let (url, origin_url) = if is_relative_url(&declared) {
+            (
+                resolve_relative_url(repository, root, &declared, None, true)?,
+                resolve_relative_url(
+                    repository,
+                    root,
+                    &declared,
+                    Some(&up_path(&path_text)),
+                    true,
+                )?,
+            )
+        } else {
+            (declared.clone(), declared)
+        };
+        if !quiet {
+            println!("Synchronizing submodule url for '{display}'");
+        }
+        repository
+            .config_mut()
+            .set(key_of(name.as_ref(), "url").as_ref(), url.as_bytes())?;
+        repository.write_config()?;
+        let sub_dir = root.join(link.path.to_os_str_lossy());
+        if !sub_dir.join(".git").exists() {
+            continue;
+        }
+        let Ok(mut sub) = Repository::open_or_discover(&sub_dir) else {
+            continue;
+        };
+        let remote = sub
+            .head()
+            .ok()
+            .and_then(|head| head.branch().map(|b| b.short_name().to_string()))
+            .and_then(|branch| {
+                sub.config_value(BStr::new(format!("branch.{branch}.remote").as_bytes()))
+                    .ok()
+                    .flatten()
+            })
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "origin".to_string());
+        sub.config_mut().set(
+            BStr::new(format!("remote.{remote}.url").as_bytes()),
+            origin_url.as_bytes(),
+        )?;
+        sub.write_config()?;
+        if recursive {
+            let nested = format!("{display}/");
+            let sub_root = sub
+                .worktree_path()
+                .map(Path::to_path_buf)
+                .unwrap_or(sub_dir);
+            let code = sync_in(&mut sub, &sub_root, "", &nested, &[], quiet, true)?;
+            if code != 0 {
+                return Ok(code);
+            }
+        }
     }
     Ok(0)
 }

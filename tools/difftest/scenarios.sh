@@ -5470,6 +5470,48 @@ s_submodule_init() {
     v submodule init vendor/lib
 }
 
+# `top` has `vendor/lib` and `other`; `lib` has its own submodule `in` (from `inner`). `clone` has
+# them all checked out and registered (made with real git), with `.gitmodules` urls edited afterwards.
+sm_nested_fixture() {
+    g init -q inner; (cd inner && tick && echo i >i.txt && g add i.txt && g commit -q -m i1)
+    g init -q lib; (cd lib && tick && echo l >l.txt && g add l.txt && g commit -q -m l1 &&
+        g -c protocol.file.allow=always submodule add -q ../inner in && tick && g commit -q -m "add in")
+    g init -q top; cd top
+    tick; echo t >t; g add t; g commit -q -m t1
+    g -c protocol.file.allow=always submodule add -q ../lib vendor/lib
+    g -c protocol.file.allow=always submodule add -q ../lib other
+    tick; g commit -q -m "add submodules"
+    cd ..
+    g -c protocol.file.allow=always clone -q --recurse-submodules top clone
+}
+
+s_submodule_sync() {
+    sm_nested_fixture
+    cd clone
+    g config -f .gitmodules submodule.vendor/lib.url ../lib2
+    g config -f .gitmodules submodule.other.url ../lib3
+    g config -f vendor/lib/.gitmodules submodule.in.url ../inner2
+    g config --unset submodule.other.active
+    v submodule sync nosuch
+    v submodule sync --bogus
+    v submodule sync vendor/lib
+    v submodule sync -q other
+    v submodule sync
+    g config remote.origin.url ../top
+    v submodule sync
+    v submodule sync --recursive
+    v submodule sync --recursive -q
+    g config --unset remote.origin.url
+    v submodule sync --recursive vendor
+    g -C vendor/lib remote remove origin
+    v submodule sync vendor/lib
+    (cd vendor && v submodule sync --recursive)
+    g config --unset submodule.vendor/lib.url
+    g config submodule.vendor/lib.active false
+    v submodule sync
+    cat .git/modules/vendor/lib/config .git/modules/vendor/lib/modules/in/config | sed "s#$ROOT#<ROOT>#g" >>"$TRANSCRIPT"
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -5485,6 +5527,7 @@ for s in "$@"; do
         s_worktree_basic) run_scenario "$s" repo w1 w2 w3 ;;
         s_worktree_lock_remove) run_scenario "$s" repo e g ;;
         s_submodule_init) run_scenario "$s" clone clone2 clone3 clone4 ;;
+        s_submodule_sync) run_scenario "$s" clone ;;
         s_worktree_move) run_scenario "$s" repo ;;
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
