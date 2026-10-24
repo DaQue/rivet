@@ -386,7 +386,13 @@ impl Repository {
         }
         let from_tree = self.head_tree_oid()?;
         let options = CheckoutOptions::new();
-        let plan = CheckoutPlan::plan(self.format(), from_tree, to_tree, self.odb(), &options)?;
+        let mut plan = CheckoutPlan::plan(self.format(), from_tree, to_tree, self.odb(), &options)?;
+        // Paths outside a sparse-checkout definition are recorded in the index and never written.
+        let sparse = self.sparse_checkout()?.map(|(sparse, _)| sparse);
+        let outside = match &sparse {
+            Some(sparse) => plan.split_off(|e| !sparse.includes(BStr::new(&e.path[..]))),
+            None => Vec::new(),
+        };
         plan.validate(
             self.worktree()?,
             self.index(),
@@ -414,6 +420,23 @@ impl Repository {
                         entry.path.clone(),
                         Some(make_index_entry(path, mode, oid, stat.as_ref())),
                     ));
+                }
+            }
+        }
+        for entry in outside {
+            match entry.action {
+                CheckoutAction::Keep => {}
+                CheckoutAction::Remove => updates.push((entry.path.clone(), None)),
+                CheckoutAction::Create | CheckoutAction::Update => {
+                    let (Some(oid), Some(mode)) = (entry.oid, entry.mode) else {
+                        continue;
+                    };
+                    let mut placeholder =
+                        make_index_entry(BStr::new(&entry.path[..]), mode, oid, None);
+                    if mode != EntryMode::Commit {
+                        crate::sparse::set_skip(&mut placeholder, true);
+                    }
+                    updates.push((entry.path.clone(), Some(placeholder)));
                 }
             }
         }
@@ -469,7 +492,9 @@ impl Repository {
                 });
             }
             let path = BStr::new(&entry.path[..]);
-            if entry.mode == EntryMode::Commit {
+            // A gitlink has no blob here, and a sparse-checkout placeholder has no file by design:
+            // both go in as the index has them.
+            if entry.mode == EntryMode::Commit || entry.skip_worktree() {
                 tree_index.insert(entry.clone());
                 continue;
             }
@@ -493,6 +518,7 @@ impl Repository {
     pub fn reset_hard_to_tree(&mut self, tree: ObjectId) -> Result<()> {
         let root = self.worktree()?.require_root("reset --hard")?.to_path_buf();
         let target = flatten_tree(self.odb(), tree)?;
+        let sparse = self.sparse_checkout()?.map(|(sparse, _)| sparse);
         let old = std::mem::take(self.index_mut());
 
         // Removals first, so a file replaced by a directory of the same name has room.
@@ -502,7 +528,8 @@ impl Repository {
                 continue;
             }
             let path = BStr::new(&entry.path[..]);
-            if self.worktree()?.stat(path)?.is_some() {
+            // A sparse-checkout placeholder has no file, and a file at its path is not ours.
+            if !entry.skip_worktree() && self.worktree()?.stat(path)?.is_some() {
                 remove_path(self.worktree()?, path)?;
                 prune_empty_dirs(&root, path);
             }
@@ -522,6 +549,13 @@ impl Repository {
                     })?;
                 }
                 fresh.insert(make_index_entry(path_ref, *mode, *oid, None));
+                continue;
+            }
+            // Outside a sparse-checkout definition the entry is recorded and nothing is written.
+            if sparse.as_ref().is_some_and(|s| !s.includes(path_ref)) {
+                let mut placeholder = make_index_entry(path_ref, *mode, *oid, None);
+                crate::sparse::set_skip(&mut placeholder, true);
+                fresh.insert(placeholder);
                 continue;
             }
             let on_disk = self.worktree()?.stat(path_ref)?;
@@ -873,6 +907,7 @@ impl Repository {
         }
         self.index_mut().sort();
         self.write_index()?;
+        self.reapply_sparse_quietly()?;
         Ok(result)
     }
 }

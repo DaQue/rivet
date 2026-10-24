@@ -2099,6 +2099,20 @@ fn checkout_paths(
         None => (None, "the index".to_string()),
     };
     let staged = tree.is_some();
+    // A name that only matches sparse-checkout placeholders is not a path git knows to restore.
+    if tree.is_none()
+        && let Some((sparse, _)) = repository.sparse_checkout()?
+    {
+        for spec in &specs {
+            if spec != "."
+                && !spec.is_empty()
+                && super::snapshot::only_placeholders(repository, &sparse, spec)
+            {
+                eprintln!("error: pathspec '{spec}' did not match any file(s) known to git");
+                return Ok(1);
+            }
+        }
+    }
     // Restoring from the index cannot take an unmerged path: git reports each one and exits 1,
     // after still restoring every other path the specs select.
     let mut unmerged: Vec<BString> = Vec::new();

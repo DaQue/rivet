@@ -820,6 +820,13 @@ impl IndexEntry {
         matches!(self.mode, EntryMode::Tree)
     }
 
+    /// Whether the entry is a sparse-checkout placeholder: tracked, with no file in the work tree
+    /// by design (see [`IndexEntryExtendedFlags::skip_worktree`]).
+    pub fn skip_worktree(&self) -> bool {
+        self.flags.is_extended()
+            && IndexEntryExtendedFlags::from_bits(self.extended_flags).skip_worktree()
+    }
+
     /// Phase 3 — whether the entry's mode says it is a symlink.
     ///
     /// # Caveats

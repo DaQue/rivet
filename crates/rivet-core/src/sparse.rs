@@ -53,6 +53,9 @@ pub struct SparseApply {
     pub unmerged: Vec<BString>,
     /// Paths that should have come back but have a file in the way.
     pub blocked: Vec<BString>,
+    /// Cone mode: directories outside the cone, all of whose tracked files are gone, that still
+    /// exist because of files git does not track.
+    pub untracked_dirs: Vec<BString>,
 }
 
 /// Remove the backslashes that protect glob characters in a cone pattern.
@@ -196,6 +199,23 @@ impl SparseCheckout {
     /// The directories a cone includes recursively, sorted and unescaped (what `list` prints).
     pub fn directories(&self) -> Vec<BString> {
         self.recursive.iter().cloned().collect()
+    }
+
+    /// Cone mode: the topmost directory on the way to `path` that is neither included nor a
+    /// parent of an included one, i.e. the root of the part of the tree that is out of the cone.
+    fn cone_boundary(&self, path: &BStr) -> Option<BString> {
+        let components: Vec<&[u8]> = path.split(|b| *b == b'/').collect();
+        let mut prefix: Vec<u8> = Vec::new();
+        for (i, component) in components[..components.len() - 1].iter().enumerate() {
+            if i > 0 {
+                prefix.push(b'/');
+            }
+            prefix.extend_from_slice(component);
+            if !self.parents.contains(prefix.as_slice().as_bstr()) {
+                return Some(BString::from(prefix));
+            }
+        }
+        None
     }
 
     /// Whether the tracked file `path` is part of the checkout.
@@ -353,6 +373,15 @@ impl Repository {
         self.sparse_pattern_path().is_file()
     }
 
+    /// After a command that wrote files without looking at the definition (a merge), take the ones
+    /// outside it out again. Warnings about files that had to stay are not worth a message there.
+    pub(crate) fn reapply_sparse_quietly(&mut self) -> Result<()> {
+        if let Some((sparse, _)) = self.sparse_checkout()? {
+            self.apply_sparse(Some(&sparse))?;
+        }
+        Ok(())
+    }
+
     /// Bring the index and the work tree in line with `sparse` (`None`: everything is present).
     ///
     /// A tracked path outside the definition loses its file and gets the `skip-worktree` bit, but
@@ -413,6 +442,32 @@ impl Repository {
             }
             Ok(())
         })();
+        if let Some(sparse) = sparse.filter(|s| s.cone) {
+            let mut boundaries: BTreeSet<BString> = BTreeSet::new();
+            for entry in index.entries() {
+                if entry.skip_worktree()
+                    && let Some(dir) = sparse.cone_boundary(BStr::new(&entry.path[..]))
+                {
+                    boundaries.insert(dir);
+                }
+            }
+            for dir in boundaries {
+                let prefix = format!("{dir}/");
+                let all_skipped = index
+                    .entries()
+                    .iter()
+                    .filter(|e| e.path.starts_with(prefix.as_bytes()))
+                    .all(|e| e.skip_worktree());
+                let on_disk = self
+                    .worktree()
+                    .ok()
+                    .and_then(|w| w.join(BStr::new(&dir[..])).ok())
+                    .is_some_and(|p| p.is_dir());
+                if all_skipped && on_disk {
+                    report.untracked_dirs.push(dir);
+                }
+            }
+        }
         *self.index_mut() = index;
         if changed {
             self.write_index()?;

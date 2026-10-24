@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use bstr::BString;
+use bstr::{BStr, BString};
 
 use crate::cli::{GlobalArgs, UntrackedModeArg};
 use rivet_core::refs::HeadState;
@@ -60,6 +60,10 @@ pub struct AddArgs {
     /// Report what would be staged, and change nothing.
     #[arg(short = 'n', long = "dry-run")]
     pub dry_run: bool,
+
+    /// Allow updating index entries outside the sparse-checkout cone.
+    #[arg(long = "sparse")]
+    pub sparse: bool,
 }
 
 /// Arguments to `rivet rm`.
@@ -404,27 +408,120 @@ pub fn run_add(global: &GlobalArgs, args: &AddArgs) -> Result<i32> {
         paths.push(super::worktree_path(&repository, path, "add")?);
     }
 
-    let options = AddOptions {
+    let mut options = AddOptions {
         force: args.force,
         update: args.update,
         all: args.all,
         intent_to_add: args.intent_to_add,
         dry_run: args.dry_run,
         pathspec: BString::default(),
+        skip_paths: Vec::new(),
     };
 
+    // Outside a sparse-checkout definition nothing is staged: an untracked file there is left alone
+    // and a name that only matches placeholders is reported, as `git add` does.
+    let mut refused: std::collections::BTreeSet<BString> = std::collections::BTreeSet::new();
+    if !args.sparse
+        && let Some((sparse, _)) = repository.sparse_checkout()?
+    {
+        let specs: Vec<BString> = if paths.is_empty() {
+            vec![BString::default()]
+        } else {
+            paths.clone()
+        };
+        if !args.update {
+            let mut status_options = StatusOptions::new();
+            status_options.untracked_files = UntrackedMode::All;
+            status_options.refresh = false;
+            for path in repository.status(&status_options)?.untracked {
+                if specs.iter().any(|spec| under_spec(&path, spec))
+                    && !sparse.includes(BStr::new(&path[..]))
+                {
+                    refused.insert(path);
+                }
+            }
+        }
+        for spec in &specs {
+            if !spec.is_empty()
+                && spec.as_slice() != b"."
+                && only_placeholders(&repository, &sparse, spec)
+                && !refused.iter().any(|path| under_spec(path, spec))
+            {
+                refused.insert(spec.clone());
+            }
+        }
+    }
+
+    options.skip_paths = refused.iter().cloned().collect();
     let outcome = repository.add(&paths, &options)?;
 
     // `AddOutcome` counts additions but does not name them, so the only honest per-path output
     // is on a dry run, where Git lists every path it would have touched. A normal `add` that
     // only modifies tracked files is silent in Git too.
     if args.dry_run {
-        for path in &outcome.paths {
+        for path in outcome.paths.iter().filter(|p| !refused.contains(*p)) {
             println!("add '{}'", path);
         }
     }
 
+    if !refused.is_empty() {
+        report_sparse_refusal(&repository, &refused);
+        return Ok(1);
+    }
     Ok(0)
+}
+
+/// Whether `path` is `spec` or below it (`spec` empty: everything).
+pub(super) fn under_spec(path: &[u8], spec: &[u8]) -> bool {
+    spec.is_empty()
+        || spec == b"."
+        || path == spec
+        || (path.starts_with(spec) && path.get(spec.len()) == Some(&b'/'))
+}
+
+/// Whether `spec` names tracked paths and every one of them is a sparse-checkout placeholder.
+pub(super) fn only_placeholders(
+    repository: &rivet_core::Repository,
+    sparse: &rivet_core::sparse::SparseCheckout,
+    spec: &[u8],
+) -> bool {
+    let mut any = false;
+    for entry in repository.index().entries() {
+        if under_spec(&entry.path, spec) {
+            if !entry.skip_worktree() && sparse.includes(BStr::new(&entry.path[..])) {
+                return false;
+            }
+            any = true;
+        }
+    }
+    any
+}
+
+/// Git's refusal for names that only match paths outside the sparse-checkout definition.
+pub(super) fn report_sparse_refusal(
+    repository: &rivet_core::Repository,
+    paths: &std::collections::BTreeSet<BString>,
+) {
+    eprintln!("The following paths and/or pathspecs matched paths that exist");
+    eprintln!("outside of your sparse-checkout definition, so will not be");
+    eprintln!("updated in the index:");
+    for path in paths {
+        eprintln!("{path}");
+    }
+    let advice = repository
+        .config()
+        .get_bool(BStr::new("advice.updateSparsePath"))
+        .ok()
+        .flatten()
+        .unwrap_or(true);
+    if advice {
+        eprintln!("hint: If you intend to update such entries, try one of the following:");
+        eprintln!("hint: * Use the --sparse option.");
+        eprintln!("hint: * Disable or modify the sparsity rules.");
+        eprintln!(
+            "hint: Disable this message with \"git config set advice.updateSparsePath false\""
+        );
+    }
 }
 
 /// Phase 3 — remove files from the work tree and the index.
@@ -464,6 +561,21 @@ pub fn run_rm(global: &GlobalArgs, args: &RmArgs) -> Result<i32> {
         paths.push(super::worktree_path(&repository, path, "rm")?);
     }
 
+    // Names that only match sparse-checkout placeholders are refused; the others go ahead.
+    let mut refused: std::collections::BTreeSet<BString> = std::collections::BTreeSet::new();
+    if let Some((sparse, _)) = repository.sparse_checkout()? {
+        for path in &paths {
+            if only_placeholders(&repository, &sparse, path) {
+                refused.insert(path.clone());
+            }
+        }
+        paths.retain(|path| !refused.contains(path));
+    }
+    if paths.is_empty() && !refused.is_empty() {
+        report_sparse_refusal(&repository, &refused);
+        return Ok(1);
+    }
+
     if !args.force
         && !args.cached
         && !args.dry_run
@@ -489,6 +601,10 @@ pub fn run_rm(global: &GlobalArgs, args: &RmArgs) -> Result<i32> {
         }
     }
 
+    if !refused.is_empty() {
+        report_sparse_refusal(&repository, &refused);
+        return Ok(1);
+    }
     Ok(0)
 }
 
@@ -559,6 +675,7 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
             intent_to_add: false,
             dry_run: false,
             pathspec: BString::default(),
+            skip_paths: Vec::new(),
         };
         repository.add(&[], &options)?;
     }
@@ -1307,6 +1424,18 @@ pub fn run_restore(global: &GlobalArgs, args: &RestoreArgs) -> Result<i32> {
     let mut specs = Vec::with_capacity(args.paths.len());
     for path in &args.paths {
         specs.push(super::worktree_path(&repository, path, "restore")?);
+    }
+    // A name that only matches sparse-checkout placeholders is not a path git knows to restore.
+    if args.source.is_none()
+        && worktree
+        && let Some((sparse, _)) = repository.sparse_checkout()?
+    {
+        for spec in &specs {
+            if spec.as_slice() != b"." && only_placeholders(&repository, &sparse, spec) {
+                eprintln!("error: pathspec '{spec}' did not match any file(s) known to git");
+                return Ok(1);
+            }
+        }
     }
     match repository.restore_paths(source, &specs, staged, worktree, false) {
         Ok(_) => Ok(0),

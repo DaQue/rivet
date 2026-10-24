@@ -1157,7 +1157,14 @@ fn write_index_entry(
         )?;
         let _ = format;
     } else if args.tag {
-        write!(out, "H ")?;
+        let tag = if entry.is_unmerged() {
+            'M'
+        } else if entry.skip_worktree() {
+            'S'
+        } else {
+            'H'
+        };
+        write!(out, "{tag} ")?;
     }
     out.write_all(&shown(&entry.path, separator))?;
     write!(out, "{separator}")?;

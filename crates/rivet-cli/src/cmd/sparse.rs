@@ -167,6 +167,11 @@ fn report(applied: &SparseApply) {
             "After fixing the above paths, you may want to run `git sparse-checkout reapply`."
         );
     }
+    for dir in &applied.untracked_dirs {
+        eprintln!(
+            "warning: directory '{dir}/' contains untracked files, but is not in the sparse-checkout cone"
+        );
+    }
     for path in &applied.blocked {
         eprintln!("error: Entry '{path}' not uptodate. Cannot update sparse checkout.");
     }

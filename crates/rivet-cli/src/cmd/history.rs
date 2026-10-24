@@ -1537,6 +1537,25 @@ fn tree_vs_worktree(
     let mut files = Vec::new();
     for path in paths {
         let path_ref = BStr::new(&path[..]);
+        // A sparse-checkout placeholder has no file; the index stands in for the work tree.
+        if let Some(entry) = repository
+            .index()
+            .entry(path_ref)
+            .filter(|entry| entry.skip_worktree())
+        {
+            let tree_side = map.get(&path).copied();
+            if tree_side != Some((entry.mode, entry.oid)) {
+                files.push(rivet_core::blob_diff(
+                    repository.format(),
+                    path_ref,
+                    tree_side.map(|(mode, oid)| (oid, mode)),
+                    Some((entry.oid, entry.mode)),
+                    repository.odb(),
+                    options,
+                )?);
+            }
+            continue;
+        }
         let data = match worktree.stat(path_ref)? {
             Some(_) => Some(worktree.read_file(path_ref)?),
             None => None,

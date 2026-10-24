@@ -674,6 +674,169 @@ s_sparse_dirty() {
     v status --short
 }
 
+s_sparse_worktree() {
+    sparse_fixture
+    v branch other
+    v sparse-checkout set a b
+    # nothing is reported for the files outside the definition
+    v status --short
+    v diff --stat
+    echo edit >>a/a1
+    v diff --stat
+    v add -u
+    v status --short
+    v commit -q -m "edit a1"
+    v diff HEAD~1 --stat
+    echo more >>b/b1
+    v commit -q -a -m "edit b1"
+    v show --stat --format=%s HEAD
+    v ls-files
+    v ls-files -s
+    dump_sparse "after commits"
+    # branches: files in the definition are updated, new ones outside are only recorded
+    v switch -q -c topic
+    echo a2 >a/a2; mkdir -p c/d f; echo c2 >c/d/c2; echo f2 >f/f2
+    v add -f a/a2 c/d/c2 f/f2
+    v commit -q -m "add files"
+    dump_sparse "on topic"
+    v switch -q main
+    dump_sparse "back on main"
+    v switch -q topic
+    dump_sparse "topic again"
+    v checkout -q main
+    v reset -q --hard topic
+    dump_sparse "reset --hard topic"
+    v reset -q --hard HEAD~1
+    dump_sparse "reset --hard HEAD~1"
+    # a file that exists outside the definition and in the way
+    v switch -q topic
+    v sparse-checkout set a
+    v switch -q main
+    v sparse-checkout disable
+    dump_sparse disable
+    v status --short
+}
+
+s_sparse_add_rm() {
+    sparse_fixture
+    v sparse-checkout set a b
+    mkdir -p f c/d
+    echo n >f/new; echo m >c/d/newc; echo x >a/new; echo y >b/untracked
+    # untracked files outside the definition are not added; the others are, and the status is 1
+    v add .
+    v status --short
+    v add -A
+    v reset -q
+    v add f
+    v add f/new c/d/newc
+    v add c/c0
+    v add -u f/f1
+    v add -u c
+    v add -n c/c0
+    v add -n .
+    v add nothing
+    v add --sparse f/new
+    v status --short
+    dump_sparse "after add"
+    v rm c/c0
+    v rm --cached c/c0
+    v rm -f f
+    v rm a/a1 c/c0
+    v rm -n c/c0
+    v rm nothing
+    v rm -r --cached a c
+    v status --short
+    git_config_advice=1
+    v config advice.updateSparsePath false
+    v add c/c0
+    v rm c/c0
+    v add -u
+    dump_sparse "after rm"
+}
+
+s_sparse_history() {
+    sparse_fixture
+    v switch -q -c side
+    for f in a/a1 c/c0 f/f1 r1; do tick; echo "side $f" >>$f; v add -f $f 2>/dev/null; done
+    tick; echo new >a/anew; echo newc >c/cnew; v add a/anew c/cnew
+    v commit -q -m "side changes"
+    v switch -q main
+    tick; echo main >>b/b1; v commit -q -a -m "main b1"
+    v sparse-checkout set a b
+    dump_sparse "sparse on main"
+    # checkout of a path outside is not a known path
+    v checkout -- c/c0
+    v restore c/c0
+    # merge with both sides moved: both sides moved
+    v merge -q side -m "merge side"
+    dump_sparse "after merge"
+    v log --oneline
+    v status --short
+    # cherry-pick, revert and stash
+    v reset -q --hard HEAD~1
+    v cherry-pick side
+    dump_sparse "after cherry-pick"
+    v revert --no-edit HEAD
+    echo wip >>a/a1; v stash push -q
+    v stash pop -q
+    v status --short
+    dump_sparse "after stash"
+    v diff --stat HEAD~2
+    v commit -q -a -m wip
+    v rebase side
+    dump_sparse "after rebase"
+    v branch -q old HEAD~1
+    v checkout -q old
+    dump_sparse "on old"
+}
+
+s_sparse_misc() {
+    sparse_fixture
+    v sparse-checkout set a b
+    mkdir -p f; echo n >f/new
+    v grep -n 1
+    v grep -n c0
+    v clean -n
+    v clean -nd
+    v mv a/a1 a/a9
+    v mv c/c0 c/c9
+    v reset -q -- c/c0
+    v status --short
+    v ls-files -t
+    v ls-files -s c
+    v log --stat --format=%s
+    v show --stat --format=%s HEAD
+    v diff HEAD~0 --stat
+    v blame c/c0
+    v archive --format=tar HEAD -o ../x.tar
+    v describe --always
+    v stash list
+    v branch topic
+    v switch -q topic
+    echo t >>a/a9; v commit -q -a -m t
+    v switch -q main
+    v merge -q topic
+    v status --short
+    dump_sparse "end"
+}
+
+s_sparse_linked() {
+    sparse_fixture
+    v sparse-checkout set a
+    # a linked work tree has its own definition
+    v worktree add -q ../wt -b wtb
+    (cd ../wt && v sparse-checkout list)
+    (cd ../wt && v sparse-checkout set b f && g ls-files -t | tr '\n' ' ' >>"$TRANSCRIPT")
+    echo >>"$TRANSCRIPT"
+    (cd ../wt && v sparse-checkout list)
+    v sparse-checkout list
+    dump_sparse "main after"
+    (cd ../wt && find . -type f -not -path './.git' | sort >>"$TRANSCRIPT")
+    (cd ../wt && v sparse-checkout disable)
+    (cd ../wt && find . -type f -not -path './.git' | sort >>"$TRANSCRIPT")
+    v sparse-checkout list
+}
+
 s_hooks_run() {
     v init -q repo; cd repo
     mkdir sub
@@ -7084,6 +7247,7 @@ for s in "$@"; do
         s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
         s_credential) run_scenario "$s" c_ok c5 ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
+        s_sparse_linked) run_scenario "$s" repo wt ;;
         s_hooks_clone) run_scenario "$s" c1 c2 c4 bare.git wt1 wt2 wt3 wt4 wt5 ;;
         s_hooks_rebase) run_scenario "$s" repo origin.git ;;
         s_pack_deltas) run_scenario "$s" origin cl cl2 ;;

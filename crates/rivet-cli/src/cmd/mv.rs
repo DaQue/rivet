@@ -70,6 +70,7 @@ pub fn run_mv(global: &GlobalArgs, args: &MvArgs) -> Result<i32> {
 
     let mut moves: Vec<Move> = Vec::new();
     let mut shown: Vec<(String, String)> = Vec::new();
+    let mut refused: std::collections::BTreeSet<BString> = std::collections::BTreeSet::new();
     for source in sources {
         let src = super::worktree_path(&repository, source, "mv")?;
         let into_dir = dest_is_dir;
@@ -102,6 +103,13 @@ pub fn run_mv(global: &GlobalArgs, args: &MvArgs) -> Result<i32> {
         let src_path = root.join(std::ffi::OsStr::from_bytes(&src));
         let dst_path = root.join(std::ffi::OsStr::from_bytes(&dst));
         let Ok(meta) = src_path.symlink_metadata() else {
+            // A tracked path outside the sparse-checkout definition has no file to move.
+            if let Some((sparse, _)) = repository.sparse_checkout()?
+                && super::snapshot::only_placeholders(&repository, &sparse, &src)
+            {
+                refused.insert(src.clone());
+                continue;
+            }
             fail("bad source")?;
             continue;
         };
@@ -176,6 +184,10 @@ pub fn run_mv(global: &GlobalArgs, args: &MvArgs) -> Result<i32> {
         }
     }
 
+    if !refused.is_empty() {
+        super::snapshot::report_sparse_refusal(&repository, &refused);
+        return Ok(1);
+    }
     if args.dry_run {
         for (src, dst) in &shown {
             println!("Checking rename of '{src}' to '{dst}'");

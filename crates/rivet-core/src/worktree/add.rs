@@ -83,6 +83,9 @@ pub struct AddOptions {
     pub dry_run: bool,
     /// A path prefix to limit the operation to, empty for the paths given.
     pub pathspec: BString,
+    /// Files found on the way that are left alone (neither hashed nor staged): the untracked files
+    /// outside a sparse-checkout definition.
+    pub skip_paths: Vec<BString>,
 }
 
 impl Default for AddOptions {
@@ -102,6 +105,7 @@ impl AddOptions {
             intent_to_add: false,
             dry_run: false,
             pathspec: BString::from(""),
+            skip_paths: Vec::new(),
         }
     }
 
@@ -341,7 +345,9 @@ pub fn add_paths(
         let tracked: Vec<BString> = index
             .entries()
             .iter()
-            .filter(|e| e.stage() == Stage::Normal && in_scope(&e.path, &specs))
+            .filter(|e| {
+                e.stage() == Stage::Normal && !e.skip_worktree() && in_scope(&e.path, &specs)
+            })
             .map(|e| e.path.clone())
             .collect();
         files.extend(tracked);
@@ -355,6 +361,9 @@ pub fn add_paths(
 
     for path in sorted_files {
         if options.update && index.entry(BStr::new(&path)).is_none() {
+            continue;
+        }
+        if options.skip_paths.contains(&path) {
             continue;
         }
         if !options.force && ignore.is_ignored(BStr::new(&path), PathKind::File)? {
@@ -425,7 +434,13 @@ pub fn add_paths(
     // ── deletions ───────────────────────────────────────────────────────────────────────────
     // Deliberately after staging: a path that was just written is present on disk, so it can
     // never be mistaken for a deletion even when the stat cache was stale.
-    let mut tracked_paths: Vec<BString> = index.entries().iter().map(|e| e.path.clone()).collect();
+    // A sparse-checkout placeholder has no file by design; its absence is not a deletion.
+    let mut tracked_paths: Vec<BString> = index
+        .entries()
+        .iter()
+        .filter(|e| !e.skip_worktree())
+        .map(|e| e.path.clone())
+        .collect();
     tracked_paths.sort();
     tracked_paths.dedup();
 

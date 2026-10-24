@@ -941,3 +941,13 @@ Base `009bbac`: no `sparse-checkout`. New `rivet_core::sparse` (documented): `Sp
 - Free-form patterns: a directory's verdict is inherited by what is below it and overturned by a deeper match (found by the scenario: `/c/`, `!/c/d/`, `/c/d/e/`).
 Not done in this phase: `checkout`/`switch`/`reset --hard`/`merge`/`stash`/`add`/`rm` do not yet honour the definition (next phase).
 Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 229 PASS / `failures: 0`.
+
+### Phase 5.9 — the rest of the tree honours the sparse-checkout definition (landed, scenarios `s_sparse_worktree`, `s_sparse_add_rm`, `s_sparse_history`, `s_sparse_misc`, `s_sparse_linked`)
+Base `ec13a41`: only `status` knew about `skip-worktree`. Found by the scenarios, each against git 2.56, and fixed:
+- `add -u`, `commit -a` and `add -A` staged the deletion of every file outside the definition (data loss on the next commit); `stash` recorded them as deleted; `diff <commit>` listed them as deleted. All three now take the index entry as the work tree.
+- `switch`/`checkout`/`reset --hard` wrote files outside the definition. `CheckoutPlan::split_off` (new, documented) sets those entries aside; they are recorded in the index with `skip-worktree` and never written, and an untracked file in the way is left alone. `merge` (and so `cherry-pick`/`revert`/`rebase`) writes first and `reapply_sparse_quietly` takes the outside files out again.
+- `add` leaves untracked files outside the definition alone (`AddOptions::skip_paths`, new) and, like `rm` and `mv`, refuses names that only match placeholders or outside paths with git's three-line message plus hints (`advice.updateSparsePath`), status 1, after doing the rest; `add --sparse` overrides. `restore`/`checkout -- <path>` of such a name is `error: pathspec '…' did not match any file(s) known to git`. `ls-files -t` now prints `S` and `M`.
+- `sparse-checkout set` warns `directory 'c/' contains untracked files, but is not in the sparse-checkout cone` for a cone-boundary directory whose tracked files are all gone but that still exists.
+- `worktree add` copies the definition and the two settings into the new work tree's own `config.worktree` and checks it out sparse.
+Found, not sparse: `rebase -q` prints `warning: skipped previously applied commit` where git is silent (recorded in `GAPS.md` below).
+Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 234 PASS / `failures: 0`.

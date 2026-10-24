@@ -15,12 +15,21 @@ only the first two are defects.
 
 The command or subsystem is absent; it either fails at the argument parser or refuses by name.
 
+* **`rebase -q`** prints `warning: skipped previously applied commit <id>`; git is silent under `-q`.
 * **Partial clone** — `--filter` and promisor/partial clones are not implemented.
 * **Sparse checkout** — `sparse-checkout init`/`set`/`add`/`list`/`reapply`/`disable` exist (cone mode
   and `--no-cone`, `--stdin`, `--skip-checks`); `check-rules`, `clean` and the sparse index
   (`--sparse-index`) do not. Paths given to `set`/`add` are taken relative to the work tree root,
   whatever the current directory. A cone file that is not in the shape git writes is read as
   free-form patterns, with git's two warnings printed once (git prints them twice).
+  Honoured by `switch`/`checkout`, `reset --hard`, `merge`, `cherry-pick`, `revert`, `rebase`, `stash`,
+  `add`/`rm`/`mv` (git's refusal for names that only match paths outside the definition, `--sparse` for
+  `add`), `restore`/`checkout -- <path>`, `diff`, `status`, `commit -a`, `add -u`, `ls-files -t`
+  and `worktree add` (the new work tree inherits the definition). Not covered, so they may ignore the
+  definition: `clean`/`update-index` details, `ls-files --sparse`, `sparse-checkout` run from a
+  subdirectory, `am`, `bisect`, `merge --abort` and conflicts that land outside the definition (the
+  files stay in the work tree), `git sparse-checkout set` leaving a directory that holds untracked
+  files (the warning is printed, git also tries to remove it).
 * **`rebase --interactive`** — also `--root`, `--rebase-merges`, `--exec`, `--keep-base` and
   signing. The grammar rejects them.
 * **`bundle-uri`**, SHA-256 bundles, and `clone`/`ls-remote` from a bundle file. Creating,

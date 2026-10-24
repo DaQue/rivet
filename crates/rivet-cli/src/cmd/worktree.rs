@@ -1146,6 +1146,23 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     std::fs::create_dir_all(admin.join("refs"))?;
     std::fs::create_dir_all(admin.join("logs"))?;
     std::fs::write(admin.join("logs/HEAD"), "")?;
+    // A sparse checkout is inherited: the new work tree gets a copy of the definition and the two
+    // settings, in its own `config.worktree`, and is checked out accordingly.
+    if repository.sparse_enabled()? {
+        let patterns = repository.git_dir().join("info").join("sparse-checkout");
+        if patterns.is_file() {
+            std::fs::create_dir_all(admin.join("info"))?;
+            std::fs::copy(&patterns, admin.join("info").join("sparse-checkout"))?;
+        }
+        let mut settings = rivet_core::config::Config::new();
+        settings.set(BStr::new("core.sparseCheckout"), b"true")?;
+        let cone = repository.sparse_cone_setting()?.unwrap_or(false);
+        settings.set(
+            BStr::new("core.sparseCheckoutCone"),
+            if cone { b"true" } else { b"false" },
+        )?;
+        settings.write(&admin.join("config.worktree"))?;
+    }
     if options.lock {
         let text = match &options.reason {
             Some(reason) => format!("{reason}\n"),

@@ -595,6 +595,22 @@ impl CheckoutPlan {
         Ok(())
     }
 
+    /// Take out of the plan every entry for which `pred` is true and return them.
+    ///
+    /// A sparse checkout uses this to set aside the paths that must not be written to the work tree:
+    /// the rest of the plan is validated and applied as usual, and the caller records the returned
+    /// entries in the index only.
+    pub fn split_off<F: FnMut(&CheckoutEntry) -> bool>(
+        &mut self,
+        mut pred: F,
+    ) -> Vec<CheckoutEntry> {
+        let (taken, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.entries)
+            .into_iter()
+            .partition(|entry| pred(entry));
+        self.entries = kept;
+        taken
+    }
+
     /// Phase 4 — the index entries this plan should produce.
     ///
     /// The other half of a checkout: writing files is not enough, because `HEAD` moves and the
