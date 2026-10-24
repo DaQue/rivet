@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 212 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 216 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-24, gate: 229 tests / 0 failed, 212 scenarios / 0 failures, `fmt`,
@@ -15,9 +15,6 @@ only the first two are defects.
 
 The command or subsystem is absent; it either fails at the argument parser or refuses by name.
 
-* **Hooks** — no `pre-commit`, `commit-msg`, `post-commit`, `pre-push`, `post-checkout`,
-  `pre-rebase` or any other hook is run. A repository that relies on hooks (linting, commit
-  templates, deploy triggers) behaves differently under rivet.
 * **Credential helpers** — `credential.helper` is not consulted and there is no prompt flow.
   HTTPS credentials come from the URL/userinfo or the transport's own environment; an
   authenticating remote that needs a helper will fail.
@@ -75,6 +72,17 @@ The command works for the common case; the listed options or edge cases are miss
   `--delete` work. A one-level lowercase *target* (`symbolic-ref FOO foo`) is refused because
   `RefName` cannot hold it, and git's quirk of writing a ref with a malformed *name*
   (`refs/heads/a..b`) is not reproduced (rivet reports `error: refusing to update ref`).
+* **Hooks** — `core.hooksPath`, the executable-bit rule (with git's once-per-hook hint) and the
+  runner exist (`rivet_core::hooks`). Run today: `pre-commit`, `prepare-commit-msg`, `commit-msg`,
+  `post-commit` and `post-rewrite amend` for `commit` (`--no-verify`/`-n`); `pre-merge-commit`,
+  `prepare-commit-msg`, `commit-msg` and `post-merge` for `merge`; `post-checkout` for `switch`,
+  `checkout` (branches and paths). Not run yet: anything on the `merge --continue`, `cherry-pick`,
+  `revert`, `am`, `stash`, `pull`-induced merge paths beyond what `merge` shares, `rebase`
+  (`pre-rebase`, `post-rewrite rebase`), `push` (`pre-push`), `clone`/`worktree add`
+  (`post-checkout`), `reference-transaction`, `applypatch-msg`/`pre-applypatch`/`post-applypatch`,
+  `pre-auto-gc`, `post-index-change`, and every server-side hook. Only `commit -m/-F` exists, so
+  `prepare-commit-msg` only ever sees the `message` source. `GIT_DIR`/`GIT_WORK_TREE` are not
+  exported to hooks (git does not either for the common layout; linked work trees are untested).
 * **`pull --rebase <remote> <branch>`** — with an explicit refspec, rebases onto the fetched
   tip rather than the fork point.
 * **Network protocol** — v2 capabilities other than `object-format=sha1` are not implemented;

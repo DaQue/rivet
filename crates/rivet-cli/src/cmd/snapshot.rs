@@ -178,6 +178,10 @@ pub struct CommitArgs {
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 
+    /// Skip the `pre-commit` and `commit-msg` hooks.
+    #[arg(short = 'n', long = "no-verify")]
+    pub no_verify: bool,
+
     /// Print a summary of the change in the commit message editor.
     #[arg(long = "status")]
     pub with_status: bool,
@@ -610,6 +614,12 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
         return Ok(128);
     }
 
+    // `pre-commit` runs before anything decides whether there is something to commit.
+    if !args.no_verify && commit_hook(&repository, "pre-commit", &[], None).is_some_and(|c| c != 0)
+    {
+        return Ok(1);
+    }
+
     // Nothing to record: Git shows the status instead of failing, and exits 1.
     if !args.allow_empty && !args.amend {
         let tree = repository.write_tree()?;
@@ -635,7 +645,42 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
         }
     }
 
+    // The message goes through `COMMIT_EDITMSG`, where `prepare-commit-msg` and `commit-msg` may
+    // rewrite it; what is in the file afterwards is what gets committed.
+    let editmsg = repository.git_dir().join("COMMIT_EDITMSG");
+    let mut staged = message.clone();
+    if !staged.ends_with('\n') {
+        staged.push('\n');
+    }
+    std::fs::write(&editmsg, &staged)?;
+    let shown = shown_path(&repository, &editmsg);
+    if commit_hook(
+        &repository,
+        "prepare-commit-msg",
+        &[shown.as_os_str(), "message".as_ref()],
+        None,
+    )
+    .is_some_and(|c| c != 0)
+    {
+        return Ok(1);
+    }
+    if !args.no_verify
+        && commit_hook(&repository, "commit-msg", &[shown.as_os_str()], None)
+            .is_some_and(|c| c != 0)
+    {
+        return Ok(1);
+    }
+    let hooked = std::fs::read(&editmsg)?;
+    if hooked != staged.as_bytes() {
+        message = String::from_utf8_lossy(&hooked).into_owned();
+        if clean_commit_message(&message).trim().is_empty() && !args.allow_empty_message {
+            eprintln!("Aborting commit due to empty commit message.");
+            return Ok(1);
+        }
+    }
+
     let message = clean_commit_message(&message);
+    let old_head = repository.head()?.oid();
     let mut options = rivet_core::repo::CommitOptions::new(bstr::BStr::new(message.as_bytes()));
     options.allow_empty = args.allow_empty;
     options.allow_empty_message = args.allow_empty_message;
@@ -650,6 +695,16 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
         }
     }
     super::branching::conclude_merge_autostash(&mut repository)?;
+    commit_hook(&repository, "post-commit", &[], None);
+    if args.amend
+        && let Some(old) = old_head
+    {
+        let line = format!("{} {}\n", old, oid);
+        rivet_core::hooks::Hook::new(&repository, "post-rewrite")
+            .arg("amend")
+            .stdin(line.into_bytes())
+            .run();
+    }
     if global.quiet {
         return Ok(0);
     }
@@ -683,6 +738,37 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+/// A path inside the git directory as a hook is handed it: relative to the work tree root.
+pub(super) fn shown_path(repository: &rivet_core::Repository, path: &std::path::Path) -> PathBuf {
+    match repository.worktree_path() {
+        Some(root) => path.strip_prefix(root).unwrap_or(path).to_path_buf(),
+        None => path.to_path_buf(),
+    }
+}
+
+/// Run one of the hooks that `commit` and `merge` share, with the environment Git gives them:
+/// `GIT_INDEX_FILE` and `GIT_EDITOR=:` (no editor is ever started here), plus `GIT_REFLOG_ACTION`
+/// when the caller is a merge.
+///
+/// Returns the hook's exit status, or `None` when there is no hook to run.
+pub(super) fn commit_hook(
+    repository: &rivet_core::Repository,
+    name: &str,
+    args: &[&std::ffi::OsStr],
+    reflog_action: Option<&str>,
+) -> Option<i32> {
+    let mut hook = rivet_core::hooks::Hook::new(repository, name)
+        .with_index()
+        .env("GIT_EDITOR", ":");
+    if let Some(action) = reflog_action {
+        hook = hook.env("GIT_REFLOG_ACTION", action);
+    }
+    for arg in args {
+        hook = hook.arg(arg);
+    }
+    hook.run()
 }
 
 /// Git's default message cleanup: strip trailing whitespace on every line, drop leading and

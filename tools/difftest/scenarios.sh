@@ -4,6 +4,249 @@ FAKESSH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fakessh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 NOW0=$(date +%s)   # one wall-clock reading shared by both implementations
 
+# Hooks: every hook in the list is the same script, which appends what it was given (argv, stdin,
+# cwd, the GIT_* variables that matter) to `hooks.log` in the work tree, where the harness's
+# work-tree comparison sees it. `hook-fail-<name>` (holding an exit code) makes that hook fail,
+# `hook-append-<name>` appends its content to the message file the hook was handed.
+hook_script='#!/bin/sh
+n=$(basename "$0")
+{
+    echo "== $n [$*] cwd=$(basename "$(pwd)") idx=${GIT_INDEX_FILE-unset} prefix=${GIT_PREFIX-unset} editor=${GIT_EDITOR-unset} action=${GIT_REFLOG_ACTION-unset} dir=${GIT_DIR-unset} wt=${GIT_WORK_TREE-unset}"
+    case $n in
+        post-rewrite|pre-push) sed "s/^/  stdin: /" ;;
+        prepare-commit-msg|commit-msg) sed "s/^/  msg: /" "$1" ;;
+    esac
+} >>hooks.log
+echo "out:$n"
+echo "err:$n" >&2
+[ -f "hook-append-$n" ] && cat "hook-append-$n" >>"$1"
+[ -f "hook-empty-$n" ] && : >"$1"
+[ -f "hook-fail-$n" ] && exit "$(cat "hook-fail-$n")"
+exit 0
+'
+install_hooks() {
+    local n
+    mkdir -p .git/hooks
+    for n in "$@"; do
+        printf '%s' "$hook_script" >".git/hooks/$n"
+        chmod +x ".git/hooks/$n"
+    done
+}
+
+s_hooks_commit() {
+    v init -q repo; cd repo
+    mkdir sub
+    echo a >a; v add a
+    install_hooks pre-commit prepare-commit-msg commit-msg post-commit post-rewrite
+    v commit -m one
+    echo b >b; v add b
+    (cd sub && v commit -m "from a subdirectory")
+    echo c >c; v add c
+    v commit --no-verify -m "no verify"
+    # a failing hook aborts, in git's order, with the hook's output and exit status 1
+    echo d >d; v add d
+    echo 1 >hook-fail-pre-commit
+    v commit -m "pre-commit fails"
+    rm hook-fail-pre-commit
+    echo 3 >hook-fail-prepare-commit-msg
+    v commit -m "prepare fails"
+    v commit --no-verify -m "prepare fails, no verify"
+    rm hook-fail-prepare-commit-msg
+    echo 2 >hook-fail-commit-msg
+    v commit -m "commit-msg fails"
+    v commit --no-verify -m "commit-msg skipped"
+    v log --format=%s
+    echo d2 >d; v add d
+    echo 5 >hook-fail-post-commit
+    v commit -m "post-commit fails"
+    rm hook-fail-post-commit
+    v log --format=%s
+    # the hooks can rewrite the message
+    echo e >e; v add e
+    echo "added by prepare-commit-msg" >hook-append-prepare-commit-msg
+    echo "added by commit-msg" >hook-append-commit-msg
+    v commit -m "rewritten"
+    rm hook-append-prepare-commit-msg hook-append-commit-msg
+    v log -1 --format=%B
+    echo f >f; v add f
+    : >hook-empty-commit-msg
+    v commit -m "emptied"
+    rm hook-empty-commit-msg
+    v status --short
+    # nothing to commit: pre-commit still runs, nothing else does
+    v reset -q --hard
+    v commit -m "nothing"
+    # amend: post-rewrite with the old and the new id on stdin
+    v commit --amend -m "amended"
+    v log --format=%s
+    # a hook that is not executable is skipped, with a hint once per hook
+    chmod -x .git/hooks/pre-commit .git/hooks/post-commit
+    echo g >g; v add g
+    v commit -m "not executable"
+    echo h >h; v add h
+    v commit -m "not executable again"
+    git config advice.ignoredHook false
+    echo i >i; v add i
+    v commit -m "advice off"
+}
+
+s_hooks_merge() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m base
+    v branch ffside
+    v switch -q -c side; echo s >s; v add s; tick; v commit -q -m side
+    v switch -q ffside; echo f >f; v add f; tick; v commit -q -m ffside
+    v switch -q main
+    install_hooks pre-commit prepare-commit-msg commit-msg post-commit pre-merge-commit post-merge post-checkout
+    rm -f hooks.log
+    # fast-forward: only post-merge
+    v merge ffside
+    # already up to date: no hook at all
+    v merge ffside
+    # a real merge: pre-merge-commit, prepare-commit-msg (merge), commit-msg, post-merge, no post-commit
+    tick; echo m >m; v add m; v commit -q -m main2
+    v merge side -m "merge side"
+    v log -1 --format=%B
+    # --no-verify skips pre-merge-commit and commit-msg, not prepare-commit-msg
+    v reset -q --hard HEAD~1
+    v merge --no-verify side -m "merge side again"
+    # the hooks can rewrite the message
+    v reset -q --hard HEAD~1
+    echo "from prepare" >hook-append-prepare-commit-msg
+    echo "from commit-msg" >hook-append-commit-msg
+    v merge side -m "rewritten merge"
+    v log -1 --format=%B
+    rm hook-append-prepare-commit-msg hook-append-commit-msg
+    # pre-merge-commit fails: the merge stays staged and in progress
+    v reset -q --hard HEAD~1
+    echo 1 >hook-fail-pre-merge-commit
+    v merge side -m "blocked by pre-merge-commit"
+    v status --short
+    v log --oneline
+    v merge --abort
+    rm hook-fail-pre-merge-commit
+    for h in prepare-commit-msg commit-msg; do
+        echo 2 >hook-fail-$h
+        v merge side -m "blocked by $h"
+        v status --short
+        v merge --abort
+        rm hook-fail-$h
+    done
+    # post-merge failing does not undo the merge
+    echo 3 >hook-fail-post-merge
+    v merge side -m "post-merge fails"
+    v log --oneline
+    rm hook-fail-post-merge
+    # --no-commit runs no merge hooks; the commit that follows runs the commit hooks
+    v reset -q --hard HEAD~1
+    v merge --no-commit --no-ff side
+    v commit -m "concluded"
+    # a squash merge
+    v reset -q --hard HEAD~1
+    v merge --squash side
+    v commit -m "squashed"
+    # a conflicting merge: commit hooks only once it is resolved
+    v switch -q -c c1 main~1; echo one >cf; v add cf; tick; v commit -q -m c1
+    v switch -q -c c2 main~1; echo two >cf; v add cf; tick; v commit -q -m c2
+    v merge c1
+    echo resolved >cf; v add cf
+    v commit -m "resolved"
+}
+
+s_hooks_checkout() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    v branch other
+    v switch -q -c work; echo w >w; v add w; tick; v commit -q -m two
+    v switch -q main
+    install_hooks post-checkout
+    rm -f hooks.log
+    # every way of changing branch runs it with <old> <new> 1
+    v switch work
+    v checkout main
+    v checkout -b topic
+    v switch -c topic2
+    v checkout --detach HEAD
+    v checkout work
+    v switch --detach main
+    v switch -
+    v checkout -B topic
+    v switch -C topic2 work
+    # staying where we are still counts
+    v switch topic2
+    v checkout topic2
+    # paths: flag 0, old and new both HEAD
+    echo changed >a
+    v checkout -- a
+    v checkout work -- w
+    # a failing hook turns into the exit status but the checkout stays done
+    echo 3 >hook-fail-post-checkout
+    v switch main
+    v branch --show-current
+    v checkout work
+    v checkout -b failing
+    v checkout -- a
+    rm hook-fail-post-checkout
+    # --orphan and a bare switch back
+    v checkout --orphan fresh
+    v switch main
+    # reset, merge and rebase moving HEAD
+    v reset -q --hard work
+    v merge -q work
+    # not executable: hinted
+    chmod -x .git/hooks/post-checkout
+    v switch work
+}
+
+s_hooks_hookspath() {
+    v init -q repo; cd repo
+    mkdir sub
+    echo a >a; v add a
+    install_hooks pre-commit commit-msg
+    v commit -m "default hooks directory"
+    # a relative core.hooksPath is taken from the work tree root, also from a subdirectory
+    mkdir custom
+    printf '%s' "$hook_script" >custom/pre-commit
+    chmod +x custom/pre-commit
+    v config core.hooksPath custom
+    echo b >b; v add b
+    (cd sub && v commit -m "relative path from a subdirectory")
+    # ...and the hooks of the default directory are no longer consulted (commit-msg is not in custom)
+    v config core.hooksPath ../custom
+    echo c >c; v add c
+    v commit -m "relative path that leads nowhere"
+    # an absolute path
+    v config core.hooksPath "$PWD/custom"
+    echo d >d; v add d
+    v commit -m "absolute path"
+    # an empty value falls back to the default directory
+    v config core.hooksPath ""
+    echo e >e; v add e
+    v commit -m "empty value"
+    # a hook that is not executable is skipped, with a hint naming the path as configured
+    v config core.hooksPath custom
+    chmod -x custom/pre-commit
+    echo f >f; v add f
+    v commit -m "not executable"
+    chmod +x custom/pre-commit
+    # a hook that fails, with the exit status of the hook
+    echo 7 >hook-fail-pre-commit
+    echo g >g; v add g
+    v commit -m "failing"
+    rm hook-fail-pre-commit
+    # a hook that is a directory is no hook
+    v config core.hooksPath dirhooks
+    mkdir -p dirhooks/pre-commit
+    v commit -m "directory"
+    # a script without a #! line is run by the shell
+    printf 'echo bare script >>hooks.log\n' >dirhooks/commit-msg
+    rmdir dirhooks/pre-commit
+    chmod +x dirhooks/commit-msg
+    echo h >h; v add h
+    v commit -m "no shebang"
+    v log --format=%s
+}
+
 s_basic_commit() {
     v init -q repo; cd repo
     echo hello >a.txt; mkdir -p dir/sub; echo deep >dir/sub/b.txt; echo x >dir/c

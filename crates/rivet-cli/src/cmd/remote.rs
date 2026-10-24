@@ -1069,6 +1069,7 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
         false,
         args.squash,
         autostash,
+        false,
     )
 }
 

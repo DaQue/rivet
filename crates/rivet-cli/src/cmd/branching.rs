@@ -1221,6 +1221,7 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         args.message.is_some(),
         args.squash,
         autostash,
+        args.no_verify,
     )
 }
 
@@ -1778,7 +1779,12 @@ fn switch_to(
             show_local_changes(repository)?;
             eprintln!("Already on '{}'", branch.short_name());
         }
-        return Ok(0);
+        return Ok(post_checkout_hook(
+            repository,
+            old_head.oid(),
+            new_commit,
+            true,
+        ));
     }
 
     // `--merge`: when the plain switch would overwrite tracked local changes, git stashes them,
@@ -1862,7 +1868,35 @@ fn switch_to(
             }
         }
     }
-    Ok(0)
+    Ok(post_checkout_hook(
+        repository,
+        old_head.oid(),
+        new_commit,
+        true,
+    ))
+}
+
+/// Run `post-checkout` with `<old> <new> <flag>` (`1` for a branch switch, `0` for a checkout of
+/// paths); an unborn side is the null id. Returns the exit status the command should end with when
+/// the hook failed, without undoing the checkout.
+fn post_checkout_hook(
+    repository: &Repository,
+    old: Option<ObjectId>,
+    new: Option<ObjectId>,
+    branch: bool,
+) -> i32 {
+    let zero = ObjectId::zero(repository.format());
+    let code = rivet_core::hooks::Hook::new(repository, "post-checkout")
+        .arg(old.unwrap_or(zero).to_string())
+        .arg(new.unwrap_or(zero).to_string())
+        .arg(if branch { "1" } else { "0" })
+        .run();
+    // A branch switch reports any failure as 1; a checkout of paths passes the hook's status on.
+    if branch {
+        i32::from(code.is_some_and(|c| c != 0))
+    } else {
+        code.unwrap_or(0)
+    }
 }
 
 fn checkout_new_branch(
@@ -1987,7 +2021,12 @@ fn checkout_new_branch(
             eprintln!("Switched to a new branch '{name}'");
         }
     }
-    Ok(0)
+    Ok(post_checkout_hook(
+        repository,
+        old_head.oid(),
+        Some(start_oid),
+        true,
+    ))
 }
 
 fn orphan_branch(
@@ -2020,11 +2059,12 @@ fn orphan_branch(
         repository.reset_index_to_tree(None)?;
     }
     // Git writes no reflog line for an orphan switch: neither HEAD's nor the new branch's.
+    let old = repository.head()?.oid();
     repository.refs().set_head(&branch, None)?;
     if !quiet {
         eprintln!("Switched to a new branch '{name}'");
     }
-    Ok(0)
+    Ok(post_checkout_hook(repository, old, old, true))
 }
 
 fn checkout_paths(
@@ -2088,7 +2128,8 @@ fn checkout_paths(
                 let noun = if count == 1 { "path" } else { "paths" };
                 eprintln!("Updated {count} {noun} from {label}");
             }
-            Ok(0)
+            let head = repository.head()?.oid();
+            Ok(post_checkout_hook(repository, head, head, false))
         }
         Err(rivet_core::Error::PathNotFound(spec)) => {
             eprintln!("error: pathspec '{spec}' did not match any file(s) known to git");
@@ -2162,8 +2203,14 @@ pub fn merge_commit(
     explicit_message: bool,
     squash: bool,
     autostash: bool,
+    no_verify: bool,
 ) -> Result<i32> {
     let git_dir = repository.git_dir().to_path_buf();
+    let reflog_action = if action.starts_with("pull") {
+        action.to_string()
+    } else {
+        format!("{action} {label}")
+    };
     let head = repository.head()?;
     let Some(ours) = head.oid() else {
         if squash {
@@ -2223,6 +2270,7 @@ pub fn merge_commit(
             if show_stat {
                 super::print_diffstat(repository, Some(old_tree), new_tree)?;
             }
+            post_merge_hook(repository, &reflog_action, true);
             return Ok(0);
         }
         let note = if explicit_message {
@@ -2245,6 +2293,7 @@ pub fn merge_commit(
         if let Some(stash) = stashed {
             super::rebase::apply_autostash(repository, stash)?;
         }
+        post_merge_hook(repository, &reflog_action, false);
         return Ok(0);
     }
     if ff == FastForward::Only {
@@ -2295,6 +2344,7 @@ pub fn merge_commit(
         write_squash_msg(repository, ours, theirs)?;
         println!("Squash commit -- not updating HEAD");
         if conflicted.is_empty() {
+            post_merge_hook(repository, &reflog_action, true);
             eprintln!("Automatic merge went well; stopped before committing as requested");
             return Ok(0);
         }
@@ -2312,7 +2362,17 @@ pub fn merge_commit(
         return Ok(1);
     }
 
-    if !conflicted.is_empty() || no_commit {
+    // The commit hooks run on the result of a clean merge; any of them failing leaves the merge
+    // staged and in progress, as `--no-commit` would.
+    let mut hooked_message = message.to_string();
+    let mut hook_failed = false;
+    if conflicted.is_empty() && !no_commit {
+        hook_failed =
+            !run_merge_commit_hooks(repository, no_verify, &reflog_action, &mut hooked_message)?;
+    }
+    let message = hooked_message.as_str();
+
+    if !conflicted.is_empty() || no_commit || hook_failed {
         let mut merge_msg = BString::from(message);
         merge_msg.push(b'\n');
         if !conflicted.is_empty() {
@@ -2351,7 +2411,11 @@ pub fn merge_commit(
             }
             return Ok(1);
         }
-        println!("Automatic merge went well; stopped before committing as requested");
+        if hook_failed {
+            eprintln!("Not committing merge; use 'git commit' to complete the merge.");
+            return Ok(1);
+        }
+        eprintln!("Automatic merge went well; stopped before committing as requested");
         return Ok(0);
     }
 
@@ -2365,6 +2429,8 @@ pub fn merge_commit(
         format!("{action} {label}: Merge made by the 'ort' strategy.")
     };
     repository.move_head(commit, BStr::new(reason.as_bytes()))?;
+    // The message file the hooks were handed does not outlive the commit.
+    let _ = std::fs::remove_file(git_dir.join("MERGE_MSG"));
     if show_stat {
         println!("Merge made by the 'ort' strategy.");
     }
@@ -2375,7 +2441,73 @@ pub fn merge_commit(
     if let Some(stash) = stashed {
         super::rebase::apply_autostash(repository, stash)?;
     }
+    post_merge_hook(repository, &reflog_action, false);
     Ok(0)
+}
+
+/// Run `post-merge` (`1` as its argument for a squash merge). Its exit status is ignored.
+fn post_merge_hook(repository: &Repository, reflog_action: &str, squash: bool) {
+    rivet_core::hooks::Hook::new(repository, "post-merge")
+        .arg(if squash { "1" } else { "0" })
+        .env("GIT_REFLOG_ACTION", reflog_action)
+        .run();
+}
+
+/// Run `pre-merge-commit`, `prepare-commit-msg` and `commit-msg` for a merge commit about to be
+/// made, with the message in `MERGE_MSG`. `pre-merge-commit` and `commit-msg` are skipped under
+/// `--no-verify`. The message may be rewritten by the hooks; returns `false` when one failed.
+fn run_merge_commit_hooks(
+    repository: &Repository,
+    no_verify: bool,
+    reflog_action: &str,
+    message: &mut String,
+) -> Result<bool> {
+    use super::snapshot::{commit_hook, shown_path};
+    let hook_exists = ["pre-merge-commit", "prepare-commit-msg", "commit-msg"]
+        .iter()
+        .any(|name| rivet_core::hooks::Hook::new(repository, name).exists());
+    if !hook_exists {
+        return Ok(true);
+    }
+    if !no_verify
+        && commit_hook(repository, "pre-merge-commit", &[], Some(reflog_action))
+            .is_some_and(|c| c != 0)
+    {
+        return Ok(false);
+    }
+    let path = repository.git_dir().join("MERGE_MSG");
+    // Git writes the message to `MERGE_MSG` without a final newline.
+    let written = message.clone();
+    std::fs::write(&path, &written)?;
+    let shown = shown_path(repository, &path);
+    if commit_hook(
+        repository,
+        "prepare-commit-msg",
+        &[shown.as_os_str(), "merge".as_ref()],
+        Some(reflog_action),
+    )
+    .is_some_and(|c| c != 0)
+    {
+        return Ok(false);
+    }
+    if !no_verify
+        && commit_hook(
+            repository,
+            "commit-msg",
+            &[shown.as_os_str()],
+            Some(reflog_action),
+        )
+        .is_some_and(|c| c != 0)
+    {
+        return Ok(false);
+    }
+    let after = std::fs::read(&path)?;
+    if after != written.as_bytes() {
+        *message = String::from_utf8_lossy(&after)
+            .trim_end_matches('\n')
+            .to_string();
+    }
+    Ok(true)
 }
 
 /// Write `SQUASH_MSG`: the log of what `theirs` has that `ours` does not, as `git merge --squash`

@@ -99,6 +99,7 @@ pub mod error;
 pub mod fsck;
 pub mod gc;
 pub mod hash;
+pub mod hooks;
 pub mod ignore;
 pub mod index;
 pub mod merge;
