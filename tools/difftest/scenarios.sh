@@ -348,6 +348,37 @@ s_hooks_push() {
     dump_hooklog
 }
 
+s_hooks_run() {
+    v init -q repo; cd repo
+    mkdir sub
+    install_hooks pre-commit post-rewrite
+    printf 'one\ntwo\n' >stdin.txt
+    v hook run pre-commit
+    v hook run pre-commit -- a "b c"
+    (cd sub && v hook run pre-commit -- from-sub)
+    v hook run post-rewrite --to-stdin=stdin.txt -- amend
+    v hook run --to-stdin=missing.txt post-rewrite
+    echo 3 >hook-fail-pre-commit
+    v hook run pre-commit
+    rm hook-fail-pre-commit
+    v hook run post-commit
+    v hook run --ignore-missing post-commit
+    v hook run not-a-hook
+    v hook run --allow-unknown-hook-name not-a-hook
+    v hook run --allow-unknown-hook-name --ignore-missing not-a-hook
+    v hook run
+    v hook
+    chmod -x .git/hooks/pre-commit
+    v hook run pre-commit
+    v hook run --ignore-missing pre-commit
+    v config core.hooksPath custom
+    mkdir custom
+    printf '%s' "$hook_script" >custom/pre-commit
+    chmod +x custom/pre-commit
+    v hook run pre-commit -- via-hookspath
+    dump_hooklog
+}
+
 s_basic_commit() {
     v init -q repo; cd repo
     echo hello >a.txt; mkdir -p dir/sub; echo deep >dir/sub/b.txt; echo x >dir/c

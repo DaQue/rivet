@@ -270,6 +270,39 @@ fn find(repo: &Repository, name: &str, hint: bool) -> Option<(PathBuf, String)> 
     Some((path, shown))
 }
 
+/// The hook names Git itself knows (`git hook run` refuses any other without
+/// `--allow-unknown-hook-name`).
+pub const NATIVE_HOOKS: &[&str] = &[
+    "applypatch-msg",
+    "pre-applypatch",
+    "post-applypatch",
+    "pre-commit",
+    "pre-merge-commit",
+    "prepare-commit-msg",
+    "commit-msg",
+    "post-commit",
+    "pre-rebase",
+    "post-checkout",
+    "post-merge",
+    "pre-push",
+    "pre-receive",
+    "update",
+    "proc-receive",
+    "post-receive",
+    "post-update",
+    "reference-transaction",
+    "push-to-checkout",
+    "pre-auto-gc",
+    "post-rewrite",
+    "sendemail-validate",
+    "fsmonitor-watchman",
+    "p4-changelist",
+    "p4-prepare-changelist",
+    "p4-post-changelist",
+    "p4-pre-submit",
+    "post-index-change",
+];
+
 /// The lines of a `post-rewrite` stdin: `<old> <new>` per rewritten commit.
 ///
 /// A convenience for callers that hold the pairs as hex strings.

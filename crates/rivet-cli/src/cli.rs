@@ -40,8 +40,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
     am, apply, archive, bisect, blame, branching, bundle, cherry, clean, format_patch, grep,
-    history, ignore, maintenance, mv, notes, packrefs, plumbing, query, rebase, reflog, remote,
-    sequencer, setup, snapshot, stash, submodule, symbolicref, tag, worktree,
+    history, hook, ignore, maintenance, mv, notes, packrefs, plumbing, query, rebase, reflog,
+    remote, sequencer, setup, snapshot, stash, submodule, symbolicref, tag, worktree,
 };
 
 /// The `rivet` command line.
@@ -314,6 +314,9 @@ pub enum Commands {
 
     /// Add, show, list, append, remove and copy object notes.
     Notes(notes::NotesArgs),
+
+    /// Run a hook by name.
+    Hook(hook::HookArgs),
 
     /// Read, write or delete a symbolic ref.
     #[command(name = "symbolic-ref")]
