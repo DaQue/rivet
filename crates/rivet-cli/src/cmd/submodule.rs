@@ -1,10 +1,11 @@
 //! `submodule`: `status`, `init`, `sync`, `add`, `update`, `deinit`, `foreach`, `set-branch`,
-//! `set-url` and `absorbgitdirs`. `.gitmodules` is read directly; `add`, `set-branch` and `set-url`
-//! edit it as text.
+//! `set-url`, `absorbgitdirs` and `summary`. `.gitmodules` is read directly; `add`, `set-branch`
+//! and `set-url` edit it as text.
 //!
 //! Each gitlink of the index prints as `<state><commit> <path>[ (<description>)]`, where the state
 //! is `-` for a submodule that is not checked out, `+` when its `HEAD` is not the recorded commit,
-//! `U` for a merge conflict and a blank otherwise. `summary` is refused by name.
+//! `U` for a merge conflict and a blank otherwise. `summary` lists the commits a gitlink moved
+//! across, with `--cached` comparing the index to `HEAD` and `--files` the work tree to the index.
 
 use std::path::Path;
 
@@ -51,6 +52,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "set-branch" => return submodule_set_branch(global, quiet, rest),
             "set-url" => return submodule_set_url(global, quiet, rest),
             "absorbgitdirs" => return submodule_absorbgitdirs(global, rest),
+            "summary" => return submodule_summary(global, rest),
             _ => {}
         }
     }
@@ -72,7 +74,8 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "--" => only_paths = true,
             "status" if !seen_sub => seen_sub = true,
             other if !seen_sub && !other.starts_with('-') => {
-                anyhow::bail!("submodule: '{other}' is not implemented (all but 'summary' are)")
+                eprint!("{USAGE}");
+                return Ok(1);
             }
             other if other.starts_with('-') => {
                 eprintln!("error: unknown option `{}'", other.trim_start_matches('-'));
@@ -2105,4 +2108,325 @@ fn absorb_in(
         }
     }
     Ok(0)
+}
+
+/// One side of a changed path in `summary`: nothing, a gitlink, or anything else.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    None,
+    Gitlink(ObjectId),
+    Other(ObjectId),
+}
+
+impl Side {
+    fn of(mode: EntryMode, oid: ObjectId) -> Self {
+        if mode == EntryMode::Commit {
+            Side::Gitlink(oid)
+        } else {
+            Side::Other(oid)
+        }
+    }
+
+    fn is_gitlink(self) -> bool {
+        matches!(self, Side::Gitlink(_))
+    }
+}
+
+fn submodule_summary(global: &GlobalArgs, args: &[String]) -> Result<i32> {
+    let mut cached = false;
+    let mut files = false;
+    let mut limit: i64 = -1;
+    let mut rest: Vec<&String> = Vec::new();
+    let mut iter = args.iter();
+    while let Some(word) = iter.next() {
+        match word.as_str() {
+            "--cached" => cached = true,
+            "--files" => files = true,
+            "--for-status" => {}
+            "-n" | "--summary-limit" => match iter.next() {
+                Some(value) => match value.parse::<i64>() {
+                    Ok(n) => limit = n,
+                    Err(_) => {
+                        eprintln!(
+                            "error: option `summary-limit' expects an integer value with an optional k/m/g suffix"
+                        );
+                        return Ok(129);
+                    }
+                },
+                None => {
+                    eprint!("{USAGE}");
+                    return Ok(1);
+                }
+            },
+            w if w.starts_with("--summary-limit=") => {
+                match w["--summary-limit=".len()..].parse::<i64>() {
+                    Ok(n) => limit = n,
+                    Err(_) => {
+                        eprintln!(
+                            "error: option `summary-limit' expects an integer value with an optional k/m/g suffix"
+                        );
+                        return Ok(129);
+                    }
+                }
+            }
+            "--" => {
+                rest.extend(iter.by_ref());
+                break;
+            }
+            w if w.starts_with('-') && w.len() > 1 => {
+                eprint!("{USAGE}");
+                return Ok(1);
+            }
+            _ => {
+                rest.push(word);
+                rest.extend(iter.by_ref());
+                break;
+            }
+        }
+    }
+    if cached && files {
+        eprintln!("fatal: options '--cached' and '--files' cannot be used together");
+        return Ok(128);
+    }
+    let repository = super::open(global)?;
+    let Some(root) = repository.worktree_path().map(Path::to_path_buf) else {
+        return Ok(0);
+    };
+    // The first word is the commit to compare with when it names one, else a path.
+    let mut head_spec = "HEAD".to_string();
+    let mut paths: Vec<String> = Vec::new();
+    let mut words = rest.into_iter().peekable();
+    if let Some(first) = words.peek()
+        && first.as_str() != "--"
+        && super::resolve_commit(&repository, first).is_ok()
+    {
+        head_spec = (*first).clone();
+        words.next();
+    }
+    if words.peek().is_some_and(|w| w.as_str() == "--") {
+        words.next();
+    }
+    paths.extend(words.cloned());
+    if limit == 0 {
+        return Ok(0);
+    }
+    let prefix = cwd_prefix(&root);
+    let specs: Vec<String> = paths.iter().map(|p| from_root(&prefix, p)).collect();
+
+    let flatten = |tree: ObjectId| rivet_core::ops::flatten_tree(repository.odb(), tree);
+    let head_files = match super::resolve_commit(&repository, &head_spec) {
+        Ok(commit) => flatten(repository.commit_tree(commit)?)?,
+        Err(_) => std::collections::BTreeMap::new(),
+    };
+    let index_files: std::collections::BTreeMap<BString, (EntryMode, ObjectId)> = repository
+        .index()
+        .entries()
+        .iter()
+        .filter(|e| !e.is_unmerged())
+        .map(|e| (e.path.clone(), (e.mode, e.oid)))
+        .collect();
+
+    // The submodule's own `HEAD`, which is what the work tree holds of a gitlink.
+    let worktree_head = |path: &BString, fallback: ObjectId| -> ObjectId {
+        let dir = root.join(path.to_os_str_lossy());
+        if !dir.join(".git").exists() {
+            return fallback;
+        }
+        Repository::open_or_discover(&dir)
+            .ok()
+            .and_then(|sub| sub.head().ok()?.oid())
+            .unwrap_or(fallback)
+    };
+
+    let mut all_paths: std::collections::BTreeSet<&BString> = std::collections::BTreeSet::new();
+    all_paths.extend(head_files.keys());
+    all_paths.extend(index_files.keys());
+    let mut out = String::new();
+    for path in all_paths {
+        if !specs.is_empty()
+            && !specs.iter().any(|spec| {
+                rivet_core::ops::pathspec_matches(path.as_ref(), BStr::new(spec.as_bytes()))
+            })
+        {
+            continue;
+        }
+        let in_head = head_files.get(path).map(|(m, o)| Side::of(*m, *o));
+        let in_index = index_files.get(path).map(|(m, o)| Side::of(*m, *o));
+        let (src, dst) = if files {
+            let dst = match in_index {
+                Some(Side::Gitlink(oid)) => Some(Side::Gitlink(worktree_head(path, oid))),
+                other => other,
+            };
+            (in_index, dst)
+        } else if cached {
+            (in_head, in_index)
+        } else {
+            let dst = match in_index {
+                Some(Side::Gitlink(oid)) => Some(Side::Gitlink(worktree_head(path, oid))),
+                other => other,
+            };
+            (in_head, dst)
+        };
+        let (src, dst) = (src.unwrap_or(Side::None), dst.unwrap_or(Side::None));
+        if src == dst || (!src.is_gitlink() && !dst.is_gitlink()) {
+            continue;
+        }
+        if files && (src == Side::None || dst == Side::None) {
+            continue;
+        }
+        // A submodule that is not checked out has nothing to compare, unless it is being removed
+        // or replaced by a plain file.
+        let populated = root.join(path.to_os_str_lossy()).join(".git").exists();
+        if !populated && dst.is_gitlink() && !matches!(src, Side::Other(_)) {
+            continue;
+        }
+        out.push_str(&summary_entry(
+            &repository,
+            &root,
+            &display_path(&prefix, path.as_ref()),
+            path,
+            src,
+            dst,
+            limit,
+        )?);
+    }
+    print!("{out}");
+    Ok(0)
+}
+
+/// The text `submodule summary` prints for one changed gitlink.
+fn summary_entry(
+    repository: &Repository,
+    root: &Path,
+    display: &str,
+    path: &BString,
+    src: Side,
+    dst: Side,
+    limit: i64,
+) -> Result<String> {
+    use rivet_core::revwalk::{SortOrder, WalkOptions, walk_oids};
+
+    let dir = root.join(path.to_os_str_lossy());
+    let sub = dir
+        .join(".git")
+        .exists()
+        .then(|| Repository::open_or_discover(&dir).ok())
+        .flatten();
+    let zero = "0000000".to_string();
+    // An abbreviated name in the submodule when it has the commit, else the superproject's.
+    let name_of_side = |side: Side| -> (String, bool) {
+        match side {
+            Side::None => (zero.clone(), false),
+            Side::Other(oid) => (super::history::abbrev(repository, &oid, false), false),
+            Side::Gitlink(oid) => match &sub {
+                Some(sub) if sub.odb().contains(&oid) => {
+                    (super::history::abbrev(sub, &oid, false), false)
+                }
+                _ => (super::history::abbrev(repository, &oid, false), true),
+            },
+        }
+    };
+    let (src_name, missing_src) = name_of_side(src);
+    let (dst_name, missing_dst) = name_of_side(dst);
+    let shown = path.to_string();
+    if matches!(
+        (src, dst),
+        (Side::Gitlink(_), Side::Other(_)) | (Side::Other(_), Side::Gitlink(_))
+    ) {
+        // Git prints the object types here, and complains about a `cd` into what is now a file.
+        let kind = |side: Side| {
+            if side.is_gitlink() {
+                "submodule"
+            } else {
+                "blob"
+            }
+        };
+        if dir.is_file() {
+            eprintln!("fatal: exec 'rev-parse': cd to '{shown}' failed: Not a directory");
+        }
+        return Ok(format!(
+            "* {display} {src_name}({})->{dst_name}({}):\n\n",
+            kind(src),
+            kind(dst)
+        ));
+    }
+    let mut text = format!("* {display} {src_name}...{dst_name}");
+    if missing_src || missing_dst {
+        text.push_str(":\n");
+        text.push_str(&match (missing_src, missing_dst) {
+            (true, false) => format!("  Warn: {shown} doesn't contain commit {src_name}\n"),
+            (false, true) => format!("  Warn: {shown} doesn't contain commit {dst_name}\n"),
+            _ => format!("  Warn: {shown} doesn't contain commits {src_name} and {dst_name}\n"),
+        });
+        text.push('\n');
+        return Ok(text);
+    }
+    let Some(sub) = sub else {
+        text.push_str(":\n\n");
+        return Ok(text);
+    };
+    let mut options = WalkOptions::new();
+    options.first_parent(true);
+    options.sort(SortOrder::Date);
+    let mut lines: Vec<(i64, char, String)> = Vec::new();
+    let subject_and_date = |oid: &ObjectId| -> Result<(i64, String)> {
+        let object = sub.odb().read_typed(oid, rivet_core::ObjectKind::Commit)?;
+        let commit = rivet_core::Commit::parse(sub.format(), object.data())?;
+        let subject = commit
+            .message
+            .lines()
+            .next()
+            .map(|l| String::from_utf8_lossy(l).into_owned())
+            .unwrap_or_default();
+        Ok((commit.committer.when, subject))
+    };
+    let count;
+    match (src, dst) {
+        (Side::Gitlink(a), Side::Gitlink(b)) => {
+            let bases = rivet_core::merge_bases(sub.odb(), a, b).unwrap_or_default();
+            let mut left = options.clone();
+            let mut right = options.clone();
+            for base in &bases {
+                left.exclude(*base);
+                right.exclude(*base);
+            }
+            let left_commits = walk_oids(sub.odb(), &[a], &left)?;
+            let right_commits = walk_oids(sub.odb(), &[b], &right)?;
+            count = left_commits.len() + right_commits.len();
+            for (marker, commits) in [('<', left_commits), ('>', right_commits)] {
+                for oid in commits {
+                    let (when, subject) = subject_and_date(&oid)?;
+                    lines.push((when, marker, subject));
+                }
+            }
+            // Newest first; the right side wins a tie, as it is walked first.
+            lines.sort_by_key(|x| std::cmp::Reverse(x.0));
+        }
+        (Side::Gitlink(only), Side::Other(_) | Side::None)
+        | (Side::Other(_) | Side::None, Side::Gitlink(only)) => {
+            let deleted = dst == Side::None;
+            let walked = walk_oids(sub.odb(), &[only], &options)?;
+            count = walked.len();
+            if !deleted && let Some(tip) = walked.first() {
+                let (when, subject) = subject_and_date(tip)?;
+                lines.push((when, '>', subject));
+            }
+            if deleted {
+                text.push_str(":\n\n");
+                return Ok(text);
+            }
+        }
+        _ => return Ok(String::new()),
+    }
+    text.push_str(&format!(" ({count}):\n"));
+    let shown_lines = if limit > 0 {
+        lines.len().min(limit as usize)
+    } else {
+        lines.len()
+    };
+    for (_, marker, subject) in lines.into_iter().take(shown_lines) {
+        text.push_str(&format!("  {marker} {subject}\n"));
+    }
+    text.push('\n');
+    Ok(text)
 }

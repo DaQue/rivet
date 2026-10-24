@@ -11,9 +11,10 @@ by `rivet` passes `git fsck` and can be cloned with `git` — the differential t
 ## Status
 
 **Pre-1.0, in active development.** The core object model, index, refs, config, revision
-parsing, diffing, three-way merge and the local transports work. The network transports and
-the command surface are being filled in; see [`docs/IMPL-ORDER.md`](docs/IMPL-ORDER.md) and
-the open items in [`.claude/PRIORITIES.md`](.claude/PRIORITIES.md).
+parsing, diffing, three-way merge, work trees, submodules, bundles and the local transports
+work. What is missing — hooks, credential helpers, sparse checkout, interactive rebase and the
+partial commands — is listed command by command in [`GAPS.md`](GAPS.md); the implementation
+order is in [`docs/IMPL-ORDER.md`](docs/IMPL-ORDER.md).
 
 Nothing here is published to crates.io yet.
 

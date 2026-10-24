@@ -6126,6 +6126,72 @@ s_submodule_absorb() {
     rm -rf other
 }
 
+s_submodule_summary() {
+    g config --global protocol.file.allow always
+    g init -q lib; (cd lib && tick && echo 1 >f && g add f && g commit -q -m "l1 first" && tick && echo 2 >>f && g commit -q -a -m "l2 second")
+    g init -q top; cd top
+    tick; echo t >t; g add t; g commit -q -m t1
+    g submodule add -q ../lib vendor/lib; g submodule add -q ../lib other
+    tick; g commit -q -m subs
+    g clone -q . ../clone
+    v submodule summary
+    (cd vendor/lib && for m in "l3 third" "l4 fourth" "l5 fifth"; do tick; echo "$m" >>f; g commit -q -a -m "$m"; done)
+    v submodule summary
+    v submodule summary --files
+    v submodule summary --cached
+    v submodule summary --cached --files
+    g add vendor/lib
+    v submodule summary
+    v submodule summary --cached
+    v submodule summary --files
+    v submodule summary HEAD
+    v submodule summary -n 1
+    v submodule summary --summary-limit 2
+    v submodule summary --summary-limit=0
+    v submodule summary -n -1
+    v submodule summary -n
+    v submodule summary -n x
+    v submodule summary vendor/lib
+    v submodule summary -- other
+    v submodule summary nosuch
+    v submodule summary HEAD vendor/lib
+    v submodule summary HEAD -- vendor/lib
+    v submodule summary -q
+    v submodule --quiet summary
+    tick; g commit -q -m bump
+    v submodule summary HEAD~1
+    v submodule summary HEAD~1 HEAD
+    v submodule summary --cached HEAD~1
+    v submodule summary --cached HEAD~2
+    v submodule summary HEAD~2
+    (cd other && echo dirty >>f)
+    v submodule summary --files
+    v submodule summary
+    (cd other && g checkout -q -- f && g reset -q --hard HEAD~1)
+    v submodule summary --files
+    v submodule summary
+    (cd vendor/lib && g reset -q --hard HEAD~4)
+    v submodule summary --files
+    g add vendor/lib
+    v submodule summary --cached
+    v submodule summary --cached HEAD
+    v submodule summary --cached -n 1
+    g rm -q --cached other
+    v submodule summary --cached
+    v submodule summary --files
+    # A submodule whose commits are not there, and one that is not checked out.
+    g update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,ghost
+    v submodule summary --cached
+    v submodule summary
+    g reset -q
+    (cd ../clone && g update-index --cacheinfo 160000,1111111111111111111111111111111111111111,vendor/lib && v submodule summary --cached && v submodule summary --files && v submodule summary)
+    mkdir sub; (cd sub && v submodule summary ../vendor/lib)
+    # A gitlink replaced by a file and the other way round.
+    rm -rf other; echo file >other; g add other
+    v submodule summary --cached
+    v submodule summary
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -6151,6 +6217,7 @@ for s in "$@"; do
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;
         s_submodule_set) run_scenario "$s" clone ;;
         s_submodule_absorb) run_scenario "$s" top top/vendor/lib ;;
+        s_submodule_summary) run_scenario "$s" none ;;
         s_worktree_move) run_scenario "$s" repo ;;
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
