@@ -349,6 +349,65 @@ s_hooks_push() {
     dump_hooklog
 }
 
+s_hooks_pick() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    v switch -q -c side
+    for i in 1 2 3 4 5; do tick; echo s$i >s$i; v add s$i; v commit -q -m side$i; done
+    tick; echo side >c; v add c; v commit -q -m c-side
+    v switch -q main
+    tick; echo main >c; v add c; v commit -q -m c-main
+    install_hooks pre-commit prepare-commit-msg commit-msg post-commit post-rewrite
+    rm -f hooks.log
+    # a pick runs prepare-commit-msg (source "message") and post-commit; no pre-commit, no commit-msg
+    v cherry-pick side~5
+    v revert --no-edit HEAD
+    # --no-commit runs nothing
+    v cherry-pick -n side~4
+    v reset -q --hard
+    # the message prepare-commit-msg leaves is the one committed; a failing post-commit is ignored
+    echo extra >hook-append-prepare-commit-msg
+    echo 5 >hook-fail-post-commit
+    v cherry-pick side~4
+    v log -1 --format=%B
+    rm hook-append-prepare-commit-msg hook-fail-post-commit
+    # several commits: the hooks run once per commit, no post-rewrite
+    v cherry-pick side~3 side~2
+    v log --format=%s
+    # a refusing prepare-commit-msg: error, status 1, the change stays staged for --continue
+    echo 3 >hook-fail-prepare-commit-msg
+    v cherry-pick side~1
+    v status --short
+    ls .git/CHERRY_PICK_HEAD
+    rm hook-fail-prepare-commit-msg
+    v cherry-pick --continue
+    v log --format=%s -3
+    echo 3 >hook-fail-prepare-commit-msg
+    v revert --no-edit HEAD~1
+    v status --short
+    v revert --continue
+    rm hook-fail-prepare-commit-msg
+    v reset -q --hard
+    # a conflict: --continue is a full commit, with pre-commit and commit-msg and source "merge"
+    v cherry-pick side
+    echo resolved >c; v add c
+    echo 1 >hook-fail-pre-commit
+    v cherry-pick --continue
+    rm hook-fail-pre-commit
+    echo 1 >hook-fail-commit-msg
+    v cherry-pick --continue
+    rm hook-fail-commit-msg
+    v cherry-pick --continue
+    v log --format=%s -2
+    # the same for a revert
+    tick; echo more >>c; v add c; v commit -q -m c-more
+    v revert --no-edit HEAD~1
+    echo fixed >c; v add c
+    v revert --continue
+    v log --format=%s -2
+    dump_hooklog
+}
+
 s_hooks_run() {
     v init -q repo; cd repo
     mkdir sub

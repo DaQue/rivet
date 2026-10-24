@@ -75,8 +75,10 @@ The command works for the common case; the listed options or edge cases are miss
   `prepare-commit-msg`, `commit-msg` and `post-merge` for `merge` and the merge inside `pull`;
   `post-checkout` for `switch` and `checkout` (branches, paths, `-b`/`-B`/`--orphan`);
   `pre-rebase`, `post-checkout`, `post-commit` and `post-rewrite rebase` for `rebase` and
-  `pull --rebase` (`--no-verify`); `pre-push` for `push` (`--no-verify`). Not run yet: the commit
-  hooks of `merge --continue`, `cherry-pick`, `revert`, `am` and `stash`; `post-checkout` for
+  `pull --rebase` (`--no-verify`); `pre-push` for `push` (`--no-verify`); `prepare-commit-msg` and `post-commit` for `cherry-pick` and
+  `revert` (and the full `commit` set for their `--continue`; a sequence that stops on a hook failure
+  keeps no `.git/sequencer`). Not run yet: the commit
+  hooks of `merge --continue`, `am` and `stash`; `post-checkout` for
   `clone` and `worktree add`; `pre-auto-gc`, `reference-transaction`, `applypatch-msg`,
   `pre-applypatch`, `post-applypatch`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` is not implemented. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
   source (and `merge`). `GIT_DIR`/`GIT_WORK_TREE` are not exported to hooks (git does not either

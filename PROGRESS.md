@@ -897,3 +897,12 @@ Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenario
 Base `d61f192`: `push origin nope`, `nope:refs/heads/x` and `main:refs/heads/ok nope` printed `fatal: src refspec nope does not match any` and exited 128. Git 2.56: one `error: src refspec <src> does not match any` per missing source, then `error: failed to push some refs to '<url>'`, exit 1, and nothing is pushed (the valid refspec in `main:refs/heads/ok nope` is not sent). A malformed refspec is the `fatal: invalid refspec '<spec>'` class, exit 128: an empty argument, `a b`, `main:` (empty destination), `main:bad..name`. One-level names (`nope`, `main`) are valid names. Done in `run_push` (`rivet-cli`), before any transport work; no core API change.
 Not done (in `GAPS.md`): `x:y:z` splits at the first colon (git: the last); the matching refspec `:`.
 Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 220 PASS / `failures: 0`.
+
+### Phase 5.2 — hooks: `cherry-pick` and `revert` (landed, scenario `s_hooks_pick`)
+Base `f8d111d`: neither command ran any hook (28 hook lines missing from the transcript). Against git 2.56:
+- A commit made by `cherry-pick`/`revert` runs `prepare-commit-msg` (args `.git/COMMIT_EDITMSG message`, `GIT_EDITOR=:`, `GIT_INDEX_FILE`, no `GIT_REFLOG_ACTION`) and `post-commit`; no `pre-commit`, no `commit-msg`, no `post-rewrite`. `-n` runs nothing. What the hook leaves in `COMMIT_EDITMSG` is committed; a failing `post-commit` is ignored.
+- A refusing `prepare-commit-msg`: `error: 'prepare-commit-msg' hook failed`, exit 1, change left staged, `MERGE_MSG` written, `CHERRY_PICK_HEAD` written for a pick only (a revert leaves no `REVERT_HEAD`, so `revert --continue` says nothing is in progress).
+- `--continue` is `git commit`: `pre-commit`, `prepare-commit-msg` (source `merge`, message including the `# Conflicts:` lines), `commit-msg`, `post-commit`; a refusing one exits 1 and keeps the state.
+- Found by the scenario: `commit_subject` took the first line only; git's summary line joins the first paragraph (`side2 extra`). Fixed in `cmd/mod.rs`.
+Not done: a multi-commit pick that stops on a hook failure keeps no `.git/sequencer` (rivet has none; see `GAPS.md`); `--skip`, `-e`, `-x` do not exist.
+Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 221 PASS / `failures: 0`.

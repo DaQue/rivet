@@ -484,8 +484,55 @@ fn apply_one(
         Op::Pick => pick.author.clone(),
         Op::Revert => repository.author_signature()?,
     };
+    // `cherry-pick` and `revert` run `prepare-commit-msg` (source `message`) and `post-commit`,
+    // but neither `pre-commit` nor `commit-msg`. A refusing hook leaves the picked change staged
+    // with `MERGE_MSG` (and, for a pick, `CHERRY_PICK_HEAD`) for `--continue`.
+    let Some(message) = message_hooks(repository, &message, "message", false)? else {
+        write_file(&git_dir, "MERGE_MSG", &message)?;
+        if op == Op::Pick {
+            write_file(
+                &git_dir,
+                op.head_file(),
+                format!("{}\n", pick.oid).as_bytes(),
+            )?;
+        }
+        eprintln!("error: 'prepare-commit-msg' hook failed");
+        return Ok(1);
+    };
     commit_and_report(repository, settings, tree, head, author, &message)?;
     Ok(0)
+}
+
+/// Pass `message` through `COMMIT_EDITMSG` and the hooks that may rewrite it: `prepare-commit-msg`
+/// with `source`, then `commit-msg` when `verify` is set. Returns the message the hooks left, or
+/// `None` when one of them refused.
+fn message_hooks(
+    repository: &Repository,
+    message: &[u8],
+    source: &str,
+    verify: bool,
+) -> Result<Option<Vec<u8>>> {
+    use super::snapshot::{commit_hook, shown_path};
+    let editmsg = repository.git_dir().join("COMMIT_EDITMSG");
+    write_file(repository.git_dir(), "COMMIT_EDITMSG", message)?;
+    let shown = shown_path(repository, &editmsg);
+    if commit_hook(
+        repository,
+        "prepare-commit-msg",
+        &[shown.as_os_str(), source.as_ref()],
+        None,
+    )
+    .is_some_and(|code| code != 0)
+    {
+        return Ok(None);
+    }
+    if verify
+        && commit_hook(repository, "commit-msg", &[shown.as_os_str()], None)
+            .is_some_and(|code| code != 0)
+    {
+        return Ok(None);
+    }
+    Ok(Some(std::fs::read(&editmsg)?))
 }
 
 fn commit_and_report(
@@ -515,6 +562,7 @@ fn commit_and_report(
     };
     let reason = format!("{prefix}: {}", String::from_utf8_lossy(subject));
     repository.move_head(oid, BStr::new(reason.as_bytes()))?;
+    super::snapshot::commit_hook(repository, "post-commit", &[], None);
 
     if settings.quiet {
         return Ok(());
@@ -627,15 +675,29 @@ fn do_continue(repository: &mut Repository, settings: &Settings) -> Result<i32> 
     let Some(head) = repository.head()?.oid() else {
         anyhow::bail!("cannot continue on an unborn branch");
     };
+    // This is `git commit`: `pre-commit` first, then the message hooks, whatever `--no-verify`.
+    if super::snapshot::commit_hook(repository, "pre-commit", &[], None)
+        .is_some_and(|code| code != 0)
+    {
+        return Ok(1);
+    }
     let pick = read_pick(repository, picked)?;
     let saved = std::fs::read(git_dir.join("MERGE_MSG")).unwrap_or_default();
-    let mut message = super::branching::strip_comment_lines(&saved);
-    if message.iter().all(u8::is_ascii_whitespace) {
-        message = match op {
+    let mut raw = saved.clone();
+    if super::branching::strip_comment_lines(&saved)
+        .iter()
+        .all(u8::is_ascii_whitespace)
+    {
+        raw = match op {
             Op::Pick => pick.message.clone(),
             Op::Revert => revert_message(&pick),
         };
     }
+    let source = if saved.is_empty() { "message" } else { "merge" };
+    let Some(edited) = message_hooks(repository, &raw, source, true)? else {
+        return Ok(1);
+    };
+    let message = super::branching::strip_comment_lines(&edited);
     let tree = repository.write_tree()?;
     if repository.head_tree_oid()? == Some(tree) {
         eprintln!(

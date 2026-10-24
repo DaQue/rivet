@@ -414,17 +414,20 @@ pub fn resolve_commit(repository: &Repository, spec: &str) -> Result<rivet_core:
         .map_err(|_| anyhow::anyhow!("Not a valid commit name {spec}"))
 }
 
-/// The first line of a commit's message, as `--oneline` and the switch/reset messages print it.
+/// A commit's subject, as `--oneline` and the switch/reset messages print it: the first paragraph
+/// of the message with its lines joined by single spaces.
 pub fn commit_subject(repository: &Repository, oid: &rivet_core::ObjectId) -> Result<String> {
     let object = repository.odb().read(oid)?;
     match object.parse()? {
         rivet_core::AnyObject::Commit(commit) => {
             let message = commit.message;
-            let first = message
+            let paragraph: Vec<String> = message
                 .split(|b| *b == b'\n')
-                .find(|line| !line.iter().all(u8::is_ascii_whitespace))
-                .unwrap_or(&[]);
-            Ok(String::from_utf8_lossy(first).trim_end().to_string())
+                .skip_while(|line| line.iter().all(u8::is_ascii_whitespace))
+                .take_while(|line| !line.iter().all(u8::is_ascii_whitespace))
+                .map(|line| String::from_utf8_lossy(line).trim_end().to_string())
+                .collect();
+            Ok(paragraph.join(" "))
         }
         _ => Ok(String::new()),
     }
