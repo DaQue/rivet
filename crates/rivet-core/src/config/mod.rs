@@ -518,7 +518,13 @@ impl Config {
                 .map_err(|_| Error::InvalidUtf8 { what: "key name" })?;
             let key_folded = BString::from(key_str.to_ascii_lowercase());
             let value: BString = if value_bytes.is_empty() {
-                BString::from("true")
+                // A bare `key` is an implicit true; `key =` is the empty string (and resets a
+                // multi-valued key such as `credential.helper`).
+                if eq.is_some() {
+                    BString::default()
+                } else {
+                    BString::from("true")
+                }
             } else {
                 let mut out: Vec<u8> = Vec::new();
                 let mut vi = 0usize;

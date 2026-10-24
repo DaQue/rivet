@@ -207,9 +207,10 @@ fn hooks_dir(repo: &Repository) -> (PathBuf, String) {
         .config()
         .get_path(BStr::new("core.hooksPath"))
         .ok()
-        .flatten()
-        .filter(|value| !value.is_empty());
+        .flatten();
     match configured {
+        // An empty value is not "unset": Git looks for `/<name>`, which finds nothing.
+        Some(value) if value.is_empty() => (PathBuf::from("/"), String::new()),
         Some(value) => {
             let path = PathBuf::from(OsStr::from_bytes(&value));
             let shown = path.display().to_string();

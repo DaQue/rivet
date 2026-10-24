@@ -61,6 +61,7 @@
 //!   because requesting it and then reporting a partial success normally would be worse than not
 //!   offering it.
 
+pub mod credential;
 pub mod fetch;
 pub mod http;
 pub mod pktline;

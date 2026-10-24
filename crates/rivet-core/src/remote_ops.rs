@@ -348,6 +348,10 @@ impl Repository {
         };
         let url = RemoteUrl::parse(BStr::new(url_text.as_bytes()))?;
         let mut transport = open_transport(&url)?;
+        transport.configure_credentials(crate::remote::credential::CredentialSettings::for_url(
+            self.config(),
+            &url,
+        )?);
         let advertisement = transport.connect(&url, self.format())?;
 
         let explicit = !request.refspecs.is_empty();
@@ -839,6 +843,10 @@ impl Repository {
         };
         let url = RemoteUrl::parse(BStr::new(url_text.as_bytes()))?;
         let mut transport = open_transport(&url)?;
+        transport.configure_credentials(crate::remote::credential::CredentialSettings::for_url(
+            self.config(),
+            &url,
+        )?);
         let advertisement = transport.connect(&url, self.format())?;
         let remote_value = |name: &[u8]| -> Option<ObjectId> {
             advertisement

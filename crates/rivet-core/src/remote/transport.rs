@@ -909,6 +909,11 @@ pub trait Transport: fmt::Debug {
     /// that preceded it, and a caller reporting one should say so rather than implying the fetch
     /// failed.
     fn disconnect(&mut self) -> Result<()>;
+
+    /// Give the transport the credential configuration for its URL, to be consulted when the
+    /// remote asks for credentials. Transports that never ask (local paths, SSH) ignore it, which
+    /// is the default.
+    fn configure_credentials(&mut self, _settings: crate::remote::credential::CredentialSettings) {}
 }
 
 /// Phase 11 — a transport over a local directory, for `file://` URLs and plain paths.

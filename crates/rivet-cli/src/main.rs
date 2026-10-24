@@ -126,6 +126,19 @@ fn main() -> ExitCode {
     match cmd::dispatch(cli) {
         Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
         Err(error) => {
+            // A refused or missing credential reads like Git's, not like the library's error.
+            if let Some(rivet_core::Error::Authentication { url, reason }) =
+                error.downcast_ref::<rivet_core::Error>()
+            {
+                if reason.starts_with("could not read ") {
+                    eprintln!("fatal: {reason}");
+                } else {
+                    let url = url.to_string();
+                    let slash = if url.ends_with('/') { "" } else { "/" };
+                    eprintln!("fatal: Authentication failed for '{url}{slash}'");
+                }
+                return ExitCode::from(cmd::EXIT_FATAL as u8);
+            }
             // Git's fatal diagnostics are one line on stderr, prefixed and unbounded; `{:#}`
             // keeps the whole anyhow chain on that line rather than printing a backtrace shape.
             eprintln!("fatal: {error:#}");

@@ -97,6 +97,11 @@ pub const USER_AGENT: &str = concat!("git/2.43.0.rivet/", env!("CARGO_PKG_VERSIO
 /// clone of a large repository on a slow link, which is worse than waiting.
 pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
+thread_local! {
+    /// The `WWW-Authenticate` values of the last `401` [`send`] saw, for the credential helpers.
+    static LAST_CHALLENGE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Phase 11 — the smart-HTTP transport.
 ///
 /// # Caveats
@@ -123,6 +128,13 @@ pub struct HttpTransport {
     /// The credentials to send, resolved lazily by the credential chain (plan §4 Phase 11). `None`
     /// until a `401` says they are needed, so that a public clone never touches a helper.
     credentials: Option<(BString, BString)>,
+    /// The password from the URL's userinfo, offered only after the server has asked for credentials
+    /// (Git never sends them unprompted).
+    url_credentials: Option<(BString, BString)>,
+    /// The credential configuration for this URL, consulted on a `401`.
+    credential_settings: Option<crate::remote::credential::CredentialSettings>,
+    /// A credential that was sent and has not been reported to the helpers yet.
+    pending_approval: Option<crate::remote::credential::Credential>,
     /// The capabilities of the last advertisement. Owned, because the response buffer they came
     /// from is reused per request; `raw` is empty because [`Capability::raw`] is already owned.
     capabilities: CapabilitySet<'static>,
@@ -195,18 +207,18 @@ impl HttpTransport {
             .http_status_as_error(false)
             .build();
         let agent = ureq::Agent::new_with_config(config);
-        let credentials = match (&url.user, &url.password) {
-            (Some(user), password) => Some((
-                user.clone(),
-                password.clone().unwrap_or_else(|| BString::from("")),
-            )),
+        let url_credentials = match (&url.user, &url.password) {
+            (Some(user), Some(password)) => Some((user.clone(), password.clone())),
             _ => None,
         };
         Ok(Self {
             url,
             redirected_base: None,
             agent,
-            credentials,
+            credentials: None,
+            url_credentials,
+            credential_settings: None,
+            pending_approval: None,
             capabilities: CapabilitySet::default(),
             version: ProtocolVersion::V0,
             format: ObjectFormat::Sha1,
@@ -588,6 +600,13 @@ pub fn send(
 
     let status = response.status().as_u16();
     if is_auth_challenge(status) {
+        let challenge: Vec<String> = response
+            .headers()
+            .get_all("www-authenticate")
+            .iter()
+            .filter_map(|value| value.to_str().ok().map(str::to_string))
+            .collect();
+        LAST_CHALLENGE.with(|c| *c.borrow_mut() = challenge);
         return Err(Error::Authentication {
             url: safe,
             reason: format!("HTTP {} from the remote", status),
@@ -818,6 +837,85 @@ pub const fn is_success(status: u16) -> bool {
 }
 
 impl HttpTransport {
+    /// Send `request`; if the server answers `401`, find credentials (the URL's, the helpers',
+    /// then a prompt) and send it once more. A second `401` tells the helpers to forget them.
+    fn send_authenticated(
+        &mut self,
+        url: &RemoteUrl,
+        request: &crate::remote::HttpRequest,
+    ) -> Result<HttpResponse> {
+        use crate::remote::credential::Credential;
+        let mut asked = self.credentials.is_some();
+        loop {
+            let base = self.base_url(url, true);
+            let challenge_failed = match send(&self.agent, request, BStr::new(&base)) {
+                Ok(response) => {
+                    if let Some(credential) = self.pending_approval.take()
+                        && let Some(settings) = &self.credential_settings
+                    {
+                        settings.approve(&credential);
+                    }
+                    return Ok(response);
+                }
+                Err(Error::Authentication { reason, .. }) => {
+                    // Git names the repository, without any userinfo.
+                    let mut bare = self.url.clone();
+                    bare.user = None;
+                    bare.password = None;
+                    (display_url(&bare), reason)
+                }
+                Err(other) => return Err(other),
+            };
+            let (shown, reason) = challenge_failed;
+            let wwwauth = LAST_CHALLENGE.with(|c| c.borrow().clone());
+            let settings = self.credential_settings.clone().unwrap_or_default();
+            if asked {
+                // What was sent was refused: the helpers must not keep it.
+                if let Some((user, password)) = self.credentials.take() {
+                    let mut credential = settings.credential_for(url, wwwauth);
+                    credential.username = Some(user);
+                    credential.password = Some(password);
+                    settings.reject(&credential);
+                }
+                self.pending_approval = None;
+                return Err(Error::Authentication { url: shown, reason });
+            }
+            asked = true;
+            let mut credential: Credential = settings.credential_for(url, wwwauth);
+            if let Some((user, password)) = &self.url_credentials {
+                credential.username = Some(user.clone());
+                credential.password = Some(password.clone());
+            } else {
+                settings.fill(&mut credential);
+            }
+            for (what, missing) in [
+                ("Username", credential.username.is_none()),
+                ("Password", credential.password.is_none()),
+            ] {
+                if !missing {
+                    continue;
+                }
+                match settings.prompt(what, &credential) {
+                    Ok(answer) if what == "Username" => credential.username = Some(answer),
+                    Ok(answer) => credential.password = Some(answer),
+                    Err(why) => {
+                        let mut host = credential.protocol.clone();
+                        host.push_str("://");
+                        host.push_str(&credential.host);
+                        return Err(Error::Authentication {
+                            url: BString::from(host.as_str()),
+                            reason: format!("could not read {what} for '{host}': {why}"),
+                        });
+                    }
+                }
+            }
+            if let (Some(user), Some(password)) = (&credential.username, &credential.password) {
+                self.credentials = Some((user.clone(), password.clone()));
+            }
+            self.pending_approval = Some(credential);
+        }
+    }
+
     /// Fetch and parse the ref advertisement of one service.
     fn advertise(
         &mut self,
@@ -828,8 +926,7 @@ impl HttpTransport {
         // v0 advertises every ref in the first response, which is what the fetch layer consumes;
         // asking for v2 would also need a separate `ls-refs` round before any ref is known.
         let request = advertise_request(url, service, ProtocolVersion::V0)?;
-        let base = self.base_url(url, true);
-        let response = send(&self.agent, &request, BStr::new(&base))?;
+        let response = self.send_authenticated(url, &request)?;
 
         // A redirect moves the repository: the rest of the session talks to the new location.
         if let Some(final_url) = &response.final_url {
@@ -1011,6 +1108,10 @@ impl Transport for HttpTransport {
     /// Phase 11 — the capabilities from the last [`Transport::connect`].
     fn capabilities(&self) -> &CapabilitySet<'_> {
         &self.capabilities
+    }
+
+    fn configure_credentials(&mut self, settings: crate::remote::credential::CredentialSettings) {
+        self.credential_settings = Some(settings);
     }
 
     /// Phase 11 — negotiate a fetch and stream the pack into `into`.

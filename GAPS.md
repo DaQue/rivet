@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 219 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 220 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-24, gate: 229 tests / 0 failed, 219 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-24, gate: 229 tests / 0 failed, 220 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -15,9 +15,6 @@ only the first two are defects.
 
 The command or subsystem is absent; it either fails at the argument parser or refuses by name.
 
-* **Credential helpers** — `credential.helper` is not consulted and there is no prompt flow.
-  HTTPS credentials come from the URL/userinfo or the transport's own environment; an
-  authenticating remote that needs a helper will fail.
 * **Sparse checkout and partial clone** — `sparse-checkout`, `--filter`, promisor/partial
   clones and `checkout` honouring `skip_worktree` entries are not implemented. The index
   records the `skip-worktree` bit (see `IndexEntry::skip_worktree`), but no command sets it.
@@ -85,6 +82,17 @@ The command works for the common case; the listed options or edge cases are miss
   source (and `merge`). `GIT_DIR`/`GIT_WORK_TREE` are not exported to hooks (git does not either
   for the common layout; linked work trees are untested). Related, not a hook: `push <remote>
   <missing-ref>` exits 128 with `fatal:` where git prints two `error:` lines and exits 1.
+* **Credential helpers** — `credential.helper` (global, per URL, `!shell`, absolute path,
+  `git-credential-<name>`; an empty value resets), `credential.useHttpPath`, `credential.username`,
+  URL userinfo, `GIT_ASKPASS`/`core.askPass`/`SSH_ASKPASS` and a terminal prompt (`/dev/tty`,
+  `GIT_TERMINAL_PROMPT=0` refuses) are consulted when an HTTP(S) remote answers `401`, with git's
+  `get`/`store`/`erase` stream (capabilities and `wwwauth[]` included). Not implemented: helper
+  output other than `username`/`password` (`quit`, `password_expiry_utc`, `authtype`/`state`
+  multi-round auth, URL rewriting by a helper), `credential.<url>.*` keys other than `helper`,
+  `useHttpPath` and `username`, `http.proxy` credentials, `credential.interactive`, the
+  `git credential` command, and credentials for `ssh://` (the ssh program asks). Covered by
+  `s_credential` against a local Basic-auth server; a `401` that first appears on a POST (not the
+  discovery request) is not retried.
 * **`pull --rebase <remote> <branch>`** — with an explicit refspec, rebases onto the fetched
   tip rather than the fork point.
 * **Network protocol** — v2 capabilities other than `object-format=sha1` are not implemented;

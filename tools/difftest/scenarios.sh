@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The differential scenarios. Run all: tools/difftest/scenarios.sh; run some: ... name1 name2
 FAKESSH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fakessh"
+AUTHSERVER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/authserver.py"
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 NOW0=$(date +%s)   # one wall-clock reading shared by both implementations
 
@@ -227,7 +228,7 @@ s_hooks_hookspath() {
     v config core.hooksPath "$PWD/custom"
     echo d >d; v add d
     v commit -m "absolute path"
-    # an empty value falls back to the default directory
+    # an empty value is not "unset": no hook is found at all
     v config core.hooksPath ""
     echo e >e; v add e
     v commit -m "empty value"
@@ -377,6 +378,106 @@ s_hooks_run() {
     chmod +x custom/pre-commit
     v hook run pre-commit -- via-hookspath
     dump_hooklog
+}
+
+# Credentials: an HTTP server that wants Basic auth (alice / s3cret), helpers that log what they are
+# told into `helper.log`, and the server's own request log. Both logs go into the transcript.
+cred_helper() {  # <root> <name> <user> <password>: a helper that answers `get` with that credential
+    local root=$1 name=$2 user=$3 password=$4
+    cat >"$root/$name.sh" <<EOF
+#!/bin/sh
+echo "== $name \$1" >>"$root/helper.log"
+sed 's/^/  in: /' >>"$root/helper.log"
+if [ "\$1" = get ] && [ -n "$user" ]; then echo username=$user; echo password=$password; fi
+EOF
+    chmod +x "$root/$name.sh"
+}
+cred_dump() {
+    local root=$1
+    echo "--- helper.log" >>"$TRANSCRIPT"
+    cat "$root/helper.log" >>"$TRANSCRIPT" 2>/dev/null
+    echo "--- requests" >>"$TRANSCRIPT"
+    # (how many upload-pack POSTs and repeated advertisements there are is not about credentials:
+    # git sends one more POST per fetch than rivet, and rivet asks a push for two advertisements)
+    grep -v 'POST .*upload-pack' "$root/req.log" | uniq >>"$TRANSCRIPT" 2>/dev/null
+    rm -f "$root/helper.log" "$root/req.log"
+}
+
+s_credential() {
+    local port=18793 root=$PWD
+    mkdir -p repos
+    g init -q --bare repos/o.git; g -C repos/o.git config http.receivepack true
+    g clone -q repos/o.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    python3 "$AUTHSERVER" $port "$root/repos" alice s3cret "$root/req.log" >/dev/null 2>&1 &
+    local server=$!
+    sleep 1
+    local url=http://127.0.0.1:$port/o.git
+    export GIT_TERMINAL_PROMPT=0
+    cred_helper "$root" good alice s3cret
+    cred_helper "$root" bad alice wrong
+    cred_helper "$root" none "" ""
+    cred_helper "$root" second alice s3cret
+    # no helper, no prompt
+    v clone -q $url c0; cred_dump "$root"
+    # a helper that knows the password
+    v config --global credential.helper "$root/good.sh"
+    v clone -q $url c_ok; cred_dump "$root"
+    # a helper with the wrong password: erased, and git's message
+    v config --global credential.helper "$root/bad.sh"
+    v clone -q $url c1; cred_dump "$root"
+    # helpers are tried in order; the first complete answer wins, store goes to all of them
+    v config --global --add credential.helper "$root/good.sh"
+    v clone -q $url c2; cred_dump "$root"
+    v config --global --unset-all credential.helper
+    v config --global credential.helper "$root/none.sh"
+    v config --global --add credential.helper "$root/second.sh"
+    v clone -q $url c3; cred_dump "$root"
+    # an empty value resets the list
+    v config --global --unset-all credential.helper
+    v config --global credential.helper "$root/bad.sh"
+    v config --global --add credential.helper ""
+    v config --global --add credential.helper "$root/good.sh"
+    v clone -q $url c4; cred_dump "$root"
+    # a helper for one URL (configuration order, not specificity), and one for another host
+    v config --global --unset-all credential.helper
+    v config --global "credential.http://127.0.0.1:$port.helper" "$root/good.sh"
+    v config --global "credential.http://localhost:$port.helper" "$root/bad.sh"
+    v config --global "credential.https://127.0.0.1:$port.helper" "$root/bad.sh"
+    v clone -q $url c5; cred_dump "$root"
+    v config --global --unset-all "credential.http://127.0.0.1:$port.helper"
+    v config --global "credential.http://127.0.0.1:$port/o.git.helper" "$root/good.sh"
+    v clone -q $url c6; cred_dump "$root"
+    v config --global --unset-all "credential.http://127.0.0.1:$port/o.git.helper"
+    v config --global "credential.http://127.0.0.1:$port/other.helper" "$root/good.sh"
+    v clone -q $url c7; cred_dump "$root"
+    v config --global --unset-all "credential.http://127.0.0.1:$port/other.helper"
+    # a shell-function helper
+    v config --global credential.helper '!f() { echo "== shell $1" >>'"$root"'/helper.log; cat >/dev/null; test "$1" = get && echo username=alice && echo password=s3cret; }; f'
+    v clone -q $url c8; cred_dump "$root"
+    # useHttpPath and a configured user name are part of what the helper is told
+    v config --global credential.helper "$root/good.sh"
+    v config --global credential.useHttpPath true
+    v clone -q $url c9; cred_dump "$root"
+    v config --global --unset credential.useHttpPath
+    v config --global credential.username alice
+    v clone -q $url c10; cred_dump "$root"
+    v config --global --unset credential.username
+    # credentials in the URL are used after the 401, never asked of the helpers, then stored
+    v clone -q http://alice:s3cret@127.0.0.1:$port/o.git c11; cred_dump "$root"
+    v clone -q http://alice:wrong@127.0.0.1:$port/o.git c12; cred_dump "$root"
+    # a prompt: through the askpass program, then handed to the helpers for storage
+    v config --global credential.helper "$root/none.sh"
+    printf '#!/bin/sh\necho "ask: $1" >>%s/helper.log\ncase "$1" in Username*) echo alice;; *) echo s3cret;; esac\n' "$root" >"$root/askpass.sh"
+    chmod +x "$root/askpass.sh"
+    GIT_ASKPASS="$root/askpass.sh" v clone -q $url c13; cred_dump "$root"
+    # fetch and push in an existing repository
+    v config --global credential.helper "$root/good.sh"
+    (cd c_ok && tick && echo b >b && v add b && v commit -q -m two && v push origin HEAD:refs/heads/main && v fetch)
+    cred_dump "$root"
+    (cd c_ok && v push origin HEAD:refs/heads/second)
+    cred_dump "$root"
+    kill $server 2>/dev/null; wait $server 2>/dev/null
 }
 
 s_basic_commit() {
@@ -6648,6 +6749,7 @@ fi
 for s in "$@"; do
     case $s in
         s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
+        s_credential) run_scenario "$s" c_ok c5 ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
         s_hooks_rebase) run_scenario "$s" repo origin.git ;;
         s_pack_deltas) run_scenario "$s" origin cl cl2 ;;
