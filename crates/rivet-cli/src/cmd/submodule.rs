@@ -1,9 +1,10 @@
-//! `submodule`: `status`, `init`, `sync`, `add`, `update` and `deinit`, and `.gitmodules` read-only.
+//! `submodule`: `status`, `init`, `sync`, `add`, `update`, `deinit` and `foreach`; `.gitmodules` is
+//! read directly and only `add` appends to it.
 //!
 //! Each gitlink of the index prints as `<state><commit> <path>[ (<description>)]`, where the state
 //! is `-` for a submodule that is not checked out, `+` when its `HEAD` is not the recorded commit,
-//! `U` for a merge conflict and a blank otherwise. Every other subcommand (
-//! `foreach`, `summary`, `absorbgitdirs`, …) is refused by name.
+//! `U` for a merge conflict and a blank otherwise. Every other subcommand (`summary`,
+//! `absorbgitdirs`, `set-branch`, `set-url`) is refused by name.
 
 use std::path::Path;
 
@@ -45,6 +46,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "add" => return submodule_add(global, quiet, rest),
             "update" => return submodule_update(global, quiet, rest),
             "deinit" => return submodule_deinit(global, quiet, rest),
+            "foreach" => return submodule_foreach(global, quiet, rest),
             _ => {}
         }
     }
@@ -67,7 +69,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "status" if !seen_sub => seen_sub = true,
             other if !seen_sub && !other.starts_with('-') => {
                 anyhow::bail!(
-                    "submodule: '{other}' is not implemented (only 'status', 'init', 'sync', 'add', 'update' and 'deinit' are)"
+                    "submodule: '{other}' is not implemented (only 'status', 'init', 'sync', 'add', 'update', 'deinit' and 'foreach' are)"
                 )
             }
             other if other.starts_with('-') => {
@@ -1673,4 +1675,119 @@ fn removal_problem(repository: &Repository, path: &BString, dir: &Path) -> Optio
         .map(|s| !s.is_clean())
         .unwrap_or(false);
     (moved || dirty).then_some("the following file has local modifications:")
+}
+
+fn submodule_foreach(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Result<i32> {
+    let mut recursive = false;
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        match word.as_str() {
+            "-q" | "--quiet" => quiet = true,
+            "--recursive" => recursive = true,
+            other if other.starts_with('-') => {
+                eprint!("{USAGE}");
+                return Ok(1);
+            }
+            _ => break,
+        }
+        at += 1;
+    }
+    let command = &args[at..];
+    let mut repository = super::open(global)?;
+    let Some(root) = repository.worktree_path().map(Path::to_path_buf) else {
+        return Ok(0);
+    };
+    let prefix = cwd_prefix(&root);
+    foreach_in(
+        &mut repository,
+        &root,
+        &prefix,
+        "",
+        command,
+        quiet,
+        recursive,
+    )
+}
+
+/// Run `command` (first word: the shell text, the rest: its arguments) in every checked-out
+/// submodule of `repository`.
+fn foreach_in(
+    repository: &mut Repository,
+    root: &Path,
+    prefix: &str,
+    shown_prefix: &str,
+    command: &[String],
+    quiet: bool,
+    recursive: bool,
+) -> Result<i32> {
+    use std::io::Write as _;
+
+    let links = match module_list(repository, prefix, &[]) {
+        Ok(links) => links,
+        Err(code) => return Ok(code),
+    };
+    let gitmodules = gitmodules_config(repository, root);
+    let recorded: Vec<(BString, ObjectId)> = repository
+        .index()
+        .entries()
+        .iter()
+        .filter(|e| e.mode == EntryMode::Commit && !e.is_unmerged())
+        .map(|e| (e.path.clone(), e.oid))
+        .collect();
+    for link in links {
+        let dest = root.join(link.path.to_os_str_lossy());
+        if !dest.join(".git").exists() {
+            continue;
+        }
+        let Ok(mut sub) = Repository::open_or_discover(&dest) else {
+            continue;
+        };
+        let Some(oid) = recorded
+            .iter()
+            .find(|(path, _)| *path == link.path)
+            .map(|(_, oid)| *oid)
+        else {
+            continue;
+        };
+        let name = name_of(&gitmodules, link.path.as_ref()).unwrap_or_else(|| link.path.clone());
+        let display = format!("{shown_prefix}{}", display_path(prefix, link.path.as_ref()));
+        if !quiet {
+            println!("Entering '{display}'");
+        }
+        std::io::stdout().flush()?;
+        let script = match command.first() {
+            Some(text) => format!("path=\"$sm_path\"; {text} \"$@\""),
+            None => "path=\"$sm_path\"".to_string(),
+        };
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .arg(command.first().map(String::as_str).unwrap_or("sh"))
+            .args(command.iter().skip(1))
+            .current_dir(&dest)
+            .env("name", name.to_string())
+            .env("sm_path", link.path.to_string())
+            .env("displaypath", &display)
+            .env("sha1", oid.to_string())
+            .env("toplevel", canonical(root))
+            .env("GIT_DIR", ".git")
+            .env_remove("GIT_WORK_TREE")
+            .status();
+        if !status.is_ok_and(|s| s.success()) {
+            eprintln!("fatal: run_command returned non-zero status for {display}\n.");
+            return Ok(128);
+        }
+        if recursive {
+            let nested = format!("{display}/");
+            let sub_root = sub.worktree_path().map(Path::to_path_buf).unwrap_or(dest);
+            let code = foreach_in(&mut sub, &sub_root, "", &nested, command, quiet, true)?;
+            if code != 0 {
+                eprintln!(
+                    "fatal: run_command returned non-zero status while recursing in the nested submodules of {display}\n."
+                );
+                return Ok(128);
+            }
+        }
+    }
+    Ok(0)
 }

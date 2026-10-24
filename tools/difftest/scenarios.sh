@@ -5718,6 +5718,38 @@ s_submodule_deinit() {
     sm_snap other vendor/lib
 }
 
+s_submodule_foreach() {
+    sm_nested_top
+    g clone -q --recurse-submodules top clone
+    g clone -q top clone2
+    cd clone
+    v submodule foreach 'echo $name $sm_path $displaypath $sha1 $toplevel; pwd'
+    v submodule foreach --recursive 'echo $displaypath; echo $path; echo $toplevel'
+    v submodule foreach -q 'echo hi'
+    v submodule --quiet foreach 'echo hi'
+    v submodule foreach 'echo err >&2'
+    v submodule foreach false
+    v submodule foreach 'exit 3'
+    v submodule foreach
+    v submodule foreach --bogus x
+    v submodule foreach -- echo a
+    v submodule foreach --recursive 'test $displaypath != vendor/lib/in'
+    v submodule foreach --recursive 'test $displaypath != other'
+    v submodule foreach echo a b
+    v submodule foreach 'echo "$@"' x
+    v submodule foreach 'echo $GIT_DIR; env | grep -c "^path="; git rev-parse --show-toplevel; git status -sb | head -1'
+    (cd other && v submodule foreach 'echo $displaypath $toplevel')
+    (cd other && v submodule foreach --recursive 'echo $displaypath')
+    mkdir sub; (cd sub && v submodule foreach 'echo $displaypath')
+    rm -rf other/in/.git
+    v submodule foreach --recursive 'echo $sm_path'
+    cd ../clone2
+    v submodule foreach 'echo $name'
+    v submodule foreach --recursive 'echo $name'
+    g submodule update --init -q vendor/lib
+    v submodule foreach 'echo $name'
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -5739,6 +5771,7 @@ for s in "$@"; do
         s_submodule_update) run_scenario "$s" clone clone/vendor/lib ;;
         s_submodule_update_recursive) run_scenario "$s" clone ;;
         s_submodule_deinit) run_scenario "$s" clone clone2 ;;
+        s_submodule_foreach) run_scenario "$s" none ;;
         s_worktree_move) run_scenario "$s" repo ;;
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
