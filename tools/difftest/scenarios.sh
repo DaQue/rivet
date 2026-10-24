@@ -24,6 +24,11 @@ echo "err:$n" >&2
 [ -f "hook-fail-$n" ] && exit "$(cat "hook-fail-$n")"
 exit 0
 '
+# Put hooks.log into the transcript, so that a difference is readable in transcript.diff.
+dump_hooklog() {
+    echo "--- hooks.log" >>"$TRANSCRIPT"
+    cat hooks.log >>"$TRANSCRIPT"
+}
 install_hooks() {
     local n
     mkdir -p .git/hooks
@@ -88,6 +93,7 @@ s_hooks_commit() {
     git config advice.ignoredHook false
     echo i >i; v add i
     v commit -m "advice off"
+    dump_hooklog
 }
 
 s_hooks_merge() {
@@ -151,6 +157,7 @@ s_hooks_merge() {
     v merge c1
     echo resolved >cf; v add cf
     v commit -m "resolved"
+    dump_hooklog
 }
 
 s_hooks_checkout() {
@@ -196,6 +203,7 @@ s_hooks_checkout() {
     # not executable: hinted
     chmod -x .git/hooks/post-checkout
     v switch work
+    dump_hooklog
 }
 
 s_hooks_hookspath() {
@@ -245,6 +253,99 @@ s_hooks_hookspath() {
     echo h >h; v add h
     v commit -m "no shebang"
     v log --format=%s
+    dump_hooklog
+}
+
+s_hooks_rebase() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    v clone -q origin.git repo
+    cd repo
+    v switch -q -c topic
+    for i in 1 2 3; do tick; echo t$i >t$i; v add t$i; v commit -q -m t$i; done
+    v switch -q main
+    tick; echo m >m; v add m; v commit -q -m main2
+    install_hooks pre-rebase post-rewrite post-checkout pre-commit post-commit
+    rm -f hooks.log
+    v rebase main topic
+    v log --format=%s
+    # the branch is already on main: nothing is rewritten
+    v rebase main
+    # --onto, with the branch current
+    v switch -q main
+    tick; echo n >n; v add n; v commit -q -m main3
+    v switch -q topic
+    v rebase --onto main main~2
+    v log --format=%s
+    # fast-forwarding rebase
+    v switch -q main
+    v branch -f ahead topic
+    v rebase ahead
+    v log --format=%s -2
+    # a refusing pre-rebase
+    v switch -q topic
+    tick; echo t4 >t4; v add t4; v commit -q -m t4
+    echo 1 >hook-fail-pre-rebase
+    v rebase main
+    v status --short
+    v rebase --no-verify main
+    v log --format=%s
+    rm hook-fail-pre-rebase
+    # conflicts: post-rewrite once, at the end, with every commit
+    v switch -q main; tick; echo x >c; v add c; v commit -q -m c-main
+    v switch -q -c cf main~1; tick; echo y >c; v add c; v commit -q -m c-topic
+    tick; echo z >z; v add z; v commit -q -m z-topic
+    v rebase main
+    echo merged >c; v add c
+    v rebase --continue
+    v log --format=%s
+    # pull --rebase
+    (cd ../seed && tick && echo p >p && g add p && g commit -qm upstream2 && g push -q origin HEAD:main 2>/dev/null)
+    v switch -q main
+    tick; echo l >l; v add l; v commit -q -m local-main
+    v pull --rebase
+    v log --format=%s
+    dump_hooklog
+}
+
+s_hooks_push() {
+    g init -q --bare origin.git
+    g init -q --bare other.git
+    v init -q repo; cd repo
+    v remote add origin ../origin.git
+    echo a >a; v add a; v commit -q -m one
+    install_hooks pre-push
+    rm -f hooks.log
+    v push origin main
+    # nothing to push: the hook still runs, with no lines
+    v push origin main
+    tick; v commit -q --allow-empty -m two
+    v tag v1
+    v push origin main:other v1
+    v push origin HEAD:refs/heads/headref
+    v push origin :other
+    v push --delete origin v1
+    v push --tags origin
+    v push --dry-run origin main:dry
+    v push --all origin
+    # a url instead of a remote name
+    v push ../other.git main:byurl
+    # --no-verify skips it
+    v push --no-verify origin main:nv
+    # a refusing hook: nothing is sent, git's error, exit 1
+    echo 1 >hook-fail-pre-push
+    v push origin main:blocked
+    v push --dry-run origin main:blocked2
+    v push --no-verify origin main:allowed
+    rm hook-fail-pre-push
+    # a rejected non-fast-forward is not offered to the hook
+    v reset -q --hard HEAD~1
+    tick; v commit -q --allow-empty -m diverged
+    v push origin main
+    v push --force origin main
+    vg --git-dir=../origin.git for-each-ref --format='%(refname)'
+    dump_hooklog
 }
 
 s_basic_commit() {
@@ -6516,6 +6617,8 @@ fi
 for s in "$@"; do
     case $s in
         s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
+        s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
+        s_hooks_rebase) run_scenario "$s" repo origin.git ;;
         s_pack_deltas) run_scenario "$s" origin cl cl2 ;;
         s_worktree_linked) run_scenario "$s" repo wt wd ;;
         s_worktree_branch_guards) run_scenario "$s" repo o d ;;

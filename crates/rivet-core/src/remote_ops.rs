@@ -799,6 +799,8 @@ pub struct PushRequest {
     pub delete: bool,
     /// Change nothing.
     pub dry_run: bool,
+    /// Do not run the `pre-push` hook (`--no-verify`).
+    pub no_verify: bool,
 }
 
 /// What a push did.
@@ -816,6 +818,8 @@ pub struct PushReport {
     pub fetch_first: bool,
     /// The remote ref names that were updated, with the new value.
     pub pushed: Vec<(BString, ObjectId)>,
+    /// The `pre-push` hook refused: nothing was sent, and `changes` is not to be printed.
+    pub hook_refused: bool,
 }
 
 impl Repository {
@@ -847,6 +851,8 @@ impl Repository {
         // Resolve what to send where.
         struct Plan {
             src: String,
+            /// The local ref as `pre-push` is told about it: its full name when it is a ref.
+            local_ref: String,
             dst: BString,
             new: Option<ObjectId>,
             force: bool,
@@ -876,6 +882,7 @@ impl Repository {
                 let dst = qualify_remote_ref(&spec.dst, &advertisement, None);
                 plans.push(Plan {
                     src: String::new(),
+                    local_ref: "(delete)".to_string(),
                     dst,
                     new: None,
                     force: true,
@@ -914,8 +921,13 @@ impl Repository {
                 dst_short
             };
             let dst = qualify_remote_ref(&dst_short, &advertisement, src_ref.as_deref());
+            let local_ref = match &src_ref {
+                Some(full) if src_text != "HEAD" => String::from_utf8_lossy(full).into_owned(),
+                _ => src_text.clone(),
+            };
             plans.push(Plan {
                 src: src_text,
+                local_ref,
                 dst,
                 new: Some(oid),
                 force: spec.force || request.force,
@@ -924,15 +936,19 @@ impl Repository {
 
         let mut changes = Vec::new();
         let mut updates = Vec::new();
+        // Which plans `pre-push` is told about: those that will be sent, not the ones already up
+        // to date or refused as non-fast-forward.
+        let mut offered = vec![true; plans.len()];
         let mut rejected = 0usize;
         let mut non_ff = false;
         let mut fetch_first = false;
         let abbrev = |oid: &ObjectId| oid.to_string()[..7].to_string();
-        for plan in &plans {
+        for (index, plan) in plans.iter().enumerate() {
             let old = remote_value(&plan.dst);
             let to = short_name(&plan.dst);
             match (old, plan.new) {
                 (Some(old), Some(new)) if old == new => {
+                    offered[index] = false;
                     changes.push(RefChange {
                         flag: '=',
                         summary: "[up to date]".to_string(),
@@ -983,6 +999,7 @@ impl Repository {
                         update.force = true;
                         updates.push(update);
                     } else {
+                        offered[index] = false;
                         rejected += 1;
                         non_ff = true;
                         let known = self.odb().contains(&old);
@@ -1020,7 +1037,38 @@ impl Repository {
             }
         }
 
+        // `pre-push` sees every ref that is about to change (not the ones already up to date),
+        // after the remote has been asked what it has and before anything is sent.
+        let mut hook_refused = false;
+        if !request.no_verify {
+            let zero = ObjectId::zero(self.format());
+            let mut lines = Vec::new();
+            for (plan, _) in plans.iter().zip(&offered).filter(|(_, offered)| **offered) {
+                let old = remote_value(&plan.dst);
+                lines.extend_from_slice(
+                    format!(
+                        "{} {} {} {}\n",
+                        plan.local_ref,
+                        plan.new.unwrap_or(zero),
+                        plan.dst,
+                        old.unwrap_or(zero)
+                    )
+                    .as_bytes(),
+                );
+            }
+            hook_refused = crate::hooks::Hook::new(self, "pre-push")
+                .arg(remote)
+                .arg(&url_text)
+                .stdin(lines)
+                .keep_stdout()
+                .run()
+                .is_some_and(|code| code != 0);
+        }
+
         let mut pushed = Vec::new();
+        if hook_refused {
+            updates.clear();
+        }
         if !updates.is_empty() && !request.dry_run {
             let outcome = crate::remote::push(
                 transport.as_mut(),
@@ -1080,6 +1128,7 @@ impl Repository {
             non_fast_forward: non_ff,
             fetch_first,
             pushed,
+            hook_refused,
         })
     }
 }

@@ -10,8 +10,8 @@
 //!   `hint: The '<path>' hook was ignored because it's not set as executable.` once per hook name
 //!   and process, unless `advice.ignoredHook` is false.
 //! * **Hooks run in the work tree root** (the git directory when bare), with stdin closed unless the
-//!   caller provides some, and with **stdout redirected to stderr**: a hook's output never
-//!   reaches the caller's stdout.
+//!   caller provides some, and with **stdout redirected to stderr** (except for `pre-push`, see
+//!   [`Hook::keep_stdout`]): a hook's output normally never reaches the caller's stdout.
 //! * **`GIT_PREFIX` is always set**, to the directory the command was started in relative to the
 //!   work tree root (`sub/`, or empty at the root); the caller adds the other variables
 //!   (`GIT_INDEX_FILE`, `GIT_EDITOR`, `GIT_REFLOG_ACTION`) that depend on the operation.
@@ -42,6 +42,7 @@ pub struct Hook<'a> {
     args: Vec<OsString>,
     env: Vec<(String, OsString)>,
     stdin: Option<Vec<u8>>,
+    keep_stdout: bool,
 }
 
 impl<'a> Hook<'a> {
@@ -53,7 +54,15 @@ impl<'a> Hook<'a> {
             args: Vec::new(),
             env: Vec::new(),
             stdin: None,
+            keep_stdout: false,
         }
+    }
+
+    /// Leave the hook's stdout on stdout. Git does this for `pre-push` only; every other hook's
+    /// stdout is sent to stderr.
+    pub fn keep_stdout(mut self) -> Self {
+        self.keep_stdout = true;
+        self
     }
 
     /// Append one argument.
@@ -117,6 +126,7 @@ impl<'a> Hook<'a> {
             .current_dir(&root)
             .env("GIT_PREFIX", prefix(self.repo))
             .envs(self.env.iter().map(|(k, v)| (k, v)));
+        let keep_stdout = self.keep_stdout;
         let spawn = |mut command: Command, data: &Option<Vec<u8>>| {
             command.stdin(if data.is_some() {
                 Stdio::piped()
@@ -124,8 +134,8 @@ impl<'a> Hook<'a> {
                 Stdio::null()
             });
             match std::io::stderr().as_fd().try_clone_to_owned() {
-                Ok(fd) => command.stdout(Stdio::from(fd)),
-                Err(_) => command.stdout(Stdio::inherit()),
+                Ok(fd) if !keep_stdout => command.stdout(Stdio::from(fd)),
+                _ => command.stdout(Stdio::inherit()),
             };
             command.spawn()
         };

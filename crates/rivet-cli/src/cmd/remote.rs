@@ -394,7 +394,7 @@ pub struct PushArgs {
     #[arg(long = "progress")]
     pub progress: bool,
 
-    /// Skip the pre-push hook. It is not implemented in v1 (plan §1).
+    /// Skip the `pre-push` hook.
     #[arg(long = "no-verify")]
     pub no_verify: bool,
 
@@ -990,6 +990,7 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
                 show_current_patch: false,
                 autostash: args.autostash,
                 no_autostash: args.no_autostash,
+                no_verify: false,
             },
         );
     }
@@ -1240,8 +1241,13 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
         force: args.force,
         delete: args.delete,
         dry_run: args.dry_run,
+        no_verify: args.no_verify,
     };
     let report = repository.push_remote(&remote, &request)?;
+    if report.hook_refused {
+        eprintln!("error: failed to push some refs to '{}'", report.url);
+        return Ok(1);
+    }
 
     let everything_current = report.changes.iter().all(|c| c.flag == '=');
     if !global.quiet {

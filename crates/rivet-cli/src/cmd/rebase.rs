@@ -76,6 +76,10 @@ pub struct RebaseArgs {
     /// Do not stash local changes (overrides `rebase.autoStash`).
     #[arg(long = "no-autostash")]
     pub no_autostash: bool,
+
+    /// Skip the `pre-rebase` hook.
+    #[arg(long = "no-verify")]
+    pub no_verify: bool,
 }
 
 /// What the reflog calls this command: `rebase`, or `pull --rebase` when `pull` drives it.
@@ -88,6 +92,32 @@ pub(super) fn set_action(action: &str) {
 
 fn action() -> &'static str {
     ACTION.get().map_or("rebase", String::as_str)
+}
+
+/// The `GIT_REFLOG_ACTION` Git exports to hooks: only `pull` sets one for its rebase.
+fn hook_action() -> Option<&'static str> {
+    Some(action()).filter(|a| a.starts_with("pull"))
+}
+
+/// Run a hook of the rebase with the environment Git gives it.
+fn rebase_hook(
+    repository: &Repository,
+    name: &str,
+    args: &[String],
+    stdin: Option<Vec<u8>>,
+    reflog_action: Option<&str>,
+) -> Option<i32> {
+    let mut hook = rivet_core::hooks::Hook::new(repository, name);
+    for arg in args {
+        hook = hook.arg(arg);
+    }
+    if let Some(data) = stdin {
+        hook = hook.stdin(data);
+    }
+    if let Some(action) = reflog_action {
+        hook = hook.env("GIT_REFLOG_ACTION", action);
+    }
+    hook.run()
 }
 
 fn rebase_dir(repository: &Repository) -> PathBuf {
@@ -488,6 +518,25 @@ fn start(
         }
     }
 
+    if !args.no_verify {
+        // `pull --rebase` hands the hook the fetched tip, a plain rebase the upstream as typed.
+        let mut hook_args = vec![if action().starts_with("pull") {
+            onto_name.clone()
+        } else {
+            upstream_name.clone()
+        }];
+        hook_args.extend(args.branch.clone());
+        if rebase_hook(repository, "pre-rebase", &hook_args, None, hook_action())
+            .is_some_and(|code| code != 0)
+        {
+            if let Some(stash) = autostash {
+                apply_autostash(repository, stash)?;
+            }
+            eprintln!("error: The pre-rebase hook refused to rebase.");
+            return Ok(1);
+        }
+    }
+
     // The todo list: non-merge commits of upstream..HEAD, oldest first, minus those whose patch
     // is already on the upstream side.
     let mut options = WalkOptions::new();
@@ -535,6 +584,19 @@ fn start(
     repository.reset_hard_to_tree(onto_tree)?;
     let reason = format!("{} (start): checkout {onto_name}", action());
     repository.point_head(HeadTarget::Detached(onto), BStr::new(reason.as_bytes()))?;
+    // Git runs `post-checkout` once, for the move onto the new base; its status is ignored.
+    let zero = ObjectId::zero(repository.format());
+    rebase_hook(
+        repository,
+        "post-checkout",
+        &[
+            head_state.oid().unwrap_or(zero).to_string(),
+            onto.to_string(),
+            "1".to_string(),
+        ],
+        None,
+        hook_action(),
+    );
 
     write_state(dir, "head-name", &format!("{head_name}\n"))?;
     write_state(dir, "onto", &format!("{onto}\n"))?;
@@ -645,7 +707,7 @@ fn continue_rebase(global: &GlobalArgs, repository: &mut Repository, dir: &Path)
         if message.iter().all(u8::is_ascii_whitespace) {
             message = original.message.clone();
         }
-        commit_pick(
+        let new = commit_pick(
             repository,
             tree,
             head,
@@ -654,6 +716,7 @@ fn continue_rebase(global: &GlobalArgs, repository: &mut Repository, dir: &Path)
             "rebase (continue)",
             Some(global.quiet),
         )?;
+        record_rewrite(dir, oid, new)?;
         clear_pick_state(repository);
         write_state(dir, "stopped-sha", "")?;
         let _ = std::fs::remove_file(dir.join("stopped-sha"));
@@ -685,6 +748,14 @@ fn commit_pick(
     let subject = message.lines().next().unwrap_or_default();
     let reason = format!("{action}: {}", String::from_utf8_lossy(subject));
     repository.move_head(oid, BStr::new(reason.as_bytes()))?;
+    // `--continue` is a `git commit` that exports its own reflog action; a pick exports one only
+    // under `pull`.
+    let hook_env = if action == "rebase (continue)" {
+        Some(action)
+    } else {
+        hook_action()
+    };
+    super::snapshot::commit_hook(repository, "post-commit", &[], hook_env);
     if let Some(false) = summary {
         println!(
             "[detached HEAD {}] {}",
@@ -808,7 +879,7 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             }
             continue;
         }
-        commit_pick(
+        let new = commit_pick(
             repository,
             tree,
             head,
@@ -817,8 +888,20 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             &format!("{} (pick)", action()),
             None,
         )?;
+        record_rewrite(dir, oid, new)?;
     }
     finish(global, repository, dir)
+}
+
+/// Append `<old> <new>` to the rewritten list that `post-rewrite` reads at the end.
+fn record_rewrite(dir: &Path, old: ObjectId, new: ObjectId) -> Result<()> {
+    use std::io::Write as _;
+    let mut list = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("rewritten-list"))?;
+    writeln!(list, "{old} {new}")?;
+    Ok(())
 }
 
 fn tz_text(minutes: i32) -> String {
@@ -841,6 +924,16 @@ fn finish(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Resul
         repository.point_head(HeadTarget::Branch(&name), BStr::new(reason.as_bytes()))?;
     }
     clear_pick_state(repository);
+    let rewritten = std::fs::read(dir.join("rewritten-list")).unwrap_or_default();
+    if !rewritten.is_empty() {
+        rebase_hook(
+            repository,
+            "post-rewrite",
+            &["rebase".to_string()],
+            Some(rewritten),
+            hook_action(),
+        );
+    }
     let stash = saved_autostash(repository, dir);
     std::fs::remove_dir_all(dir)?;
     if let Some(stash) = stash {
