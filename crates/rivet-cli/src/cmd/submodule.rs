@@ -265,7 +265,7 @@ struct GitLink {
 }
 
 /// The directory the process stands in, relative to the work tree root (`""` at the top).
-fn cwd_prefix(root: &Path) -> String {
+pub(super) fn cwd_prefix(root: &Path) -> String {
     let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let Ok(cwd) = std::env::current_dir() else {
         return String::new();
@@ -277,7 +277,7 @@ fn cwd_prefix(root: &Path) -> String {
 }
 
 /// A pathspec typed in `prefix` as a path from the work tree root.
-fn from_root(prefix: &str, spec: &str) -> String {
+pub(super) fn from_root(prefix: &str, spec: &str) -> String {
     if prefix.is_empty() || spec.starts_with(':') {
         return spec.to_string();
     }
@@ -799,7 +799,7 @@ fn url_basename(repo: &str) -> String {
 }
 
 /// A path as a list of components with `.` and `..` resolved; `None` when it leaves the tree.
-fn normalize_inside(path: &str) -> Option<String> {
+pub(super) fn normalize_inside(path: &str) -> Option<String> {
     let mut parts: Vec<&str> = Vec::new();
     for part in path.split('/') {
         match part {

@@ -474,7 +474,7 @@ impl RefStore {
     }
 
     /// The directory that stores `name` and its log.
-    fn home(&self, name: &RefName) -> &Path {
+    pub(crate) fn home(&self, name: &RefName) -> &Path {
         if is_per_worktree(name.as_bytes()) {
             &self.git_dir
         } else {

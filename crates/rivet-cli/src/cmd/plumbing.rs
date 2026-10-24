@@ -692,6 +692,52 @@ pub fn run_hash_object(global: &GlobalArgs, args: &HashObjectArgs) -> Result<i32
     Ok(0)
 }
 
+/// `:<path>` and `:<n>:<path>`: the object the index holds at `path` (stage 0 when no stage is
+/// given), with git's diagnosis when there is none. `None` when `spec` is not of that form
+/// (`:/<text>` is a commit search and a lone `:` names nothing).
+fn index_object(
+    repository: &rivet_core::Repository,
+    spec: &[u8],
+) -> Option<std::result::Result<rivet_core::ObjectId, String>> {
+    let rest = spec.strip_prefix(b":")?;
+    if rest.is_empty() || rest.starts_with(b"/") {
+        return None;
+    }
+    let (stage, path) = match rest {
+        [n @ b'0'..=b'3', b':', path @ ..] => (n - b'0', path),
+        path => (0, path),
+    };
+    let typed = String::from_utf8_lossy(path).into_owned();
+    let root = repository.worktree_path()?;
+    let prefix = super::submodule::cwd_prefix(root);
+    let wanted = if typed.starts_with("./") || typed.starts_with("../") {
+        super::submodule::normalize_inside(&format!("{prefix}/{typed}")).unwrap_or(typed.clone())
+    } else {
+        typed.clone()
+    };
+    let entries = repository.index().entries();
+    if let Some(entry) = entries
+        .iter()
+        .find(|e| e.path == wanted.as_bytes() && e.stage().as_bits() == stage)
+    {
+        return Some(Ok(entry.oid));
+    }
+    let other_stage = entries
+        .iter()
+        .filter(|e| e.path == wanted.as_bytes())
+        .map(|e| e.stage().as_bits())
+        .min();
+    Some(Err(if let Some(n) = other_stage {
+        format!(
+            "path '{wanted}' is in the index, but not at stage {stage}\nhint: Did you mean ':{n}:{wanted}'?"
+        )
+    } else if root.join(&wanted).symlink_metadata().is_ok() {
+        format!("path '{wanted}' exists on disk, but not in the index")
+    } else {
+        format!("path '{wanted}' does not exist (neither on disk nor in the index)")
+    }))
+}
+
 /// Phase 1 — show an object's type, size or contents.
 ///
 /// # Purpose
@@ -735,12 +781,19 @@ pub fn run_cat_file(global: &GlobalArgs, args: &CatFileArgs) -> Result<i32> {
     let spec = args.object.as_deref().unwrap_or_default();
     let format = repository.format();
 
-    let resolved = rivet_core::revparse::resolve_path(
-        format,
-        repository.refs(),
-        repository.odb(),
-        bstr::BStr::new(spec),
-    );
+    let resolved = match index_object(&repository, spec.as_bytes()) {
+        Some(Ok(oid)) => Ok(oid),
+        Some(Err(message)) => {
+            eprintln!("fatal: {message}");
+            return Ok(128);
+        }
+        None => rivet_core::revparse::resolve_path(
+            format,
+            repository.refs(),
+            repository.odb(),
+            bstr::BStr::new(spec),
+        ),
+    };
     let object = match resolved {
         Ok(oid) => match repository.odb().read(&oid) {
             Ok(object) => object,
@@ -1201,7 +1254,7 @@ pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
             }
             Err(error) => {
                 if let rivet_core::Error::Message(message) = &error
-                    && message.starts_with("log for '")
+                    && message.starts_with("log for ")
                 {
                     eprintln!("fatal: {message}");
                     return Ok(128);

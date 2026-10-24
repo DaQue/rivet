@@ -288,9 +288,29 @@ fn resolve_reflog(refs: &RefStore, base: &BStr) -> Result<Option<ObjectId>> {
         }
     };
 
+    // `HEAD` without a log of its own reads the log of the branch it names, as Git does.
+    let name = if prefix == "HEAD"
+        && !crate::refs::reflog::exists(refs.home(&name), &name)
+        && let Some(branch) = refs.head_branch()?
+    {
+        branch
+    } else {
+        name
+    };
     let log = refs.reflog(&name)?;
     if log.is_empty() {
-        return Ok(None);
+        // No log file at all: not a reflog spec, carry on. A log that exists but holds nothing has
+        // only the ref's current value (`@{0}`); anything older is an error, as in Git.
+        if !crate::refs::reflog::exists(refs.home(&name), &name) {
+            return Ok(None);
+        }
+        if n == 0 {
+            return Ok(refs.resolve_oid(&name).ok());
+        }
+        return Err(Error::Message(format!(
+            "log for {} is empty",
+            name.as_bstr()
+        )));
     }
     if n < log.len() {
         return Ok(Some(log[log.len() - 1 - n].new));

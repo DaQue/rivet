@@ -375,7 +375,8 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
              'git <command> [<revision>...] -- [<file>...]'"
         )
     };
-    let resolve_range = |text: &str| resolve(text).map_err(|_| ambiguous());
+    let resolve_range =
+        |text: &str| resolve(text).map_err(|error| super::rev_error(error, ambiguous));
 
     if args.all {
         for (_, oid) in repository.refs().list_all(repository.odb())? {
@@ -416,14 +417,14 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         // An unborn branch has an empty history, which `git log` reports as an error.
         match super::resolve_commit(&repository, spec) {
             Ok(oid) => starts.push(oid),
-            Err(_) => {
+            Err(error) => {
                 if spec == "HEAD" {
                     anyhow::bail!(
                         "your current branch '{}' does not have any commits yet",
                         super::head_reflog_label(&repository)?
                     );
                 }
-                return Err(ambiguous());
+                return Err(super::rev_error(error, ambiguous));
             }
         }
     }
@@ -685,10 +686,13 @@ pub fn run_show(global: &GlobalArgs, args: &ShowArgs) -> Result<i32> {
         repository.odb(),
         BStr::new(spec.as_bytes()),
     )
-    .map_err(|_| {
-        anyhow::anyhow!(
+    .map_err(|error| match error {
+        rivet_core::Error::Message(message) if message.starts_with("log for ") => {
+            anyhow::anyhow!(message)
+        }
+        _ => anyhow::anyhow!(
             "ambiguous argument '{spec}': unknown revision or path not in the working tree."
-        )
+        ),
     })?;
 
     let mut out = Vec::new();

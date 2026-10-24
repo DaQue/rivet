@@ -5861,6 +5861,91 @@ s_bundle_roundtrip() {
     vg log --oneline --all
 }
 
+# The four small divergences that were left open after the worktree block.
+s_reset_current_branch() {
+    v init -q repo; cd repo
+    tick; echo a >a; v add a; v commit -q -m one
+    tick; echo b >>a; v commit -q -a -m two
+    g branch other HEAD~1
+    v switch -C main
+    v switch -C main HEAD~1
+    v switch -C main main
+    v checkout -B main
+    v checkout -B main HEAD
+    v checkout -B other
+    v checkout -B brand
+    v checkout -B brand
+    v checkout -B main other
+    v switch -C brand
+    v switch -C brand brand
+    v switch -C other main
+    v checkout -B other
+    v branch -v
+    v reflog -n 20
+    v checkout -B nosuch/../x HEAD
+}
+
+s_cat_file_index() {
+    v init -q repo; cd repo
+    tick; echo a >a; mkdir d; echo b >d/b; v add .; v commit -q -m one
+    tick; echo a2 >>a; v add a
+    echo untracked >u
+    v cat-file -p :a
+    v cat-file -p :0:a
+    v cat-file -p :d/b
+    v cat-file -t :a
+    v cat-file -s :a
+    v cat-file -e :a
+    v cat-file -p :1:a
+    v cat-file -p :nosuch
+    v cat-file -p :u
+    v cat-file -e :nosuch
+    v cat-file -p HEAD:a
+    (cd d && v cat-file -p :./b && v cat-file -p :b && v cat-file -p :../a && v cat-file -p :d/b)
+    # A conflict: stages 1-3 exist and stage 0 does not.
+    g checkout -q -b side HEAD~0; tick; echo side >>a; g commit -q -a -m side
+    g checkout -q main; tick; echo main >>a; g commit -q -a -m mainchange
+    g merge side >/dev/null 2>&1
+    v cat-file -p :a
+    v cat-file -p :1:a
+    v cat-file -p :2:a
+    v cat-file -p :3:a
+    v cat-file -p :4:a
+    v cat-file -e :a
+    v ls-files -s
+}
+
+s_reflog_index_edges() {
+    v init -q repo; cd repo
+    tick; echo a >a; v add a; v commit -q -m one
+    tick; echo b >>a; v commit -q -a -m two
+    v log -1 --oneline HEAD@{1}
+    v log -1 --oneline main@{1}
+    v log -1 --oneline HEAD@{5}
+    v log -1 --oneline main@{5}
+    v log -1 --oneline HEAD@{0}
+    v log HEAD@{5}..HEAD
+    v show -s HEAD@{5}
+    v show -s HEAD@{1}
+    v rev-parse HEAD@{5} main@{5}
+    v rev-parse HEAD@{0}
+    : >.git/logs/HEAD
+    v log -1 --oneline HEAD@{0}
+    v log -1 --oneline HEAD@{1}
+    v rev-parse HEAD@{0}
+    v rev-parse HEAD@{1}
+    v show -s HEAD@{1}
+    v log HEAD@{1}..HEAD
+    : >.git/logs/refs/heads/main
+    v rev-parse main@{0}
+    v rev-parse main@{1}
+    v log -1 --oneline main@{1}
+    rm .git/logs/HEAD
+    v rev-parse HEAD@{0}
+    v rev-parse HEAD@{1}
+    v show -s HEAD@{1}
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

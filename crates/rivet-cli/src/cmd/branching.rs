@@ -246,7 +246,7 @@ pub struct CheckoutArgs {
     pub create: Option<String>,
 
     /// Create the branch, overwriting an existing one.
-    #[arg(short = 'B', value_name = "BRANCH", requires = "target")]
+    #[arg(short = 'B', value_name = "BRANCH")]
     pub force_create: Option<String>,
 
     /// Check out the target commit with a detached `HEAD` rather than a branch.
@@ -1898,7 +1898,29 @@ fn checkout_new_branch(
     } else {
         format!("branch: Created from {start}")
     };
-    repository.set_ref_logged(&branch, start_oid, &who, BStr::new(reason.as_bytes()))?;
+    let previous = repository
+        .refs()
+        .try_read(&branch)?
+        .and_then(|target| target.oid().ok());
+    // A reset to where the branch already is is no update of the ref and leaves its log alone.
+    if previous != Some(start_oid) {
+        repository.set_ref_logged(&branch, start_oid, &who, BStr::new(reason.as_bytes()))?;
+    }
+    // When `HEAD` names the branch, its reset is an update of `HEAD` too: Git logs it in `HEAD`'s log,
+    // moved or not, ahead of the `checkout: moving from …` line.
+    if let Some(previous) = previous {
+        let entry = rivet_core::ReflogEntry::new(
+            previous,
+            start_oid,
+            who.clone(),
+            BString::from(reason.as_str()),
+        );
+        if matches!(&old_head, HeadState::Attached { branch: b, .. } if *b == branch)
+            && repository.should_log_ref(&RefName::head())
+        {
+            repository.refs().append_reflog(&RefName::head(), &entry)?;
+        }
+    }
     // Creating the branch `HEAD` already names is an update of `HEAD` itself, so its log
     // records the creation too.
     let unborn_same = matches!(&old_head, HeadState::Unborn { branch: b } if *b == branch);
@@ -1936,6 +1958,11 @@ fn checkout_new_branch(
         show_local_changes(repository)?;
         if unborn_same {
             eprintln!("Already on '{name}'");
+        } else if exists
+            && matches!(&old_head, HeadState::Attached { branch: b, .. } if *b == branch)
+        {
+            // Resetting the branch that is already checked out is no switch at all.
+            eprintln!("Reset branch '{name}'");
         } else if exists {
             eprintln!("Switched to and reset branch '{name}'");
         } else {

@@ -1269,7 +1269,7 @@ pub fn run_reset(global: &GlobalArgs, args: &ResetArgs) -> Result<i32> {
     if pathspecs.is_empty()
         && let Err(error) = super::resolve_rev(&repository, &commit_spec)
     {
-        if error.to_string().starts_with("log for '") {
+        if error.to_string().starts_with("log for ") {
             return Err(error);
         }
         let as_path = std::path::Path::new(&commit_spec);
