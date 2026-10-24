@@ -36,6 +36,7 @@ pub mod archive;
 pub mod bisect;
 pub mod blame;
 pub mod branching;
+pub mod bundle;
 pub mod cherry;
 pub mod clean;
 mod foreachref;
@@ -115,6 +116,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Bisect(args) => bisect::run_bisect(&global, &args),
         Commands::Cherry(args) => cherry::run_cherry(&global, &args),
         Commands::Archive(args) => archive::run_archive(&global, &args),
+        Commands::Bundle(args) => bundle::run_bundle(&global, &args),
         Commands::Submodule(args) => submodule::run_submodule(&global, &args),
         Commands::Worktree(args) => worktree::run_worktree(&global, &args),
         Commands::Repack(args) => maintenance::run_repack(&global, &args),

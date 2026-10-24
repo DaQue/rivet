@@ -103,7 +103,14 @@ pub struct RemoteConfig {
 /// Open the transport a URL names.
 pub fn open_transport(url: &RemoteUrl) -> Result<Box<dyn Transport>> {
     Ok(match url.scheme {
-        RemoteScheme::File => Box::new(LocalTransport::open(url)?),
+        RemoteScheme::File => {
+            use std::os::unix::ffi::OsStrExt;
+            if crate::bundle::looks_like_bundle(Path::new(std::ffi::OsStr::from_bytes(&url.path))) {
+                Box::new(crate::bundle::BundleTransport::open(url))
+            } else {
+                Box::new(LocalTransport::open(url)?)
+            }
+        }
         RemoteScheme::Ssh => Box::new(SshTransport::new(url.clone())?),
         RemoteScheme::Http | RemoteScheme::Https => Box::new(HttpTransport::new(url.clone())?),
         RemoteScheme::Git => {
@@ -318,7 +325,7 @@ impl Repository {
         tips
     }
 
-    fn store_downloaded(&mut self, pack: &[u8]) -> Result<()> {
+    pub(crate) fn store_downloaded(&mut self, pack: &[u8]) -> Result<()> {
         if !pack.is_empty() {
             let format = self.format();
             crate::remote::sideband::store_pack_bytes(pack, self.odb_mut(), format)?;
@@ -438,6 +445,9 @@ impl Repository {
         }
         if specs.is_empty() {
             // `fetch <url>` with no refspec fetches HEAD into FETCH_HEAD.
+            if config.is_none() && !advertised.iter().any(|r| r.name.as_slice() == b"HEAD") {
+                return Err(Error::Message("couldn't find remote ref HEAD".to_string()));
+            }
             if let Some(head) = advertised.iter().find(|r| r.name.as_slice() == b"HEAD") {
                 mappings.push(Mapping {
                     src: head.name.clone(),

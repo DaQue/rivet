@@ -779,6 +779,9 @@ pub fn run_fetch(global: &GlobalArgs, args: &FetchArgs) -> Result<i32> {
             pack_refs: false,
             action: command_action("fetch"),
         };
+        if let Some(code) = super::bundle::check_fetch_source(&repository, &remote) {
+            return Ok(code);
+        }
         let report = repository.fetch_remote(&remote, &request)?;
         print_fetch_report(&report, global.quiet);
         if report.rejected > 0 {

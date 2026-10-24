@@ -5750,6 +5750,117 @@ s_submodule_foreach() {
     v submodule foreach 'echo $name'
 }
 
+# Everything about a bundle file that does not depend on how its pack was compressed: the header
+# bytes, and what real git says about it.
+bundle_snap() {
+    local f
+    for f in "$@"; do
+        {
+            echo "## bundle $f"
+            sed -n '1,/^$/p' "$f" | sed "s#$ROOT#<ROOT>#g"
+            g bundle list-heads "$f" 2>&1
+            g bundle verify "$f" 2>&1 | sed "s#$ROOT#<ROOT>#g"
+        } >>"$TRANSCRIPT"
+    done
+}
+
+s_bundle_roundtrip() {
+    g init -q src; cd src
+    for i in 1 2 3; do tick; echo "line $i" >>f; echo "g$i" >g$i; g add .; g commit -q -m "c$i"; done
+    mkdir d; echo deep >d/x; g add d; tick; g commit -q -m "c4 with dir"
+    g tag v1 HEAD~2; tick; g tag -a -m annotated av1 HEAD
+    g branch side HEAD~1
+    v bundle create ../full.bundle main
+    v bundle create ../all.bundle --all
+    v bundle create ../range.bundle HEAD~2..main
+    v bundle create ../tags.bundle main v1 av1
+    v bundle create ../two.bundle side main
+    v bundle create ../neg.bundle main ^side
+    v bundle create ../dash.bundle main --not side
+    v bundle create ../x.bundle
+    v bundle create
+    v bundle create ../x.bundle nosuch
+    v bundle create ../x.bundle HEAD~1
+    v bundle create ../x.bundle main..main
+    v bundle create --version=3 ../v3.bundle main
+    v bundle create --version=4 ../x.bundle main
+    v bundle create --version 2 ../v2.bundle main
+    v bundle create -q ../quiet.bundle HEAD
+    bundle_snap ../full.bundle ../all.bundle ../range.bundle ../tags.bundle ../two.bundle ../neg.bundle ../quiet.bundle ../v3.bundle
+    v bundle list-heads ../all.bundle
+    v bundle list-heads ../all.bundle refs/heads/main refs/tags/v1
+    v bundle list-heads ../all.bundle main
+    v bundle list-heads
+    v bundle verify ../full.bundle
+    v bundle verify -q ../full.bundle
+    v bundle verify ../range.bundle
+    v bundle verify ../all.bundle
+    v bundle verify
+    v bundle verify nosuch.bundle
+    echo hello >../notbundle
+    v bundle verify ../notbundle
+    v bundle list-heads ../notbundle
+    printf '# v2 git bundle\nzzzz\n\n' >../badhdr
+    v bundle verify ../badhdr
+    printf '# v3 git bundle\n@bogus=1\n\n' >../badcap
+    v bundle verify ../badcap
+    v bundle unbundle ../full.bundle
+    v bundle bogus
+    v bundle
+    v bundle unbundle --bogus x
+    cd ..
+    g init -q empty; cd empty
+    v bundle verify ../range.bundle
+    v bundle verify ../full.bundle
+    v bundle unbundle ../range.bundle
+    v bundle unbundle ../full.bundle
+    v bundle unbundle ../full.bundle refs/heads/main
+    v bundle unbundle ../full.bundle main
+    g rev-list --objects --all | sort >>"$TRANSCRIPT"
+    vq fsck
+    vq cat-file -p main
+    cd ..
+    g init -q e2; cd e2
+    v fetch ../range.bundle main
+    v fetch ../full.bundle
+    v fetch ../full.bundle main:fromb
+    v fetch --no-tags ../all.bundle 'refs/heads/*:refs/remotes/b/*'
+    v fetch ../all.bundle 'refs/tags/*:refs/tags/*'
+    v fetch ../range.bundle main
+    v fetch ../full.bundle nosuch
+    v for-each-ref
+    v branch -a
+    v log --oneline fromb
+    vq fsck
+    g remote add up ../all.bundle
+    v fetch --no-tags up
+    v for-each-ref
+    cd ..
+    g init -q e3; cd e3
+    g config remote.b.url ../all.bundle
+    g config remote.b.fetch '+refs/heads/*:refs/remotes/b/*'
+    v fetch --no-tags b
+    v for-each-ref
+    v log --oneline b/main
+    v fetch --no-tags b
+    cd ../src
+    tick; echo five >>f; g commit -q -a -m c5
+    v bundle create ../inc.bundle main ^av1
+    bundle_snap ../inc.bundle
+    cd ../e3
+    v fetch ../inc.bundle main:inc
+    v log --oneline inc
+    vq fsck
+    cd ..
+    g init -q e4; cd e4
+    vg fetch --no-tags ../all.bundle 'refs/heads/*:refs/remotes/b/*'
+    vg fetch ../all.bundle 'refs/tags/*:refs/tags/*'
+    vg bundle unbundle ../two.bundle
+    vg fsck --strict
+    vg for-each-ref
+    vg log --oneline --all
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -5772,6 +5883,7 @@ for s in "$@"; do
         s_submodule_update_recursive) run_scenario "$s" clone ;;
         s_submodule_deinit) run_scenario "$s" clone clone2 ;;
         s_submodule_foreach) run_scenario "$s" none ;;
+        s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;
         s_worktree_move) run_scenario "$s" repo ;;
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;

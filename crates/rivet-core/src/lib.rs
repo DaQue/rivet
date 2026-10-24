@@ -92,6 +92,7 @@
 #![warn(missing_docs)]
 
 pub mod archive;
+pub mod bundle;
 pub mod config;
 pub mod diff;
 pub mod error;

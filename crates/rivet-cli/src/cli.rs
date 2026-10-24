@@ -39,9 +39,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    am, apply, archive, bisect, blame, branching, cherry, clean, format_patch, grep, history,
-    ignore, maintenance, mv, notes, packrefs, plumbing, query, rebase, reflog, remote, sequencer,
-    setup, snapshot, stash, submodule, tag, worktree,
+    am, apply, archive, bisect, blame, branching, bundle, cherry, clean, format_patch, grep,
+    history, ignore, maintenance, mv, notes, packrefs, plumbing, query, rebase, reflog, remote,
+    sequencer, setup, snapshot, stash, submodule, tag, worktree,
 };
 
 /// The `rivet` command line.
@@ -169,6 +169,9 @@ pub enum Commands {
 
     /// Create an archive of files from a named tree.
     Archive(archive::ArchiveArgs),
+
+    /// Move objects and refs by archive.
+    Bundle(bundle::BundleArgs),
 
     /// Report on the submodules of the repository.
     Submodule(submodule::SubmoduleArgs),
