@@ -5512,6 +5512,90 @@ s_submodule_sync() {
     cat .git/modules/vendor/lib/config .git/modules/vendor/lib/modules/in/config | sed "s#$ROOT#<ROOT>#g" >>"$TRANSCRIPT"
 }
 
+# What `submodule add` leaves in `.git/modules` (config, HEAD, refs, logs, packed-refs) and the
+# `.git` files of the given submodule work trees.
+sm_snap() {
+    {
+        echo "## modules"
+        if [ -d .git/modules ]; then
+            (cd .git/modules && find . -type f \( -name config -o -name HEAD -o -name packed-refs -o -path '*/refs/*' -o -path '*/logs/*' \) | sort | while read -r f; do
+                echo "# $f"; sed "s#$ROOT#<ROOT>#g" "$f"
+            done)
+        fi
+        local d
+        for d in "$@"; do echo "## gitfile $d"; cat "$d/.git" 2>&1; done
+    } >>"$TRANSCRIPT"
+}
+
+s_submodule_add() {
+    g config --global protocol.file.allow always
+    g init -q lib; (cd lib && tick && echo l >l.txt && g add l.txt && g commit -q -m l1 && g branch dev &&
+        tick && echo l2 >>l.txt && g commit -q -a -m l2 && g checkout -q dev && tick && echo d >d.txt &&
+        g add d.txt && g commit -q -m d1 && g checkout -q main)
+    g init -q top; cd top
+    tick; echo t >t; g add t; g commit -q -m t1
+    printf 'ign\n' >.gitignore; g add .gitignore; tick; g commit -q -m ign
+    v submodule add
+    v submodule add --bogus ../lib x
+    v submodule add a b c
+    v submodule add ../lib vendor/lib
+    sm_snap vendor/lib
+    v submodule add ../lib vendor/lib
+    v submodule add ../lib
+    v submodule add -b dev --name mylib ../lib dev/lib2
+    v submodule add ../lib x --name n2
+    sm_snap lib dev/lib2
+    v submodule add -q ../lib q
+    v submodule add ../nonexist bad
+    mkdir exist; echo x >exist/x; v submodule add ../lib exist
+    mkdir exist2; v submodule add ../lib exist2
+    v submodule add ../lib t
+    v submodule add ../lib ign
+    v submodule add -f ../lib ign
+    v submodule add ../lib.git
+    v submodule add ../lib/ tr/
+    v submodule add ../lib ./dotslash
+    v submodule add ../lib "a b"
+    v submodule add ../lib ""
+    v submodule add ../lib .
+    v submodule add ../lib ../outside
+    v submodule add lib2/ zz
+    echo "# c" >>.gitmodules
+    v submodule add ../lib more
+    mkdir sub; (cd sub && v submodule add ../../lib x/y)
+    g init -q inplace; (cd inplace && tick && echo i >i.txt && g add i.txt && g commit -q -m i1)
+    v submodule add ../lib inplace
+    g rm -q -f --cached q; rm -rf q
+    v submodule add ../lib q
+    v submodule add -b nosuch ../lib nb
+    sm_snap vendor/lib q tr
+    v status -s
+    v submodule status
+    v ls-files -s
+    sed "s#$ROOT#<ROOT>#g" .gitmodules >>"$TRANSCRIPT"
+    v fsck
+    rm -f inplace/.git/index
+}
+
+# Absolute and file:// urls end up in `.gitmodules`, so the blob id depends on where the scenario
+# runs; only the transcript is compared.
+s_submodule_add_urls() {
+    g config --global protocol.file.allow always
+    g init -q lib; (cd lib && tick && echo l >l.txt && g add l.txt && g commit -q -m l1)
+    g init -q top; cd top
+    tick; echo t >t; g add t; g commit -q -m t1
+    v submodule add "$ROOT/lib" abs
+    v submodule add "file://$ROOT/lib" fu
+    v submodule add -q "$ROOT/lib/" abs2/
+    v submodule add "$ROOT/nonexist" bad
+    v submodule add "file://$ROOT/nonexist" bad2
+    v submodule add -- ../lib dashes
+    v ls-files
+    sed "s#$ROOT#<ROOT>#g" .gitmodules .git/config >>"$TRANSCRIPT"
+    sm_snap abs fu abs2
+    v submodule status
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -5528,6 +5612,8 @@ for s in "$@"; do
         s_worktree_lock_remove) run_scenario "$s" repo e g ;;
         s_submodule_init) run_scenario "$s" clone clone2 clone3 clone4 ;;
         s_submodule_sync) run_scenario "$s" clone ;;
+        s_submodule_add) run_scenario "$s" top top/vendor/lib top/dev/lib2 ;;
+        s_submodule_add_urls) run_scenario "$s" none ;;
         s_worktree_move) run_scenario "$s" repo ;;
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;

@@ -748,9 +748,6 @@ fn split_section(name: &str) -> (String, Option<String>) {
 }
 
 fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
-    use rivet_core::remote_ops::{FetchRequest, Refspec, TagMode};
-    use rivet_core::{HeadState, RefName};
-
     let options = InitOptions {
         bare: args.bare,
         initial_branch: rivet_core::ops::default_branch_name()?,
@@ -760,7 +757,21 @@ fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
             .unwrap_or(ObjectFormat::Sha1),
         work_tree: None,
     };
-    let mut repository = Repository::init(dest, &options)?;
+    let repository = Repository::init(dest, &options)?;
+    populate_clone(repository, args, true)
+}
+
+/// Fetch into an initialised repository and check out the remote's default branch: everything
+/// `clone` does after creating the directories (also used for a submodule's separate git
+/// directory).
+pub(super) fn populate_clone(
+    mut repository: Repository,
+    args: &CloneArgs,
+    checkout: bool,
+) -> Result<()> {
+    use rivet_core::remote_ops::{FetchRequest, Refspec, TagMode};
+    use rivet_core::{HeadState, RefName};
+
     let origin = args.origin.as_str();
     let url = rivet_core::remote_ops::absolutize_url(&args.repository);
 
@@ -880,8 +891,10 @@ fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
             &wanted,
         )?;
         repository.write_config()?;
-        let tree = repository.commit_tree(tip)?;
-        repository.reset_hard_to_tree(tree)?;
+        if checkout {
+            let tree = repository.commit_tree(tip)?;
+            repository.reset_hard_to_tree(tree)?;
+        }
     }
     let _ = HeadState::Unborn { branch: branch_ref };
     Ok(())

@@ -1,8 +1,8 @@
-//! `submodule`: `status`, `init` and `sync`, and `.gitmodules` read-only.
+//! `submodule`: `status`, `init`, `sync` and `add`, and `.gitmodules` read-only.
 //!
 //! Each gitlink of the index prints as `<state><commit> <path>[ (<description>)]`, where the state
 //! is `-` for a submodule that is not checked out, `+` when its `HEAD` is not the recorded commit,
-//! `U` for a merge conflict and a blank otherwise. Every other subcommand (`update`, `add`,
+//! `U` for a merge conflict and a blank otherwise. Every other subcommand (`update`,
 //! `foreach`, `deinit`, `summary`, `absorbgitdirs`, …) is refused by name.
 
 use std::path::Path;
@@ -42,6 +42,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
         match args.args[at].as_str() {
             "init" => return submodule_init(global, quiet, rest),
             "sync" => return submodule_sync(global, quiet, rest),
+            "add" => return submodule_add(global, quiet, rest),
             _ => {}
         }
     }
@@ -64,7 +65,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "status" if !seen_sub => seen_sub = true,
             other if !seen_sub && !other.starts_with('-') => {
                 anyhow::bail!(
-                    "submodule: '{other}' is not implemented (only 'status', 'init' and 'sync' are)"
+                    "submodule: '{other}' is not implemented (only 'status', 'init', 'sync' and 'add' are)"
                 )
             }
             other if other.starts_with('-') => {
@@ -724,4 +725,533 @@ fn sync_in(
         }
     }
     Ok(0)
+}
+
+const USAGE_ADD: &str = "usage: git submodule add [<options>] [--] <repository> [<path>]
+
+    -b, --[no-]branch <branch>
+                          branch of repository to add as submodule
+    -f, --[no-]force      allow adding an otherwise ignored submodule path
+    -q, --[no-]quiet      print only error messages
+    --[no-]progress       force cloning progress
+    --[no-]reference <repository>
+                          reference repository
+    --[no-]ref-format <format>
+                          specify the reference format to use
+    --[no-]dissociate     borrow the objects from reference repositories
+    --[no-]name <name>    sets the submodule's name to the given string instead of defaulting to its path
+    --[no-]depth <n>      depth for shallow clones
+
+";
+
+/// `to` as a path from the directory `from` (both absolute).
+fn relative_path(from: &Path, to: &Path) -> std::path::PathBuf {
+    let from: Vec<_> = from.components().collect();
+    let to: Vec<_> = to.components().collect();
+    let shared = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut out = std::path::PathBuf::new();
+    for _ in shared..from.len() {
+        out.push("..");
+    }
+    for part in &to[shared..] {
+        out.push(part.as_os_str());
+    }
+    out
+}
+
+/// The last component of a repository url, without `.git`: the default submodule path.
+fn url_basename(repo: &str) -> String {
+    let trimmed = repo.trim_end_matches('/');
+    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    trimmed
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A path as a list of components with `.` and `..` resolved; `None` when it leaves the tree.
+fn normalize_inside(path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            other => parts.push(other),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+fn submodule_add(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Result<i32> {
+    let mut force = false;
+    let mut branch: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut positional: Vec<&String> = Vec::new();
+    let mut iter = args.iter();
+    while let Some(word) = iter.next() {
+        if !positional.is_empty() {
+            if word.starts_with('-') {
+                eprint!("{USAGE_ADD}");
+                return Ok(129);
+            }
+            positional.push(word);
+            continue;
+        }
+        let mut value = |what: &mut Option<String>| match iter.next() {
+            Some(v) if !v.is_empty() => {
+                *what = Some(v.clone());
+                true
+            }
+            _ => false,
+        };
+        let ok = match word.as_str() {
+            "-q" | "--quiet" => {
+                quiet = true;
+                true
+            }
+            "-f" | "--force" => {
+                force = true;
+                true
+            }
+            "-b" | "--branch" => value(&mut branch),
+            "--name" => value(&mut name),
+            w if w.starts_with("--branch=") => {
+                branch = Some(w["--branch=".len()..].to_string());
+                true
+            }
+            w if w.starts_with("--name=") => {
+                name = Some(w["--name=".len()..].to_string());
+                true
+            }
+            "--depth" | "--reference" | "--ref-format" | "--progress" | "--dissociate" => {
+                anyhow::bail!("submodule add: {word} is not implemented")
+            }
+            w if w.starts_with("--depth=")
+                || w.starts_with("--reference=")
+                || w.starts_with("--ref-format=") =>
+            {
+                anyhow::bail!("submodule add: {word} is not implemented")
+            }
+            "--" => {
+                positional.extend(iter.by_ref());
+                break;
+            }
+            w if w.starts_with('-') => false,
+            _ => {
+                positional.push(word);
+                true
+            }
+        };
+        if !ok {
+            eprint!("{USAGE}");
+            return Ok(1);
+        }
+    }
+    if positional.is_empty() || positional.len() > 2 {
+        if positional.is_empty() {
+            eprint!("{USAGE}");
+            return Ok(1);
+        }
+        eprint!("{USAGE_ADD}");
+        return Ok(129);
+    }
+    let repo = positional[0].clone();
+    let typed_path = match positional.get(1) {
+        Some(path) => (*path).clone(),
+        None => url_basename(&repo),
+    };
+
+    let mut repository = super::open(global)?;
+    let Some(root) = repository.worktree_path().map(Path::to_path_buf) else {
+        anyhow::bail!("submodule add: this operation must be run in a work tree");
+    };
+    let prefix = cwd_prefix(&root);
+    let joined = from_root(&prefix, typed_path.trim_end_matches('/'));
+    if typed_path.is_empty() || joined == "." {
+        eprintln!(
+            "fatal: empty string is not a valid pathspec. please use . instead if you meant to match all paths"
+        );
+        return Ok(128);
+    }
+    let Some(sm_path) = normalize_inside(&joined) else {
+        eprintln!(
+            "fatal: {typed_path}: '{typed_path}' is outside repository at '{}'",
+            root.display()
+        );
+        return Ok(128);
+    };
+    let sm_name = name.clone().unwrap_or_else(|| sm_path.clone());
+
+    // The url the superproject records in its config.
+    let realrepo = if is_relative_url(&repo) {
+        if !prefix.is_empty() {
+            eprintln!(
+                "fatal: Relative path can only be used from the toplevel of the working tree"
+            );
+            return Ok(128);
+        }
+        resolve_relative_url(&repository, &root, &repo, None, true)?
+    } else if repo.starts_with('/') || !url_is_local_not_ssh(&repo) {
+        repo.clone()
+    } else {
+        eprintln!("fatal: repo URL: '{repo}' must be absolute or begin with ./|../");
+        return Ok(128);
+    };
+
+    let dest = root.join(&sm_path);
+    let existing = repository
+        .index()
+        .entries()
+        .iter()
+        .any(|e| e.path == sm_path.as_bytes());
+    if !force && !existing && is_ignored(&repository, &sm_path, true)? {
+        let mut hints = format!(
+            "The following paths are ignored by one of your .gitignore files:\n{sm_path}\n"
+        );
+        let advice = repository
+            .config_value(BStr::new("advice.addIgnoredFile"))?
+            .and_then(|v| rivet_core::parse_bool(v.as_ref()).ok())
+            .unwrap_or(true);
+        if advice {
+            hints.push_str("hint: Use -f if you really want to add them.\n");
+            hints.push_str(
+                "hint: Disable this message with \"git config set advice.addIgnoredFile false\"\n",
+            );
+        }
+        eprint!("{hints}");
+        return Ok(1);
+    }
+    if existing {
+        eprintln!("fatal: '{sm_path}' already exists in the index");
+        return Ok(128);
+    }
+    let populated = dest.join(".git").exists();
+    if dest.symlink_metadata().is_ok() && !populated {
+        eprintln!("fatal: '{sm_path}' already exists and is not a valid git repo");
+        return Ok(128);
+    }
+    let git_dir = repository.common_dir().join("modules").join(&sm_name);
+    if git_dir.exists() && !populated {
+        if !force {
+            let remotes = rivet_core::Config::load(&git_dir.join("config"))
+                .map(|c| {
+                    c.entries()
+                        .iter()
+                        .filter(|e| e.section.eq_ignore_ascii_case(b"remote") && e.key == "url")
+                        .map(|e| {
+                            format!(
+                                "  {}\t{}\n",
+                                e.subsection.clone().unwrap_or_default(),
+                                e.value
+                            )
+                        })
+                        .collect::<String>()
+                })
+                .unwrap_or_default();
+            eprintln!(
+                "fatal: A git directory for '{sm_name}' is found locally with remote(s):\n{remotes}If you want to reuse this local git directory instead of cloning again from\n  {realrepo}\nuse the '--force' option. If the local git directory is not the correct repo\nor you are unsure what this means choose another name with the '--name' option."
+            );
+            return Ok(128);
+        }
+        anyhow::bail!(
+            "submodule add: reusing a local git directory with --force is not implemented"
+        );
+    }
+
+    if populated {
+        if !quiet {
+            println!("Adding existing repo at '{sm_path}' to the index");
+        }
+    } else {
+        if let Err(code) = clone_submodule(&dest, &git_dir, &realrepo, quiet) {
+            return Ok(code);
+        }
+        if let Err(code) = checkout_branch(&dest, &git_dir, branch.as_deref(), &sm_path) {
+            return Ok(code);
+        }
+    }
+
+    // Stage the gitlink at the submodule's `HEAD`.
+    let sub = Repository::open_with(&dest.join(".git"), Some(&dest), None)
+        .or_else(|_| Repository::open_with(&git_dir, Some(&dest), None))?;
+    let Some(head) = sub.head()?.oid() else {
+        eprintln!("fatal: '{sm_path}' does not have a commit checked out");
+        return Ok(128);
+    };
+    stage_entry(&mut repository, &sm_path, head, EntryMode::Commit)?;
+
+    // `.gitmodules`, then its staged copy.
+    let gitmodules_path = root.join(".gitmodules");
+    let mut entries = vec![("path", sm_path.as_str()), ("url", repo.as_str())];
+    if let Some(branch) = &branch {
+        entries.push(("branch", branch.as_str()));
+    }
+    let mut text = std::fs::read_to_string(&gitmodules_path).unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!(
+        "[submodule \"{}\"]\n",
+        sm_name.replace('\\', "\\\\").replace('"', "\\\"")
+    ));
+    for (key, value) in entries {
+        text.push_str(&format!("\t{key} = {}\n", config_value(value)));
+    }
+    std::fs::write(&gitmodules_path, text)?;
+    let bytes = std::fs::read(&gitmodules_path)?;
+    let blob = repository
+        .odb()
+        .write_raw(rivet_core::ObjectKind::Blob, &bytes)?;
+    stage_entry(&mut repository, ".gitmodules", blob, EntryMode::Blob)?;
+
+    // Finally the superproject's own config.
+    let name_ref: &BStr = sm_name.as_bytes().as_bstr();
+    repository
+        .config_mut()
+        .set(key_of(name_ref, "url").as_ref(), realrepo.as_bytes())?;
+    repository
+        .config_mut()
+        .set(key_of(name_ref, "active").as_ref(), b"true")?;
+    repository.write_config()?;
+    Ok(0)
+}
+
+fn stage_entry(
+    repository: &mut Repository,
+    path: &str,
+    oid: ObjectId,
+    mode: EntryMode,
+) -> Result<()> {
+    use rivet_core::{IndexEntry, IndexEntryExtendedFlags, IndexEntryFlags, Stage};
+    let entry = IndexEntry {
+        ctime_seconds: 0,
+        ctime_nanos: 0,
+        mtime_seconds: 0,
+        mtime_nanos: 0,
+        dev: 0,
+        ino: 0,
+        mode,
+        uid: 0,
+        gid: 0,
+        size: 0,
+        oid,
+        flags: IndexEntryFlags::with(Stage::Normal, path.len()),
+        extended_flags: IndexEntryExtendedFlags::empty().bits(),
+        path: BString::from(path),
+    };
+    repository.index_mut().insert(entry);
+    repository.index_mut().sort();
+    repository.write_index()?;
+    Ok(())
+}
+
+/// Whether `path` is ignored by the repository's ignore rules.
+fn is_ignored(repository: &Repository, path: &str, directory: bool) -> Result<bool> {
+    let mut stack = repository.ignore()?.clone();
+    stack.push_dir(BStr::new(""))?;
+    let parts: Vec<&str> = path.split('/').collect();
+    let mut prefix = String::new();
+    for (at, part) in parts.iter().enumerate() {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(part);
+        let last = at + 1 == parts.len();
+        let kind = if !last || directory {
+            rivet_core::PathKind::Directory
+        } else {
+            rivet_core::PathKind::File
+        };
+        if stack
+            .check(BStr::new(prefix.as_bytes()), kind)?
+            .is_ignored()
+        {
+            return Ok(true);
+        }
+        if !last {
+            stack.push_dir(BStr::new(prefix.as_bytes()))?;
+        }
+    }
+    Ok(false)
+}
+
+/// Clone `url` into `git_dir` with `dest` as its work tree, as `submodule add` does: the git
+/// directory lives under `.git/modules`, `dest/.git` is a file pointing at it and the module
+/// config records the work tree. `Err(code)` after printing git's two-line failure.
+fn clone_submodule(
+    dest: &Path,
+    git_dir: &Path,
+    url: &str,
+    quiet: bool,
+) -> std::result::Result<(), i32> {
+    let failed = |message: String| {
+        eprintln!("fatal: {message}");
+        eprintln!(
+            "fatal: clone of '{url}' into submodule path '{}' failed",
+            dest.display()
+        );
+        let _ = std::fs::remove_dir_all(git_dir);
+        let _ = std::fs::remove_dir_all(dest);
+        128
+    };
+    if let Ok(parsed) = rivet_core::RemoteUrl::parse(BStr::new(url.as_bytes()))
+        && parsed.scheme == rivet_core::remote::RemoteScheme::File
+        && Repository::discover(Path::new(
+            &String::from_utf8_lossy(&parsed.path).into_owned(),
+        ))
+        .is_err()
+    {
+        if url.contains("://") {
+            if !quiet {
+                eprintln!("Cloning into '{}'...", dest.display());
+            }
+            return Err(failed(format!(
+                "'{}' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
+                url.strip_prefix("file://").unwrap_or(url)
+            )));
+        }
+        return Err(failed(format!("repository '{url}' does not exist")));
+    }
+    if !quiet {
+        eprintln!("Cloning into '{}'...", dest.display());
+    }
+    let setup = || -> Result<Repository> {
+        std::fs::create_dir_all(dest)?;
+        let options = rivet_core::InitOptions {
+            bare: true,
+            initial_branch: rivet_core::ops::default_branch_name()?,
+            format: rivet_core::ObjectFormat::Sha1,
+            work_tree: None,
+        };
+        let mut module = Repository::init(git_dir, &options)?;
+        let config = module.config_mut();
+        config.set(BStr::new("core.bare"), b"false")?;
+        config.set(BStr::new("core.logallrefupdates"), b"true")?;
+        let worktree = relative_path(git_dir, dest);
+        config.set(
+            BStr::new("core.worktree"),
+            worktree.to_string_lossy().as_bytes(),
+        )?;
+        module.write_config()?;
+        let link = relative_path(dest, git_dir);
+        std::fs::write(dest.join(".git"), format!("gitdir: {}\n", link.display()))?;
+        Ok(Repository::open_with(git_dir, Some(dest), None)?)
+    };
+    let result = setup().and_then(|module| {
+        super::setup::populate_clone(
+            module,
+            &super::setup::CloneArgs {
+                repository: url.to_string(),
+                directory: None,
+                bare: false,
+                mirror: false,
+                branch: None,
+                depth: None,
+                local: false,
+                tags: false,
+                origin: "origin".to_string(),
+                object_format: None,
+            },
+            false,
+        )
+    });
+    match result {
+        Ok(()) => {
+            // Git's local-path clone reports `done.`; a `file://` one does not.
+            if !quiet && !url.contains("://") {
+                eprintln!("done.");
+            }
+            Ok(())
+        }
+        Err(error) => Err(failed(error.to_string())),
+    }
+}
+
+/// The checkout `submodule add` runs after `clone --no-checkout`: `HEAD`'s tree, or with a branch
+/// `git checkout -q -B <branch> origin/<branch>`.
+fn checkout_branch(
+    dest: &Path,
+    git_dir: &Path,
+    branch: Option<&str>,
+    sm_path: &str,
+) -> std::result::Result<(), i32> {
+    let mut sub = Repository::open_with(git_dir, Some(dest), None).map_err(|e| {
+        eprintln!("fatal: {e}");
+        128
+    })?;
+    let target = match branch {
+        None => sub.head().ok().and_then(|head| head.oid()),
+        Some(branch) => {
+            rivet_core::RefName::from_bytes(format!("refs/remotes/origin/{branch}").as_bytes())
+                .ok()
+                .and_then(|name| sub.refs().resolve_oid(&name).ok())
+        }
+    };
+    let Some(oid) = target else {
+        if let Some(branch) = branch {
+            eprintln!(
+                "fatal: 'origin/{branch}' is not a commit and a branch '{branch}' cannot be created from it"
+            );
+            eprintln!("fatal: unable to checkout submodule '{sm_path}'");
+            return Err(128);
+        }
+        return Ok(());
+    };
+    let mut run = || -> Result<()> {
+        if let Some(branch) = branch {
+            let who = sub.committer_signature()?;
+            let name = rivet_core::RefName::from_bytes(format!("refs/heads/{branch}").as_bytes())?;
+            let from = match sub.head()? {
+                rivet_core::HeadState::Attached { branch, .. } => branch.short_name().to_string(),
+                _ => "HEAD".to_string(),
+            };
+            sub.set_ref_logged(
+                &name,
+                oid,
+                &who,
+                BStr::new(format!("branch: Created from origin/{branch}").as_bytes()),
+            )?;
+            let config = sub.config_mut();
+            config.set(
+                BStr::new(format!("branch.{branch}.remote").as_bytes()),
+                b"origin",
+            )?;
+            config.set(
+                BStr::new(format!("branch.{branch}.merge").as_bytes()),
+                format!("refs/heads/{branch}").as_bytes(),
+            )?;
+            sub.write_config()?;
+            sub.point_head(
+                rivet_core::ops::HeadTarget::Branch(&name),
+                BStr::new(format!("checkout: moving from {from} to {branch}").as_bytes()),
+            )?;
+        }
+        let tree = sub.commit_tree(oid)?;
+        sub.reset_hard_to_tree(tree)?;
+        Ok(())
+    };
+    run().map_err(|e| {
+        eprintln!("fatal: {e}");
+        128
+    })
+}
+
+/// A config value as `git config` writes it: quoted when it has leading or trailing blanks or a
+/// character that would start a comment.
+fn config_value(value: &str) -> String {
+    let needs_quotes = value.starts_with([' ', '\t'])
+        || value.ends_with([' ', '\t'])
+        || value.contains(['#', ';', '"', '\\', '\n']);
+    if !needs_quotes {
+        return value.to_string();
+    }
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\t', "\\t");
+    format!("\"{escaped}\"")
 }
