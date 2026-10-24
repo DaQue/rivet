@@ -495,6 +495,29 @@ s_hooks_merge_continue() {
     dump_hooklog
 }
 
+s_hooks_stash() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    install_hooks pre-commit prepare-commit-msg commit-msg post-commit post-rewrite post-checkout post-merge
+    rm -f hooks.log
+    # push, apply, pop, drop and -u create and restore commits without running any hook
+    echo dirty >>a; echo u >untracked
+    v stash push -u -m first
+    v stash apply
+    v checkout -q -- a; rm untracked
+    v stash pop
+    v stash drop
+    v checkout -q -- a; rm -f untracked
+    v stash list
+    # (`stash branch` runs post-checkout in git; rivet has no `stash branch` — see GAPS.md)
+    echo dirty >>a
+    v stash push -q
+    v stash list
+    v stash pop -q
+    v status --short
+    dump_hooklog
+}
+
 s_hooks_run() {
     v init -q repo; cd repo
     mkdir sub

@@ -50,7 +50,7 @@ The command works for the common case; the listed options or edge cases are miss
   patches, whitespace options or `--reject` together with `--3way`.
 * **`format-patch` / `am`** — no cover letters, threading, `-k`, RFC 2047 headers,
   `--directory`, scissors, `am --3way`.
-* **`stash`** — no `-u`/`-a`/`-k`, pathspecs, `apply --index`, `branch`/`create`/`store`/`save`.
+* **`stash`** — no `branch`/`create`/`store`/`save`.
 * **`clean`** — no `-i`/`-e`.
 * **`gc` / `repack`** — no `--cruft`, `--geometric`, `--window`/`--depth`,
   `--max-pack-size`, `--max-cruft-size`, `--expire-to`, `--keep-largest-pack`,
@@ -80,8 +80,8 @@ The command works for the common case; the listed options or edge cases are miss
   keeps no `.git/sequencer`); `applypatch-msg`, `pre-applypatch` and `post-applypatch` for `am` (`-n/--no-verify`;
   git's plain `am` runs no `post-rewrite` either). `merge --continue` is `commit` with the message of `MERGE_MSG` (source `merge`;
   `pre-commit`, not `pre-merge-commit`, as in git) — but the editor never starts, so `COMMIT_EDITMSG`
-  lacks the `#` status template git puts there (the scenario hides those lines). Not run yet: the commit
-  hooks of `stash`; `post-checkout` for
+  lacks the `#` status template git puts there (the scenario hides those lines). `stash` runs none (as in git, which
+  creates its commits without hooks; only `stash branch`, missing, runs `post-checkout`). Not run yet: `post-checkout` for
   `clone` and `worktree add`; `pre-auto-gc`, `reference-transaction`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` is not implemented. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
   source (and `merge`). `GIT_DIR`/`GIT_WORK_TREE` are not exported to hooks (git does not either
   for the common layout; linked work trees are untested). Related, not a hook: `push` with
