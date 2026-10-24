@@ -408,6 +408,51 @@ s_hooks_pick() {
     dump_hooklog
 }
 
+s_hooks_am() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    v switch -q -c topic
+    for i in 1 2 3; do tick; echo p$i >p$i; v add p$i; v commit -q -m "patch $i"; done
+    g format-patch -q -3 -o ../patches >/dev/null
+    v switch -q main
+    v branch -q -D topic
+    install_hooks applypatch-msg pre-applypatch post-applypatch pre-commit prepare-commit-msg commit-msg post-commit post-rewrite
+    rm -f hooks.log
+    # am runs the three applypatch hooks per patch and none of the commit hooks
+    v am ../patches/0001-patch-1.patch
+    v log --format=%s
+    # applypatch-msg may rewrite the message; a failing post-applypatch is ignored
+    echo extra >hook-append-applypatch-msg
+    echo 7 >hook-fail-post-applypatch
+    v am ../patches/0002-patch-2.patch
+    v log -1 --format=%B
+    rm hook-append-applypatch-msg hook-fail-post-applypatch
+    # --no-verify skips applypatch-msg and pre-applypatch, not post-applypatch
+    v am --no-verify ../patches/0003-patch-3.patch
+    v reset -q --hard HEAD~3
+    # a refusing pre-applypatch: exit 1, the patch stays applied in the index, --continue commits it
+    echo 1 >hook-fail-pre-applypatch
+    v am ../patches/0001-patch-1.patch ../patches/0002-patch-2.patch
+    v status --short
+    v log --format=%s
+    v am --continue
+    v log --format=%s
+    rm hook-fail-pre-applypatch
+    v am --continue
+    v log --format=%s
+    v reset -q --hard HEAD~2
+    # a refusing applypatch-msg stops before the patch is applied
+    echo 1 >hook-fail-applypatch-msg
+    v am ../patches/0001-patch-1.patch ../patches/0002-patch-2.patch
+    v status --short
+    v am --skip
+    rm hook-fail-applypatch-msg
+    v am --continue
+    v am --skip
+    v log --format=%s
+    dump_hooklog
+}
+
 s_hooks_run() {
     v init -q repo; cd repo
     mkdir sub

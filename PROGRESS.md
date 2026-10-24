@@ -906,3 +906,8 @@ Base `f8d111d`: neither command ran any hook (28 hook lines missing from the tra
 - Found by the scenario: `commit_subject` took the first line only; git's summary line joins the first paragraph (`side2 extra`). Fixed in `cmd/mod.rs`.
 Not done: a multi-commit pick that stops on a hook failure keeps no `.git/sequencer` (rivet has none; see `GAPS.md`); `--skip`, `-e`, `-x` do not exist.
 Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 221 PASS / `failures: 0`.
+
+### Phase 5.3 — hooks: `am` (landed, scenario `s_hooks_am`)
+Base `c041941`: `am` ran no hook (17 hook lines missing) and had no `--no-verify`. Against git 2.56: per patch `applypatch-msg` (arg `.git/rebase-apply/final-commit`, may rewrite the message; a refusal exits 1 before the patch is applied and before `Applying:` is printed), then after the patch is applied to the index `pre-applypatch` (a refusal exits 1 with the change staged), then the commit, then `post-applypatch` (status ignored). No `GIT_INDEX_FILE` and no `GIT_EDITOR` of am's own; none of `pre-commit`/`prepare-commit-msg`/`commit-msg`/`post-commit`/`post-rewrite`. `-n/--no-verify` skips the first two only. `--continue` re-runs `pre-applypatch` and `post-applypatch` (not `applypatch-msg`); `--skip` moves on to the next patch, which runs its hooks.
+Not done: `post-rewrite am` (git runs it only for the rebase backend), `--3way` and the other `am` options.
+Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 222 PASS / `failures: 0`.

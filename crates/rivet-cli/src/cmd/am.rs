@@ -41,6 +41,10 @@ pub struct AmArgs {
     /// Restore the branch to where it was before `am`.
     #[arg(long = "abort")]
     pub abort: bool,
+
+    /// Do not run the `applypatch-msg` and `pre-applypatch` hooks.
+    #[arg(short = 'n', long = "no-verify")]
+    pub no_verify: bool,
 }
 
 fn dir_of(repository: &Repository) -> PathBuf {
@@ -272,9 +276,9 @@ pub fn run_am(global: &GlobalArgs, args: &AmArgs) -> Result<i32> {
             }
             let next: usize = read(&dir, "next").parse().unwrap_or(1);
             write(&dir, "next", &format!("{}\n", next + 1))?;
-            return run_patches(global, &mut repository, &dir, false);
+            return run_patches(global, &mut repository, &dir, args.no_verify);
         }
-        return resume(global, &mut repository, &dir);
+        return resume(global, &mut repository, &dir, args.no_verify);
     }
 
     if dir.exists() {
@@ -339,7 +343,7 @@ pub fn run_am(global: &GlobalArgs, args: &AmArgs) -> Result<i32> {
     }
     write(&dir, "next", "1\n")?;
     write(&dir, "last", &format!("{}\n", messages.len()))?;
-    run_patches(global, &mut repository, &dir, true)
+    run_patches(global, &mut repository, &dir, args.no_verify)
 }
 
 fn write(dir: &Path, name: &str, text: &str) -> Result<()> {
@@ -347,12 +351,21 @@ fn write(dir: &Path, name: &str, text: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", dir.join(name).display()))
 }
 
+/// Run one of the hooks of `am`. None of them gets an index file or an editor of its own.
+fn am_hook(repository: &Repository, name: &str, args: &[&std::ffi::OsStr]) -> Option<i32> {
+    let mut hook = rivet_core::hooks::Hook::new(repository, name);
+    for arg in args {
+        hook = hook.arg(arg);
+    }
+    hook.run()
+}
+
 /// Apply the messages from `next` to `last`.
 fn run_patches(
     global: &GlobalArgs,
     repository: &mut Repository,
     dir: &Path,
-    _fresh: bool,
+    no_verify: bool,
 ) -> Result<i32> {
     let last: usize = read(dir, "last").parse().unwrap_or(0);
     loop {
@@ -364,9 +377,6 @@ fn run_patches(
         let fallback = repository.author_signature()?;
         let message = parse_message(&raw, &fallback)?;
         let number = format!("{next:04}");
-        if !global.quiet {
-            println!("Applying: {}", message.subject);
-        }
         // Remember the message for `--continue`.
         write(dir, "applying", "")?;
         write(
@@ -389,6 +399,17 @@ fn run_patches(
         write(dir, "msg", &format!("{}\n", message.subject))?;
         if let Some(head) = repository.head()?.oid() {
             write(dir, "abort-safety", &format!("{head}\n"))?;
+        }
+        // `applypatch-msg` may rewrite the message in `final-commit`; a refusal stops before the
+        // patch is applied.
+        if !no_verify {
+            let shown = super::snapshot::shown_path(repository, &dir.join("final-commit"));
+            if am_hook(repository, "applypatch-msg", &[shown.as_os_str()]).is_some_and(|c| c != 0) {
+                return Ok(1);
+            }
+        }
+        if !global.quiet {
+            println!("Applying: {}", message.subject);
         }
 
         let patches = match parse(&message.patch, 1) {
@@ -425,12 +446,17 @@ fn run_patches(
                 return Ok(128);
             }
         }
+        if !no_verify && am_hook(repository, "pre-applypatch", &[]).is_some_and(|c| c != 0) {
+            return Ok(1);
+        }
+        let final_message = std::fs::read(dir.join("final-commit"))?;
         commit_current(
             repository,
             &message.author,
-            &commit_message(&message),
+            &final_message,
             &message.subject,
         )?;
+        am_hook(repository, "post-applypatch", &[]);
         write(dir, "next", &format!("{}\n", next + 1))?;
     }
     let _ = std::fs::remove_dir_all(dir);
@@ -469,7 +495,12 @@ fn commit_current(
     Ok(oid)
 }
 
-fn resume(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Result<i32> {
+fn resume(
+    global: &GlobalArgs,
+    repository: &mut Repository,
+    dir: &Path,
+    no_verify: bool,
+) -> Result<i32> {
     let subject = read(dir, "msg");
     let tree = repository.write_tree()?;
     let head_tree = repository.head_tree_oid()?;
@@ -511,10 +542,14 @@ fn resume(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Resul
     if !global.quiet {
         println!("Applying: {subject}");
     }
+    if !no_verify && am_hook(repository, "pre-applypatch", &[]).is_some_and(|c| c != 0) {
+        return Ok(1);
+    }
     commit_current(repository, &author, &message, &subject)?;
+    am_hook(repository, "post-applypatch", &[]);
     let next: usize = read(dir, "next").parse().unwrap_or(1);
     write(dir, "next", &format!("{}\n", next + 1))?;
-    run_patches(global, repository, dir, false)
+    run_patches(global, repository, dir, no_verify)
 }
 
 fn abort(repository: &mut Repository, dir: &Path) -> Result<i32> {

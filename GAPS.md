@@ -77,10 +77,10 @@ The command works for the common case; the listed options or edge cases are miss
   `pre-rebase`, `post-checkout`, `post-commit` and `post-rewrite rebase` for `rebase` and
   `pull --rebase` (`--no-verify`); `pre-push` for `push` (`--no-verify`); `prepare-commit-msg` and `post-commit` for `cherry-pick` and
   `revert` (and the full `commit` set for their `--continue`; a sequence that stops on a hook failure
-  keeps no `.git/sequencer`). Not run yet: the commit
-  hooks of `merge --continue`, `am` and `stash`; `post-checkout` for
-  `clone` and `worktree add`; `pre-auto-gc`, `reference-transaction`, `applypatch-msg`,
-  `pre-applypatch`, `post-applypatch`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` is not implemented. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
+  keeps no `.git/sequencer`); `applypatch-msg`, `pre-applypatch` and `post-applypatch` for `am` (`-n/--no-verify`;
+  git's plain `am` runs no `post-rewrite` either). Not run yet: the commit
+  hooks of `merge --continue` and `stash`; `post-checkout` for
+  `clone` and `worktree add`; `pre-auto-gc`, `reference-transaction`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` is not implemented. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
   source (and `merge`). `GIT_DIR`/`GIT_WORK_TREE` are not exported to hooks (git does not either
   for the common layout; linked work trees are untested). Related, not a hook: `push` with
   a refspec `x:y:z` splits at the first colon (git: the last), and the matching refspec `:` is
