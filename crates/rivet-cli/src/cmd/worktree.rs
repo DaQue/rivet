@@ -1184,6 +1184,15 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
                 super::commit_subject(&inner, &oid)?
             );
         }
+        // `post-checkout` runs in the new work tree, from the null id to the new commit; its
+        // status is the exit status of the command.
+        let created = Repository::open_with(&admin, Some(&target), None)?;
+        let code = rivet_core::hooks::Hook::new(&created, "post-checkout")
+            .arg(ObjectId::zero(created.format()).to_string())
+            .arg(oid.to_string())
+            .arg("1")
+            .run();
+        return Ok(code.unwrap_or(0));
     }
     Ok(0)
 }

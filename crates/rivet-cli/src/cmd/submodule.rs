@@ -1185,9 +1185,9 @@ fn clone_submodule(
         std::fs::write(dest.join(".git"), format!("gitdir: {}\n", link.display()))?;
         Ok(Repository::open_with(git_dir, Some(dest), None)?)
     };
-    let result = setup().and_then(|module| {
+    let result = setup().and_then(|mut module| {
         super::setup::populate_clone(
-            module,
+            &mut module,
             &super::setup::CloneArgs {
                 repository: url.to_string(),
                 directory: None,
@@ -1202,6 +1202,7 @@ fn clone_submodule(
             },
             false,
         )
+        .map(|_| ())
     });
     match result {
         Ok(()) => {

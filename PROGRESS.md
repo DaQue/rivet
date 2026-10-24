@@ -920,3 +920,12 @@ Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenario
 ### Phase 5.5 — hooks: `stash` (landed, scenario `s_hooks_stash`)
 Nothing to wire: git 2.56 runs no hook for `stash push [-u]`, `apply`, `pop` or `drop` (it builds its commits with plumbing), and rivet matched already; the scenario pins that (hooks installed, `hooks.log` compared; only the `post-checkout` of the explicit `checkout -- a` calls shows). `stash branch`, which does run `post-checkout` in git, does not exist in rivet (`GAPS.md`). Also fixed `GAPS.md`: it claimed `stash` had no `-a`/`-k`/pathspecs/`apply --index`; they parse (only `branch`/`create`/`store`/`save` are missing) — I did not compare their output beyond `push -a` and `apply --index` running.
 Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 224 PASS / `failures: 0`.
+
+### Phase 5.6 — hooks: `clone` and `worktree add` (landed, scenario `s_hooks_clone`)
+Base `10f612a`: neither ran `post-checkout`, and `core.hooksPath` set in the *global* config was ignored by the hook runner (it read the repository file only), which is the only way to give a fresh clone a hook. Against git 2.56:
+- `clone` (not `--bare`, not empty, checkout done): `post-checkout <null> <tip> 1` in the new work tree, with `GIT_DIR=<abs>/.git` set and **`GIT_PREFIX` not set at all**; run after `done.`; its exit status is the exit status of `clone` (3 stays 3). `--bare` and an empty source run nothing. New `Hook::without_prefix` in `rivet-core` (documented) for the unset `GIT_PREFIX`.
+- `worktree add` (with checkout): `post-checkout <null> <commit> 1` in the new work tree, `GIT_PREFIX` empty, no `GIT_DIR`; its status is the exit status; `--no-checkout` runs nothing.
+- Hook runner: `core.hooksPath` is now taken from the repository, else the last of the system/global files.
+- The scenario's hook script prints `GIT_DIR` relative to the cwd (`./.git`) so the per-run root does not leak into `hooks.log`.
+Found, not hooks, recorded in `GAPS.md`: `worktree add <path> <remote-branch>` DWIM and tracking setup, `clone` of an empty repo not writing `branch.<default>.remote/merge`, `clone -b <tag>`.
+Gate after: fmt, clippy, doc clean; 232 passed / 0 failed / 0 ignored; `scenarios.sh` 225 PASS / `failures: 0`.

@@ -405,11 +405,23 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
 
     let result = clone_into(&dest, args);
     match result {
-        Ok(()) => {
+        Ok((repository, checked_out)) => {
             if !global.quiet {
                 eprintln!("done.");
             }
-            Ok(0)
+            // `post-checkout` runs in the new work tree with `GIT_DIR` set and no `GIT_PREFIX`;
+            // its status becomes the exit status of the clone.
+            let Some(tip) = checked_out else {
+                return Ok(0);
+            };
+            Ok(rivet_core::hooks::Hook::new(&repository, "post-checkout")
+                .without_prefix()
+                .env("GIT_DIR", repository.git_dir())
+                .arg(rivet_core::ObjectId::zero(repository.format()).to_string())
+                .arg(tip.to_string())
+                .arg("1")
+                .run()
+                .unwrap_or(0))
         }
         Err(error) => {
             // Remove only what this command created.
@@ -747,7 +759,10 @@ fn split_section(name: &str) -> (String, Option<String>) {
     }
 }
 
-fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
+fn clone_into(
+    dest: &std::path::Path,
+    args: &CloneArgs,
+) -> Result<(Repository, Option<rivet_core::ObjectId>)> {
     let options = InitOptions {
         bare: args.bare,
         initial_branch: rivet_core::ops::default_branch_name()?,
@@ -757,21 +772,25 @@ fn clone_into(dest: &std::path::Path, args: &CloneArgs) -> Result<()> {
             .unwrap_or(ObjectFormat::Sha1),
         work_tree: None,
     };
-    let repository = Repository::init(dest, &options)?;
-    populate_clone(repository, args, true)
+    let mut repository = Repository::init(dest, &options)?;
+    let checked_out = populate_clone(&mut repository, args, true)?;
+    Ok((repository, checked_out))
 }
 
 /// Fetch into an initialised repository and check out the remote's default branch: everything
 /// `clone` does after creating the directories (also used for a submodule's separate git
 /// directory).
+///
+/// Returns the commit that was checked out, if one was (for `post-checkout`).
 pub(super) fn populate_clone(
-    mut repository: Repository,
+    repository: &mut Repository,
     args: &CloneArgs,
     checkout: bool,
-) -> Result<()> {
+) -> Result<Option<rivet_core::ObjectId>> {
     use rivet_core::remote_ops::{FetchRequest, Refspec, TagMode};
     use rivet_core::{HeadState, RefName};
 
+    let mut checked_out = None;
     let origin = args.origin.as_str();
     let url = rivet_core::remote_ops::absolutize_url(&args.repository);
 
@@ -819,7 +838,7 @@ pub(super) fn populate_clone(
         .all(|r| r.name.as_slice() == b"HEAD")
     {
         eprintln!("warning: You appear to have cloned an empty repository.");
-        return Ok(());
+        return Ok(None);
     }
     let wanted = match &args.branch {
         Some(branch) => {
@@ -837,7 +856,7 @@ pub(super) fn populate_clone(
         None => remote_default.clone(),
     };
     let Some(wanted) = wanted else {
-        return Ok(());
+        return Ok(None);
     };
     let branch_short =
         String::from_utf8_lossy(wanted.strip_prefix(b"refs/heads/").unwrap_or(&wanted))
@@ -894,8 +913,9 @@ pub(super) fn populate_clone(
         if checkout {
             let tree = repository.commit_tree(tip)?;
             repository.reset_hard_to_tree(tree)?;
+            checked_out = Some(tip);
         }
     }
     let _ = HeadState::Unborn { branch: branch_ref };
-    Ok(())
+    Ok(checked_out)
 }

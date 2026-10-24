@@ -12,8 +12,9 @@
 //! * **Hooks run in the work tree root** (the git directory when bare), with stdin closed unless the
 //!   caller provides some, and with **stdout redirected to stderr** (except for `pre-push`, see
 //!   [`Hook::keep_stdout`]): a hook's output normally never reaches the caller's stdout.
-//! * **`GIT_PREFIX` is always set**, to the directory the command was started in relative to the
-//!   work tree root (`sub/`, or empty at the root); the caller adds the other variables
+//! * **`GIT_PREFIX` is set**, to the directory the command was started in relative to the
+//!   work tree root (`sub/`, or empty at the root), unless the caller asks for
+//!   [`Hook::without_prefix`]; the caller adds the other variables
 //!   (`GIT_INDEX_FILE`, `GIT_EDITOR`, `GIT_REFLOG_ACTION`) that depend on the operation.
 
 use std::ffi::{OsStr, OsString};
@@ -43,6 +44,7 @@ pub struct Hook<'a> {
     env: Vec<(String, OsString)>,
     stdin: Option<Vec<u8>>,
     keep_stdout: bool,
+    no_prefix: bool,
 }
 
 impl<'a> Hook<'a> {
@@ -55,7 +57,15 @@ impl<'a> Hook<'a> {
             env: Vec::new(),
             stdin: None,
             keep_stdout: false,
+            no_prefix: false,
         }
+    }
+
+    /// Do not set `GIT_PREFIX` at all. Git leaves it unset for the hooks `clone` runs in the
+    /// work tree it has just created.
+    pub fn without_prefix(mut self) -> Self {
+        self.no_prefix = true;
+        self
     }
 
     /// Leave the hook's stdout on stdout. Git does this for `pre-push` only; every other hook's
@@ -124,8 +134,10 @@ impl<'a> Hook<'a> {
         command
             .args(&self.args)
             .current_dir(&root)
-            .env("GIT_PREFIX", prefix(self.repo))
             .envs(self.env.iter().map(|(k, v)| (k, v)));
+        if !self.no_prefix {
+            command.env("GIT_PREFIX", prefix(self.repo));
+        }
         let keep_stdout = self.keep_stdout;
         let spawn = |mut command: Command, data: &Option<Vec<u8>>| {
             command.stdin(if data.is_some() {
@@ -147,8 +159,10 @@ impl<'a> Hook<'a> {
                 sh.arg(&path)
                     .args(&self.args)
                     .current_dir(&root)
-                    .env("GIT_PREFIX", prefix(self.repo))
                     .envs(self.env.iter().map(|(k, v)| (k, v)));
+                if !self.no_prefix {
+                    sh.env("GIT_PREFIX", prefix(self.repo));
+                }
                 match spawn(sh, &self.stdin) {
                     Ok(child) => child,
                     Err(e) => return Some(cannot_exec(&shown, &e)),
@@ -203,11 +217,16 @@ fn prefix(repo: &Repository) -> OsString {
 
 /// The directory hooks are looked up in.
 fn hooks_dir(repo: &Repository) -> (PathBuf, String) {
-    let configured = repo
-        .config()
-        .get_path(BStr::new("core.hooksPath"))
-        .ok()
-        .flatten();
+    // The repository's own setting wins; otherwise the last of the global and system files that
+    // has one.
+    let key = BStr::new("core.hooksPath");
+    let configured = repo.config().get_path(key).ok().flatten().or_else(|| {
+        crate::ops::load_outer_configs()
+            .ok()?
+            .iter()
+            .rev()
+            .find_map(|config| config.get_path(key).ok().flatten())
+    });
     match configured {
         // An empty value is not "unset": Git looks for `/<name>`, which finds nothing.
         Some(value) if value.is_empty() => (PathBuf::from("/"), String::new()),

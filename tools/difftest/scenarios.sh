@@ -12,7 +12,7 @@ NOW0=$(date +%s)   # one wall-clock reading shared by both implementations
 hook_script='#!/bin/sh
 n=$(basename "$0")
 {
-    echo "== $n [$*] cwd=$(basename "$(pwd)") idx=${GIT_INDEX_FILE-unset} prefix=${GIT_PREFIX-unset} editor=${GIT_EDITOR-unset} action=${GIT_REFLOG_ACTION-unset} dir=${GIT_DIR-unset} wt=${GIT_WORK_TREE-unset}"
+    echo "== $n [$*] cwd=$(basename "$(pwd)") idx=${GIT_INDEX_FILE-unset} prefix=${GIT_PREFIX-unset} editor=${GIT_EDITOR-unset} action=${GIT_REFLOG_ACTION-unset} dir=$(printf %s "${GIT_DIR-unset}" | sed "s#^$(pwd)/#./#") wt=${GIT_WORK_TREE-unset}"
     case $n in
         post-rewrite|pre-push) sed "s/^/  stdin: /" ;;
         prepare-commit-msg|commit-msg)
@@ -516,6 +516,44 @@ s_hooks_stash() {
     v stash pop -q
     v status --short
     dump_hooklog
+}
+
+s_hooks_clone() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g branch other && tick && echo b >b && g add b && g commit -qm two && g push -q origin HEAD:main other 2>/dev/null)
+    g init -q --bare empty.git
+    # post-checkout from a hooks directory in the global config: a clone has no hooks of its own
+    mkdir hooks hooks-fail
+    printf '%s' "$hook_script" >hooks/post-checkout
+    printf '#!/bin/sh\necho failing >&2\nexit 3\n' >hooks-fail/post-checkout
+    chmod +x hooks/post-checkout hooks-fail/post-checkout
+    g config --file "$GIT_CONFIG_GLOBAL" core.hooksPath "$PWD/hooks"
+    # a clone runs it in the new work tree: <null> <tip> 1, GIT_DIR set, GIT_PREFIX not
+    v clone -q origin.git c1
+    v clone -q -b other origin.git c2
+    # nothing is checked out in these: no hook
+    v clone -q --bare origin.git bare.git
+    v clone -q empty.git c3
+    ls c3
+    # the hook's status is the clone's
+    g config --file "$GIT_CONFIG_GLOBAL" core.hooksPath "$PWD/hooks-fail"
+    v clone -q origin.git c4
+    g config --file "$GIT_CONFIG_GLOBAL" core.hooksPath "$PWD/hooks"
+    # worktree add: <null> <commit> 1 in the new work tree, GIT_PREFIX empty, no GIT_DIR
+    cd c1
+    v worktree add -q ../wt1 -b wt1
+    v worktree add -q ../wt2 -b wt2 main
+    v worktree add -q --detach ../wt3 main~1
+    v worktree add -q --no-checkout ../wt4 -b wt4
+    g config --file "$GIT_CONFIG_GLOBAL" core.hooksPath "$ROOT/hooks-fail"
+    v worktree add -q ../wt5 -b wt5
+    cd ..
+    for log in c1 c2 c4 wt1 wt2 wt3; do
+        echo "--- $log/hooks.log" >>"$TRANSCRIPT"
+        sed -e "s#$ROOT#<ROOT>#g" "$log/hooks.log" >>"$TRANSCRIPT"
+    done
+    ls wt4 wt5
 }
 
 s_hooks_run() {
@@ -6928,6 +6966,7 @@ for s in "$@"; do
         s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash) run_scenario "$s" repo origin.git ;;
         s_credential) run_scenario "$s" c_ok c5 ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
+        s_hooks_clone) run_scenario "$s" c1 c2 c4 bare.git wt1 wt2 wt3 wt4 wt5 ;;
         s_hooks_rebase) run_scenario "$s" repo origin.git ;;
         s_pack_deltas) run_scenario "$s" origin cl cl2 ;;
         s_worktree_linked) run_scenario "$s" repo wt wd ;;
