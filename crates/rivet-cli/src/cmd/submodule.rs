@@ -1,10 +1,10 @@
-//! `submodule`: `status`, `init`, `sync`, `add`, `update`, `deinit`, `foreach`, `set-branch` and
-//! `set-url`. `.gitmodules` is read directly; `add`, `set-branch` and `set-url` edit it as text.
+//! `submodule`: `status`, `init`, `sync`, `add`, `update`, `deinit`, `foreach`, `set-branch`,
+//! `set-url` and `absorbgitdirs`. `.gitmodules` is read directly; `add`, `set-branch` and `set-url`
+//! edit it as text.
 //!
 //! Each gitlink of the index prints as `<state><commit> <path>[ (<description>)]`, where the state
 //! is `-` for a submodule that is not checked out, `+` when its `HEAD` is not the recorded commit,
-//! `U` for a merge conflict and a blank otherwise. Every other subcommand (`summary`,
-//! `absorbgitdirs`) is refused by name.
+//! `U` for a merge conflict and a blank otherwise. `summary` is refused by name.
 
 use std::path::Path;
 
@@ -50,6 +50,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "foreach" => return submodule_foreach(global, quiet, rest),
             "set-branch" => return submodule_set_branch(global, quiet, rest),
             "set-url" => return submodule_set_url(global, quiet, rest),
+            "absorbgitdirs" => return submodule_absorbgitdirs(global, rest),
             _ => {}
         }
     }
@@ -71,9 +72,7 @@ pub fn run_submodule(global: &GlobalArgs, args: &SubmoduleArgs) -> Result<i32> {
             "--" => only_paths = true,
             "status" if !seen_sub => seen_sub = true,
             other if !seen_sub && !other.starts_with('-') => {
-                anyhow::bail!(
-                    "submodule: '{other}' is not implemented (only 'status', 'init', 'sync', 'add', 'update', 'deinit', 'foreach', 'set-branch' and 'set-url' are)"
-                )
+                anyhow::bail!("submodule: '{other}' is not implemented (all but 'summary' are)")
             }
             other if other.starts_with('-') => {
                 eprintln!("error: unknown option `{}'", other.trim_start_matches('-'));
@@ -188,7 +187,11 @@ fn status_in(
             continue;
         }
         let sub_dir = root.join(entry.path.to_os_str_lossy());
-        let sub = if sub_dir.join(".git").exists() {
+        let active = names
+            .iter()
+            .find(|(path, _)| *path == entry.path)
+            .is_some_and(|(path, name)| is_active(repository, name.as_ref(), path.as_ref()));
+        let sub = if active && sub_dir.join(".git").exists() {
             Repository::open_or_discover(&sub_dir).ok()
         } else {
             None
@@ -2001,4 +2004,105 @@ fn submodule_set_url(global: &GlobalArgs, quiet: bool, args: &[String]) -> Resul
         false,
         Some(&known),
     )
+}
+
+const USAGE_ABSORB: &str = "usage: git submodule absorbgitdirs [<options>] [<path>...]
+
+";
+
+fn submodule_absorbgitdirs(global: &GlobalArgs, args: &[String]) -> Result<i32> {
+    let mut paths: Vec<String> = Vec::new();
+    let mut only_paths = false;
+    for word in args {
+        match word.as_str() {
+            _ if only_paths => paths.push(word.clone()),
+            "--" => only_paths = true,
+            w if w.starts_with("--") => {
+                eprintln!("error: unknown option `{}'", &w[2..]);
+                eprint!("{USAGE_ABSORB}");
+                return Ok(129);
+            }
+            w if w.starts_with('-') && w.len() > 1 => {
+                eprintln!("error: unknown switch `{}'", &w[1..2]);
+                eprint!("{USAGE_ABSORB}");
+                return Ok(129);
+            }
+            other => paths.push(other.to_string()),
+        }
+    }
+    let repository = super::open(global)?;
+    let Some(root) = repository.worktree_path().map(Path::to_path_buf) else {
+        return Ok(0);
+    };
+    let prefix = cwd_prefix(&root);
+    absorb_in(&repository, &root, &prefix, "", &paths)
+}
+
+/// Move the embedded git directories of the submodules of `repository` under its own
+/// `.git/modules`, and do the same for the submodules they contain.
+fn absorb_in(
+    repository: &Repository,
+    root: &Path,
+    prefix: &str,
+    shown_prefix: &str,
+    paths: &[String],
+) -> Result<i32> {
+    let links = match module_list(repository, prefix, paths) {
+        Ok(links) => links,
+        Err(code) => return Ok(code),
+    };
+    let gitmodules = gitmodules_config(repository, root);
+    for link in links {
+        let display = format!("{shown_prefix}{}", display_path(prefix, link.path.as_ref()));
+        let dir = root.join(link.path.to_os_str_lossy());
+        let dot_git = dir.join(".git");
+        if !dot_git.exists() {
+            continue;
+        }
+        let Some(name) = name_of(&gitmodules, link.path.as_ref()) else {
+            eprintln!("fatal: could not lookup name for submodule '{display}'");
+            return Ok(128);
+        };
+        if dot_git.is_dir() {
+            let dest = repository
+                .common_dir()
+                .join("modules")
+                .join(name.to_os_str_lossy());
+            if dest.exists() {
+                anyhow::bail!(
+                    "submodule absorbgitdirs: the module directory '{}' already exists",
+                    dest.display()
+                );
+            }
+            eprintln!(
+                "Migrating git directory of '{display}' from\n'{}' to\n'{}'",
+                dot_git.display(),
+                dest.display()
+            );
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::rename(&dot_git, &dest)?;
+            std::fs::write(
+                &dot_git,
+                format!("gitdir: {}\n", relative_path(&dir, &dest).display()),
+            )?;
+            let mut module = Repository::open_with(&dest, None, None)?;
+            module.config_mut().set(
+                BStr::new("core.worktree"),
+                relative_path(&dest, &dir).to_string_lossy().as_bytes(),
+            )?;
+            module.write_config()?;
+        }
+        // The submodules inside it, whether it was just absorbed or already was.
+        if let Ok(sub) = Repository::open_or_discover(&dir) {
+            let sub_root = sub.worktree_path().map(Path::to_path_buf).unwrap_or(dir);
+            let nested = format!("{display}/");
+            let code = absorb_in(&sub, &sub_root, "", &nested, &[])?;
+            if code != 0 {
+                return Ok(code);
+            }
+        }
+    }
+    Ok(0)
 }

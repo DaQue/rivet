@@ -6089,6 +6089,43 @@ s_submodule_set() {
     v submodule set-branch -b dev vendor/lib
 }
 
+s_submodule_absorb() {
+    g init -q inner; (cd inner && tick && echo i >i.txt && g add i.txt && g commit -q -m i1)
+    g init -q lib; (cd lib && tick && echo l >l.txt && g add l.txt && g commit -q -m l1 &&
+        g clone -q ../inner in && g add in 2>/dev/null && g config -f .gitmodules submodule.in.path in &&
+        g config -f .gitmodules submodule.in.url ../inner && g add .gitmodules && tick && g commit -q -m "add in")
+    g init -q top; cd top
+    tick; echo t >t; g add t; g commit -q -m t1
+    g clone -q ../lib vendor/lib; g clone -q ../inner vendor/lib/in
+    g clone -q ../lib other; g clone -q ../lib spare
+    g add vendor/lib other spare 2>/dev/null
+    g config -f .gitmodules submodule.vendor/lib.path vendor/lib
+    g config -f .gitmodules submodule.vendor/lib.url ../lib
+    g config -f .gitmodules submodule.spare.path spare
+    g config -f .gitmodules submodule.spare.url ../lib
+    g add .gitmodules; tick; g commit -q -m subs
+    v submodule absorbgitdirs nosuch
+    v submodule absorbgitdirs --bogus
+    v submodule absorbgitdirs -q
+    v submodule absorbgitdirs t
+    v submodule absorbgitdirs other
+    v submodule absorbgitdirs
+    g rm -q --cached other
+    v submodule absorbgitdirs spare
+    sm_snap spare
+    v submodule absorbgitdirs spare
+    v submodule absorbgitdirs
+    sm_snap vendor/lib vendor/lib/in
+    v submodule absorbgitdirs
+    v submodule status
+    v status -s
+    (cd vendor/lib && v status -sb && v log --oneline)
+    (cd vendor/lib/in && v status -sb)
+    mkdir sub
+    (cd sub && v submodule absorbgitdirs ../spare)
+    rm -rf other
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
@@ -6113,6 +6150,7 @@ for s in "$@"; do
         s_submodule_foreach) run_scenario "$s" none ;;
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;
         s_submodule_set) run_scenario "$s" clone ;;
+        s_submodule_absorb) run_scenario "$s" top top/vendor/lib ;;
         s_worktree_move) run_scenario "$s" repo ;;
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
