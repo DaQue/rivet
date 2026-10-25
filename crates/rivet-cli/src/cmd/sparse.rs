@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::io::Read as _;
 
 use anyhow::Result;
-use bstr::{BStr, BString};
+use bstr::{BStr, BString, ByteSlice as _};
 use rivet_core::Repository;
 use rivet_core::sparse::{SparseApply, cone_patterns};
 
@@ -84,8 +84,9 @@ fn parse_options(args: &[String], allowed: &[&str]) -> std::result::Result<Optio
 ///
 /// # Caveats
 ///
-/// `check-rules`, `clean` and the sparse index (`--sparse-index`) are not implemented. Paths given to
-/// `set` and `add` are taken relative to the work tree root whatever the current directory is.
+/// `clean` and the sparse index (`--sparse-index`) are not implemented. In cone mode, paths given
+/// on the command line to `set` and `add` are relative to the current directory and those read from
+/// `--stdin` to the work tree root; free-form patterns need the top-level directory.
 pub fn run_sparse_checkout(global: &GlobalArgs, args: &SparseArgs) -> Result<i32> {
     let Some((sub, rest)) = args.args.split_first() else {
         eprintln!("error: need a subcommand");
@@ -97,7 +98,8 @@ pub fn run_sparse_checkout(global: &GlobalArgs, args: &SparseArgs) -> Result<i32
         "set" => &["cone", "stdin", "skip-checks"],
         "add" => &["stdin", "skip-checks"],
         "list" | "disable" => &[],
-        "check-rules" | "clean" => {
+        "check-rules" => return check_rules(global, rest),
+        "clean" => {
             anyhow::bail!("sparse-checkout {sub} is not implemented");
         }
         other => {
@@ -123,6 +125,156 @@ pub fn run_sparse_checkout(global: &GlobalArgs, args: &SparseArgs) -> Result<i32
         "reapply" => reapply(&mut repository, &options),
         _ => disable(&mut repository),
     }
+}
+
+const CHECK_RULES_USAGE: &str = "usage: git sparse-checkout check-rules [-z] [--skip-checks][--[no-]cone] [--rules-file <file>]\n\n    -z                    terminate input and output files by a NUL character\n    --[no-]cone           when used with --rules-file interpret patterns as cone mode patterns\n    --[no-]rules-file <file>\n                          use patterns in <file> instead of the current ones.\n\n";
+
+/// The bytes a C-style quoted string (`"…"`, with `\n`, `\"`, `\ooo` escapes) stands for.
+fn unquote_c_style(text: &[u8]) -> Option<Vec<u8>> {
+    let inner = text.strip_prefix(b"\"")?;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < inner.len() {
+        match inner[i] {
+            b'"' => return (i + 1 == inner.len()).then_some(out),
+            b'\\' => {
+                i += 1;
+                let escaped = *inner.get(i)?;
+                match escaped {
+                    b'a' => out.push(7),
+                    b'b' => out.push(8),
+                    b'f' => out.push(12),
+                    b'n' => out.push(b'\n'),
+                    b'r' => out.push(b'\r'),
+                    b't' => out.push(b'\t'),
+                    b'v' => out.push(11),
+                    b'\\' | b'"' => out.push(escaped),
+                    b'0'..=b'3' => {
+                        let digits = inner.get(i..i + 3)?;
+                        if !digits.iter().all(|d| (b'0'..=b'7').contains(d)) {
+                            return None;
+                        }
+                        let value = digits.iter().fold(0u32, |n, d| n * 8 + u32::from(d - b'0'));
+                        out.push(u8::try_from(value).ok()?);
+                        i += 2;
+                    }
+                    _ => return None,
+                }
+            }
+            other => out.push(other),
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `check-rules`: read paths from standard input and print those the definition includes.
+fn check_rules(global: &GlobalArgs, args: &[String]) -> Result<i32> {
+    use std::io::Write as _;
+    let mut nul = false;
+    let mut cone = true;
+    let mut rules_file: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        match arg {
+            "-z" => nul = true,
+            "--cone" => cone = true,
+            "--no-cone" => cone = false,
+            "--no-rules-file" => rules_file = None,
+            "--rules-file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    eprintln!("error: option `rules-file' requires a value");
+                    eprint!("{CHECK_RULES_USAGE}");
+                    return Ok(129);
+                };
+                rules_file = Some(value.clone());
+            }
+            _ if arg.starts_with("--rules-file=") => {
+                rules_file = Some(arg["--rules-file=".len()..].to_string());
+            }
+            _ if arg.starts_with('-') && arg != "-" => {
+                eprintln!("error: unknown option `{}'", arg.trim_start_matches('-'));
+                eprint!("{CHECK_RULES_USAGE}");
+                return Ok(129);
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    let repository = super::open(global)?;
+    let (data, cone) = match &rules_file {
+        Some(file) => match std::fs::read(file) {
+            Ok(data) => (data, cone),
+            Err(error) => {
+                let reason = match error.kind() {
+                    std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
+                    _ => error.to_string(),
+                };
+                eprintln!("fatal: could not open '{file}' for reading: {reason}");
+                return Ok(128);
+            }
+        },
+        None => {
+            let Ok(data) = std::fs::read(repository.git_dir().join("info").join("sparse-checkout"))
+            else {
+                eprintln!("fatal: unable to load existing sparse-checkout patterns");
+                return Ok(128);
+            };
+            (data, repository.sparse_cone_setting()?.unwrap_or(true))
+        }
+    };
+    let (mut sparse, mut warnings) = rivet_core::sparse::SparseCheckout::parse(cone, &data)?;
+    if cone && rules_file.is_some() && !warnings.is_empty() {
+        // Git reads the lines of a cone rules file it does not understand as nothing, quietly,
+        // instead of falling back to free-form patterns.
+        let mut kept = Vec::new();
+        for line in data.lines() {
+            let (_, line_warnings) = rivet_core::sparse::SparseCheckout::parse(true, line)?;
+            if line_warnings.is_empty() {
+                kept.extend_from_slice(line);
+                kept.push(b'\n');
+            }
+        }
+        (sparse, warnings) = rivet_core::sparse::SparseCheckout::parse(true, &kept)?;
+    }
+    print_warnings(&warnings);
+    let mut input = Vec::new();
+    std::io::stdin().read_to_end(&mut input)?;
+    let separator = if nul { b'\0' } else { b'\n' };
+    let mut records: Vec<&[u8]> = input.split(|b| *b == separator).collect();
+    if records.last().is_some_and(|last| last.is_empty()) {
+        records.pop();
+    }
+    let mut out = std::io::stdout().lock();
+    for record in records {
+        let path = if nul || !record.starts_with(b"\"") {
+            record.to_vec()
+        } else if let Some(path) = unquote_c_style(record) {
+            path
+        } else {
+            out.flush()?;
+            eprintln!(
+                "fatal: unable to unquote C-style string '{}'",
+                String::from_utf8_lossy(record)
+            );
+            return Ok(128);
+        };
+        // Git never counts an absolute path as part of a cone.
+        if (sparse.is_cone() && path.starts_with(b"/")) || !sparse.includes(BStr::new(&path)) {
+            continue;
+        }
+        if nul {
+            out.write_all(&path)?;
+            out.write_all(b"\0")?;
+        } else {
+            out.write_all(&rivet_core::ops::quote_path(&path, false))?;
+            out.write_all(b"\n")?;
+        }
+    }
+    out.flush()?;
+    Ok(0)
 }
 
 /// The cone switch a subcommand without a flag keeps: the current one while sparse checkout is on,
@@ -274,6 +426,56 @@ fn cone_directory(repository: &Repository, arg: &str, skip_checks: bool) -> Resu
     Ok(normalized)
 }
 
+/// The current directory below the work tree root, without a trailing slash (empty at the root).
+fn cwd_prefix(repository: &Repository) -> Result<String> {
+    let Some(root) = repository
+        .worktree()?
+        .root()
+        .map(std::path::Path::to_path_buf)
+    else {
+        return Ok(String::new());
+    };
+    let here = std::env::current_dir()?;
+    Ok(here
+        .strip_prefix(&root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default())
+}
+
+/// A path argument made relative to the work tree root, as git's `prefix_path` does when it runs in
+/// a subdirectory; `..` is resolved and a path that leaves the work tree is refused.
+fn with_prefix(repository: &Repository, prefix: &str, arg: &str) -> Result<String, String> {
+    if prefix.is_empty() {
+        return Ok(arg.to_string());
+    }
+    let root = repository
+        .worktree()
+        .ok()
+        .and_then(|w| w.root().map(std::path::Path::to_path_buf))
+        .unwrap_or_default();
+    let outside = || format!("'{arg}' is outside repository at '{}'", root.display());
+    let joined = if let Some(absolute) = arg.strip_prefix('/') {
+        let root_text = root.to_string_lossy();
+        let root_text = root_text.trim_start_matches('/');
+        let inside = absolute
+            .strip_prefix(root_text)
+            .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+            .ok_or_else(outside)?;
+        inside.to_string()
+    } else {
+        format!("{prefix}/{arg}")
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for component in joined.split('/').filter(|c| !c.is_empty() && *c != ".") {
+        if component == ".." {
+            parts.pop().ok_or_else(outside)?;
+        } else {
+            parts.push(component);
+        }
+    }
+    Ok(parts.join("/"))
+}
+
 /// `set` replaces the definition, `add` extends it.
 fn set(repository: &mut Repository, options: &Options, add: bool) -> Result<i32> {
     if add && !repository.sparse_enabled()? {
@@ -284,10 +486,24 @@ fn set(repository: &mut Repository, options: &Options, add: bool) -> Result<i32>
         Some(cone) => cone,
         None => current_cone(repository)?,
     };
+    let prefix = cwd_prefix(repository)?;
     // Git switches the configuration on before it looks at the paths, so a refused path leaves
-    // sparse checkout enabled without a pattern file.
+    // sparse checkout enabled without a pattern file (and a refused `--no-cone` in cone-less mode).
     repository.write_sparse_settings(true, cone, false)?;
-    let mut given: Vec<String> = options.rest.clone();
+    if !cone && !prefix.is_empty() {
+        eprintln!("fatal: please run from the toplevel directory in non-cone mode");
+        return Ok(128);
+    }
+    let mut given: Vec<String> = Vec::new();
+    for arg in &options.rest {
+        match with_prefix(repository, &prefix, arg) {
+            Ok(path) => given.push(path),
+            Err(message) => {
+                eprintln!("fatal: {message}");
+                return Ok(128);
+            }
+        }
+    }
     if options.stdin {
         let mut text = String::new();
         std::io::stdin().read_to_string(&mut text)?;

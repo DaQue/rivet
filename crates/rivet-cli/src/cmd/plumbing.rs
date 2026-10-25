@@ -305,6 +305,11 @@ pub struct LsFilesArgs {
     #[arg(short = 't')]
     pub tag: bool,
 
+    /// Show the sparse directory entries of a sparse index; rivet's index is never sparse, so every
+    /// entry is listed either way.
+    #[arg(long = "sparse")]
+    pub sparse: bool,
+
     /// Print the path without the current directory's prefix.
     #[arg(long = "full-name")]
     pub full_name: bool,

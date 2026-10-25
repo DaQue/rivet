@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 241 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 242 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-24, gate: 237 tests / 0 failed, 241 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 237 tests / 0 failed, 242 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -17,19 +17,25 @@ The command or subsystem is absent; it either fails at the argument parser or re
 
 * **`rebase -q`** prints `warning: skipped previously applied commit <id>`; git is silent under `-q`.
 * **Partial clone** — `--filter` and promisor/partial clones are not implemented.
-* **Sparse checkout** — `sparse-checkout init`/`set`/`add`/`list`/`reapply`/`disable` exist (cone mode
-  and `--no-cone`, `--stdin`, `--skip-checks`); `check-rules`, `clean` and the sparse index
-  (`--sparse-index`) do not. Paths given to `set`/`add` are taken relative to the work tree root,
-  whatever the current directory. A cone file that is not in the shape git writes is read as
-  free-form patterns, with git's two warnings printed once (git prints them twice).
+* **Sparse checkout** — `sparse-checkout init`/`set`/`add`/`list`/`reapply`/`disable`/`check-rules` exist
+  (cone mode and `--no-cone`, `--stdin`, `--skip-checks`; `check-rules` with `-z`, `--cone`/`--no-cone`,
+  `--rules-file`, C-quoted input and output); `clean` and the sparse index (`--sparse-index`) do not.
+  In cone mode `set`/`add` take command-line paths relative to the current directory (`..` resolved,
+  `outside repository` refused) and `--stdin` lines relative to the root; `--no-cone` from a
+  subdirectory is refused as in git. `ls-files --sparse` is accepted (the index is never sparse, so it
+  changes nothing) and long `status` prints the "You are in a sparse checkout with N% …" line.
+  A cone file that is not in the shape git writes is read as free-form patterns, with git's two
+  warnings printed once (git prints them twice); `check-rules --rules-file` instead ignores the lines
+  of a cone file it does not understand, as git does, and prints no warning.
   Honoured by `switch`/`checkout`, `reset --hard`, `merge`, `cherry-pick`, `revert`, `rebase`, `stash`,
   `add`/`rm`/`mv` (git's refusal for names that only match paths outside the definition, `--sparse` for
   `add`), `restore`/`checkout -- <path>`, `diff`, `status`, `commit -a`, `add -u`, `ls-files -t`
-  and `worktree add` (the new work tree inherits the definition). Not covered, so they may ignore the
-  definition: `clean`/`update-index` details, `ls-files --sparse`, `sparse-checkout` run from a
-  subdirectory, `am`, `bisect`, `merge --abort` and conflicts that land outside the definition (the
-  files stay in the work tree), `git sparse-checkout set` leaving a directory that holds untracked
-  files (the warning is printed, git also tries to remove it).
+  and `worktree add` (the new work tree inherits the definition). A merge whose conflict lands outside
+  the definition matches git, including `merge --abort` (`s_sparse_leftovers`). Not covered, so they may
+  ignore the definition: `clean`/`update-index` details, `am`, `bisect`, and `git sparse-checkout set`
+  leaving a directory that holds untracked files (the warning is printed, git also tries to remove it).
+  `check-rules` run with a pattern file but `core.sparseCheckout` off, and a path starting with `/` in
+  non-cone mode, are not compared.
 * **`rebase --interactive`** — `pick`/`reword`/`edit`/`squash`/`fixup`/`drop`/`noop`, the editable todo list,
   `--continue`/`--skip`/`--abort` work (`s_rebase_i`, `s_rebase_i_stops`, `s_rebase_i_conflict`).
   Refused by name, before anything is touched: `--root`, `--rebase-merges`, `--exec`/`-x`, `--keep-base`,

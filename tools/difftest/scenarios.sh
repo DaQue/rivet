@@ -7668,6 +7668,112 @@ s_stash_branch() {
     v stash list
 }
 
+s_sparse_leftovers() {
+    v init -q repo; cd repo
+    mkdir -p d/e f; echo 1 >a; echo 2 >d/x; echo 3 >d/e/y; echo 4 >f/z
+    v add .; v commit -q -m one
+    v switch -q -c side; echo s >f/z; echo sx >d/x; v commit -q -a -m side
+    v switch -q main; echo m >f/z; tick; v commit -q -a -m main
+    v sparse-checkout set d f
+    # check-rules: the current definition, quoting in and out, -z, odd names.
+    vin 'a
+d/x
+d/e/y
+f/z
+zz/q
+d
+' sparse-checkout check-rules
+    echo "rc=$?"
+    vin '"a"
+d/\303\251
+"d/\303\251"
+d/a b
+"d/tab\t"
+./a
+f//z
+d/
+../x
+' sparse-checkout check-rules
+    STDIN_FILE=$(mktemp "${TMPDIR:-/tmp}/stdin.XXXXXX"); printf 'a\0d/e/y\0zz/q\0"a"\0f/z' >"$STDIN_FILE"
+    # The NUL-separated output goes through od so the transcript stays text.
+    echo '$ check-rules -z | od -c' >>"$TRANSCRIPT"
+    if [ "$IMPL" = git ]; then "$GIT" sparse-checkout check-rules -z <"$STDIN_FILE" | od -c >>"$TRANSCRIPT"; else "$RIVET" sparse-checkout check-rules -z <"$STDIN_FILE" | od -c >>"$TRANSCRIPT"; fi
+    rm -f "$STDIN_FILE"; STDIN_FILE=
+    vin '"abc
+' sparse-checkout check-rules
+    vin 'a
+' sparse-checkout check-rules extra args
+    vin 'a
+' sparse-checkout check-rules --bogus
+    printf '/*\n!/*/\n/d/\n!/d/*/\n/d/e/\n' >"$PWD/../cone.rules"
+    printf '/a\n/d/\n!/d/x\n' >"$PWD/../free.rules"
+    : >"$PWD/../empty.rules"
+    for rules in cone free empty; do
+        for flag in "" --cone --no-cone; do
+            vin 'a
+d/x
+d/e/y
+f/z
+d
+d/e
+' sparse-checkout check-rules $flag --rules-file "$PWD/../$rules.rules"
+        done
+    done
+    vin 'a
+' sparse-checkout check-rules --rules-file="$PWD/../cone.rules"
+    vin 'a
+' sparse-checkout check-rules --rules-file "$PWD/../missing.rules"
+    echo "rc=$?"
+    # Free-form definition, and a repository where the pattern file is gone.
+    v sparse-checkout set --no-cone '/a' '/d/' '!/d/e/'
+    vin 'a
+d/x
+d/e/y
+f/z
+' sparse-checkout check-rules
+    rm .git/info/sparse-checkout
+    vin 'a
+' sparse-checkout check-rules
+    echo "rc=$?"
+    v sparse-checkout set --cone d f
+    # ls-files --sparse lists every index entry when the index is not sparse.
+    v ls-files --sparse
+    v ls-files -t --sparse
+    # status says how much of the tree is present.
+    v status
+    echo more >>d/x; echo staged >>a; v add a
+    v status
+    v reset -q a; v checkout -q -- a d/x
+    # set / add from a subdirectory: arguments relative to it, --stdin relative to the root.
+    (cd d; v sparse-checkout set e); v sparse-checkout list; ls
+    (cd d; v sparse-checkout add ../f); v sparse-checkout list
+    (cd d; vin 'f
+' sparse-checkout set --stdin); v sparse-checkout list
+    v sparse-checkout set --cone d f
+    (cd d; v sparse-checkout set ..); v sparse-checkout list
+    v sparse-checkout set --cone d
+    (cd d; v sparse-checkout set ../../x; echo "rc=$?")
+    (cd d; v sparse-checkout set /f; echo "rc=$?")
+    (cd d; v sparse-checkout add x; echo "rc=$?")
+    v sparse-checkout list
+    (cd d; v sparse-checkout set --no-cone '/a'; echo "rc=$?")
+    (cd d; v sparse-checkout add '/a'; echo "rc=$?")
+    v sparse-checkout list
+    v sparse-checkout set --cone d
+    cat .git/info/sparse-checkout
+    # A merge whose conflict lies outside the definition: the file is written, then stays.
+    v merge side
+    echo "rc=$?"
+    v status
+    v ls-files -t
+    v ls-files -u
+    cat f/z
+    v merge --abort
+    echo "rc=$?"
+    ls; v ls-files -t
+    v status --short
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

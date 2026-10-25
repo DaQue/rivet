@@ -1209,10 +1209,23 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         println!("  (use \"git merge --abort\" to abort the merge)");
         println!();
     }
+    if repository.sparse_enabled()? {
+        let entries = repository.index().entries();
+        let skipped = entries.iter().filter(|e| e.skip_worktree()).count();
+        if !entries.is_empty() {
+            let present = 100 - 100 * skipped / entries.len();
+            println!("You are in a sparse checkout with {present}% of tracked files present.");
+            println!();
+        }
+    }
     let mut wrote_section = false;
     if !status.staged.is_empty() {
         println!("Changes to be committed:");
-        println!("  (use \"git restore --staged <file>...\" to unstage)");
+        // Git leaves the hint out while a merge, cherry-pick or revert is under way (its
+        // `whence` is not a plain commit).
+        if picking.is_none() && !rivet_core::merge_in_progress(repository.git_dir()) {
+            println!("  (use \"git restore --staged <file>...\" to unstage)");
+        }
         for entry in &status.staged {
             if renamed_sources.contains(&entry.path) {
                 continue;
