@@ -7774,6 +7774,72 @@ f/z
     v status --short
 }
 
+# Interop seam: a rebase that one implementation starts and stops, the other one resumes. In the
+# "git" run both are git; in the "rivet" run the first half is rivet (`v`) and the second real git
+# (`vg`), and then the other way round, so the transcripts, ids, reflogs and files must be identical.
+s_rebase_interop() {
+    v init -q repo; cd repo
+    echo 0 >f; v add f; v commit -q -m base
+    v switch -q -c topic
+    for i in 1 2 3 4; do echo $i >f$i; v add f$i; tick; v commit -q -m c$i; done
+    v switch -q main
+    echo m >m; v add m; tick; v commit -q -m main
+    echo conflict >f3; v add f3; tick; v commit -q -m "main f3"
+    orig=$(g rev-parse topic)
+    seq="sed -i -e 's/^pick \(.*\) # c1\$/edit \1 # c1/' -e 's/^pick \(.*\) # c2\$/squash \1 # c2/' -e 's/^pick \(.*\) # c4\$/reword \1 # c4/'"
+    # rivet starts, git resumes: stop at the edit, a squash behind it, a conflict, a reword.
+    v switch -q topic
+    GIT_SEQUENCE_EDITOR="$seq" v rebase -i main
+    echo "rc=$?"
+    echo more >>f1; v commit -q -a --amend -m c1
+    vg rebase --continue
+    echo "rc=$?"
+    vg status
+    echo res >f3; v add f3
+    vg rebase --continue
+    echo "rc=$?"
+    v status
+    v log --format='%h %s' main..topic
+    v reflog -14
+    # rivet starts, git skips the conflicting commit, then aborts a second run.
+    v switch -q -C topic "$orig"
+    GIT_SEQUENCE_EDITOR="$seq" v rebase -i main
+    vg rebase --continue
+    vg rebase --skip
+    echo "rc=$?"
+    v log --format='%h %s' main..topic
+    v switch -q -C topic "$orig"
+    GIT_SEQUENCE_EDITOR="$seq" v rebase -i main
+    vg rebase --abort
+    echo "rc=$?"
+    v status
+    # git starts, rivet resumes.
+    v switch -q -C topic "$orig"
+    GIT_SEQUENCE_EDITOR="$seq" vg rebase -i main
+    echo "rc=$?"
+    echo more >>f1; v commit -q -a --amend -m c1
+    v rebase --continue
+    echo "rc=$?"
+    v status
+    echo res >f3; v add f3
+    v rebase --continue
+    echo "rc=$?"
+    v status
+    v log --format='%h %s' main..topic
+    v reflog -14
+    v switch -q -C topic "$orig"
+    GIT_SEQUENCE_EDITOR="$seq" vg rebase -i main
+    v rebase --continue
+    v rebase --skip
+    echo "rc=$?"
+    v log --format='%h %s' main..topic
+    v switch -q -C topic "$orig"
+    GIT_SEQUENCE_EDITOR="$seq" vg rebase -i main
+    v rebase --abort
+    echo "rc=$?"
+    v status
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

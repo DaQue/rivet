@@ -1025,3 +1025,9 @@ Found by the scenario in code `status` already shared: long `status` now prints 
 A merge conflicting in a file outside the cone writes the conflict into the work tree, `merge --abort` leaves the file and clears nothing else; rivet already matched (compared: status, `ls-files -t`/`-u`, the file, the abort). The `-z` output is compared through `od -c`.
 Not done: see `GAPS.md` (`check-rules` with sparse checkout off, `/`-prefixed paths in non-cone mode).
 Gate after: fmt, clippy `-D warnings`, doc clean; 237 passed / 0 failed / 0 ignored; `scenarios.sh` 242 PASS / `failures: 0`.
+
+### Item 3 — the interop seam (no code change; scenario `s_rebase_interop`, new)
+Checked by hand first (git 2.56): a `rebase -i` started by rivet and stopped at `edit`, at a squash pending behind an `edit`, and at a conflict is resumed by real `git rebase --continue`, `--skip` and `--abort`; a state written by git is resumed by `rivet rebase --continue`/`--skip`/`--abort` likewise. The `rebase-merge/` directories differ in files only: rivet adds `rivet-interactive`; git adds `no-reschedule-failed-exec` and `patch`. Neither side needs the other's extras. The scenario runs both directions (edit stop, squash, conflict, reword, skip, abort) with the first half through `v` and the second through `vg` (real git in both runs, so the "git" run is git end to end); transcripts, ids, reflogs, status and files are identical, so the seam is closed and nothing was written to `GAPS.md` as a limit (a note records it).
+Found while writing it: `commit --amend --no-edit` is an unknown option in rivet (recorded in `GAPS.md`; the scenario uses `--amend -m`).
+Gate after: fmt, clippy `-D warnings`, doc clean; 237 passed / 0 failed / 0 ignored; `scenarios.sh` 243 PASS / `failures: 0`.
+Item 4 (`hook list`, credential depth) not started: the brief says to stop after a green unit rather than start a subsystem that cannot be finished in the time left.

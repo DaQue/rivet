@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 242 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 243 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 237 tests / 0 failed, 242 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 237 tests / 0 failed, 243 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -47,6 +47,11 @@ The command or subsystem is absent; it either fails at the argument parser or re
   `update-ref` and `fixup -C`/`-c`. An empty message from the editor aborts the whole rebase back to the
   original tip (git stops with the commit pending). The editor sees the message plus git's `#` footer, not
   the `git status` template. `post-rewrite` lines for a squash chain are not compared with git.
+* **Rebase interop** — a rebase that rivet starts (plain or `-i`) can be resumed, skipped or aborted by real
+  `git rebase --continue`/`--skip`/`--abort`, and the reverse, with identical ids, reflogs and files
+  (`s_rebase_interop`: edit stop, squash, conflict, reword). rivet's `rebase-merge/` carries one extra file,
+  `rivet-interactive`, which git ignores; a git-written state lacks it and rivet does not need it. Plain
+  (non-`-i`) rebase states written by git are not compared.
 * **`bundle-uri`**, SHA-256 bundles, and `clone`/`ls-remote` from a bundle file. Creating,
   listing, verifying and unbundling bundles works; fetching *from* a bundle works only as a
   remote URL.
@@ -65,6 +70,7 @@ The command works for the common case; the listed options or edge cases are miss
   `--graph` over several root commits exits 128 by design; `--graph` with `--date-order` or
   `--first-parent` orders differently from git, and `--graph --format=format:%s` draws an
   extra row.
+* **`commit`** — `--amend --no-edit` is an unknown option (found by `s_rebase_interop`, which uses `--amend -m`).
 * **`rev-list`** — no `--skip`, `--max-age`/`--min-age`, `--left-right`, `--cherry-pick`,
   `--ancestry-path`, `--children`.
 * **`for-each-ref`** — no `--shell`/`--perl`/`--python`/`--tcl`, `--stdin`, `--start-after`,
