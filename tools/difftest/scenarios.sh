@@ -7269,6 +7269,23 @@ s_clone_bundle_uri() {
     (cd remote && v for-each-ref | head -1)
 }
 
+s_clone_filter() {
+    g init -q src; cd src
+    for i in 1 2; do tick; echo "line $i" >>f; g add .; g commit -q -m "c$i"; done
+    cd ..
+    v clone --filter=blob:none src local
+    (cd local && v config core.repositoryformatversion && v config remote.origin.promisor && v config remote.origin.partialclonefilter && v config remote.origin.url | sed "s#$ROOT#<ROOT>#g" && v log --oneline && vq fsck)
+    v clone --filter=blob:none file://$ROOT/src viafile
+    (cd viafile && v config core.repositoryformatversion && v config remote.origin.promisor && v config remote.origin.partialclonefilter && v config remote.origin.url | sed "s#$ROOT#<ROOT>#g" && v status -sb)
+    v clone --filter=tree:0 --bare file://$ROOT/src bare.git
+    (cd bare.git && v config core.repositoryformatversion && v config remote.origin.promisor && v config remote.origin.partialclonefilter && v config remote.origin.url | sed "s#$ROOT#<ROOT>#g")
+    v clone --filter blob:limit=1k file://$ROOT/src limit
+    (cd limit && v config remote.origin.partialclonefilter)
+    v clone --filter=bogus src bogus
+    v clone --filter=blob:limit=zz file://$ROOT/src bogus2
+    ls bogus bogus2 2>&1 | sed "s#$ROOT#<ROOT>#g" >>"$TRANSCRIPT"
+}
+
 s_ls_remote() {
     g init -q src; cd src
     for i in 1 2 3; do tick; echo "line $i" >>f; g add .; g commit -q -m "c$i"; done
@@ -8956,6 +8973,7 @@ for s in "$@"; do
         s_submodule_foreach) run_scenario "$s" none ;;
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;
         s_ls_remote) run_scenario "$s" none ;;
+        s_clone_filter) run_scenario "$s" local viafile bare.git limit ;;
         s_clone_bundle_uri) run_scenario "$s" seeded viafile bare.git missing remote ;;
         s_bundle_clone) run_scenario "$s" all named all.git onside upstream nohead dotted odd.git ;;
         s_submodule_set) run_scenario "$s" clone ;;

@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 273 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 274 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 255 tests / 0 failed, 273 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 258 tests / 0 failed, 274 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -15,7 +15,14 @@ only the first two are defects.
 
 The command or subsystem is absent; it either fails at the argument parser or refuses by name.
 
-* **Partial clone** — `--filter` and promisor/partial clones are not implemented.
+* **Partial clone** — promisor/partial clones are not implemented: no filtered transfer, no lazy
+  fetch of missing objects. `clone --filter=blob:none|tree:<n>|blob:limit=<n>[kmg]` is accepted only
+  where git itself ignores the filter (a local path, or a `file://` URL whose repository does not set
+  `uploadpack.allowFilter`): git's warning is printed, the full clone is made and
+  `remote.<name>.promisor` / `partialclonefilter` / `core.repositoryformatversion=1` are written as git
+  does (`s_clone_filter`). Refused by name (`clone_filter_refusals.rs`): a source that honours filters, a
+  bundle or network source, and the specs `sparse:`, `object:type=` and `combine:`. The source's
+  `uploadpack.allowFilter` is read from its own repository config only, not from global config.
 * **Sparse checkout** — `sparse-checkout init`/`set`/`add`/`list`/`reapply`/`disable`/`check-rules` exist
   (cone mode and `--no-cone`, `--stdin`, `--skip-checks`; `check-rules` with `-z`, `--cone`/`--no-cone`,
   `--rules-file`, C-quoted input and output; `clean` with `-n`/`-f`/`-v`, `s_sparse_clean`); the sparse index does not. `--sparse-index` is refused by name before anything is

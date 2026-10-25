@@ -1357,3 +1357,16 @@ Refused by name, with Rust tests in `tests/diff_color.rs`: `--stat` under colour
 coloured unmerged-path output. Left undone: `show --color`, coloured `--stat`, `color.diff.*` palettes.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 255 passed / 0 failed / 0 ignored,
 `scenarios.sh` 273 PASS / `failures: 0`.
+
+## Block 9+ — `clone --filter` (partial-clone entry point)
+Queue was fully landed; took the last item (partial clone) as far as the on-disk format is proven. Landed `clone --filter=<spec>`
+(`s_clone_filter`, fails on `9d5b354`: unknown option). Accepted only where git itself ignores the filter: a local path (warning
+"--filter is ignored in local clones; use file:// instead.") and a `file://` URL whose repository lacks `uploadpack.allowFilter` (warning
+"filtering not recognized by server, ignoring"); the full clone is made and `remote.<name>.promisor`, `partialclonefilter` (canonical
+form, `blob:limit=1k` -> `1024`) and `core.repositoryformatversion=1` are written as git writes them. Invalid specs give git's
+`fatal: invalid filter-spec`. Also fixed an existing divergence the scenario exposed: `clone file://…` printed `done.` (git prints it
+only for local-path clones). Refused by name, Rust tests in `tests/clone_filter_refusals.rs`: a source that honours filters, bundle and
+network sources, `sparse:`/`object:type=`/`combine:` specs. Left undone: real filtered transfer, lazy fetch, global-config
+`uploadpack.allowFilter` (recorded in `GAPS.md`).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 258 passed / 0 failed / 0 ignored,
+`scenarios.sh` 274 PASS / `failures: 0`.

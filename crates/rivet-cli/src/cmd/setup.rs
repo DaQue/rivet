@@ -130,6 +130,48 @@ pub struct CloneArgs {
     /// Seed the clone from a bundle file (a path or a `file://` URL) before fetching.
     #[arg(long = "bundle-uri", value_name = "URI")]
     pub bundle_uri: Option<String>,
+
+    /// Record a partial-clone filter. Only sources that ignore it (a local path, or a `file://`
+    /// URL whose repository does not set `uploadpack.allowFilter`) are accepted.
+    #[arg(long = "filter", value_name = "FILTER-SPEC")]
+    pub filter: Option<String>,
+}
+
+/// The canonical form of a `--filter` spec, as git stores it in `remote.<name>.partialclonefilter`.
+///
+/// `Ok(None)` is a spec git accepts but this port cannot honour; `Err` is one git rejects.
+fn normalise_filter(spec: &str) -> Result<Option<String>, ()> {
+    if spec == "blob:none" {
+        return Ok(Some(spec.to_string()));
+    }
+    if let Some(depth) = spec.strip_prefix("tree:") {
+        return depth
+            .parse::<u64>()
+            .map(|n| Some(format!("tree:{n}")))
+            .map_err(|_| ());
+    }
+    if let Some(limit) = spec.strip_prefix("blob:limit=") {
+        let (digits, scale) = match limit.chars().last() {
+            Some('k' | 'K') => (&limit[..limit.len() - 1], 1u64 << 10),
+            Some('m' | 'M') => (&limit[..limit.len() - 1], 1u64 << 20),
+            Some('g' | 'G') => (&limit[..limit.len() - 1], 1u64 << 30),
+            _ => (limit, 1),
+        };
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(());
+        }
+        return digits
+            .parse::<u64>()
+            .ok()
+            .and_then(|n| n.checked_mul(scale))
+            .map(|n| Some(format!("blob:limit={n}")))
+            .ok_or(());
+    }
+    let known = ["sparse:oid=", "sparse:path=", "object:type=", "combine:"];
+    if known.iter().any(|prefix| spec.starts_with(prefix)) {
+        return Ok(None);
+    }
+    Err(())
 }
 
 /// Arguments to `rivet config`.
@@ -355,6 +397,14 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
     if args.mirror || args.depth.is_some() {
         anyhow::bail!("clone: --mirror and --depth are not implemented");
     }
+    let filter = match &args.filter {
+        Some(spec) => match normalise_filter(spec) {
+            Ok(Some(canonical)) => Some(canonical),
+            Ok(None) => anyhow::bail!("clone: --filter={spec} is not implemented"),
+            Err(()) => anyhow::bail!("invalid filter-spec '{spec}'"),
+        },
+        None => None,
+    };
     let parsed = rivet_core::RemoteUrl::parse(BStr::new(args.repository.as_bytes()))
         .map_err(|_| anyhow::anyhow!("repository '{}' does not exist", args.repository))?;
     let name = match &args.directory {
@@ -431,6 +481,25 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
     {
         anyhow::bail!("repository '{}' does not exist", args.repository);
     }
+    if filter.is_some() {
+        // A bundle or a network source would need a real filtered transfer; so does a
+        // `file://` source that honours filters (`uploadpack.allowFilter`).
+        let honours = parsed.scheme == rivet_core::remote::RemoteScheme::File
+            && !is_file
+            && args.repository.starts_with("file://")
+            && rivet_core::Repository::discover(&source)
+                .ok()
+                .and_then(|r| {
+                    r.config()
+                        .get_bool(BStr::new(b"uploadpack.allowfilter"))
+                        .ok()
+                        .flatten()
+                })
+                .unwrap_or(false);
+        if parsed.scheme != rivet_core::remote::RemoteScheme::File || is_file || honours {
+            anyhow::bail!("clone: --filter against this source is not implemented");
+        }
+    }
     if !global.quiet {
         if args.bare {
             eprintln!("Cloning into bare repository '{}'...", name.display());
@@ -442,7 +511,8 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
     let result = clone_into(&dest, args);
     match result {
         Ok((repository, checked_out)) => {
-            if !global.quiet && !is_bundle {
+            // Only git's local-clone path says "done."; a `file://` URL goes through the transport.
+            if !global.quiet && !is_bundle && !args.repository.starts_with("file://") {
                 eprintln!("done.");
             }
             // `post-checkout` runs in the new work tree with `GIT_DIR` set and no `GIT_PREFIX`;
@@ -892,6 +962,24 @@ pub(super) fn populate_clone(
         config.set(
             BStr::new(format!("remote.{origin}.fetch").as_bytes()),
             format!("+refs/heads/*:refs/remotes/{origin}/*").as_bytes(),
+        )?;
+    }
+    if let Some(Ok(Some(filter))) = args.filter.as_deref().map(normalise_filter) {
+        // The source ignores the filter (`run_clone` refused every other case), but git still
+        // records the clone as partial.
+        if args.repository.starts_with("file://") {
+            eprintln!("warning: filtering not recognized by server, ignoring");
+        } else {
+            eprintln!("warning: --filter is ignored in local clones; use file:// instead.");
+        }
+        config.set(BStr::new(b"core.repositoryformatversion"), b"1")?;
+        config.set(
+            BStr::new(format!("remote.{origin}.promisor").as_bytes()),
+            b"true",
+        )?;
+        config.set(
+            BStr::new(format!("remote.{origin}.partialclonefilter").as_bytes()),
+            filter.as_bytes(),
         )?;
     }
     repository.write_config()?;

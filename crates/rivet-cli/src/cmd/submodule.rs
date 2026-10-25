@@ -1213,6 +1213,7 @@ fn clone_submodule(
                 origin: "origin".to_string(),
                 object_format: None,
                 bundle_uri: None,
+                filter: None,
             },
             false,
         )
