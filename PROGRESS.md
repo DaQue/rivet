@@ -1422,3 +1422,13 @@ Left undone (in `GAPS.md`): when the named commit's date is skewed, git drops mo
 scenario); `--cherry-pick`, `--cherry-mark`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 259 passed / 0 failed / 0 ignored,
 `scenarios.sh` 279 PASS / `failures: 0`.
+
+## rev-list --cherry-pick / --cherry-mark (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed; took `GAPS.md` section 2 (`rev-list`). In `cmd/query.rs`: when both sides of
+`A...B` hold commits, every non-merge commit whose patch id (`rebase::patch_id`) appears on the other side is equivalent.
+`--cherry-pick` drops those (and they never become `--boundary` commits); `--cherry-mark` prints `=` for them and `+` for the rest
+(`<`/`>` with `--left-right`), and `--count` prints `N\tSAME` or `LEFT\tRIGHT\tSAME`. Both flags together exit 128 with git's message.
+Scenario `s_rev_list_cherry` fails on `762e11c` (unknown option), passes now; expected values checked against `/usr/bin/git`.
+Left undone (in `GAPS.md`): `--cherry` and `log --cherry-mark`/`--cherry-pick`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 259 passed / 0 failed / 0 ignored,
+`scenarios.sh` 280 PASS / `failures: 0`.

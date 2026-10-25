@@ -4774,6 +4774,46 @@ s_rev_list_ancestry_path_commit() {
     v rev-list --ancestry-path=v1 --ancestry-path main
 }
 
+s_rev_list_cherry() {
+    v init -q repo; cd repo
+    tick; echo 0 >f; v add f; v commit -q -m base
+    v switch -q -c side
+    for i in a b c; do tick; echo $i >$i; v add $i; v commit -q -m side-$i; done
+    v switch -q main
+    tick; echo m >m; v add m; v commit -q -m main-m
+    # side-b lands on main too, so both sides of main...side hold an equivalent patch
+    tick; v cherry-pick side~1 >/dev/null
+    tick; echo z >z; v add z; v commit -q -m main-z
+    v rev-list --cherry-pick main...side
+    v rev-list --cherry-pick --left-right main...side
+    v rev-list --cherry-mark main...side
+    v rev-list --cherry-mark --left-right main...side
+    v rev-list --cherry-mark --left-right --count main...side
+    v rev-list --cherry-mark --count main...side
+    v rev-list --cherry-pick --count main...side
+    v rev-list --cherry-pick --left-right --count main...side
+    v rev-list --cherry-pick --right-only main...side
+    v rev-list --cherry-mark --right-only main...side
+    v rev-list --cherry-mark --left-only main...side
+    v rev-list --cherry-mark --left-right --count --right-only main...side
+    v rev-list --cherry-pick --boundary main...side
+    v rev-list --cherry-mark --boundary --left-right main...side
+    v rev-list --cherry-mark --parents main...side
+    v rev-list --cherry-mark --reverse main...side
+    v rev-list --cherry-mark -n 3 main...side
+    v rev-list --cherry-pick --skip=1 main...side
+    v rev-list --cherry-mark main..side
+    v rev-list --cherry-pick main..side
+    v rev-list --cherry-pick main
+    v rev-list --cherry-mark main
+    v rev-list --cherry-pick --cherry-mark main...side
+    # a merge has no patch id and is never equivalent to anything
+    v switch -q -c merged side
+    tick; v merge -q --no-ff -m merge-main main^
+    v rev-list --cherry-mark --left-right merged...main
+    v rev-list --cherry-pick merged...main
+}
+
 s_rev_list_children() {
     rl_repo
     v rev-list --children main

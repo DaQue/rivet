@@ -117,6 +117,14 @@ pub struct RevListArgs {
     #[arg(long = "right-only")]
     pub right_only: bool,
 
+    /// Omit the commits of `A...B` whose patch also appears on the other side.
+    #[arg(long = "cherry-pick")]
+    pub cherry_pick: bool,
+
+    /// Mark the commits of `A...B` whose patch appears on both sides with `=` (the others get `+`).
+    #[arg(long = "cherry-mark")]
+    pub cherry_mark: bool,
+
     /// Show only the commits that descend from an excluded one (`A..B` keeps what lies between);
     /// with `=<commit>`, only its ancestors, its descendants and itself.
     #[arg(
@@ -333,6 +341,9 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     if args.left_only && args.right_only {
         anyhow::bail!("options '--right-only' and '--left-only' cannot be used together");
     }
+    if args.cherry_pick && args.cherry_mark {
+        anyhow::bail!("options '--cherry-mark' and '--cherry-pick' cannot be used together");
+    }
     if args.parents && args.children {
         anyhow::bail!("options '--parents' and '--children' cannot be used together");
     }
@@ -452,6 +463,27 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
         let followed = if args.first_parent { 1 } else { parents.len() };
         stack.extend(parents.iter().take(followed).copied());
     }
+    // `--cherry-pick` / `--cherry-mark`: when both sides of a symmetric difference have commits,
+    // every non-merge commit whose patch id shows up on the other side is equivalent.
+    let mut same: HashSet<ObjectId> = HashSet::new();
+    if args.cherry_pick || args.cherry_mark {
+        let left_total = walked.commits.iter().filter(|o| left.contains(o)).count();
+        if left_total > 0 && left_total < walked.commits.len() {
+            let mut sides: HashMap<Vec<u8>, [Vec<ObjectId>; 2]> = HashMap::new();
+            for oid in &walked.commits {
+                if walked.parents[oid].len() > 1 {
+                    continue;
+                }
+                let id = super::rebase::patch_id(&repository, oid)?;
+                sides.entry(id).or_default()[usize::from(!left.contains(oid))].push(*oid);
+            }
+            for [on_left, on_right] in sides.values() {
+                if !on_left.is_empty() && !on_right.is_empty() {
+                    same.extend(on_left.iter().chain(on_right));
+                }
+            }
+        }
+    }
     // `--ancestry-path`: a listed commit stays when one of its parents is a bottom (an excluded
     // tip) or is itself kept, so only paths through the listed commits count, as in git.
     let mut descends: HashMap<ObjectId, bool> = HashMap::new();
@@ -510,6 +542,9 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
         if ancestry_path && !descends[oid] && !path_ancestors.contains(oid) {
             continue;
         }
+        if args.cherry_pick && same.contains(oid) {
+            continue;
+        }
         let parent_count = walked.parents[oid].len();
         if parent_count < min_parents || max_parents.is_some_and(|max| parent_count > max) {
             continue;
@@ -537,7 +572,12 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     // that never got shown follow, most recently discovered first.
     let mut boundary: Vec<ObjectId> = Vec::new();
     if args.boundary {
-        let mut shown: HashSet<ObjectId> = HashSet::new();
+        // Commits `--cherry-pick` dropped count as shown, so they never become boundaries.
+        let mut shown: HashSet<ObjectId> = if args.cherry_pick {
+            same.clone()
+        } else {
+            HashSet::new()
+        };
         let mut candidates: Vec<ObjectId> = Vec::new();
         let mut child_shown: HashSet<ObjectId> = HashSet::new();
         for oid in &commits {
@@ -607,14 +647,22 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
             }
         }
     }
+    let mut same_count = 0usize;
     for oid in &commits {
+        let equivalent = args.cherry_mark && same.contains(oid);
         if boundary.contains(oid) {
             out.push(b'-');
+        } else if equivalent {
+            out.push(b'=');
         } else if args.left_right {
             out.push(if left.contains(oid) { b'<' } else { b'>' });
+        } else if args.cherry_mark {
+            out.push(b'+');
         }
         // A boundary commit carries the flag of every left commit that reached it.
-        if if boundary.contains(oid) {
+        if equivalent {
+            same_count += 1;
+        } else if if boundary.contains(oid) {
             left_parents.contains(oid)
         } else {
             left.contains(oid)
@@ -676,7 +724,12 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
         lines += objects.iter().filter(|b| **b == b'\n').count();
         out.extend_from_slice(&objects);
     }
-    if args.count && args.left_right {
+    if args.count && args.left_right && args.cherry_mark {
+        let right = lines - left_count - same_count;
+        write_stdout(format!("{left_count}\t{right}\t{same_count}\n").as_bytes())?;
+    } else if args.count && args.cherry_mark {
+        write_stdout(format!("{}\t{same_count}\n", lines - same_count).as_bytes())?;
+    } else if args.count && args.left_right {
         write_stdout(format!("{left_count}\t{}\n", lines - left_count).as_bytes())?;
     } else if args.count {
         write_stdout(format!("{lines}\n").as_bytes())?;
