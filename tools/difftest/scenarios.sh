@@ -1115,6 +1115,39 @@ s_credential_keys() {
     kill $server 2>/dev/null; wait $server 2>/dev/null
 }
 
+# `authtype`/`credential` from a helper: the request carries `Authorization: <authtype> <credential>`
+# (a Bearer server here), `store` and `erase` hear the pair back, with `capability[]=authtype` first
+# only when the helper announced it. No `continue`/`state` round yet.
+s_credential_authtype() {
+    local port=18795 root=$PWD
+    mkdir -p repos
+    g init -q --bare repos/o.git; g -C repos/o.git config http.receivepack true
+    g clone -q repos/o.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    AUTH_BEARER=tok123 python3 "$AUTHSERVER" $port "$root/repos" x y "$root/req.log" >/dev/null 2>&1 &
+    local server=$!
+    sleep 1
+    local url=http://127.0.0.1:$port/o.git
+    export GIT_TERMINAL_PROMPT=0
+    cred_helper_out "$root" bearer 'echo capability[]=authtype; echo authtype=Bearer; echo credential=tok123'
+    cred_helper_out "$root" bare 'echo authtype=Bearer; echo credential=tok123'
+    cred_helper_out "$root" badtok 'echo capability[]=authtype; echo authtype=Bearer; echo credential=nope'
+    cred_helper_out "$root" basic 'echo username=alice; echo password=s3cret'
+    v config --global credential.helper "$root/bearer.sh"
+    v clone -q $url c_bearer; cred_dump "$root"
+    # a helper that does not announce the capability still gets its header sent, and hears nothing of it
+    v config --global credential.helper "$root/bare.sh"
+    v clone -q $url c_bare; cred_dump "$root"
+    # the server refuses the token: erase, and the failure is git's
+    v config --global credential.helper "$root/badtok.sh"
+    v clone -q $url c_bad; cred_dump "$root"
+    # the pair is complete, so the helper that follows is never asked
+    v config --global credential.helper "$root/bearer.sh"
+    v config --global --add credential.helper "$root/basic.sh"
+    v clone -q $url c_first; cred_dump "$root"
+    kill $server 2>/dev/null; wait $server 2>/dev/null
+}
+
 s_basic_commit() {
     v init -q repo; cd repo
     echo hello >a.txt; mkdir -p dir/sub; echo deep >dir/sub/b.txt; echo x >dir/c
@@ -8036,6 +8069,7 @@ for s in "$@"; do
         s_credential) run_scenario "$s" c_ok c5 ;;
         s_credential_post) run_scenario "$s" c_post ;;
         s_credential_keys) run_scenario "$s" c_exp c_quitfull ;;
+        s_credential_authtype) run_scenario "$s" c_bearer c_bare c_first ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
         s_sparse_linked) run_scenario "$s" repo wt ;;
         s_rev_parse_dirs) run_scenario "$s" repo wt bare.git ;;

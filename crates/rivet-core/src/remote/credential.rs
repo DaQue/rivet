@@ -50,6 +50,29 @@ pub struct Credential {
     /// Set when the challenge answered a POST: Git then asks its helpers without the
     /// `capability[]=authtype`/`state` lines (it retries a POST with plain username/password).
     pub plain_get: bool,
+    /// The scheme a helper asked for (`authtype=Bearer`): the request then carries
+    /// `Authorization: <authtype> <credential>` instead of Basic user and password.
+    pub authtype: Option<String>,
+    /// The opaque value that goes after [`Self::authtype`] in the `Authorization` header.
+    pub credential: Option<BString>,
+    /// A helper said `capability[]=authtype`; `store` and `erase` then hear `authtype` and
+    /// `credential` back, preceded by that line.
+    pub capa_authtype: bool,
+}
+
+impl Credential {
+    /// Whether nothing more needs to be asked: a user name and password, or an `authtype` with its
+    /// `credential`.
+    pub fn is_complete(&self) -> bool {
+        (self.username.is_some() && self.password.is_some())
+            || (self.authtype.is_some() && self.credential.is_some())
+    }
+
+    /// The `Authorization` header value a helper's `authtype` and `credential` ask for.
+    pub fn authorization(&self) -> Option<String> {
+        let (authtype, credential) = self.authtype.as_ref().zip(self.credential.as_ref())?;
+        Some(format!("{authtype} {}", credential.to_str_lossy()))
+    }
 }
 
 impl std::fmt::Debug for Credential {
@@ -255,7 +278,7 @@ impl CredentialSettings {
     /// Git's text when a helper that did not complete the credential said `quit=1`.
     pub fn fill(&self, credential: &mut Credential) -> std::result::Result<(), String> {
         for helper in &self.helpers {
-            if credential.username.is_some() && credential.password.is_some() {
+            if credential.is_complete() {
                 break;
             }
             let Some(output) =
@@ -269,6 +292,12 @@ impl CredentialSettings {
                     credential.username = Some(BString::from(value));
                 } else if let Some(value) = line.strip_prefix(b"password=") {
                     credential.password = Some(BString::from(value));
+                } else if line == b"capability[]=authtype" {
+                    credential.capa_authtype = !credential.plain_get;
+                } else if let Some(value) = line.strip_prefix(b"authtype=") {
+                    credential.authtype = Some(String::from_utf8_lossy(value).into_owned());
+                } else if let Some(value) = line.strip_prefix(b"credential=") {
+                    credential.credential = Some(BString::from(value));
                 } else if let Some(value) = line.strip_prefix(b"oauth_refresh_token=") {
                     credential.oauth_refresh_token = Some(BString::from(value));
                 } else if let Some(value) = line.strip_prefix(b"password_expiry_utc=") {
@@ -285,7 +314,7 @@ impl CredentialSettings {
                 credential.password = None;
                 credential.password_expiry_utc = None;
             }
-            if credential.username.is_some() && credential.password.is_some() {
+            if credential.is_complete() {
                 return Ok(());
             }
             if quit {
@@ -400,6 +429,17 @@ fn input(credential: &Credential, operation: Operation) -> Vec<u8> {
     if operation == Operation::Get && !credential.plain_get {
         out.extend_from_slice(b"capability[]=authtype\ncapability[]=state\n");
     }
+    if operation != Operation::Get && credential.capa_authtype {
+        out.extend_from_slice(b"capability[]=authtype\n");
+        if let Some(authtype) = &credential.authtype {
+            out.extend_from_slice(format!("authtype={authtype}\n").as_bytes());
+        }
+        if let Some(value) = &credential.credential {
+            out.extend_from_slice(b"credential=");
+            out.extend_from_slice(value);
+            out.push(b'\n');
+        }
+    }
     out.extend_from_slice(
         format!(
             "protocol={}\nhost={}\n",
@@ -487,6 +527,30 @@ mod tests {
 
     fn url(text: &str) -> RemoteUrl {
         RemoteUrl::parse(BStr::new(text)).unwrap()
+    }
+
+    #[test]
+    fn authtype_and_credential_complete_a_credential_and_come_back_on_store() {
+        let mut credential = Credential {
+            protocol: "http".into(),
+            host: "h:1".into(),
+            authtype: Some("Bearer".into()),
+            ..Credential::default()
+        };
+        assert!(!credential.is_complete(), "an authtype alone is not enough");
+        assert_eq!(credential.authorization(), None);
+        credential.credential = Some(BString::from("tok"));
+        assert!(credential.is_complete());
+        assert_eq!(credential.authorization().as_deref(), Some("Bearer tok"));
+        assert_eq!(
+            input(&credential, Operation::Store),
+            b"protocol=http\nhost=h:1\n"
+        );
+        credential.capa_authtype = true;
+        assert_eq!(
+            input(&credential, Operation::Store),
+            b"capability[]=authtype\nauthtype=Bearer\ncredential=tok\nprotocol=http\nhost=h:1\n"
+        );
     }
 
     #[test]

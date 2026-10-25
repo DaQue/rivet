@@ -100,6 +100,18 @@ pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 thread_local! {
     /// The `WWW-Authenticate` values of the last `401` [`send`] saw, for the credential helpers.
     static LAST_CHALLENGE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The `Authorization` value a helper's `authtype`/`credential` asked for, added by [`send`] and
+    /// [`send_streaming`] to every request while it is set. Kept out of [`HttpRequest::headers`] for
+    /// the reason [`HttpTransport::base_url`] gives for the Basic userinfo.
+    static AUTH_HEADER: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// `builder` with the helper-chosen `Authorization` header, when there is one.
+fn with_authorization<B>(builder: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
+    match AUTH_HEADER.with(|h| h.borrow().clone()) {
+        Some(value) => builder.header("Authorization", value),
+        None => builder,
+    }
 }
 
 /// Phase 11 — the smart-HTTP transport.
@@ -146,6 +158,8 @@ pub struct HttpTransport {
     /// Where the advertisement was actually served from, after any redirect: later requests go
     /// there, as Git's do.
     redirected_base: Option<BString>,
+    /// The `Authorization` value a helper's `authtype`/`credential` produced, sent instead of Basic.
+    authorization: Option<String>,
 }
 
 impl HttpTransport {
@@ -214,6 +228,7 @@ impl HttpTransport {
         Ok(Self {
             url,
             redirected_base: None,
+            authorization: None,
             agent,
             credentials: None,
             url_credentials,
@@ -607,13 +622,13 @@ pub fn send(
     let full = join_url(redacted_url, &request.target);
     let safe = crate::remote::redact_url(BStr::new(&full));
     let response = if request.is_get {
-        let mut builder = agent.get(&full[..]);
+        let mut builder = with_authorization(agent.get(&full[..]));
         for (name, value) in &request.headers {
             builder = builder.header(*name, &value[..]);
         }
         builder.call()
     } else {
-        let mut builder = agent.post(&full[..]);
+        let mut builder = with_authorization(agent.post(&full[..]));
         for (name, value) in &request.headers {
             builder = builder.header(*name, &value[..]);
         }
@@ -727,13 +742,13 @@ pub fn send_streaming<T>(
     let full = join_url(redacted_url, &request.target);
     let safe = crate::remote::redact_url(BStr::new(&full));
     let response = if request.is_get {
-        let mut builder = agent.get(&full[..]);
+        let mut builder = with_authorization(agent.get(&full[..]));
         for (name, value) in &request.headers {
             builder = builder.header(*name, &value[..]);
         }
         builder.call()
     } else {
-        let mut builder = agent.post(&full[..]);
+        let mut builder = with_authorization(agent.post(&full[..]));
         for (name, value) in &request.headers {
             builder = builder.header(*name, &value[..]);
         }
@@ -893,10 +908,13 @@ impl HttpTransport {
         mut attempt: impl FnMut(&ureq::Agent, &BStr) -> Result<T>,
     ) -> Result<T> {
         use crate::remote::credential::Credential;
-        let mut asked = self.credentials.is_some();
+        let mut asked = self.credentials.is_some() || self.authorization.is_some();
         loop {
             let base = self.base_url(url, true);
-            let challenge_failed = match attempt(&self.agent, BStr::new(&base)) {
+            AUTH_HEADER.with(|h| *h.borrow_mut() = self.authorization.clone());
+            let outcome = attempt(&self.agent, BStr::new(&base));
+            AUTH_HEADER.with(|h| *h.borrow_mut() = None);
+            let challenge_failed = match outcome {
                 Ok(response) => {
                     if let Some(credential) = self.pending_approval.take()
                         && let Some(settings) = &self.credential_settings
@@ -919,7 +937,12 @@ impl HttpTransport {
             let settings = self.credential_settings.clone().unwrap_or_default();
             if asked {
                 // What was sent was refused: the helpers must not keep it.
-                if let Some((user, password)) = self.credentials.take() {
+                if self.authorization.take().is_some() {
+                    if let Some(mut credential) = self.pending_approval.take() {
+                        credential.wwwauth = wwwauth;
+                        settings.reject(&credential);
+                    }
+                } else if let Some((user, password)) = self.credentials.take() {
                     let mut credential = self.pending_approval.take().unwrap_or_else(|| {
                         let mut fresh = settings.credential_for(url, Vec::new());
                         fresh.username = Some(user);
@@ -947,7 +970,7 @@ impl HttpTransport {
                 ("Username", credential.username.is_none()),
                 ("Password", credential.password.is_none()),
             ] {
-                if !missing {
+                if !missing || credential.is_complete() {
                     continue;
                 }
                 match settings.prompt(what, &credential) {
@@ -970,7 +993,11 @@ impl HttpTransport {
                     }
                 }
             }
-            if let (Some(user), Some(password)) = (&credential.username, &credential.password) {
+            if let Some(value) = credential.authorization() {
+                self.authorization = Some(value);
+            } else if let (Some(user), Some(password)) =
+                (&credential.username, &credential.password)
+            {
                 self.credentials = Some((user.clone(), password.clone()));
             }
             self.pending_approval = Some(credential);

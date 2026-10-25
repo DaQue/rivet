@@ -142,8 +142,9 @@ The command works for the common case; the listed options or edge cases are miss
   `GIT_TERMINAL_PROMPT=0` refuses) are consulted when an HTTP(S) remote answers `401`, with git's
   `get`/`store`/`erase` stream (capabilities and `wwwauth[]` included). Helper output `quit`,
   `password_expiry_utc` (an expired password is dropped) and `oauth_refresh_token` (handed back to
-  `store`/`erase`) work (`s_credential_keys`). Not implemented: helper output `authtype`/`credential`/
-  `state` (multi-round auth), `url=` (URL rewriting by a helper), `credential.<url>.*` keys other than `helper`,
+  `store`/`erase`) work (`s_credential_keys`), as do `authtype` with `credential` (an
+  `Authorization: <authtype> <credential>` header, `s_credential_authtype`). Not implemented: helper
+  output `state[]`/`continue` (multi-round auth), `url=` (URL rewriting by a helper), `credential.<url>.*` keys other than `helper`,
   `useHttpPath` and `username`, `http.proxy` credentials, `credential.interactive`, the
   `git credential` command, and credentials for `ssh://` (the ssh program asks). Covered by
   `s_credential` against a local Basic-auth server; a `401` that first appears on a POST (discovery

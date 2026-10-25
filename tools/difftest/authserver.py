@@ -3,6 +3,8 @@
 
 usage: authserver.py <port> <project-root> <user> <password> [<request-log>]
 
+With AUTH_BEARER=<token> the accepted header is `Authorization: Bearer <token>` (user and password are
+then ignored) and the challenge is `Bearer realm="rivet-test"`.
 With AUTH_ONLY_POST=1 in the environment only POST requests are challenged; GET is public.
 Every request without the right `Authorization: Basic` header is answered 401 with a
 `WWW-Authenticate: Basic realm="rivet-test"` challenge. Each request is appended to the request log
@@ -18,7 +20,13 @@ import sys
 port, root, user, password = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 log = sys.argv[5] if len(sys.argv) > 5 else None
 only_post = os.environ.get("AUTH_ONLY_POST") == "1"
-expected = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
+bearer = os.environ.get("AUTH_BEARER")
+if bearer:
+    expected = "Bearer " + bearer
+    scheme = 'Bearer realm="rivet-test"'
+else:
+    expected = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
+    scheme = 'Basic realm="rivet-test"'
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -37,7 +45,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         if state != "auth" and not (only_post and self.command == "GET"):
             self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="rivet-test"')
+            self.send_header("WWW-Authenticate", scheme)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
