@@ -4758,6 +4758,21 @@ s_rev_list_ancestry_path() {
     v rev-list --ancestry-path main..main
 }
 
+s_rev_list_children() {
+    rl_repo
+    v rev-list --children main
+    v rev-list --children --all
+    v rev-list --children main side3 side1
+    v rev-list --children side1..main
+    v rev-list --children --reverse main
+    v rev-list --children --first-parent main
+    v rev-list --children --boundary main~3..main
+    v rev-list --children --date-order --all
+    v rev-list --children -n 3 main
+    v rev-list --children --count main
+    v rev-list --children --parents main
+}
+
 s_rev_list_abbrev() {
     rl_repo
     v rev-list --abbrev-commit main

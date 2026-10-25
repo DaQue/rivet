@@ -1370,3 +1370,12 @@ network sources, `sparse:`/`object:type=`/`combine:` specs. Left undone: real fi
 `uploadpack.allowFilter` (recorded in `GAPS.md`).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 258 passed / 0 failed / 0 ignored,
 `scenarios.sh` 274 PASS / `failures: 0`.
+
+## rev-list --children (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed; took `GAPS.md` section 2 (`rev-list`). Landed `--children` (`s_rev_list_children`,
+fails on `8bdd483`: unknown option). Each walked commit is put in front of its parents' child lists in walk order, so the latest child
+comes first, as git prints it; `--children` with `--parents` gives git's fatal. Combined with `--all`, `--reverse`, `--first-parent`,
+`--boundary`, `-n`, `--count`, `--date-order`.
+Left undone (in `GAPS.md`): `--cherry-pick`, `--cherry-mark`, `--ancestry-path=<commit>`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 258 passed / 0 failed / 0 ignored,
+`scenarios.sh` 275 PASS / `failures: 0`.

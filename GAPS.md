@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 274 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 275 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 258 tests / 0 failed, 274 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 258 tests / 0 failed, 275 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -101,7 +101,7 @@ The command works for the common case; the listed options or edge cases are miss
   `--graph` over several root commits exits 128 by design; `--graph` with `--date-order` or
   `--first-parent` orders differently from git, and `--graph --format=format:%s` draws an
   extra row.
-* **`rev-list`** — no `--cherry-pick`, `--children`. `--left-right`, `--left-only`
+* **`rev-list`** — no `--cherry-pick`. `--children` works (`s_rev_list_children`). `--left-right`, `--left-only`
   and `--right-only` work (`s_rev_list_left_right`), and so does `--ancestry-path` without a
   commit argument (`s_rev_list_ancestry_path`); `--cherry-mark` is not implemented.
 * **`for-each-ref`** — no `--shell`/`--perl`/`--python`/`--tcl`, `--stdin`, `--start-after`,

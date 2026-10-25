@@ -133,6 +133,10 @@ pub struct RevListArgs {
     #[arg(long = "parents")]
     pub parents: bool,
 
+    /// Print each commit's children after its id.
+    #[arg(long = "children")]
+    pub children: bool,
+
     /// Skip merge commits.
     #[arg(long = "no-merges")]
     pub no_merges: bool,
@@ -321,6 +325,9 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     }
     if args.left_only && args.right_only {
         anyhow::bail!("options '--right-only' and '--left-only' cannot be used together");
+    }
+    if args.parents && args.children {
+        anyhow::bail!("options '--parents' and '--children' cannot be used together");
     }
     if args.left_right && args.count && args.objects {
         anyhow::bail!("marked counting and '--objects' cannot be used together");
@@ -567,6 +574,16 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     } else {
         HashSet::new()
     };
+    // `--children`: each walked commit is put in front of the child list of every parent as the
+    // walk meets it, so the most recently met child comes first.
+    let mut children: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
+    if args.children {
+        for oid in &walked.commits {
+            for parent in &walked.parents[oid] {
+                children.entry(*parent).or_default().insert(0, *oid);
+            }
+        }
+    }
     for oid in &commits {
         if boundary.contains(oid) {
             out.push(b'-');
@@ -588,6 +605,10 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
                 out.push(b' ');
                 out.extend_from_slice(parent.to_string().as_bytes());
             }
+        }
+        for child in children.get(oid).into_iter().flatten() {
+            out.push(b' ');
+            out.extend_from_slice(child.to_string().as_bytes());
         }
         out.push(b'\n');
         lines += 1;
