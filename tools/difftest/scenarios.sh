@@ -8941,6 +8941,25 @@ s_diff_color() {
     v diff --color=always HEAD~1 HEAD --name-only
 }
 
+# `status` of a submodule checked out at another commit: ` M path` / `modified:   path (new commits)`.
+s_status_moved_submodule() {
+    g config --global protocol.file.allow always
+    g init -q lib; (cd lib && tick && echo 1 >f && g add f && g commit -q -m l1 && tick && echo 2 >>f && g commit -q -a -m l2)
+    g init -q repo; cd repo
+    tick; echo t >t; g add t; g commit -q -m t1
+    g submodule add -q ../lib sub; g submodule add -q ../lib dir/sub2
+    tick; g commit -q -m subs
+    v status; v status --short; v status --porcelain
+    (cd sub && g checkout -q HEAD~1)
+    v status; v status --short; v status --porcelain; v status -s -- sub; v status -s -- dir
+    (cd dir/sub2 && g checkout -q HEAD~1)
+    v status; v status --short
+    g add sub
+    v status; v status --short
+    (cd sub && g checkout -q -)
+    v status; v status --short
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

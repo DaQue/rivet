@@ -1058,6 +1058,19 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     };
     status.staged.retain(|e| e.kind != ChangeKind::Unmerged);
     status.unstaged.retain(|e| e.kind != ChangeKind::Unmerged);
+    // `unstaged_changes` skips gitlinks; a submodule checked out at another commit is ` M`.
+    let moved_submodules = moved_submodules(&repository, &options.pathspec);
+    for (path, index_oid, head_oid, mode) in &moved_submodules {
+        status.unstaged.push(rivet_core::worktree::StatusEntry {
+            path: path.clone(),
+            kind: ChangeKind::Modified,
+            old_oid: Some(*index_oid),
+            new_oid: Some(*head_oid),
+            old_mode: Some(*mode),
+            new_mode: Some(*mode),
+        });
+    }
+    status.unstaged.sort_by(|a, b| a.path.cmp(&b.path));
 
     // Staged renames: a deleted path and an added one holding (nearly) the same content.
     let mut renames: std::collections::BTreeMap<BString, BString> =
@@ -1325,10 +1338,14 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         }
         println!("  (use \"git restore <file>...\" to discard changes in working directory)");
         for entry in &status.unstaged {
+            let moved = moved_submodules
+                .iter()
+                .any(|(path, ..)| *path == entry.path);
             println!(
-                "\t{:<12}{}",
+                "\t{:<12}{}{}",
                 section_label(entry.kind),
-                q(&entry.path, false)
+                q(&entry.path, false),
+                if moved { " (new commits)" } else { "" }
             );
         }
         wrote_section = true;
@@ -1380,6 +1397,47 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+/// Gitlinks in the index whose checked-out submodule `HEAD` is not the recorded commit.
+///
+/// A submodule that is not checked out, or whose `HEAD` cannot be read, is not reported, as in git.
+fn moved_submodules(
+    repository: &rivet_core::Repository,
+    pathspec: &[u8],
+) -> Vec<(
+    BString,
+    rivet_core::hash::ObjectId,
+    rivet_core::hash::ObjectId,
+    rivet_core::object::EntryMode,
+)> {
+    let Some(root) = repository.worktree_path().map(std::path::Path::to_path_buf) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in repository.index().entries() {
+        if entry.mode != rivet_core::object::EntryMode::Commit
+            || entry.is_unmerged()
+            || !(pathspec.is_empty()
+                || rivet_core::ops::pathspec_matches(
+                    entry.path.as_ref(),
+                    bstr::BStr::new(pathspec),
+                ))
+        {
+            continue;
+        }
+        let dir = root.join(bstr::ByteSlice::to_os_str_lossy(&entry.path[..]));
+        if !dir.join(".git").exists() {
+            continue;
+        }
+        let head = rivet_core::Repository::open_or_discover(&dir)
+            .ok()
+            .and_then(|sub| sub.head().ok()?.oid());
+        if let Some(head) = head.filter(|head| *head != entry.oid) {
+            out.push((entry.path.clone(), entry.oid, head, entry.mode));
+        }
+    }
+    out
 }
 
 /// Git's one-line section label, padded so the paths line up.

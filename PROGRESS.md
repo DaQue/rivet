@@ -1379,3 +1379,14 @@ comes first, as git prints it; `--children` with `--parents` gives git's fatal. 
 Left undone (in `GAPS.md`): `--cherry-pick`, `--cherry-mark`, `--ancestry-path=<commit>`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 258 passed / 0 failed / 0 ignored,
 `scenarios.sh` 275 PASS / `failures: 0`.
+
+## status of a moved submodule (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed (its "Remaining" list is all in `git log`); took `GAPS.md` section 1
+(`status` of a moved submodule). Landed in the CLI only (`moved_submodules` in `snapshot.rs`, no core API change): a gitlink whose
+checked-out submodule `HEAD` differs from the index is added to the unstaged list, giving ` M path` in `--short`/`--porcelain` and
+`modified:   path (new commits)` in the long form (`s_status_moved_submodule`, fails on `bdc15bb`: nothing reported). Pathspec-limited
+runs honoured.
+Left undone (in `GAPS.md`): dirty-tree submodules (`modified content`/`untracked content`), `diff`/`commit -a`/`add -u` over gitlinks,
+and `status -- <file>` which fails with an i/o error (found while writing the scenario, pre-existing).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 258 passed / 0 failed / 0 ignored,
+`scenarios.sh` 276 PASS / `failures: 0`.
