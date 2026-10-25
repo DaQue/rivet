@@ -1055,6 +1055,38 @@ pub struct ForEachRefArgs {
     /// Do not print a line when the format expands to nothing.
     #[arg(long = "omit-empty")]
     pub omit_empty: bool,
+
+    /// Quote placeholders suitably for shells.
+    #[arg(short = 's', long = "shell", overrides_with_all = ["shell", "no_shell"])]
+    pub shell: bool,
+
+    /// Undo `--shell`.
+    #[arg(long = "no-shell", overrides_with_all = ["shell", "no_shell"])]
+    pub no_shell: bool,
+
+    /// Quote placeholders suitably for perl.
+    #[arg(short = 'p', long = "perl", overrides_with_all = ["perl", "no_perl"])]
+    pub perl: bool,
+
+    /// Undo `--perl`.
+    #[arg(long = "no-perl", overrides_with_all = ["perl", "no_perl"])]
+    pub no_perl: bool,
+
+    /// Quote placeholders suitably for python.
+    #[arg(long = "python", overrides_with_all = ["python", "no_python"])]
+    pub python: bool,
+
+    /// Undo `--python`.
+    #[arg(long = "no-python", overrides_with_all = ["python", "no_python"])]
+    pub no_python: bool,
+
+    /// Quote placeholders suitably for Tcl.
+    #[arg(long = "tcl", overrides_with_all = ["tcl", "no_tcl"])]
+    pub tcl: bool,
+
+    /// Undo `--tcl`.
+    #[arg(long = "no-tcl", overrides_with_all = ["tcl", "no_tcl"])]
+    pub no_tcl: bool,
 }
 
 /// Git's `shorten_unambiguous_ref` for `refname:short`.

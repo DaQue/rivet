@@ -4973,6 +4973,24 @@ s_for_each_ref_contents() {
     v for-each-ref --format='%(contents:bogus)' refs/heads/main
 }
 
+s_for_each_ref_quote() {
+    fer_repo
+    g tag -a -m "$(printf 'it'"'"'s [a] {b} $c "d" \\e!\tf\r\n\nbody')" quoted
+    local q
+    for q in --shell --perl --python --tcl -s -p; do
+        v for-each-ref $q --format='%(refname:short)|%(objecttype)|%(contents)|%(taggername)|lit' refs/heads refs/tags
+        v for-each-ref $q --format='%(HEAD) %(refname:short) %(objectname:short)' refs/heads
+    done
+    v for-each-ref --python --format='%(contents:subject)' refs/tags/quoted
+    v for-each-ref --shell --format='%(if)%(taggername)%(then)Y %(refname)%(else)N %(refname)%(end)|lit' refs/tags refs/heads
+    v for-each-ref --python --format='%(align:12)%(refname:short)%(end)|%(objecttype)' refs/heads
+    v for-each-ref --shell --omit-empty --format='%(taggername)' refs/tags refs/heads
+    v for-each-ref --shell --shell --format='%(refname)' refs/heads
+    v for-each-ref --shell --no-shell --format='%(refname)' refs/heads
+    v for-each-ref --shell --perl --format='%(refname)' refs/heads
+    v for-each-ref -s --python --format='%(refname)' refs/heads
+}
+
 s_for_each_ref_upstream() {
     fer_repo
     v for-each-ref --format='%(refname:short) up=%(upstream) short=%(upstream:short) track=%(upstream:track) ts=%(upstream:trackshort) nb=%(upstream:track,nobracket) rn=%(upstream:remotename) rr=%(upstream:remoteref)' refs/heads

@@ -1442,3 +1442,13 @@ Scenario `s_status_dirty_submodule` fails on `6dd4801` (dirty submodule not repo
 Left undone (in `GAPS.md`): nested dirty submodules, `--ignore-submodules` / `status.submoduleSummary`, `status` with several pathspecs.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 259 passed / 0 failed / 0 ignored,
 `scenarios.sh` 281 PASS / `failures: 0`.
+
+## for-each-ref --shell / --perl / --python / --tcl (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed; took `GAPS.md` section 2 (`for-each-ref`). `ForEachRefArgs` gains `-s/--shell`,
+`-p/--perl`, `--python`, `--tcl` and their `--no-…` forms (last one wins); `cmd/foreachref.rs` quotes each top-level `%(atom)` and each
+`%(if)`/`%(align)` group as a whole, never the literal text, with git's `sq`/`perl`/`python`/`tcl` escaping. Two different styles give
+`error: more than one quoting style?` plus usage, exit 129; the same style twice is fine.
+Scenario `s_for_each_ref_quote` fails on `99cedfb` (unknown option), passes now; expected values checked against `/usr/bin/git`.
+Left undone (in `GAPS.md`): `--stdin`, `--start-after`, `--include-root-refs`, `version:` sort.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 259 passed / 0 failed / 0 ignored,
+`scenarios.sh` 282 PASS / `failures: 0`.

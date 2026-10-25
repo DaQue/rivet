@@ -56,6 +56,74 @@ pub(super) struct Fatal(pub String);
 /// Text prefix marking a diagnostic that git reports as a usage error.
 const MALFORMED: &str = "malformed format string ";
 
+/// Text of the usage error raised when two different quoting styles are requested.
+const TWO_STYLES: &str = "more than one quoting style?";
+
+/// The `--shell` / `--perl` / `--python` / `--tcl` quoting of `%(atom)` values.
+#[derive(Clone, Copy)]
+enum Quote {
+    Shell,
+    Perl,
+    Python,
+    Tcl,
+}
+
+impl Quote {
+    /// Git's `sq_quote_buf`, `perl_quote_buf`, `python_quote_buf` and `tcl_quote_buf`.
+    fn apply(self, text: &str) -> String {
+        let (open, close) = match self {
+            Quote::Tcl => ('"', '"'),
+            _ => ('\'', '\''),
+        };
+        let mut out = String::from(open);
+        for c in text.chars() {
+            match (self, c) {
+                (Quote::Shell, '\'' | '!') => {
+                    out.push_str("'\\");
+                    out.push(c);
+                    out.push('\'');
+                }
+                (Quote::Perl | Quote::Python, '\'' | '\\') => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                (Quote::Python, '\n') => out.push_str("\\n"),
+                (Quote::Tcl, '\x0c') => out.push_str("\\f"),
+                (Quote::Tcl, '\r') => out.push_str("\\r"),
+                (Quote::Tcl, '\n') => out.push_str("\\n"),
+                (Quote::Tcl, '\t') => out.push_str("\\t"),
+                (Quote::Tcl, '\x0b') => out.push_str("\\v"),
+                (Quote::Tcl, '[' | ']' | '{' | '}' | '$' | '\\' | '"') => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                _ => out.push(c),
+            }
+        }
+        out.push(close);
+        out
+    }
+}
+
+/// Like [`evaluate`], quoting each top-level placeholder (and each `%(if)`/`%(align)` group as a
+/// whole) but not the literal text between them.
+fn evaluate_quoted(
+    nodes: &[Node],
+    item: &RefItem,
+    context: &Context,
+    style: Quote,
+) -> Eval<String> {
+    let mut out = String::new();
+    for node in nodes {
+        let text = evaluate(std::slice::from_ref(node), item, context)?;
+        match node {
+            Node::Text(_) => out.push_str(&text),
+            _ => out.push_str(&style.apply(&text)),
+        }
+    }
+    Ok(out)
+}
+
 pub(super) type Eval<T> = std::result::Result<T, Fatal>;
 
 fn fatal<T>(text: impl Into<String>) -> Eval<T> {
@@ -1163,7 +1231,7 @@ fn write_stdout(bytes: &[u8]) -> anyhow::Result<()> {
 pub(super) fn run(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<i32> {
     match run_inner(global, args)? {
         Ok(code) => Ok(code),
-        Err(Fatal(text)) if text.starts_with(MALFORMED) => {
+        Err(Fatal(text)) if text.starts_with(MALFORMED) || text == TWO_STYLES => {
             eprintln!("error: {text}");
             eprintln!("{USAGE}");
             Ok(129)
@@ -1189,6 +1257,20 @@ fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<
                 .iter()
                 .any(|p| super::query::ref_pattern_matches(p, name))
     });
+
+    let styles: Vec<Quote> = [
+        (args.shell, Quote::Shell),
+        (args.perl, Quote::Perl),
+        (args.python, Quote::Python),
+        (args.tcl, Quote::Tcl),
+    ]
+    .into_iter()
+    .filter_map(|(on, style)| on.then_some(style))
+    .collect();
+    if styles.len() > 1 {
+        return Ok(Err(Fatal(TWO_STYLES.to_string())));
+    }
+    let quote = styles.first().copied();
 
     let format = args
         .format
@@ -1411,7 +1493,11 @@ fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<
 
     let mut out = Vec::new();
     for (_, item) in &keyed {
-        let line = match evaluate(&nodes, item, &context) {
+        let line = match quote {
+            Some(style) => evaluate_quoted(&nodes, item, &context, style),
+            None => evaluate(&nodes, item, &context),
+        };
+        let line = match line {
             Ok(line) => line,
             Err(fatal) => return Ok(Err(fatal)),
         };

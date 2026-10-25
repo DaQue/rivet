@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 281 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 282 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 259 tests / 0 failed, 281 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 259 tests / 0 failed, 282 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -110,8 +110,8 @@ The command works for the common case; the listed options or edge cases are miss
   commit argument (`s_rev_list_ancestry_path`); `--ancestry-path=<commit>` keeps the commit, its
   descendants and its ancestors (`s_rev_list_ancestry_path_commit`), but when the commit's date is skewed
   (older than its parents) git drops most of the ancestors and rivet keeps them all.
-* **`for-each-ref`** — no `--shell`/`--perl`/`--python`/`--tcl`, `--stdin`, `--start-after`,
-  `--include-root-refs`, `version:`/`v:` sort.
+* **`for-each-ref`** — `--shell`/`--perl`/`--python`/`--tcl` (and `-s`/`-p`, `--no-…`) work (`s_for_each_ref_quote`);
+  no `--stdin`, `--start-after`, `--include-root-refs`, `version:`/`v:` sort.
 * **`blame`** — `-M`/`-C` refuse while the file has uncommitted changes; no `--incremental`,
   `-w`, `--since`, `-S`, regex `-L`.
 * **`grep`** — no `-P`, `-o`, `--and`/`--or`/`--not`, `--heading`, `-z`, `--threads`,
