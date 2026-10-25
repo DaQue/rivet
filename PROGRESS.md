@@ -1210,3 +1210,15 @@ canonical absolute path of `<repo>/objects` (or `<repo>/.git/objects`); `--disso
 value prints the submodule usage, exit 1. Scenario `s_submodule_update_reference` fails on `0a8b473` (flags refused by name; verified by rebuilding the base) and passes after.
 Deliberately left: rivet still copies every object and does not read alternates (`Odb` docs), `--filter` stays refused by name (Rust test `filter_is_refused_by_name`). `GAPS.md` updated.
 Gate after: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 260 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 (9) — `rebase --keep-base`
+Gate at `f2e1f82`: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 260 PASS / `failures: 0`.
+
+Landed (Remaining item 4): `rebase --keep-base <upstream> [<branch>]`, plain and with `-i`. The base is the merge base of upstream and the branch; it is both the landing point and the lower bound of
+the range, so nothing is skipped as already applied upstream. The reflog line is `rebase (start): checkout <upstream>...<branch>`. `--keep-base` with `--onto` or `--root` is
+`fatal: options '--keep-base' and '--…' cannot be used together` (128); several or no merge base is `fatal: '<upstream>': need exactly one merge base with branch` (128).
+A plain rebase now steps over leading picks whose parent is already the landing commit (git prints only the remaining `Rebasing (n/n)` and logs no `pick` for them; only reachable on a branch
+already based on the target, e.g. one holding a merge). Scenario `s_rebase_keep_base` fails on `f2e1f82` (flag refused by name; verified against the old binary) and passes after. The
+`--keep-base` row was dropped from the refusal list in `rebase_interactive.rs`. `GAPS.md` updated.
+Deliberately left: `--keep-base` with `--root`/`--rebase-merges` interplay beyond the conflict error; a duplicate patch on the branch under `--keep-base` (not probed in a scenario).
+Gate after: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 261 PASS / `failures: 0`.

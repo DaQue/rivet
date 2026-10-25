@@ -11,7 +11,7 @@
 //!
 //! `break`, `label`, `reset`, `merge`, `update-ref` and `fixup -C`/`-c` lines in the todo
 //! list are refused by name *before* anything is touched, like `--exec` without `-i`, `--root`,
-//! `--rebase-merges`, `--keep-base`, `--autosquash`, `--edit-todo` and signing on the command line.
+//! `--rebase-merges`, `--autosquash`, `--edit-todo` and signing on the command line.
 //!
 //! # Caveats
 //!

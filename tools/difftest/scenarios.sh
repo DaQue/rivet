@@ -7938,6 +7938,57 @@ s_rebase_break() {
     v reflog
 }
 
+# `rebase --keep-base`: onto the merge base of upstream and branch, so a linear branch is "up to
+# date" and `-i` replays it in place; `--onto`/`--root` conflict; unrelated histories are refused.
+s_rebase_keep_base() {
+    rebase_repo
+    g branch orig topic
+    rebase_i_helpers
+    v switch -q topic
+    v rebase --keep-base main
+    echo "rc=$?"
+    v rebase --keep-base main topic
+    echo "rc=$?"
+    v switch -q main
+    v rebase --keep-base main topic
+    echo "rc=$?"
+    v log --oneline --all
+    v rebase --keep-base --onto main main
+    echo "rc=$?"
+    v rebase --keep-base --root
+    echo "rc=$?"
+    v rebase --keep-base
+    echo "rc=$?"
+    v rebase --keep-base nosuch
+    echo "rc=$?"
+    # -i keeps the base: reword and drop land on top of A, main's B and C stay out.
+    v switch -q topic
+    SEQ='1s/^pick/reword/;2d' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" GIT_EDITOR="$PWD/../msg.sh" v rebase -i --keep-base main
+    echo "rc=$?"
+    v log --format='%H %an %s' --graph --all
+    v reflog
+    cat .git/ORIG_HEAD
+    # A merge on the branch is flattened by the plain form; the commits already on the base are
+    # stepped over.
+    v reset -q --hard orig
+    v switch -q -c side orig~3
+    echo s >s; v add s; tick; v commit -q -m S
+    v switch -q topic
+    tick; v merge -q --no-edit side >/dev/null 2>&1
+    v log --oneline --graph topic
+    v rebase --keep-base main
+    echo "rc=$?"
+    v log --oneline --graph topic
+    v reflog
+    # No merge base at all.
+    v switch -q --orphan unrelated
+    echo u >u; v add u; tick; v commit -q -m U
+    v switch -q topic
+    v rebase --keep-base unrelated
+    echo "rc=$?"
+    v status
+}
+
 # `stash branch`: the argument errors, a branch made at the stash's base with the index and the
 # untracked files restored, `post-checkout` for the new branch, an explicit stash, and the two ways
 # it can fail (the checkout refuses, the apply refuses) which must keep the stash.

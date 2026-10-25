@@ -13,7 +13,7 @@
 //!
 //! # What is refused
 //!
-//! `--root`, `--rebase-merges`, `--exec` without `-i`, `--keep-base`, `--autosquash`, `--edit-todo` and signing
+//! `--root`, `--rebase-merges`, `--exec` without `-i`, `--autosquash`, `--edit-todo` and signing
 //! are accepted by the grammar only to be refused by name; the other options Git has are not in the
 //! grammar, so they fail at the command line instead of being ignored. What `--interactive` refuses
 //! is listed in [`interactive`].
@@ -261,6 +261,14 @@ fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<Commit> {
 pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
     let mut repository = super::open(global)?;
     let dir = rebase_dir(&repository);
+    if args.keep_base {
+        for (given, other) in [(args.onto.is_some(), "--onto"), (args.root, "--root")] {
+            if given {
+                eprintln!("fatal: options '--keep-base' and '{other}' cannot be used together");
+                return Ok(128);
+            }
+        }
+    }
     for (given, what) in [
         (args.root, "--root"),
         (args.rebase_merges.is_some(), "--rebase-merges"),
@@ -268,7 +276,6 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
             !args.exec.is_empty() && !args.interactive,
             "--exec without -i",
         ),
-        (args.keep_base, "--keep-base"),
         (args.gpg_sign.is_some(), "--gpg-sign"),
         (
             args.autosquash && !args.interactive,
@@ -528,14 +535,32 @@ fn start(
             }
         },
     };
-    let upstream = super::resolve_commit(repository, &upstream_name)
+    let mut upstream = super::resolve_commit(repository, &upstream_name)
         .map_err(|_| anyhow::anyhow!("invalid upstream '{upstream_name}'"))?;
-    let onto_name = args.onto.clone().unwrap_or_else(|| upstream_name.clone());
-    let onto = match &args.onto {
+    let mut onto_name = args.onto.clone().unwrap_or_else(|| upstream_name.clone());
+    let mut onto = match &args.onto {
         Some(name) => super::resolve_commit(repository, name)
             .map_err(|_| anyhow::anyhow!("Does not point to a valid commit '{name}'"))?,
         None => upstream,
     };
+    if args.keep_base {
+        // `--keep-base` rebases onto the merge base of upstream and the branch, and that commit
+        // also bounds the range, so no patch is skipped as already applied upstream.
+        let bases =
+            rivet_core::merge_bases(repository.odb(), upstream, orig_head).unwrap_or_default();
+        let [base] = bases[..] else {
+            eprintln!("fatal: '{upstream_name}': need exactly one merge base with branch");
+            return Ok(128);
+        };
+        let branch = match (&args.branch, &head_state) {
+            (Some(branch), _) => branch.clone(),
+            (None, HeadState::Attached { branch, .. }) => branch.short_name().to_string(),
+            (None, _) => "HEAD".to_string(),
+        };
+        onto_name = format!("{upstream_name}...{branch}");
+        upstream = base;
+        onto = base;
+    }
 
     let autostash = if autostash_wanted(repository, args.autostash, args.no_autostash) {
         create_autostash(repository)?
@@ -676,13 +701,25 @@ fn start(
         return interactive::begin(global, repository, &plan, dir);
     }
 
+    // Leading picks whose parent is already the landing commit change nothing: step over them
+    // (only reachable when the branch already sits on the new base, as with `--keep-base`).
+    let mut landing = onto;
+    let mut skipped = 0;
+    for (oid, _) in &todo {
+        if repository.commit_parents(*oid)?.as_slice() != [landing] {
+            break;
+        }
+        landing = *oid;
+        skipped += 1;
+    }
+
     // Detach at the new base.
     std::fs::create_dir_all(dir)?;
     rivet_core::write_orig_head(repository.git_dir(), orig_head)?;
-    let onto_tree = repository.commit_tree(onto)?;
-    repository.reset_hard_to_tree(onto_tree)?;
+    let landing_tree = repository.commit_tree(landing)?;
+    repository.reset_hard_to_tree(landing_tree)?;
     let reason = format!("{} (start): checkout {onto_name}", action());
-    repository.point_head(HeadTarget::Detached(onto), BStr::new(reason.as_bytes()))?;
+    repository.point_head(HeadTarget::Detached(landing), BStr::new(reason.as_bytes()))?;
     // Git runs `post-checkout` once, for the move onto the new base; its status is ignored.
     let zero = ObjectId::zero(repository.format());
     rebase_hook(
@@ -690,7 +727,7 @@ fn start(
         "post-checkout",
         &[
             head_state.oid().unwrap_or(zero).to_string(),
-            onto.to_string(),
+            landing.to_string(),
             "1".to_string(),
         ],
         None,
@@ -701,15 +738,15 @@ fn start(
     write_state(dir, "onto", &format!("{onto}\n"))?;
     write_state(dir, "orig-head", &format!("{orig_head}\n"))?;
     write_state(dir, "end", &format!("{}\n", todo.len()))?;
-    write_state(dir, "msgnum", "0\n")?;
+    write_state(dir, "msgnum", &format!("{skipped}\n"))?;
     write_state(dir, "interactive", "")?;
-    write_state(dir, "done", "")?;
-    let lines: String = todo
-        .iter()
-        .map(|(oid, subject)| format!("pick {oid} # {subject}\n"))
-        .collect();
+    let line_of = |(oid, subject): &(ObjectId, String)| format!("pick {oid} # {subject}\n");
+    let done: String = todo[..skipped].iter().map(line_of).collect();
+    let lines: String = todo[skipped..].iter().map(line_of).collect();
+    let all: String = todo.iter().map(line_of).collect();
+    write_state(dir, "done", &done)?;
     write_state(dir, "git-rebase-todo", &lines)?;
-    write_state(dir, "git-rebase-todo.backup", &lines)?;
+    write_state(dir, "git-rebase-todo.backup", &all)?;
     if let Some(stash) = autostash {
         write_state(dir, "autostash", &format!("{stash}\n"))?;
     }

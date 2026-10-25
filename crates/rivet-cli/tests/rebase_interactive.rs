@@ -79,7 +79,6 @@ fn options_that_are_not_implemented_are_refused_by_name() {
             vec!["rebase", "-i", "--rebase-merges", "main"],
             "--rebase-merges",
         ),
-        (vec!["rebase", "-i", "--keep-base", "main"], "--keep-base"),
         (
             vec!["rebase", "--autosquash", "main"],
             "--autosquash without -i",
