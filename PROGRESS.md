@@ -1338,3 +1338,12 @@ Landed the three flags (`s_rev_list_left_right`, fails on `b985101`: unknown opt
 Left undone (in `GAPS.md`): `--cherry-mark`, `--cherry-pick`, `--ancestry-path`, `--children`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
 `scenarios.sh` 271 PASS / `failures: 0`.
+
+## rev-list --ancestry-path (2026-10-25)
+Landed `--ancestry-path` (`s_rev_list_ancestry_path`, fails on `9095754`: unknown option). A listed commit stays when one of its parents is a bottom
+(an excluded tip: `^X`, the left of `X..Y`, the merge bases of `X...Y`) or is itself kept; with no bottom git's fatal
+`--ancestry-path given but there are no bottom commits` (exit 128) is matched. Combined with `--parents`, `--first-parent`, `--reverse`, `--count`,
+`--boundary`, `-n`, `--skip`.
+Left undone (in `GAPS.md`): `--ancestry-path=<commit>`, `--cherry-mark`, `--cherry-pick`, `--children`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
+`scenarios.sh` 272 PASS / `failures: 0`.

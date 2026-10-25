@@ -4738,6 +4738,26 @@ s_rev_list_left_right() {
     v rev-list --left-only --right-only main...side3
 }
 
+s_rev_list_ancestry_path() {
+    rl_repo
+    v rev-list --ancestry-path main~6..main
+    v rev-list --ancestry-path side1..main
+    v rev-list --ancestry-path side2..main
+    v rev-list --ancestry-path ^side1 main
+    v rev-list --ancestry-path main~3..main
+    v rev-list --ancestry-path v1..main
+    v rev-list --ancestry-path main...side3
+    v rev-list --ancestry-path --parents side1..main
+    v rev-list --ancestry-path --first-parent side1..main
+    v rev-list --ancestry-path --reverse side1..main
+    v rev-list --ancestry-path --count side1..main
+    v rev-list --ancestry-path --boundary side1..main
+    v rev-list --ancestry-path -n 2 side1..main
+    v rev-list --ancestry-path --skip=1 side1..main
+    v rev-list --ancestry-path main
+    v rev-list --ancestry-path main..main
+}
+
 s_rev_list_abbrev() {
     rl_repo
     v rev-list --abbrev-commit main
