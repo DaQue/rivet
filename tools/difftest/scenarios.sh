@@ -4991,6 +4991,38 @@ s_for_each_ref_quote() {
     v for-each-ref -s --python --format='%(refname)' refs/heads
 }
 
+s_for_each_ref_stdin_start() {
+    fer_repo
+    local fmt='--format=%(refname)' first
+    first=$(g for-each-ref --format='%(refname)' | sed -n 2p)
+    v for-each-ref "$fmt" --start-after="$first"
+    v for-each-ref "$fmt" --start-after=refs/heads/a
+    v for-each-ref "$fmt" --start-after=refs/zzz
+    v for-each-ref "$fmt" --start-after=
+    v for-each-ref "$fmt" --start-after="$first" --count=1
+    v for-each-ref "$fmt" --start-after="$first" --start-after=refs/heads/main
+    v for-each-ref "$fmt" --start-after="$first" --no-start-after
+    v for-each-ref "$fmt" --start-after="$first" --exclude=refs/tags
+    v for-each-ref "$fmt" --start-after="$first" --sort=refname
+    v for-each-ref "$fmt" --start-after="$first" --sort=-refname refs/heads
+    v for-each-ref "$fmt" --start-after="$first" refs/heads
+    printf 'refs/heads\n' >pat.txt
+    STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin
+    STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin refs/tags
+    STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin --start-after="$first"
+    STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin --sort=-refname
+    STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin --exclude=refs/heads/main
+    printf 'refs/tags\nrefs/heads/m*\n' >pat.txt
+    STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin
+    printf 'refs/heads/main\r\n\nrefs/tags' >pat.txt
+    STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin
+    printf '\n' >pat.txt
+    STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin
+    : >pat.txt
+    STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin
+    STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin --start-after="$first"
+}
+
 s_for_each_ref_upstream() {
     fer_repo
     v for-each-ref --format='%(refname:short) up=%(upstream) short=%(upstream:short) track=%(upstream:track) ts=%(upstream:trackshort) nb=%(upstream:track,nobracket) rn=%(upstream:remotename) rr=%(upstream:remoteref)' refs/heads

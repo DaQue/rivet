@@ -1245,13 +1245,40 @@ pub(super) fn run(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<
 
 fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<i32>> {
     let repository = super::open(global)?;
+    if args.start_after.is_some() && !args.sort.is_empty() {
+        return Ok(Err(Fatal(
+            "cannot use --start-after with custom sort options".to_string(),
+        )));
+    }
+    if args.stdin && !args.patterns.is_empty() {
+        return Ok(Err(Fatal(
+            "unknown arguments supplied with --stdin".to_string(),
+        )));
+    }
+    // Under `--stdin` an empty list means "every ref", but a list of blank lines matches nothing.
+    let mut patterns = args.patterns.clone();
+    if args.stdin {
+        let mut input = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+        patterns = input
+            .lines()
+            .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+            .collect();
+    }
+    if args.start_after.is_some() && !patterns.is_empty() {
+        return Ok(Err(Fatal(
+            "cannot use --start-after with patterns".to_string(),
+        )));
+    }
     let mut refs = super::query::refs_sorted(&repository)?;
+    if let Some(marker) = &args.start_after {
+        refs.retain(|(name, _)| name.as_str() > marker.as_str());
+    }
     refs.retain(|(name, _)| {
-        (args.patterns.is_empty()
-            || args
-                .patterns
+        (patterns.is_empty()
+            || patterns
                 .iter()
-                .any(|p| super::query::ref_pattern_matches(p, name)))
+                .any(|p| !p.is_empty() && super::query::ref_pattern_matches(p, name)))
             && !args
                 .exclude
                 .iter()

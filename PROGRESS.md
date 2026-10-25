@@ -1464,3 +1464,14 @@ Scenario `s_ls_remote_sort` fails on `2bd75e4` (`--sort` refused); expected valu
 Left undone (in `GAPS.md`): `version:refname`, `*` ignore-case, object-data keys, `--upload-pack`, `--server-option`, subdirectory-of-repo path.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
 `scenarios.sh` 283 PASS / `failures: 0`.
+
+## for-each-ref --stdin / --start-after (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed; took `GAPS.md` section 2 (`for-each-ref`). `ForEachRefArgs` gains `--stdin`
+(patterns one per line, CR stripped, blank lines match nothing, empty input means every ref), `--start-after=<marker>` (refs sorting after
+the marker, default order only) and `--no-start-after` (last one wins). git's refusals are reproduced in git's order:
+`cannot use --start-after with custom sort options`, `unknown arguments supplied with --stdin`, `cannot use --start-after with patterns`
+(all exit 128).
+Scenario `s_for_each_ref_stdin_start` fails on `38f8da6` (unknown options), passes now; expected values checked against `/usr/bin/git`.
+Left undone (in `GAPS.md`): `--include-root-refs`, `version:` sort.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
+`scenarios.sh` 284 PASS / `failures: 0`.

@@ -1044,6 +1044,18 @@ pub struct ForEachRefArgs {
     #[arg(long = "exclude", value_name = "PATTERN")]
     pub exclude: Vec<String>,
 
+    /// Read the patterns from standard input, one per line.
+    #[arg(long = "stdin")]
+    pub stdin: bool,
+
+    /// Start listing after this refname (default order only).
+    #[arg(long = "start-after", value_name = "MARKER", overrides_with_all = ["start_after", "no_start_after"])]
+    pub start_after: Option<String>,
+
+    /// Undo `--start-after`.
+    #[arg(long = "no-start-after", overrides_with_all = ["start_after", "no_start_after"])]
+    pub no_start_after: bool,
+
     /// Sort case-insensitively.
     #[arg(long = "ignore-case")]
     pub ignore_case: bool,
