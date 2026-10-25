@@ -120,7 +120,7 @@ pub fn run_symbolic_ref(global: &GlobalArgs, args: &SymbolicRefArgs) -> Result<i
             return Ok(1);
         };
         let Ok(target_ref) = RefName::from_bytes(target.as_bytes()) else {
-            bail!("symbolic-ref: the one-level target '{target}' is not supported");
+            bail!("not implemented: symbolic-ref to the one-level target '{target}'");
         };
         // Git logs the update (empty message unless `-m`) when the new target resolves to an
         // object, and only for refs that keep a reflog.
