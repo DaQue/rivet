@@ -328,7 +328,7 @@ pub struct CheckoutArgs {
 ///   partial success — the merge is *in progress* and the user is expected to resolve it — and a
 ///   script that treats `1` as "the command did not run" would try again on top of a conflicted
 ///   index.
-#[derive(Debug, clap::Args)]
+#[derive(Debug, Default, clap::Args)]
 pub struct MergeArgs {
     /// Accept the automatic merge message without starting an editor. Rivet never starts one.
     #[arg(long = "no-edit")]

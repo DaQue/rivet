@@ -8241,6 +8241,43 @@ s_submodule_update_remote() {
     sm_snap other
 }
 
+# `submodule update --merge`: run `git merge <recorded commit>` inside the submodule instead of detaching.
+s_submodule_update_merge() {
+    sm_nested_top
+    g clone -q top clone
+    cd clone
+    v submodule update --init vendor/lib
+    g -C vendor/lib checkout -q -b work
+    (cd "$ROOT/lib" && tick && echo two >>l.txt && g commit -q -a -m two)
+    v submodule update --merge --remote vendor/lib
+    sm_snap vendor/lib
+    (cd vendor/lib && tick && echo x >x.txt && g add x.txt && g commit -q -m local)
+    (cd "$ROOT/lib" && tick && echo three >>l.txt && g commit -q -a -m three)
+    v submodule update --merge --remote vendor/lib
+    sm_snap vendor/lib
+    v submodule update --merge -N vendor/lib
+    echo "rc=$?"
+    sm_snap vendor/lib
+    (cd "$ROOT/lib" && tick && echo four >>l.txt && g commit -q -a -m four)
+    v submodule update -q --merge --remote vendor/lib
+    sm_snap vendor/lib
+    v submodule update --merge --checkout -N vendor/lib
+    g config submodule.vendor/lib.update merge
+    (cd "$ROOT/lib" && tick && echo five >>l.txt && g commit -q -a -m five)
+    v submodule update --remote vendor/lib
+    sm_snap vendor/lib
+    (cd vendor/lib && tick && echo a >>l.txt && g commit -q -a -m c1)
+    (cd "$ROOT/lib" && tick && echo b >>l.txt && g commit -q -a -m c2)
+    v submodule update --merge --remote vendor/lib
+    echo "rc=$?"
+    sm_snap vendor/lib
+    g -C vendor/lib merge --abort
+    (cd "$ROOT/lib" && tick && echo d >>l.txt && g commit -q -a -m c3)
+    v submodule update -q --merge --remote vendor/lib
+    echo "rc=$?"
+    sm_snap vendor/lib
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
@@ -8279,6 +8316,7 @@ for s in "$@"; do
         s_submodule_update) run_scenario "$s" clone clone/vendor/lib ;;
         s_submodule_update_recursive) run_scenario "$s" clone ;;
         s_submodule_update_remote) run_scenario "$s" clone ;;
+        s_submodule_update_merge) run_scenario "$s" clone ;;
         s_submodule_deinit) run_scenario "$s" clone clone2 ;;
         s_submodule_foreach) run_scenario "$s" none ;;
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;

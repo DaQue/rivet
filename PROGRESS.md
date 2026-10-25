@@ -1154,3 +1154,16 @@ and passes after.
 Deliberately left: `submodule.<name>.branch = .` is refused by name (no Rust test for the refusal yet); `--merge`/`--rebase` and the clone flags.
 New gap found and recorded in `GAPS.md`: `status` does not report a moved submodule (` M path`); I took that line out of the scenario.
 Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 255 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 (4) — `submodule update --merge`
+Gate at `438432f`: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 255 PASS / `failures: 0`.
+
+Landed (Remaining item 2, first half): `submodule update --merge` and `submodule.<name>.update = merge`. Rivet runs its own `merge <oid>` inside the
+submodule (`run_merge` with `MergeArgs::default()`, which now derives `Default`), then prints `Submodule path '…': merged in '<oid>'`. A failing merge is
+`fatal: Unable to merge '<oid>' in submodule path '…'`, exit 128. `-q` is passed through to the merge (git quiets the "Merge made" line and diffstat but
+still prints conflict output). `--checkout` now overrides a configured `merge` strategy, and `--merge` overrides config. Scenario `s_submodule_update_merge`
+(fast-forward, true merge with a local commit, already-up-to-date, `-q`, `--checkout` override, config `update = merge`, conflict exit 128, `-q` merge). It fails on
+`438432f` (`--merge` was refused by name) and passes after.
+Deliberately left: `--rebase` (git prints `Rebasing (n/m)` progress with carriage returns; needs its own transcript), a fresh clone combined with `--merge`,
+and the clone flags.
+Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 256 PASS / `failures: 0`.

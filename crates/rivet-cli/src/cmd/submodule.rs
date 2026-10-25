@@ -1308,6 +1308,7 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
     let mut force = false;
     let mut no_fetch = false;
     let mut remote = false;
+    let mut strategy_flag: Option<&'static str> = None;
     let mut paths: Vec<String> = Vec::new();
     let mut only_paths = false;
     for word in args {
@@ -1319,9 +1320,9 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
             "-f" | "--force" => force = true,
             "-N" | "--no-fetch" => no_fetch = true,
             "--remote" => remote = true,
-            "--checkout" => {}
-            "--merge"
-            | "--rebase"
+            "--checkout" => strategy_flag = Some("checkout"),
+            "--merge" => strategy_flag = Some("merge"),
+            "--rebase"
             | "--depth"
             | "--reference"
             | "--filter"
@@ -1354,6 +1355,7 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
         force,
         no_fetch,
         remote,
+        strategy_flag,
         quiet,
     };
     update_in(&mut repository, &root, &prefix, "", &paths, &options)
@@ -1365,6 +1367,8 @@ struct UpdateOptions {
     force: bool,
     no_fetch: bool,
     remote: bool,
+    /// `--checkout` / `--merge`: wins over `submodule.<name>.update`.
+    strategy_flag: Option<&'static str>,
     quiet: bool,
 }
 
@@ -1419,12 +1423,17 @@ fn update_in(
             }
             continue;
         }
-        let strategy = repository
-            .config_value(key_of(name.as_ref(), "update").as_ref())?
-            .map(|v| v.to_string())
-            .or_else(|| setting(&gitmodules, name.as_ref(), "update").map(|v| v.to_string()));
+        let strategy = options.strategy_flag.map(str::to_string).or_else(|| {
+            repository
+                .config_value(key_of(name.as_ref(), "update").as_ref())
+                .ok()
+                .flatten()
+                .map(|v| v.to_string())
+                .or_else(|| setting(&gitmodules, name.as_ref(), "update").map(|v| v.to_string()))
+        });
+        let merge = strategy.as_deref() == Some("merge");
         match strategy.as_deref() {
-            None | Some("checkout") => {}
+            None | Some("checkout") | Some("merge") => {}
             Some("none") => {
                 eprintln!("Skipping submodule '{display}'");
                 continue;
@@ -1505,7 +1514,28 @@ fn update_in(
                 }
                 return Ok(128);
             }
-            if let Err(error) = checkout_detached(&mut sub, oid, options.force, fresh) {
+            if merge {
+                // Git runs `git merge [-q] <oid>` inside the submodule.
+                let inner = GlobalArgs {
+                    repo: Some(dest.clone()),
+                    verbose: false,
+                    quiet: options.quiet,
+                    no_pager: true,
+                };
+                let args = super::branching::MergeArgs {
+                    commit: Some(oid.to_string()),
+                    ..Default::default()
+                };
+                if super::branching::run_merge(&inner, &args)? != 0 {
+                    eprintln!("fatal: Unable to merge '{oid}' in submodule path '{display}'");
+                    return Ok(128);
+                }
+                sub = Repository::open_with(&git_dir, Some(&dest), None)
+                    .or_else(|_| Repository::open_or_discover(&dest))?;
+                if !options.quiet {
+                    println!("Submodule path '{display}': merged in '{oid}'");
+                }
+            } else if let Err(error) = checkout_detached(&mut sub, oid, options.force, fresh) {
                 match error.downcast::<rivet_core::Error>() {
                     Ok(core) => {
                         if let Err(other) =
@@ -1518,8 +1548,7 @@ fn update_in(
                 }
                 eprintln!("fatal: Unable to checkout '{oid}' in submodule path '{display}'");
                 return Ok(1);
-            }
-            if !options.quiet {
+            } else if !options.quiet {
                 println!("Submodule path '{display}': checked out '{oid}'");
             }
         }
