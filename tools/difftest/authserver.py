@@ -3,6 +3,7 @@
 
 usage: authserver.py <port> <project-root> <user> <password> [<request-log>]
 
+With AUTH_ONLY_POST=1 in the environment only POST requests are challenged; GET is public.
 Every request without the right `Authorization: Basic` header is answered 401 with a
 `WWW-Authenticate: Basic realm="rivet-test"` challenge. Each request is appended to the request log
 as `<method> <path> <auth|noauth|badauth>`, so a scenario can check how many round trips each
@@ -16,6 +17,7 @@ import sys
 
 port, root, user, password = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 log = sys.argv[5] if len(sys.argv) > 5 else None
+only_post = os.environ.get("AUTH_ONLY_POST") == "1"
 expected = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
 
 
@@ -33,7 +35,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 out.write(f"{self.command} {self.path.split('?')[0]} {state}\n")
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
-        if state != "auth":
+        if state != "auth" and not (only_post and self.command == "GET"):
             self.send_response(401)
             self.send_header("WWW-Authenticate", 'Basic realm="rivet-test"')
             self.send_header("Content-Length", "0")

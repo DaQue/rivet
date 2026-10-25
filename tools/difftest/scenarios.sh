@@ -994,6 +994,51 @@ s_credential() {
     kill $server 2>/dev/null; wait $server 2>/dev/null
 }
 
+# A server that leaves discovery public and challenges only the POSTs (fetch, push, ls-refs): the 401
+# arrives mid-command, the helpers are asked then, and the POST is sent again with the credentials.
+s_credential_post() {
+    local port=18795 root=$PWD
+    mkdir -p repos
+    g init -q --bare repos/o.git; g -C repos/o.git config http.receivepack true
+    g -C repos/o.git symbolic-ref HEAD refs/heads/main
+    g clone -q repos/o.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    AUTH_ONLY_POST=1 python3 "$AUTHSERVER" $port "$root/repos" alice s3cret "$root/req.log" >/dev/null 2>&1 &
+    local server=$!
+    sleep 1
+    local url=http://127.0.0.1:$port/o.git
+    export GIT_TERMINAL_PROMPT=0
+    cred_helper "$root" good alice s3cret
+    cred_helper "$root" bad alice wrong
+    cred_post_dump() {
+        echo "--- helper.log" >>"$TRANSCRIPT"
+        cat "$root/helper.log" >>"$TRANSCRIPT" 2>/dev/null
+        echo "--- requests (distinct)" >>"$TRANSCRIPT"
+        sort -u "$root/req.log" >>"$TRANSCRIPT" 2>/dev/null
+        rm -f "$root/helper.log" "$root/req.log"
+    }
+    # no helper: the POST is challenged and nothing can answer
+    v clone -q $url c0; cred_post_dump
+    # a helper that knows the password: asked at the POST, stored after it worked
+    v config --global credential.helper "$root/good.sh"
+    v clone -q $url c_post; cred_post_dump
+    # a helper with the wrong password: rejected, erased, git's message
+    v config --global credential.helper "$root/bad.sh"
+    v clone -q $url c1; cred_post_dump
+    # push and fetch in an existing repository
+    v config --global credential.helper "$root/good.sh"
+    (cd c_post && tick && echo b >b && v add b && v commit -q -m two && v push origin HEAD:refs/heads/main); cred_post_dump
+    (cd seed && tick && echo c >c && g add c && g commit -qm three && g push -q origin HEAD:refs/heads/side 2>/dev/null)
+    (cd c_post && v fetch origin); cred_post_dump
+    # the same refusals on a fetch of an existing repository
+    (cd seed && tick && echo d >d && g add d && g commit -qm four && g push -q origin HEAD:refs/heads/side 2>/dev/null)
+    v config --global credential.helper "$root/bad.sh"
+    (cd c_post && v fetch origin); cred_post_dump
+    v config --global --unset-all credential.helper
+    (cd c_post && v fetch origin); cred_post_dump
+    kill $server 2>/dev/null; wait $server 2>/dev/null
+}
+
 # Helper output beyond username/password: `password_expiry_utc`, `oauth_refresh_token` (handed back to
 # store/erase), an expired password (discarded, then the next helper or the prompt), and `quit=1`.
 cred_helper_out() {  # <root> <name> <shell commands run on get>
@@ -7969,6 +8014,7 @@ for s in "$@"; do
     case $s in
         s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash|s_push_refspec_forms) run_scenario "$s" repo origin.git ;;
         s_credential) run_scenario "$s" c_ok c5 ;;
+        s_credential_post) run_scenario "$s" c_post ;;
         s_credential_keys) run_scenario "$s" c_exp c_quitfull ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
         s_sparse_linked) run_scenario "$s" repo wt ;;

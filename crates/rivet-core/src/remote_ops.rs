@@ -348,6 +348,15 @@ impl Repository {
             None => (remote.to_string(), remote.to_string(), Vec::new()),
         };
         let url = RemoteUrl::parse(BStr::new(url_text.as_bytes()))?;
+        if request.write_fetch_head && !request.dry_run {
+            // Git empties FETCH_HEAD before it talks to the remote, so a fetch that fails (an
+            // unreachable or refusing remote) leaves it empty, not stale.
+            let path = self.git_dir().join("FETCH_HEAD");
+            std::fs::write(&path, b"").map_err(|e| Error::IoAtPath {
+                path: BString::from(path.to_string_lossy().as_bytes()),
+                source: e,
+            })?;
+        }
         let mut transport = open_transport(&url)?;
         transport.configure_credentials(crate::remote::credential::CredentialSettings::for_url(
             self.config(),

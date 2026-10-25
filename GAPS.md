@@ -142,8 +142,10 @@ The command works for the common case; the listed options or edge cases are miss
   `state` (multi-round auth), `url=` (URL rewriting by a helper), `credential.<url>.*` keys other than `helper`,
   `useHttpPath` and `username`, `http.proxy` credentials, `credential.interactive`, the
   `git credential` command, and credentials for `ssh://` (the ssh program asks). Covered by
-  `s_credential` against a local Basic-auth server; a `401` that first appears on a POST (not the
-  discovery request) is not retried.
+  `s_credential` against a local Basic-auth server; a `401` that first appears on a POST (discovery
+  public, POSTs challenged) is retried like the discovery one (`s_credential_post`), but only fetch,
+  clone and a first-POST refusal are compared for the failure text (`RPC failed; HTTP 401 curl 22 …`
+  and `expected flush after ref listing`); a refused `receive-pack` POST is not compared.
 * **`pull --rebase <remote> <branch>`** — with an explicit refspec, rebases onto the fetched
   tip rather than the fork point.
 * **Network protocol** — v2 capabilities other than `object-format=sha1` are not implemented;

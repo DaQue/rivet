@@ -316,6 +316,32 @@ impl HttpTransport {
 /// Built from the parsed fields rather than from [`RemoteUrl::redacted`], whose userinfo handling
 /// still appends the password; this is the string that ends up in a message a user may paste into a
 /// bug report.
+/// What Git adds when the `ls-refs` POST is refused (rivet's first POST of a fetch stands in for it,
+/// the refs having come with the advertisement): its `stateless-connect` helper dies reading the
+/// listing. The reason carries both lines (`main` prints them as Git does): after a refused
+/// credential Git reports `RPC failed`, and when no credential could be found it reports why not.
+fn ls_refs_failure(error: Error) -> Error {
+    const TAIL: &str = "fatal: expected flush after ref listing";
+    match error {
+        Error::Authentication { url, reason }
+            if reason.starts_with("could not read ")
+                || reason.starts_with("credential helper ") =>
+        {
+            Error::Authentication {
+                url,
+                reason: format!("{reason}\n{TAIL}"),
+            }
+        }
+        Error::Authentication { url, .. } => Error::Authentication {
+            url,
+            reason: format!(
+                "RPC failed; HTTP 401 curl 22 The requested URL returned error: 401\n{TAIL}"
+            ),
+        },
+        other => other,
+    }
+}
+
 fn display_url(url: &RemoteUrl) -> BString {
     let mut out = BString::from(url.scheme.as_str());
     out.extend_from_slice(b"://");
@@ -720,6 +746,13 @@ pub fn send_streaming<T>(
 
     let status = response.status().as_u16();
     if is_auth_challenge(status) {
+        let challenge: Vec<String> = response
+            .headers()
+            .get_all("www-authenticate")
+            .iter()
+            .filter_map(|value| value.to_str().ok().map(str::to_string))
+            .collect();
+        LAST_CHALLENGE.with(|c| *c.borrow_mut() = challenge);
         return Err(Error::Authentication {
             url: safe,
             reason: format!("HTTP {} from the remote", status),
@@ -844,11 +877,26 @@ impl HttpTransport {
         url: &RemoteUrl,
         request: &crate::remote::HttpRequest,
     ) -> Result<HttpResponse> {
+        self.authenticated(url, true, |agent, base| send(agent, request, base))
+    }
+
+    /// Run `attempt` (one request, given the agent and the base URL carrying the credentials found
+    /// so far); on a `401` find credentials and run it again, as [`Self::send_authenticated`] does
+    /// for the advertisement. Every POST goes through here too: a server may leave discovery public
+    /// and challenge only the POST; `capabilities` is false for those, as Git asks its helpers
+    /// without `authtype`/`state` there. `attempt` must be repeatable, so a streaming consumer is only
+    /// called once the status is known.
+    fn authenticated<T>(
+        &mut self,
+        url: &RemoteUrl,
+        capabilities: bool,
+        mut attempt: impl FnMut(&ureq::Agent, &BStr) -> Result<T>,
+    ) -> Result<T> {
         use crate::remote::credential::Credential;
         let mut asked = self.credentials.is_some();
         loop {
             let base = self.base_url(url, true);
-            let challenge_failed = match send(&self.agent, request, BStr::new(&base)) {
+            let challenge_failed = match attempt(&self.agent, BStr::new(&base)) {
                 Ok(response) => {
                     if let Some(credential) = self.pending_approval.take()
                         && let Some(settings) = &self.credential_settings
@@ -886,6 +934,7 @@ impl HttpTransport {
             }
             asked = true;
             let mut credential: Credential = settings.credential_for(url, wwwauth);
+            credential.plain_get = !capabilities;
             if let Some((user, password)) = &self.url_credentials {
                 credential.username = Some(user.clone());
                 credential.password = Some(password.clone());
@@ -1189,76 +1238,79 @@ impl Transport for HttpTransport {
         }
 
         let request = service_request(&self.url, Service::UploadPack, body)?;
-        let base = self.base_url(&self.url, true);
         let mut server_error: Option<String> = None;
+        let target = self.url.clone();
 
-        send_streaming(&self.agent, &request, BStr::new(&base), &mut |reader| {
-            let mut reader = std::io::BufReader::new(reader);
-            let mut packfile = !v2;
+        self.authenticated(&target, false, |agent, base| {
+            send_streaming(agent, &request, base, &mut |reader| {
+                let mut reader = std::io::BufReader::new(reader);
+                let mut packfile = !v2;
 
-            loop {
-                match read_frame(&mut reader)? {
-                    None | Some(Frame::Flush) => break,
-                    Some(Frame::Raw(head)) => {
-                        // No sideband: the pack starts raw, right after the NAK pkt-line.
-                        if v2 {
-                            return Err(Error::Protocol(
-                                "protocol v2 sent an unframed pack".to_string(),
-                            ));
-                        }
-                        into.write_all(&head)?;
-                        copy_stream(&mut reader, into)?;
-                        break;
-                    }
-                    Some(Frame::Data(data)) => {
-                        if data.is_empty() {
-                            continue;
-                        }
-                        if let Some(message) = data.strip_prefix(b"ERR ") {
-                            server_error = Some(String::from_utf8_lossy(message).into_owned());
+                loop {
+                    match read_frame(&mut reader)? {
+                        None | Some(Frame::Flush) => break,
+                        Some(Frame::Raw(head)) => {
+                            // No sideband: the pack starts raw, right after the NAK pkt-line.
+                            if v2 {
+                                return Err(Error::Protocol(
+                                    "protocol v2 sent an unframed pack".to_string(),
+                                ));
+                            }
+                            into.write_all(&head)?;
+                            copy_stream(&mut reader, into)?;
                             break;
                         }
-                        if v2 && !packfile {
-                            let line = data.strip_suffix(b"\n").unwrap_or(&data);
-                            if line == b"packfile" {
-                                packfile = true;
+                        Some(Frame::Data(data)) => {
+                            if data.is_empty() {
+                                continue;
                             }
-                            continue;
-                        }
-                        if !v2
-                            && (data.starts_with(b"ack ")
-                                || data.starts_with(b"ACK ")
-                                || data.starts_with(b"NAK")
-                                || data.starts_with(b"shallow ")
-                                || data.starts_with(b"unshallow "))
-                        {
-                            continue;
-                        }
-                        if sideband {
-                            match data[0] {
-                                1 => into.write_all(&data[1..])?,
-                                2 => {}
-                                3 => {
-                                    server_error =
-                                        Some(String::from_utf8_lossy(&data[1..]).into_owned())
-                                }
-                                other => {
-                                    return Err(Error::Protocol(format!(
-                                        "unknown sideband channel {other}"
-                                    )));
-                                }
+                            if let Some(message) = data.strip_prefix(b"ERR ") {
+                                server_error = Some(String::from_utf8_lossy(message).into_owned());
+                                break;
                             }
-                        } else if v2 {
-                            // v2 always sidebands the packfile section.
-                            into.write_all(&data[1..])?;
-                        } else {
-                            into.write_all(&data)?;
+                            if v2 && !packfile {
+                                let line = data.strip_suffix(b"\n").unwrap_or(&data);
+                                if line == b"packfile" {
+                                    packfile = true;
+                                }
+                                continue;
+                            }
+                            if !v2
+                                && (data.starts_with(b"ack ")
+                                    || data.starts_with(b"ACK ")
+                                    || data.starts_with(b"NAK")
+                                    || data.starts_with(b"shallow ")
+                                    || data.starts_with(b"unshallow "))
+                            {
+                                continue;
+                            }
+                            if sideband {
+                                match data[0] {
+                                    1 => into.write_all(&data[1..])?,
+                                    2 => {}
+                                    3 => {
+                                        server_error =
+                                            Some(String::from_utf8_lossy(&data[1..]).into_owned())
+                                    }
+                                    other => {
+                                        return Err(Error::Protocol(format!(
+                                            "unknown sideband channel {other}"
+                                        )));
+                                    }
+                                }
+                            } else if v2 {
+                                // v2 always sidebands the packfile section.
+                                into.write_all(&data[1..])?;
+                            } else {
+                                into.write_all(&data)?;
+                            }
                         }
                     }
                 }
-            }
-            Ok(())
-        })?;
+                Ok(())
+            })
+        })
+        .map_err(ls_refs_failure)?;
 
         match server_error {
             Some(message) => Err(Error::Protocol(message)),
@@ -1324,8 +1376,9 @@ impl Transport for HttpTransport {
         body.extend_from_slice(pack);
 
         let request = service_request(&self.url, Service::ReceivePack, body)?;
-        let base = self.base_url(&self.url, true);
-        let response = send(&self.agent, &request, BStr::new(&base))?;
+        let target = self.url.clone();
+        let response =
+            self.authenticated(&target, false, |agent, base| send(agent, &request, base))?;
 
         if !report {
             return Ok(Vec::new());
@@ -1409,8 +1462,10 @@ impl Transport for HttpTransport {
         body.extend_from_slice(FLUSH_PACKET);
 
         let request = service_request(&self.url, Service::UploadPack, body)?;
-        let base = self.base_url(&self.url, true);
-        let response = send(&self.agent, &request, BStr::new(&base))?;
+        let target = self.url.clone();
+        let response = self
+            .authenticated(&target, false, |agent, base| send(agent, &request, base))
+            .map_err(ls_refs_failure)?;
 
         let mut cursor = &response.body[..];
         let mut refs = Vec::new();

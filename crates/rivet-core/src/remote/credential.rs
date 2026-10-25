@@ -47,6 +47,9 @@ pub struct Credential {
     /// The OAuth refresh token a helper handed out (`oauth_refresh_token`), passed back to
     /// `store` and `erase`.
     pub oauth_refresh_token: Option<BString>,
+    /// Set when the challenge answered a POST: Git then asks its helpers without the
+    /// `capability[]=authtype`/`state` lines (it retries a POST with plain username/password).
+    pub plain_get: bool,
 }
 
 impl std::fmt::Debug for Credential {
@@ -394,7 +397,7 @@ impl CredentialSettings {
 /// The text a helper reads on stdin for `operation`.
 fn input(credential: &Credential, operation: Operation) -> Vec<u8> {
     let mut out = Vec::new();
-    if operation == Operation::Get {
+    if operation == Operation::Get && !credential.plain_get {
         out.extend_from_slice(b"capability[]=authtype\ncapability[]=state\n");
     }
     out.extend_from_slice(
@@ -504,6 +507,20 @@ mod tests {
             "https://*.example.com",
             &url("https://git.example.com/x")
         ));
+    }
+
+    #[test]
+    fn a_post_challenge_asks_without_capabilities() {
+        let credential = Credential {
+            protocol: "http".into(),
+            host: "h:1".into(),
+            plain_get: true,
+            ..Credential::default()
+        };
+        assert_eq!(
+            input(&credential, Operation::Get),
+            b"protocol=http\nhost=h:1\n"
+        );
     }
 
     #[test]
