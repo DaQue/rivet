@@ -62,8 +62,11 @@ The command or subsystem is absent; it either fails at the argument parser or re
   (`s_rebase_interop`: edit stop, squash, conflict, reword). rivet's `rebase-merge/` carries one extra file,
   `rivet-interactive`, which git ignores; a git-written state lacks it and rivet does not need it. Plain
   (non-`-i`) rebase states written by git are not compared.
-* **`bundle-uri`** and SHA-256 bundles. Creating, listing, verifying and unbundling bundles works;
-  fetching, cloning and `ls-remote` *from* a bundle file work (`s_bundle_clone`, `s_ls_remote`).
+* **`bundle-uri`** (beyond `clone --bundle-uri=<file>`) and SHA-256 bundles. Creating, listing, verifying and unbundling bundles works;
+  fetching, cloning and `ls-remote` *from* a bundle file work (`s_bundle_clone`, `s_ls_remote`). `clone --bundle-uri` takes a file path
+  or `file://` URL only (refs land in `refs/bundles/*`, `s_clone_bundle_uri`); other schemes warn and fall back to a plain clone, as an
+  unreachable URI does in git. Bundle lists (`bundle.*` config), `fetch.bundleURI` and the `bundle-uri` protocol command are not
+  implemented; a file that is not a bundle gets git's two warnings but not the `bad config line` error naming a random temp file.
   `ls-remote --sort`, `--upload-pack` and `--server-option` are refused by name (Rust test
   `ls_remote_refusals`); its patterns understand `*` and `?` but not `[...]`.
 * **Submodule clone flags** — `update --depth` works only for a local-path source (git ignores it with

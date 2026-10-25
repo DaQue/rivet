@@ -1321,3 +1321,11 @@ and `--max-age`/`--min-age` (Unix timestamps, inclusive; `not a number of second
 `GAPS.md` section 2 `rev-list` line trimmed. Left undone: `--left-right`, `--cherry-pick`, `--ancestry-path`, `--children`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 255 passed / 0 failed / 0 ignored,
 `scenarios.sh` 269 PASS / `failures: 0`.
+
+## clone --bundle-uri (2026-10-25)
+Landed `clone --bundle-uri=<file|file://>` (`s_clone_bundle_uri`, fails on `2f82617`: unknown option). The bundle's objects are stored
+before the fetch and its refs written as `refs/bundles/<rest>` with no reflog; a missing file, a non-bundle or a non-file scheme
+prints git's `failed to download` / `failed to fetch objects` warnings and the clone carries on. Works with `--bare`.
+Left undone (in `GAPS.md`): bundle lists, `fetch.bundleURI`, http(s) URIs, the random-tempfile `bad config line` error for a junk file, `--depth` combination.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
+`scenarios.sh` 270 PASS / `failures: 0`.

@@ -7198,6 +7198,26 @@ s_bundle_clone() {
     (cd dotted && v log --oneline -1)
 }
 
+s_clone_bundle_uri() {
+    g init -q src; cd src
+    for i in 1 2; do tick; echo "line $i" >>f; g add .; g commit -q -m "c$i"; done
+    g tag v1
+    v bundle create ../b.bundle --all
+    tick; echo more >>f; g commit -q -a -m c3
+    cd ..
+    echo junk >junk.bundle
+    v clone --bundle-uri=$ROOT/b.bundle src seeded
+    (cd seeded && v for-each-ref && v log --oneline && v config --get remote.origin.url | sed "s#$ROOT#<ROOT>#g" && vq fsck)
+    v clone --bundle-uri=file://$ROOT/b.bundle src viafile
+    (cd viafile && v for-each-ref)
+    v clone --bundle-uri=./b.bundle --bare src bare.git
+    (cd bare.git && v for-each-ref)
+    v clone --bundle-uri=$ROOT/nosuch.bundle src missing
+    (cd missing && v for-each-ref && v log --oneline -1)
+    v clone --bundle-uri=https://x.invalid/b src remote
+    (cd remote && v for-each-ref | head -1)
+}
+
 s_ls_remote() {
     g init -q src; cd src
     for i in 1 2 3; do tick; echo "line $i" >>f; g add .; g commit -q -m "c$i"; done
@@ -8857,6 +8877,7 @@ for s in "$@"; do
         s_submodule_foreach) run_scenario "$s" none ;;
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;
         s_ls_remote) run_scenario "$s" none ;;
+        s_clone_bundle_uri) run_scenario "$s" seeded viafile bare.git missing remote ;;
         s_bundle_clone) run_scenario "$s" all named all.git onside upstream nohead dotted odd.git ;;
         s_submodule_set) run_scenario "$s" clone ;;
         s_submodule_absorb) run_scenario "$s" top top/vendor/lib ;;

@@ -126,6 +126,10 @@ pub struct CloneArgs {
     /// The object format, for a local clone; must match the source's.
     #[arg(long = "object-format", value_name = "FORMAT", value_enum)]
     pub object_format: Option<FormatArg>,
+
+    /// Seed the clone from a bundle file (a path or a `file://` URL) before fetching.
+    #[arg(long = "bundle-uri", value_name = "URI")]
+    pub bundle_uri: Option<String>,
 }
 
 /// Arguments to `rivet config`.
@@ -819,6 +823,42 @@ fn clone_into(
     Ok((repository, checked_out))
 }
 
+/// `clone --bundle-uri`: store the objects of a local bundle and record its refs under
+/// `refs/bundles/` (`refs/heads/main` becomes `refs/bundles/heads/main`, without a reflog). Like
+/// git, a URI that cannot be used only warns and the clone carries on; only a file path and a
+/// `file://` URL are understood.
+fn seed_from_bundle_uri(repository: &mut Repository, uri: &str) -> Result<()> {
+    let path = uri.strip_prefix("file://").unwrap_or(uri);
+    let local = !path.contains("://");
+    let bundle = if local {
+        rivet_core::bundle::Bundle::read(&absolute_source(path), repository.format(), uri).ok()
+    } else {
+        None
+    };
+    let Some(bundle) = bundle else {
+        if !local || !absolute_source(path).exists() {
+            eprintln!("warning: failed to download bundle from URI '{uri}'");
+        } else {
+            eprintln!("warning: file at URI '{uri}' is not a bundle or bundle list");
+        }
+        eprintln!("warning: failed to fetch objects from bundle URI '{uri}'");
+        return Ok(());
+    };
+    if !bundle.missing_prerequisites(repository).is_empty() {
+        eprintln!("warning: failed to fetch objects from bundle URI '{uri}'");
+        return Ok(());
+    }
+    bundle.unpack(repository)?;
+    for r in bundle.refs() {
+        let Some(rest) = r.name.strip_prefix(b"refs/") else {
+            continue;
+        };
+        let name = rivet_core::RefName::from_bytes(&[b"refs/bundles/".as_slice(), rest].concat())?;
+        repository.refs().set_direct(&name, r.oid, None)?;
+    }
+    Ok(())
+}
+
 /// Fetch into an initialised repository and check out the remote's default branch: everything
 /// `clone` does after creating the directories (also used for a submodule's separate git
 /// directory).
@@ -855,6 +895,10 @@ pub(super) fn populate_clone(
         )?;
     }
     repository.write_config()?;
+
+    if let Some(uri) = &args.bundle_uri {
+        seed_from_bundle_uri(repository, uri)?;
+    }
 
     let spec = if args.bare {
         "+refs/heads/*:refs/heads/*".to_string()
