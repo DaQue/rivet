@@ -4688,6 +4688,23 @@ s_rev_list_filters() {
     v rev-list --grep=fix --count main
     v rev-list -F --grep='main d' main
     v rev-list --fixed-strings --grep='fix (' main
+    v rev-list --skip=2 main
+    v rev-list --skip 2 main
+    v rev-list --skip=2 -n 2 main
+    v rev-list --skip=2 --count main
+    v rev-list --skip=1 --reverse main
+    v rev-list --skip=1 -n 2 --reverse main
+    v rev-list --skip=0 -n 0 main
+    v rev-list --skip=-1 main
+    v rev-list --skip=999 main
+    v rev-list --skip=1 --no-merges main
+    v rev-list --skip=x main
+    v rev-list --max-age=1700000200 main
+    v rev-list --min-age=1700000300 main
+    v rev-list --max-age=1700000200 --min-age=1700000400 main
+    v rev-list --max-age=1700000300 --since=1700000100 main
+    v rev-list --since=1700000300 --max-age=1700000100 main
+    v rev-list --max-age=abc main
 }
 
 s_rev_list_abbrev() {

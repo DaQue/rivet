@@ -1313,3 +1313,11 @@ The refusal Rust test no longer lists `--root`. `GAPS.md` updated. `PRIORITIES.m
 Left undone: more than one positional argument with `--root` (git's full usage text).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
 `scenarios.sh` 269 PASS / `failures: 0`.
+
+## rev-list --skip, --max-age, --min-age (2026-10-25)
+Landed `rev-list --skip=<n>` (applied after the filters, before `--max-count`; a negative value counts as 0; `not an integer` otherwise)
+and `--max-age`/`--min-age` (Unix timestamps, inclusive; `not a number of seconds since epoch` otherwise; the last of
+`--max-age`/`--since` and of `--min-age`/`--until` wins). Scenarios added to `s_rev_list_filters`, which fails on `012ebc4` and passes after.
+`GAPS.md` section 2 `rev-list` line trimmed. Left undone: `--left-right`, `--cherry-pick`, `--ancestry-path`, `--children`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 255 passed / 0 failed / 0 ignored,
+`scenarios.sh` 269 PASS / `failures: 0`.

@@ -89,6 +89,18 @@ pub struct RevListArgs {
     #[arg(short = 'n', long = "max-count", value_name = "N")]
     pub max_count: Option<usize>,
 
+    /// Skip this many commits before starting to show them.
+    #[arg(long = "skip", value_name = "N")]
+    pub skip: Option<String>,
+
+    /// Show only commits made at or after this Unix timestamp.
+    #[arg(long = "max-age", value_name = "TIMESTAMP", overrides_with = "since")]
+    pub max_age: Option<String>,
+
+    /// Show only commits made at or before this Unix timestamp.
+    #[arg(long = "min-age", value_name = "TIMESTAMP", overrides_with = "until")]
+    pub min_age: Option<String>,
+
     /// Print the commits in reverse order (after `--max-count` is applied).
     #[arg(long = "reverse")]
     pub reverse: bool,
@@ -122,11 +134,21 @@ pub struct RevListArgs {
     pub max_parents: Option<usize>,
 
     /// Show only commits made after this date.
-    #[arg(long = "since", alias = "after", value_name = "DATE")]
+    #[arg(
+        long = "since",
+        alias = "after",
+        value_name = "DATE",
+        overrides_with = "max_age"
+    )]
     pub since: Option<String>,
 
     /// Show only commits made before this date.
-    #[arg(long = "until", alias = "before", value_name = "DATE")]
+    #[arg(
+        long = "until",
+        alias = "before",
+        value_name = "DATE",
+        overrides_with = "min_age"
+    )]
     pub until: Option<String>,
 
     /// Show only commits whose author matches the pattern (repeatable, any of them).
@@ -347,8 +369,25 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
         rivet_core::ops::parse_approxidate(text)
             .ok_or_else(|| anyhow::anyhow!("invalid date format: {text}"))
     };
-    spec.max_age = args.since.as_deref().map(parse_date).transpose()?;
-    spec.min_age = args.until.as_deref().map(parse_date).transpose()?;
+    let parse_epoch = |text: &str| -> Result<i64> {
+        text.parse::<i64>()
+            .map_err(|_| anyhow::anyhow!("'{text}': not a number of seconds since epoch"))
+    };
+    spec.max_age = match &args.max_age {
+        Some(text) => Some(parse_epoch(text)?),
+        None => args.since.as_deref().map(parse_date).transpose()?,
+    };
+    spec.min_age = match &args.min_age {
+        Some(text) => Some(parse_epoch(text)?),
+        None => args.until.as_deref().map(parse_date).transpose()?,
+    };
+    let skip = match &args.skip {
+        Some(text) => text
+            .parse::<i64>()
+            .map_err(|_| anyhow::anyhow!("'{text}': not an integer"))?
+            .max(0) as usize,
+        None => 0,
+    };
     let walked = super::gitwalk::walk(&repository, &spec)?;
 
     let matcher = CommitMatcher::new(args)?;
@@ -362,12 +401,17 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
         (n, false) => n,
     };
     let mut commits: Vec<ObjectId> = Vec::new();
+    let mut skipped = 0usize;
     for oid in &walked.commits {
         let parent_count = walked.parents[oid].len();
         if parent_count < min_parents || max_parents.is_some_and(|max| parent_count > max) {
             continue;
         }
         if !matcher.is_empty() && !matcher.matches(&repository, oid)? {
+            continue;
+        }
+        if skipped < skip {
+            skipped += 1;
             continue;
         }
         commits.push(*oid);

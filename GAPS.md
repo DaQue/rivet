@@ -88,7 +88,7 @@ The command works for the common case; the listed options or edge cases are miss
   `--graph` over several root commits exits 128 by design; `--graph` with `--date-order` or
   `--first-parent` orders differently from git, and `--graph --format=format:%s` draws an
   extra row.
-* **`rev-list`** — no `--skip`, `--max-age`/`--min-age`, `--left-right`, `--cherry-pick`,
+* **`rev-list`** — no `--left-right`, `--cherry-pick`,
   `--ancestry-path`, `--children`.
 * **`for-each-ref`** — no `--shell`/`--perl`/`--python`/`--tcl`, `--stdin`, `--start-after`,
   `--include-root-refs`, `version:`/`v:` sort.
