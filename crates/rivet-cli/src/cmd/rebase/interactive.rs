@@ -39,6 +39,7 @@ pub(super) enum Cmd {
     Drop,
     Noop,
     Exec,
+    Break,
 }
 
 impl Cmd {
@@ -53,6 +54,7 @@ impl Cmd {
             "drop" | "d" => Cmd::Drop,
             "noop" => Cmd::Noop,
             "exec" | "x" => Cmd::Exec,
+            "break" | "b" => Cmd::Break,
             _ => return None,
         })
     }
@@ -68,6 +70,7 @@ impl Cmd {
             Cmd::Drop => "drop",
             Cmd::Noop => "noop",
             Cmd::Exec => "exec",
+            Cmd::Break => "break",
         }
     }
 
@@ -242,7 +245,7 @@ pub(super) fn edit_message(repository: &Repository, message: &[u8]) -> Result<Op
 /// One parsed todo line.
 pub(super) struct Item {
     pub cmd: Cmd,
-    /// `None` for `noop` and `exec`.
+    /// `None` for `noop`, `exec` and `break`.
     pub oid: Option<ObjectId>,
     /// The shell command of an `exec` line.
     pub text: Option<String>,
@@ -259,6 +262,7 @@ impl Item {
                 super::subject_of(repository, oid)?
             ),
             (None, Some(text)) => format!("exec {text}\n"),
+            (None, None) if self.cmd == Cmd::Break => "break\n".to_string(),
             (None, None) => "noop\n".to_string(),
         })
     }
@@ -286,7 +290,6 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
         let mut words = line.split_whitespace();
         let word = words.next().unwrap_or_default();
         let name = match word {
-            "b" | "break" => Some("break"),
             "l" | "label" => Some("label"),
             "t" | "reset" => Some("reset"),
             "m" | "merge" => Some("merge"),
@@ -297,6 +300,24 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
             return Parsed::Refused(format!(
                 "rebase: '{name}' in the todo list is not implemented"
             ));
+        }
+        if matches!(word, "b" | "break") {
+            let extra = line[word.len()..].trim_start();
+            if extra.is_empty() {
+                items.push(Item {
+                    cmd: Cmd::Break,
+                    oid: None,
+                    text: None,
+                });
+            } else {
+                let tail = stripped_tail(text, number, comment);
+                errors.push(format!(
+                    "break does not accept arguments: '{}\n{tail}'",
+                    extra.trim_end()
+                ));
+                errors.push(format!("invalid line {}: {raw}", number + 1));
+            }
+            continue;
         }
         if matches!(word, "x" | "exec") {
             let command = line[word.len()..].trim();
@@ -355,6 +376,25 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
     } else {
         Parsed::Invalid(errors)
     }
+}
+
+/// What Git quotes after a `break` that was given arguments: its list is cleaned up (comment lines
+/// gone, trailing blanks trimmed, runs of blank lines collapsed) and the quote runs to the end of it.
+fn stripped_tail(text: &str, number: usize, comment: char) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for raw in text.lines().skip(number + 1) {
+        let line = raw.trim_end();
+        if line.starts_with(comment)
+            || (line.is_empty() && out.last().is_none_or(|l| l.is_empty()) && !out.is_empty())
+        {
+            continue;
+        }
+        out.push(line);
+    }
+    while out.last().is_some_and(|l| l.is_empty()) {
+        out.pop();
+    }
+    out.iter().map(|l| format!("{l}\n")).collect()
 }
 
 /// The lines of the state files for `items`: `<command> <full id> # <subject>`.

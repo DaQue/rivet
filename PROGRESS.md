@@ -1128,3 +1128,16 @@ Deliberately left: `--exec` without `-i` (git runs it as an unedited interactive
 `--continue` after a failed exec does not re-check for staged/unstaged changes the way git does; exec exit-status handling beyond success/failure
 (e.g. `reschedule-failed-exec`) is not implemented.
 Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 253 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 (2) — `rebase -i` `break` todo command
+Gate at `a9899fe`: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 253 PASS / `failures: 0`.
+
+Queue audit: item 4 is already covered — `s_sparse_linked` runs `sparse-checkout` from a linked work tree against git, `s_sparse_leftovers` covers conflicts outside the definition, the sparse index stays refused. Nothing to change there.
+
+Landed (priority 7, the `break` part only): `break` / `b` todo lines stop the rebase with `Stopped at <short> (<subject>)` on stderr, exit 0, `break` recorded in `done`
+and counted in `Rebasing (n/m)`; `--continue` goes on, work committed while stopped survives, a trailing `break` works. `break` with arguments is the
+error git prints (`break does not accept arguments: '<rest of the cleaned-up list>'`, the quote runs to the end of the list).
+Scenario `s_rebase_break` (status while stopped, `--continue`, `b`, commit while stopped, trailing break, arguments error, reflog). It fails on `a9899fe`
+(`break` was refused by name) and passes after. Rust test `rebase_interactive.rs`: `break` removed from the refusal list.
+Deliberately left: `label`, `reset`, `merge`, `update-ref`, `fixup -C`/`-c`; `--continue` after `break` does not check for a dirty tree as git may.
+Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 254 PASS / `failures: 0`.

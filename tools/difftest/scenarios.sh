@@ -7904,6 +7904,40 @@ s_rebase_exec() {
     v reflog
 }
 
+s_rebase_break() {
+    rebase_repo
+    g branch orig topic
+    rebase_i_helpers
+    # break stops between two commits; the todo keeps the rest and --continue goes on.
+    rebase_i_run '2i break'
+    v status
+    v log --format='%H %s' main..topic
+    v rebase --continue
+    echo "rc=$?"
+    v log --format='%H %s' main..topic
+    v status
+    # b is the short form, a break may stand last, and work done while stopped survives.
+    v switch -q topic
+    v reset -q --hard orig
+    rebase_i_run '1a b'
+    echo more >break-note.txt
+    v add break-note.txt
+    v commit -q -m 'added while stopped'
+    v rebase --continue
+    echo "rc=$?"
+    v log --format='%s' main..topic
+    v switch -q topic
+    v reset -q --hard orig
+    rebase_i_run '$a break'
+    v rebase --continue
+    echo "rc=$?"
+    # arguments are an error
+    rebase_i_run '1a break extra words'
+    echo "rc=$?"
+    v rebase --abort
+    v reflog
+}
+
 # `stash branch`: the argument errors, a branch made at the stash's base with the index and the
 # untracked files restored, `post-checkout` for the new branch, an explicit stash, and the two ways
 # it can fail (the checkout refuses, the apply refuses) which must keep the stash.

@@ -1000,6 +1000,21 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             interactive::flush_pending(repository, dir)?;
         }
 
+        if cmd == interactive::Cmd::Break {
+            if !global.quiet {
+                eprint!("Rebasing ({msgnum}/{end})\r");
+            }
+            let Some(head) = repository.head()?.oid() else {
+                anyhow::bail!("rebase: HEAD is unborn");
+            };
+            eprintln!(
+                "Stopped at {} ({})",
+                super::history::abbrev(repository, &head, false),
+                subject_of(repository, &head)?
+            );
+            return Ok(0);
+        }
+
         if cmd == interactive::Cmd::Exec {
             if !global.quiet {
                 eprint!("Rebasing ({msgnum}/{end})\r");

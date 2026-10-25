@@ -103,7 +103,6 @@ fn todo_commands_that_are_not_implemented_are_refused_before_anything_moves() {
     let p = dir.path();
     let head = git(p, &["rev-parse", "HEAD"]);
     for (edit, name) in [
-        ("1a break", "break"),
         ("1i label onto", "label"),
         ("2s/^pick/fixup -C/", "fixup -C"),
     ] {
