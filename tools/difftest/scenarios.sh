@@ -9084,6 +9084,29 @@ s_ls_remote_patterns() {
     v ls-remote ../src 'refs/heads/[ab]1' 'refs/tags/v1.[0]'
 }
 
+s_ls_remote_sort() {
+    g init -q src; cd src
+    tick; echo a >f; g add .; g commit -q -m c1
+    for b in zeta Alpha beta; do g branch "$b"; done
+    for t in v1 v10 v2 a; do g tag "$t"; done
+    tick; g tag -a -m ann ann
+    for k in refname -refname refname:strip=1 refname:lstrip=2 refname:lstrip=-1 refname:rstrip=1 \
+        refname:rstrip=-1 -refname:lstrip=9 refname:strip=0 refname: -refname:rstrip=2 \
+        nokey '' - refname:foo refname:lstrip refname:lstrip=x refname:rstrip= ' refname' 'refname,objectname'; do
+        v ls-remote --sort="$k" ../src
+    done
+    v ls-remote --sort=-refname --sort=refname:lstrip=2 ../src
+    v ls-remote --sort=refname:lstrip=2 --sort=-refname:rstrip=1 ../src
+    v ls-remote --heads --sort=-refname ../src
+    v ls-remote --tags --refs --sort=-refname ../src
+    v ls-remote --symref --sort=-refname ../src
+    v ls-remote --sort=-refname ../src 'v*'
+    v ls-remote --sort=-refname --exit-code ../src nomatch
+    v ls-remote --sort=nokey ../nonexistent
+    cd ..; g init -q other; cd other
+    v ls-remote --sort=-refname ../src
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
@@ -9132,6 +9155,7 @@ for s in "$@"; do
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;
         s_ls_remote) run_scenario "$s" none ;;
         s_ls_remote_patterns) run_scenario "$s" none ;;
+        s_ls_remote_sort) run_scenario "$s" none ;;
         s_clone_filter) run_scenario "$s" local viafile bare.git limit ;;
         s_clone_bundle_uri) run_scenario "$s" seeded viafile bare.git missing remote ;;
         s_bundle_clone) run_scenario "$s" all named all.git onside upstream nohead dotted odd.git ;;

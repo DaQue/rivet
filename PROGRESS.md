@@ -1452,3 +1452,15 @@ Scenario `s_for_each_ref_quote` fails on `99cedfb` (unknown option), passes now;
 Left undone (in `GAPS.md`): `--stdin`, `--start-after`, `--include-root-refs`, `version:` sort.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 259 passed / 0 failed / 0 ignored,
 `scenarios.sh` 282 PASS / `failures: 0`.
+
+## ls-remote --sort (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed; took `GAPS.md` section 1 (`ls-remote`). `--sort=<key>` (repeatable; the last is the
+most significant, ties fall back to the plain name) orders the advertised lines for `refname` with `lstrip`/`rstrip`/`strip` (negative counts
+too) and a leading `-`. Keys are parsed after the remote answered, with git's texts (`unknown field name`, `malformed field name`,
+`unrecognized %(refname) argument`, `Integer value expected`). `version:`/`v:`, `*`, `refname:short|dir|base` are refused by name
+(Rust test `sort_keys_beyond_refname_are_refused_by_name`). Also fixed on the way: `ls-remote <nonexistent path>` listed the repository
+around the current directory instead of failing.
+Scenario `s_ls_remote_sort` fails on `2bd75e4` (`--sort` refused); expected values checked against `/usr/bin/git`.
+Left undone (in `GAPS.md`): `version:refname`, `*` ignore-case, object-data keys, `--upload-pack`, `--server-option`, subdirectory-of-repo path.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
+`scenarios.sh` 283 PASS / `failures: 0`.

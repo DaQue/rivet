@@ -36,9 +36,9 @@ pub struct LsRemoteArgs {
     #[arg(short = 'q', long = "quiet")]
     pub quiet: bool,
 
-    /// Accepted so the error can name it: ordering the output is not implemented.
+    /// Order the output by a ref-name key (`refname`, with `lstrip`/`rstrip`/`strip`; `-` reverses).
     #[arg(long = "sort", value_name = "KEY")]
-    pub sort: Option<String>,
+    pub sort: Vec<String>,
 
     /// Accepted so the error can name it.
     #[arg(long = "upload-pack", visible_alias = "exec", value_name = "PATH")]
@@ -59,8 +59,8 @@ pub struct LsRemoteArgs {
 
 /// Run `rivet ls-remote`.
 pub fn run_ls_remote(global: &GlobalArgs, args: &LsRemoteArgs) -> Result<i32> {
-    if args.sort.is_some() || args.upload_pack.is_some() || !args.server_option.is_empty() {
-        anyhow::bail!("ls-remote: --sort, --upload-pack and --server-option are not implemented");
+    if args.upload_pack.is_some() || !args.server_option.is_empty() {
+        anyhow::bail!("ls-remote: --upload-pack and --server-option are not implemented");
     }
     let start = super::base_dir(global)?;
     let mut repository = rivet_core::Repository::open_or_discover(&start).ok();
@@ -131,7 +131,9 @@ pub fn run_ls_remote(global: &GlobalArgs, args: &LsRemoteArgs) -> Result<i32> {
         let usable = if path.is_file() {
             true
         } else {
-            rivet_core::Repository::discover(&path).is_ok()
+            // Discovery walks upwards, so a path that does not exist would find the repository
+            // around the current directory.
+            path.is_dir() && rivet_core::Repository::discover(&path).is_ok()
         };
         if !usable {
             return Ok(died(format!(
@@ -156,6 +158,22 @@ pub fn run_ls_remote(global: &GlobalArgs, args: &LsRemoteArgs) -> Result<i32> {
         );
     }
 
+    // Git parses the keys only once the remote has answered.
+    let sort_keys = match args
+        .sort
+        .iter()
+        .map(|key| SortKey::parse(key))
+        .collect::<Result<Vec<_>, SortError>>()
+    {
+        Ok(keys) => keys,
+        Err(SortError::Refused(key)) => {
+            anyhow::bail!("ls-remote: --sort={key} is not implemented")
+        }
+        Err(SortError::Fatal(message)) => {
+            eprintln!("fatal: {message}");
+            return Ok(128);
+        }
+    };
     let symrefs = if args.symref {
         advertisement.capabilities.symrefs()?
     } else {
@@ -176,6 +194,17 @@ pub fn run_ls_remote(global: &GlobalArgs, args: &LsRemoteArgs) -> Result<i32> {
             name.extend_from_slice(b"^{}");
             entries.push((name, peeled, true));
         }
+    }
+    if !sort_keys.is_empty() {
+        entries.sort_by(|a, b| {
+            // The last `--sort` is the most significant; ties fall back to the plain name.
+            sort_keys
+                .iter()
+                .rev()
+                .map(|key| key.compare(&a.0, &b.0))
+                .find(|ordering| ordering.is_ne())
+                .unwrap_or_else(|| a.0.cmp(&b.0))
+        });
     }
     let mut shown = 0;
     for (ref_name, oid, peeled) in &entries {
@@ -209,4 +238,110 @@ pub fn run_ls_remote(global: &GlobalArgs, args: &LsRemoteArgs) -> Result<i32> {
         println!("{oid}\t{printable}");
     }
     Ok(if args.exit_code && shown == 0 { 2 } else { 0 })
+}
+
+/// One `--sort` key: `refname` with an optional component strip, reversed by a leading `-`.
+struct SortKey {
+    reverse: bool,
+    strip: Option<Strip>,
+}
+
+enum Strip {
+    Left(i64),
+    Right(i64),
+}
+
+enum SortError {
+    /// Git reports this one and exits 128.
+    Fatal(String),
+    /// A key git accepts that rivet does not implement.
+    Refused(String),
+}
+
+impl SortKey {
+    /// Parse a key the way git's `ref-filter` does, with its error texts. Keys that need object
+    /// data, `version:` sorting, `*` (ignore case) and `:short` are refused by name.
+    fn parse(key: &str) -> Result<SortKey, SortError> {
+        let (reverse, atom) = match key.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, key),
+        };
+        if atom.is_empty() {
+            return Err(SortError::Fatal("malformed field name: ".to_string()));
+        }
+        if atom.starts_with('*')
+            || atom.starts_with("version:")
+            || atom.starts_with("v:")
+            || atom.starts_with("refname:short")
+            || atom.starts_with("refname:dir")
+            || atom.starts_with("refname:base")
+        {
+            return Err(SortError::Refused(key.to_string()));
+        }
+        let Some(modifiers) = atom
+            .strip_prefix("refname")
+            .filter(|m| m.is_empty() || m.starts_with(':'))
+        else {
+            return Err(SortError::Fatal(format!("unknown field name: {atom}")));
+        };
+        let unrecognized =
+            |m: &str| SortError::Fatal(format!("unrecognized %(refname) argument: {m}"));
+        let mut strip = None;
+        for modifier in modifiers
+            .strip_prefix(':')
+            .into_iter()
+            .filter(|m| !m.is_empty())
+        {
+            let (name, value) = match modifier.split_once('=') {
+                Some((name, value)) => (name, Some(value)),
+                None => (modifier, None),
+            };
+            let build: fn(i64) -> Strip = match name {
+                "lstrip" | "strip" => Strip::Left,
+                "rstrip" => Strip::Right,
+                _ => return Err(unrecognized(modifier)),
+            };
+            let Some(count) = value else {
+                return Err(unrecognized(modifier));
+            };
+            let count: i64 = count.parse().map_err(|_| {
+                SortError::Fatal(format!("Integer value expected refname:{modifier}"))
+            })?;
+            strip = Some(build(count));
+        }
+        Ok(SortKey { reverse, strip })
+    }
+
+    fn compare(&self, a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+        let ordering = self.value(a).cmp(&self.value(b));
+        if self.reverse {
+            ordering.reverse()
+        } else {
+            ordering
+        }
+    }
+
+    fn value(&self, name: &[u8]) -> Vec<u8> {
+        let parts: Vec<&[u8]> = name.split(|&c| c == b'/').collect();
+        let kept: &[&[u8]] = match self.strip {
+            None => &parts,
+            Some(Strip::Left(n)) => {
+                let drop = if n >= 0 {
+                    n as usize
+                } else {
+                    parts.len().saturating_sub(n.unsigned_abs() as usize)
+                };
+                &parts[drop.min(parts.len())..]
+            }
+            Some(Strip::Right(n)) => {
+                let keep = if n >= 0 {
+                    parts.len().saturating_sub(n as usize)
+                } else {
+                    (n.unsigned_abs() as usize).min(parts.len())
+                };
+                &parts[..keep]
+            }
+        };
+        kept.join(&b'/')
+    }
 }
