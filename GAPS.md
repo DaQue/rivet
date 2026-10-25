@@ -41,7 +41,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   non-cone mode, are not compared.
 * **`rebase --interactive`** — `pick`/`reword`/`edit`/`squash`/`fixup`/`drop`/`noop`, the editable todo list,
   `--continue`/`--skip`/`--abort` work (`s_rebase_i`, `s_rebase_i_stops`, `s_rebase_i_conflict`).
-  Refused by name, before anything is touched: `--root`, `--rebase-merges`, `--exec`/`-x` without `-i` (with `-i` it works, as does an `exec` todo line, `s_rebase_exec`; `break` works too, `s_rebase_break`); `--keep-base` works (`s_rebase_keep_base`),
+  Plain `--root` works (`s_rebase_root`; `--root` with `-i`, and more than one positional argument with `--root`, which git answers with its full usage text, are not). Refused by name, before anything is touched: `--root` with `-i`, `--rebase-merges`, `--exec`/`-x` without `-i` (with `-i` it works, as does an `exec` todo line, `s_rebase_exec`; `break` works too, `s_rebase_break`); `--keep-base` works (`s_rebase_keep_base`),
   signing, `--edit-todo` outside an interactive rebase (rivet's plain rebase has no todo to edit),
   `--autosquash` without `-i` (git runs it as an unedited interactive rebase),
   `--autosquash` over an `amend!` commit that has a target (needs `fixup -C`) or a `fixup!` that names

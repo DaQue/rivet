@@ -89,7 +89,7 @@ pub struct RebaseArgs {
     #[arg(short = 'i', long = "interactive")]
     pub interactive: bool,
 
-    /// Refused: rebase every commit down to the root.
+    /// Rebase every commit down to the root (refused with `--interactive`).
     #[arg(long = "root")]
     pub root: bool,
 
@@ -270,7 +270,7 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
         }
     }
     for (given, what) in [
-        (args.root, "--root"),
+        (args.root && args.interactive, "--root"),
         (args.rebase_merges.is_some(), "--rebase-merges"),
         (
             !args.exec.is_empty() && !args.interactive,
@@ -485,12 +485,23 @@ fn start(
     }
     // The branch to rebase: the one named, or the current one. Naming another branch does not
     // switch to it first; the detach onto the new base moves `HEAD` there in one step.
+    // With `--root` there is no upstream, so the one positional argument names the branch.
+    let branch_arg = match (args.root, &args.upstream) {
+        (true, Some(_)) if args.branch.is_some() => {
+            eprintln!(
+                "usage: git rebase [-i] [options] [--exec <cmd>] [--onto <newbase>] --root [<branch>]"
+            );
+            return Ok(129);
+        }
+        (true, upstream) => args.branch.clone().or_else(|| upstream.clone()),
+        (false, _) => args.branch.clone(),
+    };
     let head_state = repository.head()?;
     let current_branch = match &head_state {
         HeadState::Attached { branch, .. } => Some(branch.short_name().to_string()),
         _ => None,
     };
-    let (orig_head, head_name, switch_to) = match &args.branch {
+    let (orig_head, head_name, switch_to) = match &branch_arg {
         Some(branch) => {
             let name = RefName::from_bytes(format!("refs/heads/{branch}").as_bytes())?;
             if repository.refs().exists(&name) {
@@ -520,6 +531,7 @@ fn start(
     let label = head_name.clone();
 
     let upstream_name = match &args.upstream {
+        _ if args.root => "--root".to_string(),
         Some(name) => name.clone(),
         None => match tracked_upstream(repository, &head_state)? {
             Some(name) => name,
@@ -535,13 +547,42 @@ fn start(
             }
         },
     };
-    let mut upstream = super::resolve_commit(repository, &upstream_name)
-        .map_err(|_| anyhow::anyhow!("invalid upstream '{upstream_name}'"))?;
+    let mut upstream = if args.root {
+        None
+    } else {
+        Some(
+            super::resolve_commit(repository, &upstream_name)
+                .map_err(|_| anyhow::anyhow!("invalid upstream '{upstream_name}'"))?,
+        )
+    };
     let mut onto_name = args.onto.clone().unwrap_or_else(|| upstream_name.clone());
     let mut onto = match &args.onto {
-        Some(name) => super::resolve_commit(repository, name)
-            .map_err(|_| anyhow::anyhow!("Does not point to a valid commit '{name}'"))?,
+        Some(name) => Some(
+            super::resolve_commit(repository, name)
+                .map_err(|_| anyhow::anyhow!("Does not point to a valid commit '{name}'"))?,
+        ),
         None => upstream,
+    };
+    if args.root && onto.is_none() {
+        // Without `--onto` the commits are replayed onto an empty commit, which git writes without
+        // its (empty) tree.
+        let tree = super::empty_tree(repository)?;
+        let mut builder = rivet_core::CommitBuilder::new();
+        builder.tree(tree);
+        builder.author(repository.author_signature()?);
+        builder.committer(repository.committer_signature()?);
+        builder.message(BStr::new(b""));
+        let body = builder.build(repository.format())?;
+        let virtual_onto = repository.odb().write_raw(ObjectKind::Commit, &body)?;
+        onto_name = virtual_onto.to_string();
+        onto = Some(virtual_onto);
+    }
+    // With `--root` every commit not reachable from the new base is replayed.
+    if args.root {
+        upstream = onto;
+    }
+    let (Some(mut upstream), Some(mut onto)) = (upstream, onto) else {
+        unreachable!("an upstream or a base is always known here");
     };
     if args.keep_base {
         // `--keep-base` rebases onto the merge base of upstream and the branch, and that commit
@@ -574,7 +615,7 @@ fn start(
     // Already based on the target with a linear history: nothing to do.
     let odb = repository.odb();
     let bases = rivet_core::merge_bases(odb, onto, orig_head).unwrap_or_default();
-    if !args.interactive && onto == upstream && bases.first() == Some(&onto) {
+    if !args.interactive && !args.root && onto == upstream && bases.first() == Some(&onto) {
         let mut options = WalkOptions::new();
         options.exclude(onto);
         let between = rivet_core::revwalk::walk_oids(odb, &[orig_head], &options)?;
@@ -588,7 +629,7 @@ fn start(
         if linear {
             // Naming the branch makes Git settle on it: one reflog line when `HEAD` moves
             // there, two when it is on the branch already.
-            if args.branch.is_some()
+            if branch_arg.is_some()
                 && let Some(branch) = head_name.strip_prefix("refs/heads/")
             {
                 let name = RefName::from_bytes(format!("refs/heads/{branch}").as_bytes())?;
@@ -631,7 +672,7 @@ fn start(
         } else {
             upstream_name.clone()
         }];
-        hook_args.extend(args.branch.clone());
+        hook_args.extend(branch_arg.clone());
         if rebase_hook(repository, "pre-rebase", &hook_args, None, hook_action())
             .is_some_and(|code| code != 0)
         {
@@ -652,7 +693,11 @@ fn start(
     range.reverse();
     let mut theirs_options = WalkOptions::new();
     theirs_options.exclude(orig_head);
-    let upstream_only = rivet_core::revwalk::walk_oids(odb, &[upstream], &theirs_options)?;
+    let upstream_only = if args.root {
+        Vec::new()
+    } else {
+        rivet_core::revwalk::walk_oids(odb, &[upstream], &theirs_options)?
+    };
     let mut upstream_ids: HashSet<Vec<u8>> = HashSet::new();
     for oid in &upstream_only {
         if repository.commit_parents(*oid)?.len() <= 1 {
@@ -1083,13 +1128,11 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             anyhow::bail!("rebase: HEAD is unborn");
         };
 
-        // A commit that already sits on the current head is reused, not rewritten.
-        if !cmd.is_fixup() && original.parents.first() == Some(&head) {
-            let reason = if interactive {
-                format!("{}: fast-forward", action())
-            } else {
-                format!("{} (pick): {subject}", action())
-            };
+        // A commit that already sits on the current head is reused, not rewritten. A root commit
+        // is reused on top of the empty commit that `--root` starts from.
+        let on_virtual_root = original.parents.is_empty() && is_virtual_onto(repository, &head)?;
+        if !cmd.is_fixup() && (original.parents.first() == Some(&head) || on_virtual_root) {
+            let reason = format!("{}: fast-forward", action());
             repository.move_head(oid, BStr::new(reason.as_bytes()))?;
             let tree = repository.commit_tree(oid)?;
             repository.reset_hard_to_tree(tree)?;
@@ -1197,6 +1240,15 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
         }
     }
     finish(global, repository, dir)
+}
+
+/// Whether `oid` is the empty commit `rebase --root` starts from: no parent, the empty tree and
+/// no message.
+fn is_virtual_onto(repository: &Repository, oid: &ObjectId) -> Result<bool> {
+    let commit = read_commit(repository, oid)?;
+    Ok(commit.parents.is_empty()
+        && commit.message.is_empty()
+        && repository.commit_tree(*oid)? == super::empty_tree(repository)?)
 }
 
 /// Run an `exec` line in the work tree the way git does: a bare word is started directly, anything

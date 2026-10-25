@@ -7989,6 +7989,65 @@ s_rebase_keep_base() {
     v status
 }
 
+# `rebase --root`: without `--onto` the commits are replayed onto a virtual empty commit (and
+# reused as fast-forwards); with `--onto` the range is everything not reachable from the new base,
+# so a root commit already below it is stepped over; an unrelated root conflicts like any pick.
+s_rebase_root() {
+    rebase_repo
+    v switch -q topic
+    v rebase --root
+    echo "rc=$?"
+    v log --format='%H %p %s' --graph
+    v reflog
+    cat .git/ORIG_HEAD
+    ls .git/rebase-merge
+    v fsck
+    v switch -q main
+    v rebase --root -q
+    echo "rc=$?"
+    v rebase --root topic
+    echo "rc=$?"
+    v log --format='%H %p %s' --graph --all
+    v reflog
+    v reset -q --hard topic
+    # The root is reachable from the new base: only the commits above it move.
+    v switch -q -c moved main
+    v rebase --root --onto topic
+    echo "rc=$?"
+    v log --format='%H %p %s' --graph
+    v reflog -8
+    # Onto itself and onto a commit inside the branch: nothing to replay.
+    v rebase --root --onto moved
+    echo "rc=$?"
+    v rebase --root --onto moved~1
+    echo "rc=$?"
+    v reflog -4
+    # An unrelated root is replayed like any pick and can conflict.
+    v switch -q --orphan lone
+    printf 'x\n' >a; echo l >l; v add a l; tick; v commit -q -m L1
+    echo l2 >>l; tick; v commit -q -a -m L2
+    v rebase --root --onto main
+    echo "rc=$?"
+    v status
+    cat .git/rebase-merge/done
+    printf 'x\n' >a; v add a
+    v rebase --continue >/dev/null 2>&1
+    echo "rc=$?"
+    v log --format='%H %p %s' --graph
+    v reflog -8
+    # pre-rebase gets `--root` where the upstream would be, and the branch if one was named.
+    mkdir -p .git/hooks
+    printf '#!/bin/sh\necho "pre-rebase $@" >&2\n' >.git/hooks/pre-rebase
+    chmod +x .git/hooks/pre-rebase
+    v rebase --root
+    echo "rc=$?"
+    v rebase --root --onto main~1 main
+    echo "rc=$?"
+    printf '#!/bin/sh\nexit 1\n' >.git/hooks/pre-rebase
+    v rebase --root
+    echo "rc=$?"
+}
+
 # `stash branch`: the argument errors, a branch made at the stash's base with the index and the
 # untracked files restored, `post-checkout` for the new branch, an explicit stash, and the two ways
 # it can fail (the checkout refuses, the apply refuses) which must keep the stash.

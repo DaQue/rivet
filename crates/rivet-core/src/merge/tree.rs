@@ -462,8 +462,14 @@ pub(crate) fn flatten_tree(
     tree: ObjectId,
 ) -> Result<BTreeMap<BString, (EntryMode, ObjectId)>> {
     let mut out = BTreeMap::new();
+    // Git never stores the empty tree but treats it as always present.
+    let (empty, _) =
+        crate::object::hash_object(odb.format(), crate::object::ObjectKind::Tree, b"")?;
     let mut stack: Vec<(BString, ObjectId)> = vec![(BString::default(), tree)];
     while let Some((prefix, oid)) = stack.pop() {
+        if oid == empty {
+            continue;
+        }
         let object = odb.read_typed(&oid, crate::object::ObjectKind::Tree)?;
         let parsed = crate::object::Tree::parse(odb.format(), object.data())?;
         for entry in parsed.iter() {
