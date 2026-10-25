@@ -1099,3 +1099,17 @@ Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 igno
 Base `cee9d3b`: `s_rebase_quiet_skipped` fails there. `rebase -q` dropped no output: `warning: skipped previously applied commit <id>` was printed unconditionally. Probed against `/usr/bin/git` 2.56: under `-q` the `warning:` line is gone, the two `hint:` lines stay. The warning is now guarded by `global.quiet` in `crates/rivet-cli/src/cmd/rebase.rs`; the hints are untouched. No API change, no Rust test needed (CLI-only text).
 Not done: `PRIORITIES.md` items 3 (multi-round retry, `ssh://`), 4 (sparse index), 7, 8.
 Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 252 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 — queue audit, no code change
+Gate at `a62bcc5`: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 248 passed / 0 failed / 0 ignored,
+`scenarios.sh` 252 PASS / `failures: 0`.
+
+`.claude/PRIORITIES.md` is stale against `git log`; checked each item against real git 2.56.0 and the tree:
+- 1 `commit --amend --no-edit`: already implemented (`snapshot.rs`), `merge`/`cherry-pick`/`revert --no-edit` match git, `s_rebase_interop` already uses `--no-edit`.
+- 2 `hook list`: landed in 430513b (hookdir hooks, `-z`, exit codes). Still open per GAPS.md: config-defined hooks are refused by name.
+- 3 credential depth: authtype, state, url, `password_expiry_utc`, `oauth_refresh_token` have scenarios. Still open per GAPS.md: multi-round retry.
+- 5 `symbolic-ref` one-level target: already refused by name with a Rust test (GAPS.md).
+- 6 `rev-parse` flags: no longer listed in GAPS.md section 1.
+- Not started, deliberately: 4 sparse index, 7 advanced `rebase -i` todo commands, 8 partial clone / `bundle-uri`. Each is a subsystem that cannot be proven against git in one unit.
+
+I did not tick the queue: the brief forbids editing `.claude/`. The supervisor should refresh PRIORITIES.md.
