@@ -105,6 +105,18 @@ pub struct RevListArgs {
     #[arg(long = "reverse")]
     pub reverse: bool,
 
+    /// Mark each commit of a symmetric difference with `<` (left) or `>` (right).
+    #[arg(long = "left-right")]
+    pub left_right: bool,
+
+    /// Show only the commits reachable from the left side of `A...B`.
+    #[arg(long = "left-only")]
+    pub left_only: bool,
+
+    /// Show only the commits not reachable from the left side of `A...B`.
+    #[arg(long = "right-only")]
+    pub right_only: bool,
+
     /// Also list the trees, blobs and tags the commits reach.
     #[arg(long = "objects")]
     pub objects: bool,
@@ -281,6 +293,7 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     let mut tips: Vec<(ObjectId, bool)> = Vec::new();
     let mut pending_tags: Vec<ObjectId> = Vec::new();
     let mut excluded_tips: Vec<ObjectId> = Vec::new();
+    let mut left_tips: Vec<ObjectId> = Vec::new();
     let note_tips = |repository: &Repository, oid: ObjectId, tags: &mut Vec<ObjectId>| {
         let mut current = oid;
         while let Ok(object) = repository.odb().read(&current) {
@@ -301,6 +314,12 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     if args.revs.is_empty() && !args.all {
         eprintln!("usage: rivet rev-list [<options>] <commit>...");
         return Ok(129);
+    }
+    if args.left_only && args.right_only {
+        anyhow::bail!("options '--right-only' and '--left-only' cannot be used together");
+    }
+    if args.left_right && args.count && args.objects {
+        anyhow::bail!("marked counting and '--objects' cannot be used together");
     }
     if args.all {
         // Git adds the refs in name order first and `HEAD` last; the order only shows in ties.
@@ -332,6 +351,7 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
             let right = peel(if right.is_empty() { "HEAD" } else { right })?;
             tips.push((left, false));
             tips.push((right, false));
+            left_tips.push(left);
             for base in rivet_core::merge_bases(repository.odb(), left, right).unwrap_or_default() {
                 tips.push((base, true));
                 excluded_tips.push(base);
@@ -400,11 +420,28 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
         (None, true) => Some(1),
         (n, false) => n,
     };
+    // The left side of every `A...B`: the listed commits reachable from `A`, as git's
+    // `SYMMETRIC_LEFT` flag spreads through the parents the walk follows.
+    let mut left: HashSet<ObjectId> = HashSet::new();
+    let mut stack: Vec<ObjectId> = left_tips;
+    while let Some(oid) = stack.pop() {
+        let Some(parents) = walked.parents.get(&oid) else {
+            continue;
+        };
+        if !left.insert(oid) {
+            continue;
+        }
+        let followed = if args.first_parent { 1 } else { parents.len() };
+        stack.extend(parents.iter().take(followed).copied());
+    }
     let mut commits: Vec<ObjectId> = Vec::new();
     let mut skipped = 0usize;
     for oid in &walked.commits {
         let parent_count = walked.parents[oid].len();
         if parent_count < min_parents || max_parents.is_some_and(|max| parent_count > max) {
+            continue;
+        }
+        if (args.left_only && !left.contains(oid)) || (args.right_only && left.contains(oid)) {
             continue;
         }
         if !matcher.is_empty() && !matcher.matches(&repository, oid)? {
@@ -473,9 +510,33 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     };
     let mut out = Vec::new();
     let mut lines = 0usize;
+    let mut left_count = 0usize;
+    let left_parents: HashSet<ObjectId> = if args.left_right && args.count && args.boundary {
+        let mut parents = HashSet::new();
+        for oid in commits.iter().filter(|oid| left.contains(oid)) {
+            let all = &commit_facts(&repository, oid)?.parents;
+            parents.extend(
+                all.iter()
+                    .take(if args.first_parent { 1 } else { all.len() }),
+            );
+        }
+        parents
+    } else {
+        HashSet::new()
+    };
     for oid in &commits {
         if boundary.contains(oid) {
             out.push(b'-');
+        } else if args.left_right {
+            out.push(if left.contains(oid) { b'<' } else { b'>' });
+        }
+        // A boundary commit carries the flag of every left commit that reached it.
+        if if boundary.contains(oid) {
+            left_parents.contains(oid)
+        } else {
+            left.contains(oid)
+        } {
+            left_count += 1;
         }
         out.extend_from_slice(name(oid).as_bytes());
         if args.parents {
@@ -528,7 +589,9 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
         lines += objects.iter().filter(|b| **b == b'\n').count();
         out.extend_from_slice(&objects);
     }
-    if args.count {
+    if args.count && args.left_right {
+        write_stdout(format!("{left_count}\t{}\n", lines - left_count).as_bytes())?;
+    } else if args.count {
         write_stdout(format!("{lines}\n").as_bytes())?;
     } else {
         write_stdout(&out)?;

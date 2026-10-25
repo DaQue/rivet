@@ -1329,3 +1329,12 @@ prints git's `failed to download` / `failed to fetch objects` warnings and the c
 Left undone (in `GAPS.md`): bundle lists, `fetch.bundleURI`, http(s) URIs, the random-tempfile `bad config line` error for a junk file, `--depth` combination.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
 `scenarios.sh` 270 PASS / `failures: 0`.
+
+## rev-list --left-right, --left-only, --right-only (2026-10-25)
+Landed the three flags (`s_rev_list_left_right`, fails on `b985101`: unknown option). `<`/`>` prefix (a commit reachable from the left tip of an
+`A...B`, following `--first-parent` when given, is `<`; everything else, including a plain `rev-list main`, is `>`; `--boundary` keeps `-`),
+`--count` prints `<left>\t<right>` (a boundary commit counts left when a left commit has it as a parent, as git's flag spreading does),
+`--left-only`/`--right-only` filter before `--skip`/`-n`, and git's two fatals (`--left-only` with `--right-only`; `--left-right --count --objects`).
+Left undone (in `GAPS.md`): `--cherry-mark`, `--cherry-pick`, `--ancestry-path`, `--children`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
+`scenarios.sh` 271 PASS / `failures: 0`.

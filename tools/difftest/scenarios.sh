@@ -4707,6 +4707,37 @@ s_rev_list_filters() {
     v rev-list --max-age=abc main
 }
 
+s_rev_list_left_right() {
+    rl_repo
+    v rev-list --left-right main...side3
+    v rev-list --left-right side3...main
+    v rev-list --left-right main...side1
+    v rev-list --left-right main
+    v rev-list --left-right side3..main
+    v rev-list --left-right --parents main...side3
+    v rev-list --left-right --boundary main...side3
+    v rev-list --left-right --abbrev-commit main...side3
+    v rev-list --left-right --reverse main...side3
+    v rev-list --left-right --first-parent main...side3
+    v rev-list --left-right -n 2 main...side3
+    v rev-list --left-right --skip=1 main...side3
+    v rev-list --left-right --no-merges main...side3
+    v rev-list --left-right --count main...side3
+    v rev-list --left-right --count main
+    v rev-list --left-right --count side3..main
+    v rev-list --left-right --boundary --count main...side3
+    v rev-list --left-right --count --objects main...side3
+    v rev-list --left-only main...side3
+    v rev-list --right-only main...side3
+    v rev-list --left-only main
+    v rev-list --right-only main
+    v rev-list --left-only --count main...side3
+    v rev-list --right-only --count main...side3
+    v rev-list --left-right --left-only main...side3
+    v rev-list --left-right --left-only --count main...side3
+    v rev-list --left-only --right-only main...side3
+}
+
 s_rev_list_abbrev() {
     rl_repo
     v rev-list --abbrev-commit main
