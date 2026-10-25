@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 246 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 247 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 240 tests / 0 failed, 246 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 244 tests / 0 failed, 247 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -19,7 +19,11 @@ The command or subsystem is absent; it either fails at the argument parser or re
 * **Partial clone** — `--filter` and promisor/partial clones are not implemented.
 * **Sparse checkout** — `sparse-checkout init`/`set`/`add`/`list`/`reapply`/`disable`/`check-rules` exist
   (cone mode and `--no-cone`, `--stdin`, `--skip-checks`; `check-rules` with `-z`, `--cone`/`--no-cone`,
-  `--rules-file`, C-quoted input and output); `clean` and the sparse index (`--sparse-index`) do not.
+  `--rules-file`, C-quoted input and output); `clean` and the sparse index do not. `--sparse-index` is refused by name before anything is
+  touched, and an index that real git wrote with the `sdir` extension is refused on read
+  (`not implemented yet`), because treating its directory entries as files reports every path under
+  them as deleted (`crates/rivet-cli/tests/sparse_index.rs`). `--no-sparse-index` is accepted and
+  does nothing.
   In cone mode `set`/`add` take command-line paths relative to the current directory (`..` resolved,
   `outside repository` refused) and `--stdin` lines relative to the root; `--no-cone` from a
   subdirectory is refused as in git. `ls-files --sparse` is accepted (the index is never sparse, so it

@@ -50,6 +50,7 @@ struct Options {
     cone: Option<bool>,
     stdin: bool,
     skip_checks: bool,
+    sparse_index: bool,
     rest: Vec<String>,
 }
 
@@ -67,6 +68,7 @@ fn parse_options(args: &[String], allowed: &[&str]) -> std::result::Result<Optio
             "--cone" if allowed.contains(&"cone") => options.cone = Some(true),
             "--no-cone" if allowed.contains(&"cone") => options.cone = Some(false),
             "--no-sparse-index" if allowed.contains(&"cone") => {}
+            "--sparse-index" if allowed.contains(&"cone") => options.sparse_index = true,
             "--stdin" if allowed.contains(&"stdin") => options.stdin = true,
             "--skip-checks" if allowed.contains(&"skip-checks") => options.skip_checks = true,
             other => {
@@ -116,6 +118,11 @@ pub fn run_sparse_checkout(global: &GlobalArgs, args: &SparseArgs) -> Result<i32
             return Ok(129);
         }
     };
+    if options.sparse_index {
+        // Refused before anything is touched: a full index under `index.sparse=true` would not be
+        // the index git writes.
+        anyhow::bail!("sparse-checkout {sub} --sparse-index is not implemented");
+    }
     let mut repository = super::open(global)?;
     match sub.as_str() {
         "list" => list(&repository),

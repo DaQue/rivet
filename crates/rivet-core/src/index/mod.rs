@@ -116,6 +116,20 @@ fn entry_mode_from_u32(mode: u32) -> Option<EntryMode> {
     }
 }
 
+/// Refuse the `sdir` extension, which marks a sparse index.
+///
+/// Optional by its lowercase signature, but dropping it is not safe: the file then holds directory
+/// entries (040000) standing for whole subtrees, and treating those as files reports every path
+/// under them as deleted.
+fn refuse_sparse_index(signature: [u8; 4]) -> Result<()> {
+    if signature == *b"sdir" {
+        return Err(Error::NotImplemented {
+            what: "a sparse index (the `sdir` extension)",
+        });
+    }
+    Ok(())
+}
+
 /// Phase 3 — the name of the index file inside a git directory.
 ///
 /// # Caveats
@@ -1118,6 +1132,7 @@ impl Index {
                     reason: "truncated extension data",
                 });
             }
+            refuse_sparse_index(sig)?;
             let ext_data = data[offset..offset + ext_len].to_vec();
             offset += ext_len;
             extensions.push(IndexExtension::new(sig, ext_data));
@@ -1208,6 +1223,7 @@ impl Index {
                     reason: "extension extends past end",
                 });
             }
+            refuse_sparse_index(sig)?;
             let ext_data = data[offset..offset + ext_len].to_vec();
             extensions.push(IndexExtension::new(sig, ext_data));
             offset += ext_len;
@@ -2014,6 +2030,26 @@ mod tests {
             Stage::from_bits(4).unwrap_err(),
             Error::InvalidStage { stage: 4 }
         ));
+    }
+
+    #[test]
+    fn parse_refuses_a_sparse_index_by_name() {
+        let index = Index {
+            version: IndexVersion::V2,
+            entries: vec![blob_entry("abcd")],
+            extensions: vec![IndexExtension::new(*b"sdir", Vec::new())],
+        };
+        let bytes = index.to_bytes(ObjectFormat::Sha1);
+        let err = Index::parse(ObjectFormat::Sha1, &bytes).unwrap_err();
+        assert!(matches!(err, Error::NotImplemented { what } if what.contains("sparse index")));
+
+        // The same bytes without the extension still parse.
+        let plain = Index {
+            extensions: Vec::new(),
+            ..index
+        };
+        let bytes = plain.to_bytes(ObjectFormat::Sha1);
+        assert!(Index::parse(ObjectFormat::Sha1, &bytes).is_ok());
     }
 
     #[test]
