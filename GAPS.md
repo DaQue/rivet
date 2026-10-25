@@ -63,8 +63,9 @@ The command or subsystem is absent; it either fails at the argument parser or re
   branches). With a `file://` or network URL git makes a shallow clone, which rivet's `clone` cannot
   write: refused by name. `--single-branch` / `--no-single-branch` work like `--depth`'s narrowing: the
   fetch refspec names the one cloned branch, and a source with several branches is refused by name (rivet's
-  `clone` cannot fetch a single branch only). `--reference`, `--dissociate` and `--filter` are refused
-  with "not implemented". `-j`/`--jobs` is validated and accepted but runs sequentially.
+  `clone` cannot fetch a single branch only). `--filter` is refused with "not implemented".
+  `--reference` writes the module's `objects/info/alternates` (rivet still copies every object, and does
+  not read alternates); `--dissociate` leaves none. `-j`/`--jobs` is validated and accepted but runs sequentially.
   `checkout`, `merge` and `rebase` (`--merge`, `--rebase`, `submodule.<name>.update`) work. `update --remote` works
   (branch from `.gitmodules`, remote `HEAD` by default); `submodule.<name>.branch = .` is refused.
 * **`status` of a moved submodule** — a gitlink whose submodule `HEAD` differs from the index (` M path`)

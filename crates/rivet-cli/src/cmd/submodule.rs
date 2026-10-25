@@ -7,7 +7,7 @@
 //! `U` for a merge conflict and a blank otherwise. `summary` lists the commits a gitlink moved
 //! across, with `--cached` comparing the index to `HEAD` and `--files` the work tree to the index.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use bstr::{BStr, BString, ByteSlice};
@@ -1355,6 +1355,8 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
     let mut only_paths = false;
     let mut depth: Option<String> = None;
     let mut single_branch: Option<bool> = None;
+    let mut reference: Option<String> = None;
+    let mut dissociate = false;
     let mut words = args.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
@@ -1390,7 +1392,18 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
             }
             "--single-branch" => single_branch = Some(true),
             "--no-single-branch" => single_branch = Some(false),
-            "--reference" | "--filter" | "--dissociate" => {
+            "--reference" => {
+                let Some(value) = words.next() else {
+                    eprint!("{USAGE}");
+                    return Ok(1);
+                };
+                reference = Some(value.clone());
+            }
+            other if other.starts_with("--reference=") => {
+                reference = Some(other["--reference=".len()..].to_string());
+            }
+            "--dissociate" => dissociate = true,
+            "--filter" => {
                 anyhow::bail!("submodule update: {word} is not implemented")
             }
             "--recommend-shallow" | "--no-recommend-shallow" | "--progress" => {}
@@ -1417,6 +1430,8 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
         quiet,
         depth,
         single_branch,
+        reference,
+        dissociate,
     };
     update_in(&mut repository, &root, &prefix, "", &paths, &options)
 }
@@ -1451,6 +1466,20 @@ struct UpdateOptions {
     depth: Option<String>,
     /// `--single-branch` / `--no-single-branch`, the last one given.
     single_branch: Option<bool>,
+    /// `--reference <repository>`: recorded in the new module's `objects/info/alternates`.
+    reference: Option<String>,
+    /// `--dissociate`: no alternates are left behind (rivet's clone copies every object anyway).
+    dissociate: bool,
+}
+
+/// The object directory of a `--reference` repository, as git resolves it: the repository's
+/// `objects` directory (or its `.git/objects`), made absolute.
+fn reference_objects(reference: &str) -> Option<PathBuf> {
+    let path = Path::new(reference);
+    [path.join("objects"), path.join(".git").join("objects")]
+        .into_iter()
+        .find(|objects| objects.is_dir())
+        .and_then(|objects| objects.canonicalize().ok())
 }
 
 /// Bring the submodules of `repository` to the commits its index records.
@@ -1541,6 +1570,35 @@ fn update_in(
                     eprintln!("Maybe you want to use 'update --init'?");
                     continue;
                 };
+                let alternate = match options.reference.as_deref() {
+                    None => None,
+                    Some(reference) => {
+                        let Some(objects) = reference_objects(reference) else {
+                            // Git retries a failed clone once, so the whole attempt prints twice.
+                            for attempt in 0..2 {
+                                if !options.quiet {
+                                    eprintln!("Cloning into '{}'...", dest.display());
+                                }
+                                eprintln!(
+                                    "fatal: reference repository '{reference}' is not a local repository."
+                                );
+                                eprintln!(
+                                    "fatal: clone of '{url}' into submodule path '{}' failed",
+                                    dest.display()
+                                );
+                                if attempt == 0 {
+                                    eprintln!("Failed to clone '{display}'. Retry scheduled");
+                                } else {
+                                    eprintln!(
+                                        "Failed to clone '{display}' a second time, aborting"
+                                    );
+                                }
+                            }
+                            return Ok(1);
+                        };
+                        Some(objects)
+                    }
+                };
                 if let Err(code) = clone_submodule(
                     &dest,
                     &git_dir,
@@ -1550,6 +1608,11 @@ fn update_in(
                     options.single_branch,
                 ) {
                     return Ok(code);
+                }
+                if let (Some(objects), false) = (alternate, options.dissociate) {
+                    let info = git_dir.join("objects").join("info");
+                    std::fs::create_dir_all(&info)?;
+                    std::fs::write(info.join("alternates"), format!("{}\n", objects.display()))?;
                 }
             }
         }

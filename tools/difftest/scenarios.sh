@@ -8357,6 +8357,28 @@ s_submodule_update_single_branch() {
     g -C other config --get-all remote.origin.fetch
 }
 
+# `submodule update --reference` / `--dissociate`: the module's `objects/info/alternates`, and the failed-clone retry.
+s_submodule_update_reference() {
+    sm_nested_top
+    g clone -q --bare "$ROOT/lib" "$ROOT/refrepo.git"
+    g clone -q top clone
+    cd clone
+    v submodule update --init --reference "$ROOT/refrepo.git" vendor/lib
+    echo "rc=$?"
+    sm_snap vendor/lib
+    sed "s#$ROOT##" .git/modules/vendor/lib/objects/info/alternates
+    v submodule update --init --reference="$ROOT/lib" --dissociate other
+    echo "rc=$?"
+    ls .git/modules/other/objects/info/alternates 2>&1 | sed 's#.*/##'
+    v submodule deinit -q -f vendor/lib
+    rm -rf .git/modules/vendor
+    v submodule update --init --reference /nonexistent vendor/lib
+    echo "rc=$?"
+    ls .git/modules
+    v submodule update --reference
+    echo "rc=$?"
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
@@ -8395,6 +8417,7 @@ for s in "$@"; do
         s_submodule_update) run_scenario "$s" clone clone/vendor/lib ;;
         s_submodule_update_recursive) run_scenario "$s" clone ;;
         s_submodule_update_single_branch) run_scenario "$s" clone ;;
+        s_submodule_update_reference) run_scenario "$s" clone ;;
         s_submodule_update_remote) run_scenario "$s" clone ;;
         s_submodule_update_merge) run_scenario "$s" clone ;;
         s_submodule_update_rebase) run_scenario "$s" clone ;;

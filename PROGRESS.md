@@ -1200,3 +1200,13 @@ Scenario `s_submodule_update_single_branch` fails on `846b30e` (flag refused by 
 Deliberately left, refused by name: `--single-branch`/`--depth` on a source with several branches (rivet's `clone` fetches every branch; Rust test
 `single_branch_on_a_source_with_several_branches_is_refused_and_leaves_nothing_behind`), `--reference`, `--dissociate`, `--filter`. `GAPS.md` updated.
 Gate after: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 259 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 (8) — `submodule update --reference` / `--dissociate`
+Gate at `0a8b473`: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 259 PASS / `failures: 0`.
+
+Landed (Remaining item 3, last part): `submodule update --reference <repo>` (also `--reference=<repo>`) writes the new module's `objects/info/alternates` with the
+canonical absolute path of `<repo>/objects` (or `<repo>/.git/objects`); `--dissociate` leaves no alternates. A reference that is not a local repository prints git's
+`fatal: reference repository '…' is not a local repository.` and the clone-failure lines twice (`Retry scheduled`, then `a second time, aborting`), exit 1; a missing
+value prints the submodule usage, exit 1. Scenario `s_submodule_update_reference` fails on `0a8b473` (flags refused by name; verified by rebuilding the base) and passes after.
+Deliberately left: rivet still copies every object and does not read alternates (`Odb` docs), `--filter` stays refused by name (Rust test `filter_is_refused_by_name`). `GAPS.md` updated.
+Gate after: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 260 PASS / `failures: 0`.

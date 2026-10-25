@@ -86,18 +86,17 @@ fn single_branch_on_a_source_with_several_branches_is_refused_and_leaves_nothing
 }
 
 #[test]
-fn reference_and_filter_are_refused_by_name() {
+fn filter_is_refused_by_name() {
     let clone = fixture("sm-reference");
     let rivet = env!("CARGO_BIN_EXE_rivet");
-    for flag in ["--reference", "--dissociate", "--filter"] {
-        let out = run(rivet, &clone, &["submodule", "update", "--init", flag]);
-        assert!(!out.status.success(), "{flag}");
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            stderr.contains(&format!("{flag} is not implemented")),
-            "{stderr}"
-        );
-        assert!(!clone.join("s/.git").exists());
-    }
+    let flag = "--filter";
+    let out = run(rivet, &clone, &["submodule", "update", "--init", flag]);
+    assert!(!out.status.success(), "{flag}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("{flag} is not implemented")),
+        "{stderr}"
+    );
+    assert!(!clone.join("s/.git").exists());
     let _ = std::fs::remove_dir_all(clone.parent().unwrap());
 }
