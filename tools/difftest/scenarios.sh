@@ -8215,6 +8215,50 @@ s_stash_branch() {
     v stash list
 }
 
+# `label` / `reset` todo lines: a label is a ref under refs/rewritten that lives until the rebase ends
+# (finished or aborted), `reset` moves HEAD and the work tree there (reflog `rebase (reset): '<arg>'`, none
+# when HEAD does not move), a name that does not resolve reschedules the line. `merge` and `update-ref`
+# stay refused by name (GAPS.md).
+s_rebase_label_reset() {
+    rebase_repo
+    g branch orig topic
+    rebase_i_helpers
+    # Rebuild the same commits after a reset to main: a fork off the label, then back to the label.
+    rebase_i_run $'1i label start\n1i reset main\n3a reset start\n3a label end'
+    v for-each-ref
+    v reflog
+    # Stopped between lines: the labels exist, the done file does not matter, --continue cleans them.
+    rebase_i_run $'1i label a\n2i label b\n2i break\n3a reset a'
+    v for-each-ref
+    v rev-parse refs/rewritten/a refs/rewritten/b
+    v rebase --continue
+    echo "rc=$?"
+    v for-each-ref
+    v reflog
+    # The short forms, a branch name and a commit id as reset targets.
+    rebase_i_run $'1i l first\n1a t main\n2a t first\n3a t orig'
+    v reflog
+    rebase_i_run $'2i break\n2i t main'
+    v rebase --continue
+    echo "rc=$?"
+    v log --format='%H %s' main..topic
+    # A name that resolves to nothing stops with git's hint; the line stays in the todo list.
+    rebase_i_run $'1i reset nosuch'
+    v status
+    v rebase --abort
+    v for-each-ref
+    v reflog
+    # Labels are checked when the list is read.
+    for bad in 'label' 'label bad name' 'label ..x' 'label a.lock' 'label @' 'reset' 'label a # c'; do
+        rebase_i_run "1i $bad"
+        v rebase --abort
+    done
+    # A label aborted over disappears with the rebase.
+    rebase_i_run $'1i label gone\n2i break'
+    v rebase --abort
+    v for-each-ref
+}
+
 s_sparse_clean() {
     v init -q repo; cd repo
     mkdir -p a b/deep b/other c/y c/z d/e; echo 1 >a/f; echo 2 >b/f; echo 3 >b/deep/g; echo 4 >b/other/f

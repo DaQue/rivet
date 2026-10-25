@@ -41,6 +41,8 @@ pub(super) enum Cmd {
     Noop,
     Exec,
     Break,
+    Label,
+    Reset,
 }
 
 impl Cmd {
@@ -56,6 +58,8 @@ impl Cmd {
             "noop" => Cmd::Noop,
             "exec" | "x" => Cmd::Exec,
             "break" | "b" => Cmd::Break,
+            "label" | "l" => Cmd::Label,
+            "reset" | "t" => Cmd::Reset,
             _ => return None,
         })
     }
@@ -72,6 +76,8 @@ impl Cmd {
             Cmd::Noop => "noop",
             Cmd::Exec => "exec",
             Cmd::Break => "break",
+            Cmd::Label => "label",
+            Cmd::Reset => "reset",
         }
     }
 
@@ -290,7 +296,7 @@ pub(super) struct Item {
     pub flag: Flag,
     /// `None` for `noop`, `exec` and `break`.
     pub oid: Option<ObjectId>,
-    /// The shell command of an `exec` line.
+    /// The shell command of an `exec` line, or the name a `label` / `reset` line carries.
     pub text: Option<String>,
 }
 
@@ -305,7 +311,7 @@ impl Item {
                 name(oid),
                 super::subject_of(repository, oid)?
             ),
-            (None, Some(text)) => format!("exec {text}\n"),
+            (None, Some(text)) => format!("{} {text}\n", self.cmd.name()),
             (None, None) if self.cmd == Cmd::Break => "break\n".to_string(),
             (None, None) => "noop\n".to_string(),
         })
@@ -321,6 +327,12 @@ pub(super) enum Parsed {
     Refused(String),
 }
 
+/// Whether `name` can be the name of a `label`: it has to make a valid ref under `refs/rewritten/`.
+pub(super) fn valid_label(name: &str) -> bool {
+    name != "@"
+        && rivet_core::RefName::from_bytes(format!("refs/rewritten/{name}").as_bytes()).is_ok()
+}
+
 /// Read a todo list. Comment lines and blank lines are skipped; every command is resolved to a
 /// commit now, so the list can be saved with full ids.
 pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> Parsed {
@@ -334,8 +346,6 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
         let mut words = line.split_whitespace();
         let word = words.next().unwrap_or_default();
         let name = match word {
-            "l" | "label" => Some("label"),
-            "t" | "reset" => Some("reset"),
             "m" | "merge" => Some("merge"),
             "u" | "update-ref" => Some("update-ref"),
             _ => None,
@@ -344,6 +354,25 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
             return Parsed::Refused(format!(
                 "rebase: '{name}' in the todo list is not implemented"
             ));
+        }
+        if matches!(word, "l" | "label" | "t" | "reset") {
+            let cmd = Cmd::parse(word).unwrap_or(Cmd::Label);
+            let target = line[word.len()..].trim();
+            if target.is_empty() {
+                errors.push(format!("missing arguments for {}", cmd.name()));
+                errors.push(format!("invalid line {}: {raw}", number + 1));
+            } else if cmd == Cmd::Label && !valid_label(target) {
+                errors.push(format!("'{target}' is not a valid label"));
+                errors.push(format!("invalid line {}: {raw}", number + 1));
+            } else {
+                items.push(Item {
+                    cmd,
+                    flag: Flag::None,
+                    oid: None,
+                    text: Some(target.to_string()),
+                });
+            }
+            continue;
         }
         if matches!(word, "b" | "break") {
             let extra = line[word.len()..].trim_start();

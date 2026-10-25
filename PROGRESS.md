@@ -1282,3 +1282,14 @@ Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace`
 Landed the flag glued to the commit in a todo line (`fixup -C<id>`, `fixup -c<id>`; `fixup -Cxyz` reports `could not parse 'xyz'`) —
 real git parses it like the spaced form. `s_rebase_fixup_c` extended; it fails on `a46c3bd` and passes after. `GAPS.md` updated.
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 252 passed / 0 failed / 0 ignored; `scenarios.sh` 266 PASS / `failures: 0`.
+
+## rebase -i `label` / `reset` (2026-10-25)
+Landed the `label <name>` and `reset <label|ref|commit>` todo commands (`s_rebase_label_reset`, fails on `941f854`: both were
+refused by name). A label is `refs/rewritten/<name>` (no reflog), listed in `refs-to-delete` and removed when the rebase finishes
+or is aborted. `reset` moves HEAD and the work tree and logs `rebase (reset): '<arg>'`, nothing when HEAD does not move; an
+unresolvable name prints `error: could not resolve '<arg>'` plus git's "rescheduled" hint and keeps the line in the todo list.
+Names are checked when the list is read (`'<name>' is not a valid label`, `missing arguments for label|reset`).
+The refusal Rust test `todo_commands_that_are_not_implemented_are_refused_before_anything_moves` now uses `merge` instead of `label`.
+Left undone (in `GAPS.md`): `merge`, `update-ref`, `--rebase-merges`, `reset -C`; `--quit` leaves labels behind (not compared).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
+`scenarios.sh` 267 PASS / `failures: 0`.

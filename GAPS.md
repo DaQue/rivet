@@ -50,8 +50,8 @@ The command or subsystem is absent; it either fails at the argument parser or re
   `--autosquash` over an `amend!` commit that has a target (git turns it into `fixup -C` and strips the
   `amend!` line from the message, which is not reproduced) or a `fixup!` that names
   another fixup commit by id (`s_rebase_autosquash` covers the rest, plus `--no-autosquash` and
-  `rebase.autoSquash`), and the todo commands `label`, `reset`, `merge`
-  and `update-ref`. A rebase stopped inside a `fixup -C`/`-c` chain and resumed by the other implementation
+  `rebase.autoSquash`), and the todo commands `merge` and `update-ref` (`label` and `reset` work,
+  `s_rebase_label_reset`; `reset` takes a label, a ref or a commit id, and the `-C` form is not parsed). A rebase stopped inside a `fixup -C`/`-c` chain and resumed by the other implementation
   is not compared (git leaves no `message-fixup` there; rivet writes one). An empty message from the editor aborts the whole rebase back to the
   original tip (git stops with the commit pending). The editor sees the message plus git's `#` footer, not
   the `git status` template. `post-rewrite` lines for a squash chain are not compared with git.

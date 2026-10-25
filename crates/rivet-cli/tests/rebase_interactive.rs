@@ -102,7 +102,7 @@ fn todo_commands_that_are_not_implemented_are_refused_before_anything_moves() {
     let p = dir.path();
     let head = git(p, &["rev-parse", "HEAD"]);
     for (edit, name) in [
-        ("1i label onto", "label"),
+        ("1i merge topic", "merge"),
         ("2i update-ref refs/heads/x", "update-ref"),
     ] {
         let script = p.join(".git/seq-edit.sh");

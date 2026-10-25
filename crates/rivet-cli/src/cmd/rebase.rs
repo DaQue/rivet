@@ -845,6 +845,7 @@ fn abort(repository: &mut Repository, dir: &Path) -> Result<i32> {
     }
     clear_pick_state(repository);
     let stash = saved_autostash(repository, dir);
+    delete_labels(repository, dir);
     std::fs::remove_dir_all(dir)?;
     if let Some(stash) = stash {
         apply_autostash(repository, stash)?;
@@ -1117,6 +1118,26 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             continue;
         }
 
+        if matches!(cmd, interactive::Cmd::Label | interactive::Cmd::Reset) {
+            if !global.quiet {
+                eprint!("Rebasing ({msgnum}/{end})\r");
+            }
+            let target = line[line.find(char::is_whitespace).unwrap_or(line.len())..].trim();
+            let ok = if cmd == interactive::Cmd::Label {
+                run_label(repository, dir, target)?
+            } else {
+                run_reset(repository, target)?
+            };
+            if !ok {
+                write_state(dir, "git-rebase-todo", &format!("{line}\n{rest}"))?;
+                eprintln!(
+                    "hint: Could not execute the todo command\nhint:\nhint:     {line}\nhint:\nhint: It has been rescheduled; To edit the command before continuing, please\nhint: edit the todo list first:\nhint:\nhint:     git rebase --edit-todo\nhint:     git rebase --continue"
+                );
+                return Ok(1);
+            }
+            continue;
+        }
+
         let words: Vec<&str> = line.split_whitespace().collect();
         let (flag, hex) = interactive::flag_of(cmd, &words);
         let hex = hex.ok_or_else(|| anyhow::anyhow!("rebase: malformed todo line '{line}'"))?;
@@ -1247,6 +1268,56 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
     finish(global, repository, dir)
 }
 
+/// `label <name>`: remember HEAD as `refs/rewritten/<name>`, to be removed when the rebase ends.
+fn run_label(repository: &Repository, dir: &Path, name: &str) -> Result<bool> {
+    let Some(head) = repository.head()?.oid() else {
+        anyhow::bail!("rebase: HEAD is unborn");
+    };
+    let path = repository.git_dir().join("refs/rewritten").join(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, format!("{head}\n"))?;
+    let mut list = std::fs::read_to_string(dir.join("refs-to-delete")).unwrap_or_default();
+    let entry = format!("refs/rewritten/{name}");
+    if !list.lines().any(|l| l == entry) {
+        list.push_str(&format!("{entry}\n"));
+        std::fs::write(dir.join("refs-to-delete"), list)?;
+    }
+    Ok(true)
+}
+
+/// `reset <label or commit>`: move HEAD there and make the work tree match. `false` (after git's
+/// error line) when the name resolves to nothing.
+fn run_reset(repository: &mut Repository, target: &str) -> Result<bool> {
+    let label = repository.git_dir().join("refs/rewritten").join(target);
+    let from_label = std::fs::read_to_string(label).ok().and_then(|text| {
+        ObjectId::from_hex(repository.format(), BStr::new(text.trim().as_bytes())).ok()
+    });
+    let resolved = match from_label {
+        Some(oid) => Some(oid),
+        None => crate::cmd::resolve_commit(repository, target).ok(),
+    };
+    let Some(oid) = resolved else {
+        eprintln!("error: could not resolve '{target}'");
+        return Ok(false);
+    };
+    if repository.head()?.oid() != Some(oid) {
+        let reason = format!("{} (reset): '{target}'", action());
+        repository.move_head(oid, BStr::new(reason.as_bytes()))?;
+        let tree = repository.commit_tree(oid)?;
+        repository.reset_hard_to_tree(tree)?;
+    }
+    Ok(true)
+}
+
+/// Remove the `refs/rewritten/*` refs the `label` lines of this rebase made.
+fn delete_labels(repository: &Repository, dir: &Path) {
+    for entry in read_state(dir, "refs-to-delete").lines() {
+        let _ = std::fs::remove_file(repository.git_dir().join(entry));
+    }
+}
+
 /// Whether `oid` is the empty commit `rebase --root` starts from: no parent, the empty tree and
 /// no message.
 fn is_virtual_onto(repository: &Repository, oid: &ObjectId) -> Result<bool> {
@@ -1330,6 +1401,7 @@ fn finish(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Resul
         );
     }
     let stash = saved_autostash(repository, dir);
+    delete_labels(repository, dir);
     std::fs::remove_dir_all(dir)?;
     if let Some(stash) = stash {
         apply_autostash(repository, stash)?;
