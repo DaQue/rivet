@@ -427,14 +427,29 @@ impl Repository {
                     set_skip(entry, true);
                 } else {
                     if entry.mode != EntryMode::Commit {
-                        if self.worktree()?.stat(path)?.is_some() {
-                            report.blocked.push(entry.path.clone());
-                            continue;
+                        match self.worktree()?.stat(path)? {
+                            // A directory is in the way.
+                            Some(stat) if stat.mode == EntryMode::Tree => {
+                                report.blocked.push(entry.path.clone());
+                                continue;
+                            }
+                            // A file reappeared: git keeps it and only clears the bit, so that
+                            // `status` compares it with the index like any tracked file.
+                            Some(_) => {}
+                            None => {
+                                write_blob(
+                                    self.worktree()?,
+                                    path,
+                                    entry.oid,
+                                    entry.mode,
+                                    self.odb(),
+                                )?;
+                                let stat = self.worktree()?.stat(path)?;
+                                let fresh =
+                                    make_index_entry(path, entry.mode, entry.oid, stat.as_ref());
+                                *entry = fresh;
+                            }
                         }
-                        write_blob(self.worktree()?, path, entry.oid, entry.mode, self.odb())?;
-                        let stat = self.worktree()?.stat(path)?;
-                        let fresh = make_index_entry(path, entry.mode, entry.oid, stat.as_ref());
-                        *entry = fresh;
                     }
                     set_skip(entry, false);
                 }

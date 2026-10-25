@@ -9139,6 +9139,22 @@ s_ls_remote_sort() {
     v ls-remote --sort=-refname ../src
 }
 
+# `sparse-checkout set` over a skip-worktree path whose file reappeared with other content.
+s_sparse_reappeared() {
+    v init -q repo; cd repo
+    mkdir a b; echo 1 >a/f; echo 2 >b/f; echo 3 >b/g; echo 4 >top
+    v add .; v commit -q -m one
+    v sparse-checkout set --cone a
+    mkdir b; echo other >b/f; echo 2 >b/g
+    v sparse-checkout set b; echo "rc=$?"
+    v ls-files -t; cat b/f b/g; v status -s
+    v sparse-checkout set a; echo "rc=$?"
+    v ls-files -t; ls b; v status -s
+    mkdir -p b; echo other >b/f
+    v sparse-checkout reapply; echo "rc=$?"
+    v ls-files -t; v status -s
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

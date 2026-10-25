@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 284 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 285 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 260 tests / 0 failed, 284 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 260 tests / 0 failed, 285 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -44,8 +44,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   the definition matches git, including `merge --abort` (`s_sparse_leftovers`). Not covered, so they may
   ignore the definition: `update-index` details, `am`, `bisect`, and `git sparse-checkout set`
   leaving a directory that holds untracked files (the warning is printed, git also tries to remove it).
-  `sparse-checkout set`/`reapply` over a skip-worktree path whose file reappeared with other content
-  does nothing (git warns "not up to date" and clears the bit). `clean -v` lists the files of one
+  `clean -v` lists the files of one
   directory sorted (git uses readdir order), and a nested repository's `.git` is walked like any directory.
   `check-rules` run with a pattern file but `core.sparseCheckout` off, and a path starting with `/` in
   non-cone mode, are not compared.

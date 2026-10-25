@@ -1475,3 +1475,14 @@ Scenario `s_for_each_ref_stdin_start` fails on `38f8da6` (unknown options), pass
 Left undone (in `GAPS.md`): `--include-root-refs`, `version:` sort.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
 `scenarios.sh` 284 PASS / `failures: 0`.
+
+## sparse-checkout: a file that reappeared under a skip-worktree path (2026-10-25)
+Took `GAPS.md` section 1 (sparse remainder). `apply_sparse` used to refuse to bring a path back into the definition when a file was
+already there (`error: Entry '…' not uptodate`) and left the skip-worktree bit set, so `status` hid the edit and a later `set`/`reapply`
+never printed git's "not up to date" warning. It now keeps the file and clears the bit as git does; only a directory in the way still
+reports `blocked`.
+Scenario `s_sparse_reappeared` fails on `b411c98` (error lines, bit left set, no `status` output, no warning); expected values checked
+against `/usr/bin/git`. The matching line in `GAPS.md` is removed.
+Left undone (in `GAPS.md`): `update-index` details, `am`, `bisect` and sparse, `set` over a directory with untracked files.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
+`scenarios.sh` 285 PASS / `failures: 0`.
