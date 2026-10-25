@@ -1293,3 +1293,14 @@ The refusal Rust test `todo_commands_that_are_not_implemented_are_refused_before
 Left undone (in `GAPS.md`): `merge`, `update-ref`, `--rebase-merges`, `reset -C`; `--quit` leaves labels behind (not compared).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
 `scenarios.sh` 267 PASS / `failures: 0`.
+
+## rebase -i `update-ref` (2026-10-25)
+Landed the `update-ref <ref>` todo command (`s_rebase_update_ref`, fails on `73969d2`: the line was refused by name). Each line
+records HEAD in `rebase-merge/update-refs` (git's ref / old id / new id triples, written when the list is read, repeated lines
+once); the refs move only when the rebase finishes, reflog `rewritten during rebase`, followed by git's
+`Updated the following refs with --update-refs:` list; `--abort` moves nothing. A missing argument, an invalid refname and a
+name that is not fully qualified are reported as git does. The refusal Rust test now covers `merge` only.
+Left undone (in `GAPS.md`): a ref that moved since the start, a ref checked out in another work tree, `--update-refs` /
+`rebase.updateRefs` generating the lines, `merge`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
+`scenarios.sh` 268 PASS / `failures: 0`.

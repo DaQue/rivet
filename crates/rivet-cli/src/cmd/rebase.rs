@@ -1118,13 +1118,18 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             continue;
         }
 
-        if matches!(cmd, interactive::Cmd::Label | interactive::Cmd::Reset) {
+        if matches!(
+            cmd,
+            interactive::Cmd::Label | interactive::Cmd::Reset | interactive::Cmd::UpdateRef
+        ) {
             if !global.quiet {
                 eprint!("Rebasing ({msgnum}/{end})\r");
             }
             let target = line[line.find(char::is_whitespace).unwrap_or(line.len())..].trim();
             let ok = if cmd == interactive::Cmd::Label {
                 run_label(repository, dir, target)?
+            } else if cmd == interactive::Cmd::UpdateRef {
+                run_update_ref(repository, dir, target)?
             } else {
                 run_reset(repository, target)?
             };
@@ -1311,6 +1316,75 @@ fn run_reset(repository: &mut Repository, target: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// Write `update-refs`, git's list of the refs the `update-ref` lines name: for each, one line
+/// with the ref, one with its id now (all zeros when it does not exist) and one for the id it will
+/// get (all zeros until the line runs).
+fn write_update_refs(
+    repository: &Repository,
+    dir: &Path,
+    items: &[interactive::Item],
+) -> Result<()> {
+    let zero = ObjectId::zero(repository.format());
+    let mut text = String::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for item in items
+        .iter()
+        .filter(|i| i.cmd == interactive::Cmd::UpdateRef)
+    {
+        let name = item.text.as_deref().unwrap_or_default();
+        if seen.contains(&name) {
+            continue;
+        }
+        seen.push(name);
+        let before = RefName::from_bytes(name.as_bytes())
+            .ok()
+            .and_then(|r| repository.refs().resolve_oid(&r).ok())
+            .unwrap_or(zero);
+        text.push_str(&format!("{name}\n{before}\n{zero}\n"));
+    }
+    if !text.is_empty() {
+        write_state(dir, "update-refs", &text)?;
+    }
+    Ok(())
+}
+
+/// `update-ref <ref>`: remember HEAD as the id `<ref>` gets when the rebase finishes.
+fn run_update_ref(repository: &Repository, dir: &Path, name: &str) -> Result<bool> {
+    let Some(head) = repository.head()?.oid() else {
+        anyhow::bail!("rebase: HEAD is unborn");
+    };
+    let text = read_state(dir, "update-refs");
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    match lines.iter().position(|l| l == name).filter(|i| i % 3 == 0) {
+        Some(i) => lines[i + 2] = head.to_string(),
+        None => {
+            let zero = ObjectId::zero(repository.format());
+            lines.extend([name.to_string(), zero.to_string(), head.to_string()]);
+        }
+    }
+    write_state(dir, "update-refs", &format!("{}\n", lines.join("\n")))?;
+    Ok(true)
+}
+
+/// Move the refs the `update-ref` lines collected; returns the ones that moved.
+fn apply_update_refs(repository: &mut Repository, dir: &Path) -> Result<Vec<String>> {
+    let text = read_state(dir, "update-refs");
+    let lines: Vec<&str> = text.lines().collect();
+    let zero = ObjectId::zero(repository.format()).to_string();
+    let who = repository.committer_signature()?;
+    let mut moved = Vec::new();
+    for entry in lines.as_chunks::<3>().0 {
+        if entry[2] == zero {
+            continue;
+        }
+        let name = RefName::from_bytes(entry[0].as_bytes())?;
+        let oid = ObjectId::from_hex(repository.format(), BStr::new(entry[2].as_bytes()))?;
+        repository.set_ref_logged(&name, oid, &who, BStr::new(b"rewritten during rebase"))?;
+        moved.push(entry[0].to_string());
+    }
+    Ok(moved)
+}
+
 /// Remove the `refs/rewritten/*` refs the `label` lines of this rebase made.
 fn delete_labels(repository: &Repository, dir: &Path) {
     for entry in read_state(dir, "refs-to-delete").lines() {
@@ -1400,6 +1474,7 @@ fn finish(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Resul
             hook_action(),
         );
     }
+    let updated = apply_update_refs(repository, dir)?;
     let stash = saved_autostash(repository, dir);
     delete_labels(repository, dir);
     std::fs::remove_dir_all(dir)?;
@@ -1410,6 +1485,12 @@ fn finish(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Resul
         match head_name.strip_prefix("refs/heads/") {
             Some(_) => eprintln!("Successfully rebased and updated {head_name}."),
             None => eprintln!("Successfully rebased and updated detached HEAD."),
+        }
+        if !updated.is_empty() {
+            eprintln!("Updated the following refs with --update-refs:");
+            for name in updated {
+                eprintln!("\t{name}");
+            }
         }
     }
     Ok(0)

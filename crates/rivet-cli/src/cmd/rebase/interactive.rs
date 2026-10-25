@@ -43,6 +43,7 @@ pub(super) enum Cmd {
     Break,
     Label,
     Reset,
+    UpdateRef,
 }
 
 impl Cmd {
@@ -60,6 +61,7 @@ impl Cmd {
             "break" | "b" => Cmd::Break,
             "label" | "l" => Cmd::Label,
             "reset" | "t" => Cmd::Reset,
+            "update-ref" | "u" => Cmd::UpdateRef,
             _ => return None,
         })
     }
@@ -78,6 +80,7 @@ impl Cmd {
             Cmd::Break => "break",
             Cmd::Label => "label",
             Cmd::Reset => "reset",
+            Cmd::UpdateRef => "update-ref",
         }
     }
 
@@ -296,7 +299,7 @@ pub(super) struct Item {
     pub flag: Flag,
     /// `None` for `noop`, `exec` and `break`.
     pub oid: Option<ObjectId>,
-    /// The shell command of an `exec` line, or the name a `label` / `reset` line carries.
+    /// The shell command of an `exec` line, or the name a `label` / `reset` / `update-ref` line carries.
     pub text: Option<String>,
 }
 
@@ -333,6 +336,14 @@ pub(super) fn valid_label(name: &str) -> bool {
         && rivet_core::RefName::from_bytes(format!("refs/rewritten/{name}").as_bytes()).is_ok()
 }
 
+/// Whether `name` is a ref name git accepts, one-level names included.
+fn valid_refname(name: &str) -> bool {
+    name == "HEAD"
+        || rivet_core::RefName::from_bytes(name.as_bytes()).is_ok()
+        || (!name.contains('/')
+            && rivet_core::RefName::from_bytes(format!("refs/heads/{name}").as_bytes()).is_ok())
+}
+
 /// Read a todo list. Comment lines and blank lines are skipped; every command is resolved to a
 /// commit now, so the list can be saved with full ids.
 pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> Parsed {
@@ -347,7 +358,6 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
         let word = words.next().unwrap_or_default();
         let name = match word {
             "m" | "merge" => Some("merge"),
-            "u" | "update-ref" => Some("update-ref"),
             _ => None,
         };
         if let Some(name) = name {
@@ -372,6 +382,28 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
                     text: Some(target.to_string()),
                 });
             }
+            continue;
+        }
+        if matches!(word, "u" | "update-ref") {
+            let target = line[word.len()..].trim();
+            if target.is_empty() {
+                errors.push("missing arguments for update-ref".to_string());
+            } else if !valid_refname(target) {
+                errors.push(format!("'{target}' is not a valid refname"));
+            } else if !target.starts_with("refs/") {
+                errors.push(format!(
+                    "update-ref requires a fully qualified refname e.g. refs/heads/{target}"
+                ));
+            } else {
+                items.push(Item {
+                    cmd: Cmd::UpdateRef,
+                    flag: Flag::None,
+                    oid: None,
+                    text: Some(target.to_string()),
+                });
+                continue;
+            }
+            errors.push(format!("invalid line {}: {raw}", number + 1));
             continue;
         }
         if matches!(word, "b" | "break") {
@@ -757,6 +789,7 @@ pub(super) fn begin(
     let count = items.iter().filter(|i| i.cmd != Cmd::Noop).count();
     write_state(dir, "end", &format!("{count}\n"))?;
     write_state(dir, "msgnum", &format!("{skipped}\n"))?;
+    super::write_update_refs(repository, dir, &items)?;
     super::run_todo(global, repository, dir)
 }
 

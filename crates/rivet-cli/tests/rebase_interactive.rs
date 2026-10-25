@@ -101,23 +101,19 @@ fn todo_commands_that_are_not_implemented_are_refused_before_anything_moves() {
     let dir = repo();
     let p = dir.path();
     let head = git(p, &["rev-parse", "HEAD"]);
-    for (edit, name) in [
-        ("1i merge topic", "merge"),
-        ("2i update-ref refs/heads/x", "update-ref"),
-    ] {
-        let script = p.join(".git/seq-edit.sh");
-        std::fs::write(&script, format!("#!/bin/sh\nsed -i -e '{edit}' \"$1\"\n")).unwrap();
-        let out = rivet(
-            p,
-            &["rebase", "-i", "main"],
-            &[("GIT_SEQUENCE_EDITOR", &format!("sh {}", script.display()))],
-        );
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(128), "{edit}: {err}");
-        assert!(err.contains("is not implemented"), "{edit}: {err}");
-        assert!(err.contains(name), "{edit}: {err}");
-        assert_untouched(p, &head);
-    }
+    let (edit, name) = ("1i merge topic", "merge");
+    let script = p.join(".git/seq-edit.sh");
+    std::fs::write(&script, format!("#!/bin/sh\nsed -i -e '{edit}' \"$1\"\n")).unwrap();
+    let out = rivet(
+        p,
+        &["rebase", "-i", "main"],
+        &[("GIT_SEQUENCE_EDITOR", &format!("sh {}", script.display()))],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(128), "{edit}: {err}");
+    assert!(err.contains("is not implemented"), "{edit}: {err}");
+    assert!(err.contains(name), "{edit}: {err}");
+    assert_untouched(p, &head);
 }
 
 #[test]

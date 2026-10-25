@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 266 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 268 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 252 tests / 0 failed, 264 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 252 tests / 0 failed, 268 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -50,8 +50,10 @@ The command or subsystem is absent; it either fails at the argument parser or re
   `--autosquash` over an `amend!` commit that has a target (git turns it into `fixup -C` and strips the
   `amend!` line from the message, which is not reproduced) or a `fixup!` that names
   another fixup commit by id (`s_rebase_autosquash` covers the rest, plus `--no-autosquash` and
-  `rebase.autoSquash`), and the todo commands `merge` and `update-ref` (`label` and `reset` work,
-  `s_rebase_label_reset`; `reset` takes a label, a ref or a commit id, and the `-C` form is not parsed). A rebase stopped inside a `fixup -C`/`-c` chain and resumed by the other implementation
+  `rebase.autoSquash`), and the todo command `merge` (`label` and `reset` work,
+  `s_rebase_label_reset`; `reset` takes a label, a ref or a commit id, and the `-C` form is not parsed;
+  `update-ref <ref>` works, `s_rebase_update_ref`, but a ref that moved since the rebase started, or that is
+  checked out in another work tree, is not compared, and `--update-refs` / `rebase.updateRefs` do not generate the lines). A rebase stopped inside a `fixup -C`/`-c` chain and resumed by the other implementation
   is not compared (git leaves no `message-fixup` there; rivet writes one). An empty message from the editor aborts the whole rebase back to the
   original tip (git stops with the commit pending). The editor sees the message plus git's `#` footer, not
   the `git status` template. `post-rewrite` lines for a squash chain are not compared with git.

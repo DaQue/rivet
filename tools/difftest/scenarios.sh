@@ -8259,6 +8259,43 @@ s_rebase_label_reset() {
     v for-each-ref
 }
 
+# `update-ref <ref>` todo lines: each names a branch that is moved to the rewritten HEAD when the rebase
+# finishes (never earlier, never on abort); the list is checked when it is read.
+s_rebase_update_ref() {
+    rebase_repo
+    g branch orig topic
+    g branch bD orig~2
+    g branch bE orig~1
+    rebase_i_helpers
+    rebase_i_run $'1a update-ref refs/heads/bD\n2a update-ref refs/heads/bE'
+    v for-each-ref
+    v reflog bD
+    v reflog bE
+    v reflog
+    # Stopped before the end: nothing moved yet, the state file is git's, --continue applies them.
+    g branch -f bD orig~2; g branch -f bE orig~1
+    rebase_i_run $'1a update-ref refs/heads/bD\n2a break\n2a update-ref refs/heads/bE'
+    v for-each-ref
+    cat .git/rebase-merge/update-refs
+    v rebase --continue
+    echo "rc=$?"
+    v for-each-ref
+    # The short form, a repeated line, a ref that does not exist yet, a ref outside refs/heads.
+    g branch -f bD orig~2; g branch -f bE orig~1
+    rebase_i_run $'1a u refs/heads/bD\n1a update-ref refs/heads/bD\n2a update-ref refs/heads/new\n3a update-ref refs/tags/tg'
+    v for-each-ref
+    # Abort leaves every ref where it was.
+    g branch -f bD orig~2
+    rebase_i_run $'1a update-ref refs/heads/bD\n2a break'
+    v rebase --abort
+    v for-each-ref
+    # The line is checked when the list is read.
+    for bad in 'update-ref' 'update-ref bad name' 'update-ref refs/heads/a..b' 'update-ref HEAD' 'update-ref bD'; do
+        rebase_i_run "1a $bad"
+        v rebase --abort
+    done
+}
+
 s_sparse_clean() {
     v init -q repo; cd repo
     mkdir -p a b/deep b/other c/y c/z d/e; echo 1 >a/f; echo 2 >b/f; echo 3 >b/deep/g; echo 4 >b/other/f
