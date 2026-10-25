@@ -375,7 +375,7 @@ pub struct LsFilesArgs {
 #[derive(Debug, clap::Args)]
 pub struct RevParseArgs {
     /// The revisions and repository properties to resolve.
-    #[arg(value_name = "ARG", required = true)]
+    #[arg(value_name = "ARG")]
     pub args: Vec<String>,
 
     /// The revisions must resolve to an object id, and nothing else may be printed.
@@ -389,6 +389,10 @@ pub struct RevParseArgs {
     /// Print the git directory's path.
     #[arg(long = "git-dir")]
     pub git_dir: bool,
+
+    /// Print the path of the git directory shared by all work trees.
+    #[arg(long = "git-common-dir")]
+    pub git_common_dir: bool,
 
     /// Print the work tree's root path.
     #[arg(long = "show-toplevel")]
@@ -1222,7 +1226,10 @@ pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
 
     // Repository properties print first, as in Git, and do not consume the positional arguments.
     if args.git_dir {
-        println!("{}", repository.git_dir().display());
+        println!("{}", repository_dir_text(&repository, false)?);
+    }
+    if args.git_common_dir {
+        println!("{}", repository_dir_text(&repository, true)?);
     }
     if args.show_toplevel {
         match repository.worktree_path() {
@@ -1292,6 +1299,49 @@ pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
         }
     }
     Ok(status)
+}
+
+/// The path `--git-dir` / `--git-common-dir` print, spelled as Git spells it: relative to the
+/// current directory when the directory lives inside the work tree (or is the bare repository
+/// itself) — `.git` at the top, `../.git` below it — and absolute otherwise. `--git-dir` is
+/// relative only at the top; from a subdirectory Git prints it absolute.
+fn repository_dir_text(repository: &rivet_core::Repository, common: bool) -> Result<String> {
+    let dir = if common {
+        repository.common_dir()
+    } else {
+        repository.git_dir()
+    };
+    let absolute = || dir.display().to_string();
+    let top = match repository.worktree_path() {
+        Some(path) => path.to_path_buf(),
+        None => repository.git_dir().to_path_buf(),
+    };
+    let (Ok(cwd), Ok(top), Ok(canonical)) = (
+        std::env::current_dir().and_then(|p| p.canonicalize()),
+        top.canonicalize(),
+        dir.canonicalize(),
+    ) else {
+        return Ok(absolute());
+    };
+    let Ok(below_top) = cwd.strip_prefix(&top) else {
+        return Ok(absolute());
+    };
+    let Ok(inside) = canonical.strip_prefix(&top) else {
+        return Ok(absolute());
+    };
+    let depth = below_top.components().count();
+    if depth > 0 && !common {
+        return Ok(absolute());
+    }
+    let mut parts = vec![".."; depth];
+    let inside = inside.display().to_string();
+    if !inside.is_empty() {
+        parts.push(&inside);
+    }
+    if parts.is_empty() {
+        return Ok(".".to_string());
+    }
+    Ok(parts.join("/"))
 }
 
 /// The ref name a spec came from, for `--symbolic-full-name`.

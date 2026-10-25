@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 247 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 248 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 244 tests / 0 failed, 247 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 245 tests / 0 failed, 248 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -59,8 +59,6 @@ The command or subsystem is absent; it either fails at the argument parser or re
 * **`bundle-uri`**, SHA-256 bundles, and `clone`/`ls-remote` from a bundle file. Creating,
   listing, verifying and unbundling bundles works; fetching *from* a bundle works only as a
   remote URL.
-* **`rev-parse --git-common-dir`** and `--git-dir` with no argument are not in the frozen
-  grammar.
 * **Submodule advance/update modes** — `update --remote`, `--merge`, `--rebase`, `--depth`,
   `--reference`, `--filter`, `--single-branch`, `-j` and the `merge`/`rebase` strategies are
   refused with an explicit "not implemented". `checkout` is the only strategy.

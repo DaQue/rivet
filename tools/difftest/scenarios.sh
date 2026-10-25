@@ -868,6 +868,26 @@ s_hooks_run() {
     dump_hooklog
 }
 
+s_rev_parse_dirs() {
+    v init -q repo; cd repo
+    echo a >f; v add f; tick; v commit -q -m one
+    mkdir sub
+    v rev-parse --git-common-dir
+    v rev-parse --git-dir
+    v rev-parse --git-dir --git-common-dir
+    v rev-parse --git-common-dir HEAD
+    (cd sub && v rev-parse --git-common-dir)
+    (cd sub && v rev-parse --git-dir)
+    v worktree add -q ../wt -b wtb
+    (cd ../wt && v rev-parse --git-common-dir)
+    (cd ../wt && v rev-parse --git-dir)
+    (cd ../wt && v rev-parse --git-dir --git-common-dir --is-inside-work-tree)
+    v rev-parse --git-common-dir nonexistent
+    cd .. && v init -q --bare bare.git
+    (cd bare.git && v rev-parse --git-common-dir)
+    (cd bare.git && v rev-parse --git-dir)
+}
+
 s_hooks_list() {
     v init -q repo; cd repo
     mkdir sub
@@ -8018,6 +8038,7 @@ for s in "$@"; do
         s_credential_keys) run_scenario "$s" c_exp c_quitfull ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
         s_sparse_linked) run_scenario "$s" repo wt ;;
+        s_rev_parse_dirs) run_scenario "$s" repo wt bare.git ;;
         s_hooks_clone) run_scenario "$s" c1 c2 c4 bare.git wt1 wt2 wt3 wt4 wt5 ;;
         s_hooks_rebase) run_scenario "$s" repo origin.git ;;
         s_pack_deltas) run_scenario "$s" origin cl cl2 ;;
