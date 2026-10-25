@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 278 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 279 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-25, gate: 259 tests / 0 failed, 278 scenarios / 0 failures, `fmt`,
@@ -105,7 +105,10 @@ The command works for the common case; the listed options or edge cases are miss
   extra row.
 * **`rev-list`** — no `--cherry-pick`. `--children` works (`s_rev_list_children`). `--left-right`, `--left-only`
   and `--right-only` work (`s_rev_list_left_right`), and so does `--ancestry-path` without a
-  commit argument (`s_rev_list_ancestry_path`); `--cherry-mark` is not implemented.
+  commit argument (`s_rev_list_ancestry_path`); `--ancestry-path=<commit>` keeps the commit, its
+  descendants and its ancestors (`s_rev_list_ancestry_path_commit`), but when the commit's date is skewed
+  (older than its parents) git drops most of the ancestors and rivet keeps them all; `--cherry-mark` is
+  not implemented.
 * **`for-each-ref`** — no `--shell`/`--perl`/`--python`/`--tcl`, `--stdin`, `--start-after`,
   `--include-root-refs`, `version:`/`v:` sort.
 * **`blame`** — `-M`/`-C` refuse while the file has uncommitted changes; no `--incremental`,

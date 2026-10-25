@@ -4758,6 +4758,22 @@ s_rev_list_ancestry_path() {
     v rev-list --ancestry-path main..main
 }
 
+s_rev_list_ancestry_path_commit() {
+    rl_repo
+    v rev-list --ancestry-path=side1 main
+    v rev-list --ancestry-path=side2 main
+    v rev-list --ancestry-path=v1 main
+    v rev-list --ancestry-path=main~5 main~8..main
+    v rev-list --ancestry-path=side1 side2..main
+    v rev-list --ancestry-path=side1 --ancestry-path=side2 main
+    v rev-list --ancestry-path=v1 --parents main
+    v rev-list --ancestry-path=side1 --reverse main
+    v rev-list --ancestry-path=side1 --count main
+    v rev-list --ancestry-path=side1 --boundary main~4..main
+    v rev-list --ancestry-path=nonexistent main
+    v rev-list --ancestry-path=v1 --ancestry-path main
+}
+
 s_rev_list_children() {
     rl_repo
     v rev-list --children main

@@ -1410,3 +1410,15 @@ Scenario `s_ls_remote_patterns` fails on `1273bbe` (brackets matched literally),
 Left undone: `status` with more than one pathspec (needs a public `StatusOptions` change), dirty-tree submodules.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 259 passed / 0 failed / 0 ignored,
 `scenarios.sh` 278 PASS / `failures: 0`.
+
+## rev-list --ancestry-path=<commit> (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed; took `GAPS.md` section 2 (`rev-list`). `--ancestry-path` now also takes
+`=<commit>` (repeatable, equals sign required): a listed commit stays when it is one of those commits, a descendant of one
+(through listed commits) or one of their ancestors. An unresolvable argument prints git's `error: could not get commit for
+--ancestry-path argument X` and exits 128. Scenario `s_rev_list_ancestry_path_commit` fails on `44beaa5` (value rejected by the
+parser), passes now; expected output checked against `/usr/bin/git`.
+Left undone (in `GAPS.md`): when the named commit's date is skewed, git drops most of its ancestors and rivet keeps them all
+(found with `side3`/`v2` in `rl_repo`; the cause is git's date-ordered walk, not reproduced, so those cases are not in the
+scenario); `--cherry-pick`, `--cherry-mark`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 259 passed / 0 failed / 0 ignored,
+`scenarios.sh` 279 PASS / `failures: 0`.

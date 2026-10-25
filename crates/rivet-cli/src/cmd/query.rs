@@ -117,9 +117,16 @@ pub struct RevListArgs {
     #[arg(long = "right-only")]
     pub right_only: bool,
 
-    /// Show only the commits that descend from an excluded one (`A..B` keeps what lies between).
-    #[arg(long = "ancestry-path")]
-    pub ancestry_path: bool,
+    /// Show only the commits that descend from an excluded one (`A..B` keeps what lies between);
+    /// with `=<commit>`, only its ancestors, its descendants and itself.
+    #[arg(
+        long = "ancestry-path",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append
+    )]
+    pub ancestry_path: Vec<String>,
 
     /// Also list the trees, blobs and tags the commits reach.
     #[arg(long = "objects")]
@@ -448,10 +455,26 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     // `--ancestry-path`: a listed commit stays when one of its parents is a bottom (an excluded
     // tip) or is itself kept, so only paths through the listed commits count, as in git.
     let mut descends: HashMap<ObjectId, bool> = HashMap::new();
-    if args.ancestry_path && excluded_tips.is_empty() {
+    let ancestry_path = !args.ancestry_path.is_empty();
+    let mut path_roots: Vec<ObjectId> = Vec::new();
+    for text in args.ancestry_path.iter().filter(|text| !text.is_empty()) {
+        let Ok(root) = peel(text) else {
+            eprintln!("error: could not get commit for --ancestry-path argument {text}");
+            return Ok(128);
+        };
+        path_roots.push(root);
+    }
+    // With `=<commit>` the bottoms are those commits, and their ancestors stay as well.
+    let path_ancestors = commit_ancestors(&repository, path_roots.iter().copied());
+    let bottoms = if path_roots.is_empty() {
+        &excluded_tips
+    } else {
+        &path_roots
+    };
+    if ancestry_path && bottoms.is_empty() {
         anyhow::bail!("--ancestry-path given but there are no bottom commits");
     }
-    if args.ancestry_path {
+    if ancestry_path {
         for start in &walked.commits {
             let mut stack = vec![*start];
             while let Some(&oid) = stack.last() {
@@ -463,16 +486,16 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
                 let pending: Vec<ObjectId> = parents
                     .iter()
                     .filter(|p| {
-                        !excluded_tips.contains(p)
+                        !bottoms.contains(p)
                             && walked.parents.contains_key(p)
                             && !descends.contains_key(p)
                     })
                     .copied()
                     .collect();
                 if pending.is_empty() {
-                    let keep = parents.iter().any(|p| {
-                        excluded_tips.contains(p) || descends.get(p).copied().unwrap_or(false)
-                    });
+                    let keep = parents
+                        .iter()
+                        .any(|p| bottoms.contains(p) || descends.get(p).copied().unwrap_or(false));
                     descends.insert(oid, keep);
                     stack.pop();
                 } else {
@@ -484,7 +507,7 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     let mut commits: Vec<ObjectId> = Vec::new();
     let mut skipped = 0usize;
     for oid in &walked.commits {
-        if args.ancestry_path && !descends[oid] {
+        if ancestry_path && !descends[oid] && !path_ancestors.contains(oid) {
             continue;
         }
         let parent_count = walked.parents[oid].len();
