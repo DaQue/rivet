@@ -1185,7 +1185,9 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     let rebase = rebase_progress(&repository);
     if rebase.is_none() {
         println!("{}", head_line());
-        print_tracking(&tracking_state(&repository, &head)?);
+        if !matches!(head, HeadState::Unborn { .. }) {
+            print_tracking(&tracking_state(&repository, &head)?);
+        }
     }
     if matches!(head, HeadState::Unborn { .. }) {
         // Git separates the "No commits yet" paragraph from the branch line, and keeps a trailing
@@ -1677,7 +1679,7 @@ enum Tracking {
 }
 
 fn tracking_state(repository: &rivet_core::Repository, head: &HeadState) -> Result<Tracking> {
-    let (Some(branch), Some(oid)) = (head.branch(), head.oid()) else {
+    let (Some(branch), oid) = (head.branch(), head.oid()) else {
         return Ok(Tracking::None);
     };
     let Some((remote, merge)) = repository.branch_upstream(&branch.short_name().to_string())?
@@ -1712,6 +1714,10 @@ fn tracking_state(repository: &rivet_core::Repository, head: &HeadState) -> Resu
     };
     let Ok(upstream_oid) = repository.refs().resolve_oid(&name) else {
         return Ok(Tracking::Gone { upstream: short });
+    };
+    // An unborn branch has nothing to count against; only a vanished upstream is reported.
+    let Some(oid) = oid else {
+        return Ok(Tracking::None);
     };
     let count = |from: rivet_core::ObjectId, exclude: rivet_core::ObjectId| -> Result<usize> {
         let mut options = rivet_core::revwalk::WalkOptions::new();

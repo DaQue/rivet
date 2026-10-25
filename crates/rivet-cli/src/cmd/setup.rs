@@ -356,7 +356,19 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
     let name = match &args.directory {
         Some(dir) => dir.clone(),
         None => {
-            let guessed = rivet_core::remote::guess_remote_name(&parsed).ok_or_else(|| {
+            // A regular file is a bundle: git strips only `.bundle` from its name, not `.git`.
+            let bundle_file = parsed.scheme == rivet_core::remote::RemoteScheme::File
+                && std::path::Path::new(&String::from_utf8_lossy(&parsed.path).into_owned())
+                    .is_file();
+            let guessed = if bundle_file {
+                let path: &[u8] = &parsed.path;
+                let base = path.rsplit(|b| *b == b'/').next().unwrap_or(path);
+                let base = base.strip_suffix(b".bundle".as_slice()).unwrap_or(base);
+                (!base.is_empty()).then(|| bstr::BString::from(base))
+            } else {
+                rivet_core::remote::guess_remote_name(&parsed)
+            }
+            .ok_or_else(|| {
                 anyhow::anyhow!(
                     "could not guess a directory name from '{}'",
                     args.repository
@@ -387,11 +399,31 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
         );
     }
     // A local source that is not a repository is reported before anything is created.
+    let source = std::path::PathBuf::from(String::from_utf8_lossy(&parsed.path).into_owned());
+    let is_file = parsed.scheme == rivet_core::remote::RemoteScheme::File && source.is_file();
+    let is_bundle = is_file && rivet_core::bundle::looks_like_bundle(&source);
+    if is_file && !is_bundle {
+        // Git treats any regular file as a bundle and then trips over it as a gitfile.
+        if !global.quiet {
+            eprintln!("Cloning into '{}'...", name.display());
+        }
+        eprintln!(
+            "error: '{}' does not look like a v2 or v3 bundle file",
+            absolute_source(&args.repository).display()
+        );
+        eprintln!(
+            "fatal: invalid gitfile format: {}",
+            absolute_source(&args.repository).display()
+        );
+        eprintln!("fatal: Could not read from remote repository.");
+        eprintln!();
+        eprintln!("Please make sure you have the correct access rights");
+        eprintln!("and the repository exists.");
+        return Ok(128);
+    }
     if parsed.scheme == rivet_core::remote::RemoteScheme::File
-        && rivet_core::Repository::discover(std::path::Path::new(
-            &String::from_utf8_lossy(&parsed.path).into_owned(),
-        ))
-        .is_err()
+        && !is_file
+        && rivet_core::Repository::discover(&source).is_err()
     {
         anyhow::bail!("repository '{}' does not exist", args.repository);
     }
@@ -406,7 +438,7 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
     let result = clone_into(&dest, args);
     match result {
         Ok((repository, checked_out)) => {
-            if !global.quiet {
+            if !global.quiet && !is_bundle {
                 eprintln!("done.");
             }
             // `post-checkout` runs in the new work tree with `GIT_DIR` set and no `GIT_PREFIX`;
@@ -759,6 +791,16 @@ fn split_section(name: &str) -> (String, Option<String>) {
     }
 }
 
+/// `path` made absolute against the current directory, without normalising `.` or `..`.
+fn absolute_source(path: &str) -> PathBuf {
+    let path = std::path::Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
+    }
+}
+
 fn clone_into(
     dest: &std::path::Path,
     args: &CloneArgs,
@@ -792,7 +834,14 @@ pub(super) fn populate_clone(
 
     let mut checked_out = None;
     let origin = args.origin.as_str();
-    let url = rivet_core::remote_ops::absolutize_url(&args.repository);
+    let url = if absolute_source(&args.repository).is_file() {
+        // A bundle path is made absolute but, unlike a repository path, not normalised.
+        absolute_source(&args.repository)
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        rivet_core::remote_ops::absolutize_url(&args.repository)
+    };
 
     let config = repository.config_mut();
     config.set(
@@ -856,6 +905,22 @@ pub(super) fn populate_clone(
         None => remote_default.clone(),
     };
     let Some(wanted) = wanted else {
+        if !args.bare {
+            // Refs but no usable `HEAD` (a bundle made without one): the local default branch is
+            // left unborn but still set up to track the remote branch of the same name.
+            eprintln!("warning: remote HEAD refers to nonexistent ref, unable to checkout");
+            let default = rivet_core::ops::default_branch_name()?;
+            let config = repository.config_mut();
+            config.set(
+                BStr::new(format!("branch.{default}.remote").as_bytes()),
+                origin.as_bytes(),
+            )?;
+            config.set(
+                BStr::new(format!("branch.{default}.merge").as_bytes()),
+                format!("refs/heads/{default}").as_bytes(),
+            )?;
+            repository.write_config()?;
+        }
         return Ok(None);
     };
     let branch_short =

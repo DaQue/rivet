@@ -55,9 +55,9 @@ The command or subsystem is absent; it either fails at the argument parser or re
   (`s_rebase_interop`: edit stop, squash, conflict, reword). rivet's `rebase-merge/` carries one extra file,
   `rivet-interactive`, which git ignores; a git-written state lacks it and rivet does not need it. Plain
   (non-`-i`) rebase states written by git are not compared.
-* **`bundle-uri`**, SHA-256 bundles, and `clone`/`ls-remote` from a bundle file. Creating,
-  listing, verifying and unbundling bundles works; fetching *from* a bundle works only as a
-  remote URL.
+* **`bundle-uri`**, SHA-256 bundles, and `ls-remote` (the subcommand does not exist at all).
+  Creating, listing, verifying and unbundling bundles works; fetching and cloning *from* a bundle
+  file work (`s_bundle_clone`).
 * **Submodule clone flags** — `update --depth` works only for a local-path source (git ignores it with
   a warning; rivet narrows the fetch refspec to the one branch, and refuses a source with several
   branches). With a `file://` or network URL git makes a shallow clone, which rivet's `clone` cannot

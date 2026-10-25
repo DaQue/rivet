@@ -7148,6 +7148,39 @@ s_bundle_roundtrip() {
     vg log --oneline --all
 }
 
+# `clone` from a bundle file: the directory name comes from the file name (only `.bundle` is
+# stripped from a regular file), the bundle's refs become the remote-tracking branches, and a file that
+# is not a bundle is refused.
+s_bundle_clone() {
+    g init -q src; cd src
+    for i in 1 2 3; do tick; echo "line $i" >>f; g add .; g commit -q -m "c$i"; done
+    g tag v1 HEAD~1; g branch side HEAD~1
+    v bundle create ../all.bundle --all
+    v bundle create ../nohead.bundle side
+    cd ..
+    cp all.bundle odd.git
+    echo hello >notbundle
+    v clone all.bundle
+    (cd all && v for-each-ref && v branch -a && v log --oneline && v config --get remote.origin.url | sed "s#$ROOT#<ROOT>#g" && v config --get branch.main.remote && v status -sb && vq fsck)
+    v clone all.bundle named
+    (cd named && v log --oneline side && v rev-parse HEAD)
+    v clone --bare all.bundle
+    (cd all.git && v for-each-ref && v symbolic-ref HEAD)
+    v clone -b side all.bundle onside
+    (cd onside && v status -sb && v log --oneline)
+    v clone -b nosuch all.bundle nob
+    ls nob 2>&1 | sed "s#$ROOT#<ROOT>#g" >>"$TRANSCRIPT"
+    v clone odd.git
+    v clone -o up all.bundle upstream
+    (cd upstream && v branch -r && v config --get remote.up.fetch)
+    v clone nohead.bundle nohead
+    (cd nohead && v branch -a && v status -sb)
+    v clone notbundle nb
+    v clone nosuch.bundle nsb
+    v clone ./all.bundle dotted
+    (cd dotted && v log --oneline -1)
+}
+
 # The four small divergences that were left open after the worktree block.
 s_reset_current_branch() {
     v init -q repo; cd repo
@@ -8535,6 +8568,7 @@ for s in "$@"; do
         s_submodule_deinit) run_scenario "$s" clone clone2 ;;
         s_submodule_foreach) run_scenario "$s" none ;;
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;
+        s_bundle_clone) run_scenario "$s" all named all.git onside upstream nohead dotted odd.git ;;
         s_submodule_set) run_scenario "$s" clone ;;
         s_submodule_absorb) run_scenario "$s" top top/vendor/lib ;;
         s_submodule_summary) run_scenario "$s" none ;;

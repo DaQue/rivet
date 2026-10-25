@@ -1233,3 +1233,14 @@ reused commit; git logs fast-forward). With `--onto` the range is everything not
 conflict. `rivet-core`'s `flatten_tree` now treats the (never stored) empty tree as empty instead of failing. Scenario `s_rebase_root` fails on `258cdff` (flag refused by name) and passes after.
 Deliberately left: `--root` with `-i` (still refused by name, Rust test in `rebase_interactive.rs`); two positionals with `--root` print only the first usage line (exit 129), not git's full option list. `GAPS.md` updated.
 Gate after: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 262 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 (11) — `clone` from a bundle file
+Gate at `a2b535e`: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 262 PASS / `failures: 0`.
+
+Landed (Remaining item 6, clone half): `rivet clone <file.bundle> [<dir>]`. A regular file is taken as a bundle: the directory name strips only `.bundle` (not `.git`), the remote URL is the
+absolute path without `.`/`..` normalisation, and no `done.` line is printed. A bundle without `HEAD` prints `warning: remote HEAD refers to nonexistent ref, unable to checkout` and sets
+`branch.<default>.remote/merge`; `status -sb` of that unborn branch then shows `...origin/<default> [gone]` (long `status` is unchanged). A regular file that is not a bundle gets git's
+three-part error (`does not look like a v2 or v3 bundle file`, `invalid gitfile format`, `Could not read from remote repository`) and exit 128. Scenario `s_bundle_clone` fails on `a2b535e` and
+passes after. `GAPS.md` updated.
+Deliberately left: `ls-remote` (the subcommand does not exist at all, for any remote), `bundle-uri`, SHA-256 bundles.
+Gate after: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 263 PASS / `failures: 0`.
