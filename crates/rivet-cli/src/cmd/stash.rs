@@ -45,6 +45,16 @@ pub enum StashCommand {
     Drop(RefArgs),
     /// Remove every stash.
     Clear,
+    /// Check out a new branch at the commit a stash was made on, apply the stash there and drop it.
+    Branch(BranchArgs),
+}
+
+/// Arguments of `stash branch`: the new branch's name and, optionally, which stash.
+#[derive(Debug, clap::Args)]
+pub struct BranchArgs {
+    /// `<branchname> [<stash>]`; counted by hand to give git's messages.
+    #[arg(value_name = "BRANCHNAME")]
+    pub words: Vec<String>,
 }
 
 /// Arguments of `stash push`.
@@ -134,14 +144,61 @@ pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
         Some(StashCommand::Push(push_args)) => push(global, &mut repository, push_args),
         Some(StashCommand::List) => list(&repository),
         Some(StashCommand::Show(show_args)) => show(&repository, show_args),
-        Some(StashCommand::Apply(r)) => apply(global, &mut repository, r, false),
-        Some(StashCommand::Pop(r)) => apply(global, &mut repository, r, true),
+        Some(StashCommand::Apply(r)) => apply(global, &mut repository, r, false, false),
+        Some(StashCommand::Pop(r)) => apply(global, &mut repository, r, true, false),
         Some(StashCommand::Drop(r)) => drop_one(global, &repository, r),
         Some(StashCommand::Clear) => {
             clear(&repository)?;
             Ok(0)
         }
+        Some(StashCommand::Branch(b)) => branch(global, repository, b),
     }
+}
+
+/// `stash branch <name> [<stash>]`: `checkout -b <name> <stash^>`, `apply --index`, then drop the
+/// stash. A failed checkout or apply leaves the stash in place.
+fn branch(global: &GlobalArgs, repository: Repository, args: &BranchArgs) -> Result<i32> {
+    let Some(name) = args.words.first() else {
+        eprintln!("No branch name specified");
+        return Ok(128);
+    };
+    if args.words.len() > 2 {
+        let extra: Vec<String> = args.words[1..].iter().map(|w| format!("'{w}'")).collect();
+        eprintln!("Too many revisions specified: {}", extra.join(" "));
+        return Ok(128);
+    }
+    let spec = args.words.get(1).map(String::as_str);
+    let Picked::Found(_, stash) = pick(&repository, spec)? else {
+        return Ok(128);
+    };
+    let base = repository.commit_parents(stash)?[0];
+    drop(repository);
+    let switch = super::branching::SwitchArgs {
+        branch: None,
+        create: Some(name.clone()),
+        force_create: None,
+        start_point: Some(base.to_string()),
+        detach: false,
+        orphan: None,
+        track: false,
+        no_track: false,
+        force: false,
+        merge: false,
+        conflict: None,
+        dry_run: false,
+        progress: false,
+        guess: false,
+    };
+    let code = super::branching::run_switch(global, &switch)?;
+    if code != 0 {
+        return Ok(code);
+    }
+    let mut repository = super::open(global)?;
+    let apply_args = RefArgs {
+        stash: spec.map(str::to_string),
+        index: true,
+    };
+    apply(global, &mut repository, &apply_args, true, true)
 }
 
 fn clear(repository: &Repository) -> Result<()> {
@@ -480,6 +537,7 @@ fn apply(
     repository: &mut Repository,
     args: &RefArgs,
     drop_after: bool,
+    from_branch: bool,
 ) -> Result<i32> {
     let Picked::Found(position, stash) = pick(repository, args.stash.as_deref())? else {
         return Ok(128);
@@ -571,6 +629,9 @@ fn apply(
             }
         }
     }
+    if args.index && (refused.is_some() || conflicted) {
+        eprintln!("Index was not unstashed.");
+    }
     // Untracked files come back after the merge; those whose path is taken are reported and the
     // rest are still restored.
     let untracked_failed = match parents.get(2) {
@@ -581,7 +642,7 @@ fn apply(
         if !global.quiet {
             print_status(global)?;
         }
-        if drop_after {
+        if drop_after && !from_branch {
             println!("The stash entry is kept in case you need it again.");
         }
         if untracked_failed {
@@ -593,8 +654,8 @@ fn apply(
         if !global.quiet {
             print_status(global)?;
         }
-        if drop_after {
-            eprintln!("The stash entry is kept in case you need it again.");
+        if drop_after && !from_branch {
+            println!("The stash entry is kept in case you need it again.");
         }
         if untracked_failed {
             eprintln!("error: could not restore untracked files from stash");

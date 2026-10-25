@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 240 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 241 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-24, gate: 237 tests / 0 failed, 240 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-24, gate: 237 tests / 0 failed, 241 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -71,7 +71,7 @@ The command works for the common case; the listed options or edge cases are miss
   patches, whitespace options or `--reject` together with `--3way`.
 * **`format-patch` / `am`** — no cover letters, threading, `-k`, RFC 2047 headers,
   `--directory`, scissors, `am --3way`.
-* **`stash`** — no `branch`/`create`/`store`/`save`.
+* **`stash`** — no `create`/`store`/`save`. `stash branch` exists (`s_stash_branch`).
 * **`clean`** — no `-i`/`-e`.
 * **`gc` / `repack`** — no `--cruft`, `--geometric`, `--window`/`--depth`,
   `--max-pack-size`, `--max-cruft-size`, `--expire-to`, `--keep-largest-pack`,
@@ -102,7 +102,7 @@ The command works for the common case; the listed options or edge cases are miss
   git's plain `am` runs no `post-rewrite` either). `merge --continue` is `commit` with the message of `MERGE_MSG` (source `merge`;
   `pre-commit`, not `pre-merge-commit`, as in git) — but the editor never starts, so `COMMIT_EDITMSG`
   lacks the `#` status template git puts there (the scenario hides those lines). `stash` runs none (as in git, which
-  creates its commits without hooks; only `stash branch`, missing, runs `post-checkout`). `post-checkout` for `clone` (the
+  creates its commits without hooks; only `stash branch` runs `post-checkout`, through its checkout). `post-checkout` for `clone` (the
   status becomes the exit status) and `worktree add`; `core.hooksPath` is also read from the global and
   system config. Not run yet: `pre-auto-gc`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` is not implemented. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
   source (and `merge`). `GIT_DIR`/`GIT_WORK_TREE` are not exported to hooks (git does not either

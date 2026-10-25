@@ -7559,6 +7559,69 @@ s_rebase_autosquash() {
     v rebase --abort
 }
 
+# `stash branch`: the argument errors, a branch made at the stash's base with the index and the
+# untracked files restored, `post-checkout` for the new branch, an explicit stash, and the two ways
+# it can fail (the checkout refuses, the apply refuses) which must keep the stash.
+s_stash_branch() {
+    v init -q repo; cd repo
+    echo a >a; echo b >b; v add .; v commit -q -m one
+    mkdir -p .git/hooks
+    printf '#!/bin/sh\necho "post-checkout $@" >&2\n' >.git/hooks/post-checkout
+    chmod +x .git/hooks/post-checkout
+    echo a2 >>a; echo new >n; v add n; echo ut >u
+    v stash -q -u
+    tick; echo b2 >>b; v commit -q -a -m two
+    v stash branch
+    v stash branch x stash@{3}
+    v stash branch main
+    v stash branch x stash@{0} y
+    v stash list
+    v stash branch nb
+    echo "rc=$?"
+    v status
+    v stash list
+    v reflog -5
+    v log --oneline -3 --all
+    v switch -q main
+    # An explicit stash, not the newest one.
+    tick; echo c >>a; v commit -q -a -m three
+    echo a3 >>a; v stash -q
+    echo c1 >c; v add c; v stash -q
+    v stash list
+    v stash branch cb stash@{1}
+    echo "rc=$?"
+    v status
+    v stash list
+    v branch
+    # The checkout refuses: a local change to a file that differs between here and the stash base.
+    v switch -q main
+    echo ok >>b; v stash -q
+    tick; echo d >>b; v commit -q -a -m four
+    echo dirty >>b
+    v stash branch nope
+    echo "rc=$?"
+    v status
+    v stash list
+    v branch
+    v checkout -q -- b
+    # The apply refuses: the checkout carries a local change that the stash also touches.
+    v switch -q main
+    echo z >>a; v stash -q
+    echo "z-local" >>a
+    v stash branch carry
+    echo "rc=$?"
+    v status
+    v stash list
+    v branch
+    # `pop --index` that conflicts says the index was not unstashed.
+    v reset -q --hard; rm -f u; v switch -q main
+    echo s >>b; v stash -q
+    echo h >>b; tick; v commit -q -a -m five
+    v stash pop --index
+    echo "rc=$?"
+    v stash list
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
