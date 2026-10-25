@@ -407,6 +407,9 @@ fn clean(repository: &Repository, args: &[String]) -> Result<i32> {
         if verbose {
             let mut files = Vec::new();
             files_below(&root, &dir, &mut files);
+            // Git sorts the whole path list, not each directory separately: `b/other/sub/u` comes
+            // before `b/other/x.log`, which a per-directory walk cannot produce.
+            files.sort();
             for file in files {
                 println!("{verb} {file}");
             }
