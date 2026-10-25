@@ -7449,7 +7449,13 @@ s_push_refspec_forms() {
     v push --dry-run origin topic:main
     v push origin --delete feature
     v push origin :nosuch
-    v push --dry-run origin :
+    # git fails the whole command line while matching refspecs, before anything is sent: the
+    # branch named next to the missing delete must NOT reach the remote (checked with git 2.56).
+    v branch good-branch
+    v push origin good-branch :nosuch
+    v push origin :nosuch good-branch
+    v push --dry-run origin good-branch :nosuch
+    (cd ../origin.git && v for-each-ref)
     v push origin +:
     (cd ../origin.git && v for-each-ref)
 }

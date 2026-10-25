@@ -978,8 +978,13 @@ Found and fixed by the scenario: `log ^A` alone printed `HEAD`'s history; git pr
 
 ### Phase 6.3 — `push` refspec forms (landed, scenario `s_push_refspec_forms`)
 Base `5b6e70b`. `Refspec::parse` splits at the last colon (`x:y:z` is source `x:y`, destination `z`); with a colon only the destination is syntax-checked (a bad source is `src refspec … does not match any`, status 1, as in git; `^x:y` stays fatal). The matching refspec `:` (and `+:`) pushes every local branch the remote has under the same name. Found by the scenario and fixed in the same area: refs are reported and sent ordered by destination name; refs already current are not listed in a mixed report; the "tip of your current branch is behind" hint depends on the rejected *destination* being the checked-out branch; `push origin :nosuch` is `error: unable to delete…` + `failed to push some refs`, status 1 (was `fatal:`, 128).
-Not done: other refs on the same command line as a missing-ref delete are not pushed (recorded in `GAPS.md`).
+Not done: see Phase 6.4 — the "other refs are not pushed" gap recorded here turned out not to be a gap.
 Gate after: fmt, clippy `-D warnings`, doc clean; 235 passed / 0 failed / 0 ignored; `scenarios.sh` 239 PASS / `failures: 0`.
 
 Items 3 (`stash branch`, `clean -i`, `sparse-checkout check-rules`) were not started: the brief says to stop after a green unit rather than start a subsystem that cannot be finished.
+
+### Phase 7.0 — `push` with a missing-ref delete (Item 0: premise was wrong; scenario `s_push_refspec_forms` extended)
+The brief said git pushes the other refs and fails only the delete. Checked with git 2.56 in a scratch bare remote: `git push R good-branch :nosuch` and `git push R :nosuch good-branch` both print only `error: unable to delete 'nosuch': remote ref does not exist` + `error: failed to push some refs to 'R'`, exit 1, and **nothing reaches the remote** (`for-each-ref` is empty; the same holds for `--dry-run`). Git rejects the line while matching refspecs, before it sends anything. rivet already did exactly that, so no behaviour changed and the scenario passes on the base as well; the `GAPS.md` entry was false and is deleted. Added to the scenario: the three mixed command lines (both orders, plus `--dry-run`) and a `for-each-ref` of the remote right after, which would catch rivet starting to push the good ref. Only a comment in `crates/rivet-cli/src/cmd/remote.rs` changed.
+Gate after: fmt, clippy `-D warnings`, doc clean; 235 passed / 0 failed / 0 ignored; `scenarios.sh` 239 PASS / `failures: 0`.
+Items 1–3 (`--autosquash`, `--edit-todo`, `stash branch`) are not started in this run so far.
 

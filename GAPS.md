@@ -103,9 +103,6 @@ The command works for the common case; the listed options or edge cases are miss
   system config. Not run yet: `pre-auto-gc`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` is not implemented. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
   source (and `merge`). `GIT_DIR`/`GIT_WORK_TREE` are not exported to hooks (git does not either
   for the common layout; linked work trees are untested).
-* **`push`** — a delete naming a ref the remote does not have (`push origin :nosuch`) fails with git's
-  two `error:` lines and status 1, but the other refs of the same command line are not pushed (git pushes
-  them and fails only that ref).
 * **`reference-transaction`** — deliberately not implemented: git 2.56 runs it for every ref write with
   four states (`preparing`, `prepared`, `committed`, `aborted`), `ref:<target>` in the stdin for
   symbolic updates (`switch` writes `<null> ref:refs/heads/x HEAD`), a `HEAD` entry next to the branch

@@ -1300,7 +1300,8 @@ pub fn run_push(global: &GlobalArgs, args: &PushArgs) -> Result<i32> {
     };
     let report = match repository.push_remote(&remote, &request) {
         Ok(report) => report,
-        // Deleting a ref the remote does not have fails that ref, not the command line.
+        // Deleting a ref the remote does not have fails the whole command line, as in git, which
+        // rejects it while matching refspecs, before any other ref is sent.
         Err(error) if error.to_string().starts_with("unable to delete '") => {
             let url = match repository.remote_config(&remote)? {
                 Some(config) => config
