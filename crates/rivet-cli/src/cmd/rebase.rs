@@ -920,13 +920,19 @@ fn continue_rebase(global: &GlobalArgs, repository: &mut Repository, dir: &Path)
             let _ = std::fs::remove_file(dir.join("stopped-sha"));
             return run_todo(global, repository, dir);
         }
-        let stopped_cmd = read_state(dir, "done")
+        let done = read_state(dir, "done");
+        let stopped_words: Vec<&str> = done
             .lines()
             .last()
-            .and_then(|l| l.split_whitespace().next())
-            .and_then(interactive::Cmd::parse);
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect();
+        let stopped_cmd = stopped_words
+            .first()
+            .and_then(|w| interactive::Cmd::parse(w));
         if let Some(cmd) = stopped_cmd.filter(|c| c.is_fixup()) {
-            interactive::chain_add(repository, dir, oid, cmd)?;
+            let (flag, _) = interactive::flag_of(cmd, &stopped_words);
+            interactive::chain_add(repository, dir, oid, cmd, flag)?;
             let action = "rebase (continue)";
             if !interactive::chain_commit(global, repository, dir, tree, cmd, action)? {
                 return interactive::give_up_on_message(repository, dir);
@@ -1111,10 +1117,9 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             continue;
         }
 
-        let hex = line
-            .split_whitespace()
-            .nth(1)
-            .ok_or_else(|| anyhow::anyhow!("rebase: malformed todo line '{line}'"))?;
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let (flag, hex) = interactive::flag_of(cmd, &words);
+        let hex = hex.ok_or_else(|| anyhow::anyhow!("rebase: malformed todo line '{line}'"))?;
         let oid = ObjectId::from_hex(repository.format(), BStr::new(hex.as_bytes()))?;
         let original = read_commit(repository, &oid)?;
         let subject = subject_of(repository, &oid)?;
@@ -1201,7 +1206,7 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
         }
         let tree = repository.write_tree()?;
         if cmd.is_fixup() {
-            interactive::chain_add(repository, dir, oid, cmd)?;
+            interactive::chain_add(repository, dir, oid, cmd, flag)?;
             let action = format!("{} ({})", action(), cmd.name());
             if !interactive::chain_commit(global, repository, dir, tree, cmd, &action)? {
                 return interactive::give_up_on_message(repository, dir);

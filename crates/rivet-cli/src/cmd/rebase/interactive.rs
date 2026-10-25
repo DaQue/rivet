@@ -2,14 +2,15 @@
 //!
 //! # What is implemented
 //!
-//! `pick`, `reword`, `edit`, `squash`, `fixup` and `drop` (and Git's one-letter forms), `noop`, a
+//! `pick`, `reword`, `edit`, `squash`, `fixup` (with `-C` and `-c`) and `drop` (and Git's one-letter
+//! forms), `noop`, `exec`, `break`, a
 //! todo list edited by `GIT_SEQUENCE_EDITOR` / `sequence.editor` / the usual editor chain, and
 //! `core.commentChar`. Leading `pick`s that would not change anything are fast-forwarded over, as Git
 //! does, so an untouched list rewrites nothing.
 //!
 //! # What is refused
 //!
-//! `break`, `label`, `reset`, `merge`, `update-ref` and `fixup -C`/`-c` lines in the todo
+//! `label`, `reset`, `merge` and `update-ref` lines in the todo
 //! list are refused by name *before* anything is touched, like `--exec` without `-i`, `--root`,
 //! `--rebase-merges`, `--autosquash`, `--edit-todo` and signing on the command line.
 //!
@@ -78,6 +79,46 @@ impl Cmd {
     pub(super) fn is_fixup(self) -> bool {
         matches!(self, Cmd::Squash | Cmd::Fixup)
     }
+}
+
+/// The flag of a `fixup` line: `-C` takes the message of that commit instead, `-c` does the same and
+/// opens the editor on it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(super) enum Flag {
+    #[default]
+    None,
+    Replace,
+    Edit,
+}
+
+impl Flag {
+    /// The flag a todo word spells.
+    pub(super) fn parse(word: &str) -> Flag {
+        match word {
+            "-C" => Flag::Replace,
+            "-c" => Flag::Edit,
+            _ => Flag::None,
+        }
+    }
+
+    /// The word in the todo list, with its leading space (empty for no flag).
+    fn suffix(self) -> &'static str {
+        match self {
+            Flag::None => "",
+            Flag::Replace => " -C",
+            Flag::Edit => " -c",
+        }
+    }
+}
+
+/// The flag and the commit word of a todo line of `cmd`, the line split into words.
+pub(super) fn flag_of(cmd: Cmd, words: &[&str]) -> (Flag, Option<String>) {
+    let flag = match (cmd, words.get(1)) {
+        (Cmd::Fixup, Some(word)) => Flag::parse(word),
+        _ => Flag::None,
+    };
+    let at = if flag == Flag::None { 1 } else { 2 };
+    (flag, words.get(at).map(|w| w.to_string()))
 }
 
 /// Whether the rebase in `dir` was started with `--interactive`.
@@ -245,6 +286,8 @@ pub(super) fn edit_message(repository: &Repository, message: &[u8]) -> Result<Op
 /// One parsed todo line.
 pub(super) struct Item {
     pub cmd: Cmd,
+    /// `-C` / `-c` of a `fixup`.
+    pub flag: Flag,
     /// `None` for `noop`, `exec` and `break`.
     pub oid: Option<ObjectId>,
     /// The shell command of an `exec` line.
@@ -256,8 +299,9 @@ impl Item {
     fn line(&self, repository: &Repository, name: impl Fn(&ObjectId) -> String) -> Result<String> {
         Ok(match (&self.oid, &self.text) {
             (Some(oid), _) => format!(
-                "{} {} # {}\n",
+                "{}{} {} # {}\n",
                 self.cmd.name(),
+                self.flag.suffix(),
                 name(oid),
                 super::subject_of(repository, oid)?
             ),
@@ -306,6 +350,7 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
             if extra.is_empty() {
                 items.push(Item {
                     cmd: Cmd::Break,
+                    flag: Flag::None,
                     oid: None,
                     text: None,
                 });
@@ -327,6 +372,7 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
             } else {
                 items.push(Item {
                     cmd: Cmd::Exec,
+                    flag: Flag::None,
                     oid: None,
                     text: Some(command.to_string()),
                 });
@@ -341,6 +387,7 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
         if cmd == Cmd::Noop {
             items.push(Item {
                 cmd,
+                flag: Flag::None,
                 oid: None,
                 text: None,
             });
@@ -351,17 +398,15 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
             errors.push(format!("invalid line {}: {raw}", number + 1));
             continue;
         };
-        if cmd == Cmd::Fixup && target.starts_with('-') {
-            return Parsed::Refused(format!(
-                "rebase: 'fixup {target}' in the todo list is not implemented"
-            ));
-        }
-        if target.starts_with('-') {
-            target = "";
+        let mut flag = Flag::None;
+        if cmd == Cmd::Fixup && Flag::parse(target) != Flag::None {
+            flag = Flag::parse(target);
+            target = words.next().unwrap_or_default();
         }
         match crate::cmd::resolve_commit(repository, target) {
             Ok(oid) => items.push(Item {
                 cmd,
+                flag,
                 oid: Some(oid),
                 text: None,
             }),
@@ -796,6 +841,59 @@ fn trimmed(message: &[u8]) -> String {
         .to_string()
 }
 
+/// The sections of a squash message that are still in it, turned into "will be skipped" ones: the
+/// header reworded and the body commented out. `text` is the message without its first line.
+fn skip_sections(text: &str, c: char) -> String {
+    let first = format!("{c} This is the 1st commit message:");
+    let numbered = format!("{c} This is the commit message #");
+    let mut out = String::new();
+    let mut blanks = String::new();
+    let mut commenting = false;
+    let mut body_started = false;
+    for line in text.split_inclusive('\n') {
+        let bare = line.trim_end_matches('\n');
+        let is_header = bare.starts_with(&format!("{c} This is the"))
+            || bare.starts_with(&format!("{c} The commit message #"))
+            || bare.starts_with(&format!("{c} The 1st commit message"));
+        if is_header {
+            out.push_str(&blanks);
+            blanks.clear();
+            commenting = false;
+            body_started = false;
+            if bare == first {
+                out.push_str(&format!("{c} The 1st commit message will be skipped:\n"));
+                commenting = true;
+            } else if let Some(n) = bare
+                .strip_prefix(&numbered)
+                .and_then(|n| n.strip_suffix(':'))
+            {
+                out.push_str(&format!("{c} The commit message #{n} will be skipped:\n"));
+                commenting = true;
+            } else {
+                out.push_str(line);
+            }
+        } else if commenting && bare.is_empty() {
+            blanks.push_str(line);
+        } else if commenting {
+            // Blank lines inside the body are commented, those between header and body stay plain.
+            if body_started {
+                out.push_str(&blanks.replace('\n', &format!("{c}\n")));
+            } else {
+                out.push_str(&blanks);
+            }
+            blanks.clear();
+            body_started = true;
+            out.push_str(&format!("{c} {bare}\n"));
+        } else {
+            out.push_str(&blanks);
+            blanks.clear();
+            out.push_str(line);
+        }
+    }
+    out.push_str(&blanks);
+    out
+}
+
 /// Add the commit `oid` to the squash message of the chain in progress, starting the chain from the
 /// message of `HEAD` when it is the first link.
 pub(super) fn chain_add(
@@ -803,6 +901,7 @@ pub(super) fn chain_add(
     dir: &Path,
     oid: ObjectId,
     cmd: Cmd,
+    flag: Flag,
 ) -> Result<()> {
     use std::io::Write as _;
     let c = comment_char(repository);
@@ -821,19 +920,32 @@ pub(super) fn chain_add(
             )
         }
     };
+    // `-C` / `-c` replace the message so far, unless a `squash` is already part of the chain.
+    let replaces = flag != Flag::None
+        && !read_state(dir, "current-fixups")
+            .lines()
+            .any(|l| l.starts_with("squash"));
     let mut list = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&fixups)?;
-    writeln!(list, "{} {oid}", cmd.name())?;
+    writeln!(list, "{}{} {oid}", cmd.name(), flag.suffix())?;
     let count = read_state(dir, "current-fixups").lines().count() + 1;
     let rest = text
         .split_once('\n')
         .map_or("", |(_, rest)| rest)
         .to_string();
+    let rest = if replaces {
+        skip_sections(&rest, c)
+    } else {
+        rest
+    };
     text = format!("{c} This is a combination of {count} commits.\n{rest}");
     let message = trimmed(&read_commit(repository, &oid)?.message);
-    if cmd == Cmd::Fixup {
+    if replaces {
+        write_state(dir, "message-fixup", &format!("{message}\n"))?;
+    }
+    if cmd == Cmd::Fixup && !replaces && flag == Flag::None {
         let commented: String = message
             .lines()
             .map(|l| {
@@ -889,7 +1001,7 @@ pub(super) fn chain_commit(
     }
     let has_squash = read_state(dir, "current-fixups")
         .lines()
-        .any(|l| l.starts_with("squash"));
+        .any(|l| l.starts_with("squash") || l.starts_with("fixup -c"));
     let _ = cmd;
     let message = if has_squash {
         match edit_message(repository, &text)? {

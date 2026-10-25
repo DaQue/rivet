@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 265 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 266 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-25, gate: 252 tests / 0 failed, 264 scenarios / 0 failures, `fmt`,
@@ -44,13 +44,16 @@ The command or subsystem is absent; it either fails at the argument parser or re
   non-cone mode, are not compared.
 * **`rebase --interactive`** — `pick`/`reword`/`edit`/`squash`/`fixup`/`drop`/`noop`, the editable todo list,
   `--continue`/`--skip`/`--abort` work (`s_rebase_i`, `s_rebase_i_stops`, `s_rebase_i_conflict`).
-  Plain `--root` works (`s_rebase_root`; `--root` with `-i`, and more than one positional argument with `--root`, which git answers with its full usage text, are not). Refused by name, before anything is touched: `--root` with `-i`, `--rebase-merges`, `--exec`/`-x` without `-i` (with `-i` it works, as does an `exec` todo line, `s_rebase_exec`; `break` works too, `s_rebase_break`); `--keep-base` works (`s_rebase_keep_base`),
+  Plain `--root` works (`s_rebase_root`; `--root` with `-i`, and more than one positional argument with `--root`, which git answers with its full usage text, are not). Refused by name, before anything is touched: `--root` with `-i`, `--rebase-merges`, `--exec`/`-x` without `-i` (with `-i` it works, as does an `exec` todo line, `s_rebase_exec`; `break` works too, `s_rebase_break`; so do `fixup -C`/`-c`, `s_rebase_fixup_c`); `--keep-base` works (`s_rebase_keep_base`),
   signing, `--edit-todo` outside an interactive rebase (rivet's plain rebase has no todo to edit),
   `--autosquash` without `-i` (git runs it as an unedited interactive rebase),
-  `--autosquash` over an `amend!` commit that has a target (needs `fixup -C`) or a `fixup!` that names
+  `--autosquash` over an `amend!` commit that has a target (git turns it into `fixup -C` and strips the
+  `amend!` line from the message, which is not reproduced) or a `fixup!` that names
   another fixup commit by id (`s_rebase_autosquash` covers the rest, plus `--no-autosquash` and
-  `rebase.autoSquash`), and the todo commands `label`, `reset`, `merge`,
-  `update-ref` and `fixup -C`/`-c`. An empty message from the editor aborts the whole rebase back to the
+  `rebase.autoSquash`), and the todo commands `label`, `reset`, `merge`
+  and `update-ref`. A rebase stopped inside a `fixup -C`/`-c` chain and resumed by the other implementation
+  is not compared (git leaves no `message-fixup` there; rivet writes one). `fixup -C<commit>` with the
+  flag glued to the commit is not parsed. An empty message from the editor aborts the whole rebase back to the
   original tip (git stops with the commit pending). The editor sees the message plus git's `#` footer, not
   the `git status` template. `post-rewrite` lines for a squash chain are not compared with git.
 * **Rebase interop** — a rebase that rivet starts (plain or `-i`) can be resumed, skipped or aborted by real

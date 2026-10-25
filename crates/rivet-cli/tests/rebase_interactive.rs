@@ -103,7 +103,7 @@ fn todo_commands_that_are_not_implemented_are_refused_before_anything_moves() {
     let head = git(p, &["rev-parse", "HEAD"]);
     for (edit, name) in [
         ("1i label onto", "label"),
-        ("2s/^pick/fixup -C/", "fixup -C"),
+        ("2i update-ref refs/heads/x", "update-ref"),
     ] {
         let script = p.join(".git/seq-edit.sh");
         std::fs::write(&script, format!("#!/bin/sh\nsed -i -e '{edit}' \"$1\"\n")).unwrap();

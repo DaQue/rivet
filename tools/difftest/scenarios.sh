@@ -8007,6 +8007,34 @@ s_rebase_break() {
     v reflog
 }
 
+# `fixup -C` / `fixup -c`: the message of that commit replaces the chain's message so far (no editor for
+# -C, the editor for -c), unless a `squash` is already in the chain, when they act like `squash`. The
+# intermediate commits of a chain are in the reflog, so their messages are compared by id as well.
+s_rebase_fixup_c() {
+    rebase_repo
+    g branch orig topic
+    rebase_i_helpers
+    for edit in '2s/^pick/fixup -C/' '2s/^pick/fixup -c/' '3s/^pick/f -C/' '2s/^pick/fixup/;3s/^pick/fixup -C/' \
+        '2s/^pick/fixup -C/;3s/^pick/fixup/' '2s/^pick/squash/;3s/^pick/fixup -C/' '2s/^pick/fixup -C/;3s/^pick/squash/' \
+        '2s/^pick/fixup -C/;3s/^pick/fixup -C/' '2s/^pick/fixup -c/;3s/^pick/fixup/' '2s/^pick/fixup/;3s/^pick/fixup -c/' \
+        '2s/^pick/fixup -c/;3s/^pick/fixup -C/' '1s/^pick/reword/;2s/^pick/fixup -C/'; do
+        rebase_i_run "$edit"
+        v reflog
+    done
+    # The todo list as saved: the flag is kept, the commit is named in full.
+    rebase_i_run '2s/^pick/fixup -C/;3a exec cat .git/rebase-merge/done'
+    # Invalid lines: git parses the word after the flag as the commit.
+    rebase_i_run '2s/^pick/fixup -x/'
+    v rebase --abort
+    rebase_i_run '2s/^pick \([0-9a-f]*\).*/fixup -C/'
+    v rebase --abort
+    rebase_i_run '2s/^pick/fixup -C -c/'
+    v rebase --abort
+    rebase_i_run '2s/^pick/squash -C/'
+    v rebase --abort
+    v reflog
+}
+
 # `rebase --keep-base`: onto the merge base of upstream and branch, so a linear branch is "up to
 # date" and `-i` replays it in place; `--onto`/`--root` conflict; unrelated histories are refused.
 s_rebase_keep_base() {

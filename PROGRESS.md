@@ -1265,3 +1265,15 @@ Left undone (in `GAPS.md`): `set`/`reapply` over a skip-worktree path whose file
 and clears the bit), readdir ordering of `-v` output.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
 `scenarios.sh` 265 PASS / `failures: 0`.
+
+## rebase -i fixup -C / -c (2026-10-25)
+Landed `fixup -C <commit>` and `fixup -c <commit>` (and `f -C`) in the todo list (`s_rebase_fixup_c`, fails on `2cd7a16`: the
+lines were refused by name). `-C` replaces the chain's message with that commit's, without an editor; `-c` does the same and
+opens the editor at the end of the chain; after a `squash` in the chain both act like `squash`. Earlier sections of the
+combined message become "will be skipped" ones, so the intermediate commits of a chain (visible by id in the reflog) match git.
+The todo keeps the flag (`fixup -C <id> # subject`, `current-fixups` carries `fixup -C <id>`). A dashed word after any other
+todo command is now reported as git does (`could not parse '-C'`, not `''`). The scenario covers 12 chains plus the invalid lines.
+Left undone (in `GAPS.md`): `amend!` autosquash (needs the `amend!` line stripped), a stop inside a `-C`/`-c` chain resumed by
+real git (git writes no `message-fixup` there), `fixup -C<commit>` glued form.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
+`scenarios.sh` 266 PASS / `failures: 0`.
