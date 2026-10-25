@@ -134,6 +134,7 @@ fn main() -> ExitCode {
                     eprintln!("error: {reason}");
                 } else if reason.starts_with("could not read ")
                     || reason.starts_with("credential helper ")
+                    || reason.starts_with("credential url ")
                 {
                     eprintln!("fatal: {reason}");
                 } else {

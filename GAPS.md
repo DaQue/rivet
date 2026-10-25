@@ -143,8 +143,10 @@ The command works for the common case; the listed options or edge cases are miss
   `get`/`store`/`erase` stream (capabilities and `wwwauth[]` included). Helper output `quit`,
   `password_expiry_utc` (an expired password is dropped) and `oauth_refresh_token` (handed back to
   `store`/`erase`) work (`s_credential_keys`), as do `authtype` with `credential` (an
-  `Authorization: <authtype> <credential>` header, `s_credential_authtype`). Not implemented: helper
-  output `state[]`/`continue` (multi-round auth), `url=` (URL rewriting by a helper), `credential.<url>.*` keys other than `helper`,
+  `Authorization: <authtype> <credential>` header, `s_credential_authtype`) and `url=` (replaces the credential;
+  `s_credential_url`; `store`/`erase` still go to the helpers chosen for the original URL, git re-selects them
+  for the new one). Not implemented: helper
+  output `state[]`/`continue` (multi-round auth), `credential.<url>.*` keys other than `helper`,
   `useHttpPath` and `username`, `http.proxy` credentials, `credential.interactive`, the
   `git credential` command, and credentials for `ssh://` (the ssh program asks). Covered by
   `s_credential` against a local Basic-auth server; a `401` that first appears on a POST (discovery

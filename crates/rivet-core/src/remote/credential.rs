@@ -60,12 +60,88 @@ pub struct Credential {
     pub capa_authtype: bool,
 }
 
+/// Undo `%XX` escapes; a `%` not followed by two hex digits stays as it is (as in Git).
+fn percent_decode(text: &str) -> Vec<u8> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(hi), Some(lo)) = (
+                bytes.get(i + 1).and_then(|b| hex(*b)),
+                bytes.get(i + 2).and_then(|b| hex(*b)),
+            )
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 impl Credential {
     /// Whether nothing more needs to be asked: a user name and password, or an `authtype` with its
     /// `credential`.
     pub fn is_complete(&self) -> bool {
         (self.username.is_some() && self.password.is_some())
             || (self.authtype.is_some() && self.credential.is_some())
+    }
+
+    /// Replace the credential by what a helper's `url=` line spells out, as Git's
+    /// `credential_from_url` does: everything set so far is dropped, then the protocol, host, path,
+    /// user name and password of the URL are taken (percent-decoded, trailing slashes of the path
+    /// removed). The path is kept only with `credential.useHttpPath`.
+    fn reset_from_url(
+        &mut self,
+        url: &str,
+        use_http_path: bool,
+    ) -> std::result::Result<(), String> {
+        let unparsable = || format!("credential url cannot be parsed: {url}");
+        let Some((protocol, rest)) = url.split_once("://") else {
+            eprintln!("warning: url has no scheme: {url}");
+            return Err(unparsable());
+        };
+        let authority_end = rest.find('/').unwrap_or(rest.len());
+        let (authority, path) = rest.split_at(authority_end);
+        // Git looks for the first '@' and the first ':' of the whole remainder.
+        let at = rest.find('@').filter(|at| *at < authority_end);
+        let colon = rest.find(':');
+        let (username, password, host) = match at {
+            None => (None, None, authority),
+            Some(at) => match colon.filter(|colon| *colon < at) {
+                None => (Some(&rest[..at]), None, &rest[at + 1..authority_end]),
+                Some(colon) => (
+                    Some(&rest[..colon]),
+                    Some(&rest[colon + 1..at]),
+                    &rest[at + 1..authority_end],
+                ),
+            },
+        };
+        let path = percent_decode(path.trim_start_matches('/'));
+        let host = percent_decode(host);
+        for (what, value) in [("host", &host), ("path", &path)] {
+            if value.contains(&b'\n') {
+                eprintln!("warning: url contains a newline in its {what} component: {url}");
+                return Err(unparsable());
+            }
+        }
+        let path = path.trim_end_with(|c| c == '/');
+        *self = Credential {
+            protocol: protocol.to_owned(),
+            host: String::from_utf8_lossy(&host).into_owned(),
+            path: (use_http_path && !path.is_empty())
+                .then(|| String::from_utf8_lossy(path).into_owned()),
+            username: username.map(|u| BString::from(percent_decode(u))),
+            password: password.map(|p| BString::from(percent_decode(p))),
+            plain_get: self.plain_get,
+            capa_authtype: self.capa_authtype,
+            ..Credential::default()
+        };
+        Ok(())
     }
 
     /// The `Authorization` header value a helper's `authtype` and `credential` ask for.
@@ -287,6 +363,7 @@ impl CredentialSettings {
                 continue;
             };
             let mut quit = false;
+            let mut replaced = false;
             for line in output.lines() {
                 if let Some(value) = line.strip_prefix(b"username=") {
                     credential.username = Some(BString::from(value));
@@ -303,6 +380,9 @@ impl CredentialSettings {
                 } else if let Some(value) = line.strip_prefix(b"password_expiry_utc=") {
                     credential.password_expiry_utc =
                         value.to_str().ok().and_then(|v| v.parse().ok());
+                } else if let Some(value) = line.strip_prefix(b"url=") {
+                    credential.reset_from_url(&value.to_str_lossy(), self.use_http_path)?;
+                    replaced = true;
                 } else if let Some(value) = line.strip_prefix(b"quit=") {
                     quit = crate::config::parse_bool(BStr::new(value)).unwrap_or(false);
                 }
@@ -319,6 +399,10 @@ impl CredentialSettings {
             }
             if quit {
                 return Err(format!("credential helper '{helper}' told us to quit"));
+            }
+            // Git's `credential_clear` also forgets the helper list, so none that follow is asked.
+            if replaced {
+                break;
             }
         }
         Ok(())
@@ -661,6 +745,34 @@ mod tests {
             credential.password.as_ref().map(|v| v.as_slice()),
             Some(&b"b"[..])
         );
+    }
+
+    #[test]
+    fn a_helper_url_replaces_the_credential() {
+        let mut credential = Credential {
+            username: Some("old".into()),
+            ..Credential::default()
+        };
+        credential
+            .reset_from_url("https://us%40er:p%3Aw@o.example:8443//a%20b/c/", true)
+            .unwrap();
+        assert_eq!(credential.protocol, "https");
+        assert_eq!(credential.host, "o.example:8443");
+        assert_eq!(credential.path.as_deref(), Some("a b/c"));
+        assert_eq!(
+            credential.username.as_ref().map(|v| v.as_slice()),
+            Some(&b"us@er"[..])
+        );
+        assert_eq!(
+            credential.password.as_ref().map(|v| v.as_slice()),
+            Some(&b"p:w"[..])
+        );
+        credential
+            .reset_from_url("http://h.example/x", false)
+            .unwrap();
+        assert!(credential.path.is_none() && credential.username.is_none());
+        assert!(credential.reset_from_url("h.example/x", false).is_err());
+        assert!(credential.reset_from_url("http://h/a%0ab", false).is_err());
     }
 
     #[test]

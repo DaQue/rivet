@@ -1148,6 +1148,42 @@ s_credential_authtype() {
     kill $server 2>/dev/null; wait $server 2>/dev/null
 }
 
+# `url=` from a helper replaces the whole credential (protocol, host, path, user, password, all
+# percent-decoded); what was set before it is dropped, the helpers after it see the new credential,
+# `store`/`erase` hear it, and an unparseable URL is fatal.
+s_credential_url() {
+    local port=18796 root=$PWD
+    mkdir -p repos
+    g init -q --bare repos/o.git; g -C repos/o.git config http.receivepack true
+    g clone -q repos/o.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    python3 "$AUTHSERVER" $port "$root/repos" alice s3cret "$root/req.log" >/dev/null 2>&1 &
+    local server=$!
+    sleep 1
+    local url=http://127.0.0.1:$port/o.git
+    export GIT_TERMINAL_PROMPT=0
+    cred_helper "$root" good alice s3cret
+    cred_helper_out "$root" same "echo url=http://alice:s3cret@127.0.0.1:$port/o.git/"
+    cred_helper_out "$root" moved "echo url=http://%61lice:s3%63ret@other.example:8080//x%20y/z"
+    cred_helper_out "$root" cleared "echo username=alice; echo url=http://127.0.0.1:$port"
+    cred_helper_out "$root" junk 'echo url=nonsense'
+    cred_helper_out "$root" nl 'echo url=http://h/a%0ab'
+    v config --global credential.helper "$root/same.sh"
+    v clone -q $url c_same; cred_dump "$root"
+    v config --global credential.helper "$root/moved.sh"
+    v clone -q $url c_moved; cred_dump "$root"
+    # the user name given before the url is gone; the next helper is asked about the new credential
+    v config --global credential.helper "$root/cleared.sh"
+    v config --global --add credential.helper "$root/good.sh"
+    v clone -q $url c_cleared; cred_dump "$root"
+    v config --global --unset-all credential.helper
+    v config --global credential.helper "$root/junk.sh"
+    v clone -q $url c_junk; cred_dump "$root"
+    v config --global credential.helper "$root/nl.sh"
+    v clone -q $url c_nl; cred_dump "$root"
+    kill $server 2>/dev/null; wait $server 2>/dev/null
+}
+
 s_basic_commit() {
     v init -q repo; cd repo
     echo hello >a.txt; mkdir -p dir/sub; echo deep >dir/sub/b.txt; echo x >dir/c
@@ -8070,6 +8106,7 @@ for s in "$@"; do
         s_credential_post) run_scenario "$s" c_post ;;
         s_credential_keys) run_scenario "$s" c_exp c_quitfull ;;
         s_credential_authtype) run_scenario "$s" c_bearer c_bare c_first ;;
+        s_credential_url) run_scenario "$s" c_same c_moved c_cleared c_junk c_nl ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
         s_sparse_linked) run_scenario "$s" repo wt ;;
         s_rev_parse_dirs) run_scenario "$s" repo wt bare.git ;;
