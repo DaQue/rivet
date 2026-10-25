@@ -1167,3 +1167,14 @@ still prints conflict output). `--checkout` now overrides a configured `merge` s
 Deliberately left: `--rebase` (git prints `Rebasing (n/m)` progress with carriage returns; needs its own transcript), a fresh clone combined with `--merge`,
 and the clone flags.
 Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 256 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 (5) — `submodule update --rebase`
+Gate at `f431682`: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 256 PASS / `failures: 0`.
+
+Landed (Remaining item 2, second half): `submodule update --rebase` and `submodule.<name>.update = rebase`. Rivet runs its own `rebase <oid>` inside the
+submodule (`run_rebase` with `RebaseArgs::default()` plus `upstream`), then prints `Submodule path '…': rebased into '<oid>'`. A failing rebase is
+`fatal: Unable to rebase '<oid>' in submodule path '…'`, exit 128. `-q` is passed through. `--rebase` overrides config and `--checkout` overrides a configured `rebase`.
+Scenario `s_submodule_update_rebase` (fast-forward, replay of a local commit, already-up-to-date, `-q`, `--checkout` override, config `update = rebase`, conflict exit 128,
+detached HEAD). It fails on `f431682` (`--rebase` was refused by name) and passes after.
+Deliberately left: a fresh clone combined with `--rebase`, and the clone flags (`--depth`, `--reference`, `--filter`, `--single-branch`, `-j`).
+Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 257 PASS / `failures: 0`.

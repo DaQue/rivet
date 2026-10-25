@@ -1322,8 +1322,8 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
             "--remote" => remote = true,
             "--checkout" => strategy_flag = Some("checkout"),
             "--merge" => strategy_flag = Some("merge"),
-            "--rebase"
-            | "--depth"
+            "--rebase" => strategy_flag = Some("rebase"),
+            "--depth"
             | "--reference"
             | "--filter"
             | "--single-branch"
@@ -1367,7 +1367,7 @@ struct UpdateOptions {
     force: bool,
     no_fetch: bool,
     remote: bool,
-    /// `--checkout` / `--merge`: wins over `submodule.<name>.update`.
+    /// `--checkout` / `--merge` / `--rebase`: wins over `submodule.<name>.update`.
     strategy_flag: Option<&'static str>,
     quiet: bool,
 }
@@ -1432,8 +1432,9 @@ fn update_in(
                 .or_else(|| setting(&gitmodules, name.as_ref(), "update").map(|v| v.to_string()))
         });
         let merge = strategy.as_deref() == Some("merge");
+        let rebase = strategy.as_deref() == Some("rebase");
         match strategy.as_deref() {
-            None | Some("checkout") | Some("merge") => {}
+            None | Some("checkout") | Some("merge") | Some("rebase") => {}
             Some("none") => {
                 eprintln!("Skipping submodule '{display}'");
                 continue;
@@ -1514,7 +1515,28 @@ fn update_in(
                 }
                 return Ok(128);
             }
-            if merge {
+            if rebase {
+                // Git runs `git rebase [-q] <oid>` inside the submodule.
+                let inner = GlobalArgs {
+                    repo: Some(dest.clone()),
+                    verbose: false,
+                    quiet: options.quiet,
+                    no_pager: true,
+                };
+                let args = super::rebase::RebaseArgs {
+                    upstream: Some(oid.to_string()),
+                    ..Default::default()
+                };
+                if super::rebase::run_rebase(&inner, &args)? != 0 {
+                    eprintln!("fatal: Unable to rebase '{oid}' in submodule path '{display}'");
+                    return Ok(128);
+                }
+                sub = Repository::open_with(&git_dir, Some(&dest), None)
+                    .or_else(|_| Repository::open_or_discover(&dest))?;
+                if !options.quiet {
+                    println!("Submodule path '{display}': rebased into '{oid}'");
+                }
+            } else if merge {
                 // Git runs `git merge [-q] <oid>` inside the submodule.
                 let inner = GlobalArgs {
                     repo: Some(dest.clone()),

@@ -58,9 +58,9 @@ The command or subsystem is absent; it either fails at the argument parser or re
 * **`bundle-uri`**, SHA-256 bundles, and `clone`/`ls-remote` from a bundle file. Creating,
   listing, verifying and unbundling bundles works; fetching *from* a bundle works only as a
   remote URL.
-* **Submodule advance/update modes** — `--rebase`, `--depth`,
-  `--reference`, `--filter`, `--single-branch`, `-j` and the `rebase` strategy are
-  refused with an explicit "not implemented". `checkout` and `merge` (`--merge`, `submodule.<name>.update = merge`) work. `update --remote` works
+* **Submodule advance/update modes** — `--depth`,
+  `--reference`, `--filter`, `--single-branch` and `-j` are
+  refused with an explicit "not implemented". `checkout`, `merge` and `rebase` (`--merge`, `--rebase`, `submodule.<name>.update`) work. `update --remote` works
   (branch from `.gitmodules`, remote `HEAD` by default); `submodule.<name>.branch = .` is refused.
 * **`status` of a moved submodule** — a gitlink whose submodule `HEAD` differs from the index (` M path`)
   is not reported by `status`/`status --short`.
