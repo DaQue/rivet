@@ -158,6 +158,10 @@ pub struct CommitArgs {
     #[arg(long = "amend")]
     pub amend: bool,
 
+    /// With `--amend`, keep the message of the commit being replaced and open no editor.
+    #[arg(long = "no-edit")]
+    pub no_edit: bool,
+
     /// Record a commit that changes nothing.
     #[arg(long = "allow-empty")]
     pub allow_empty: bool,
@@ -704,6 +708,16 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
     {
         from_merge = true;
         String::from_utf8_lossy(&saved).into_owned()
+    } else if args.amend && args.no_edit {
+        let head = repository
+            .head()?
+            .oid()
+            .ok_or_else(|| anyhow::anyhow!("You have nothing to amend."))?;
+        let object = repository
+            .odb()
+            .read_typed(&head, rivet_core::ObjectKind::Commit)?;
+        let commit = rivet_core::Commit::parse(repository.format(), object.data())?;
+        String::from_utf8_lossy(commit.message).into_owned()
     } else {
         anyhow::bail!("commit: no message given (use -m or -F; the editor is not implemented)");
     };
@@ -849,7 +863,7 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
         other => branch_name(other),
     };
     let parents = repository.commit_parents(oid)?;
-    let root = if parents.is_empty() {
+    let root = if old_head.is_none() {
         " (root-commit)"
     } else {
         ""
@@ -867,6 +881,17 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
     let committer = repository.committer_signature()?;
     if author.name != committer.name || author.email != committer.email {
         println!(" Author: {} <{}>", author.name, author.email);
+    }
+    // An amended commit keeps its author date, so Git always shows it.
+    if args.amend {
+        let date = rivet_core::ops::format_date_style(
+            "default",
+            author.when,
+            author.tz_offset_minutes,
+            author.when,
+        )
+        .unwrap_or_default();
+        println!(" Date: {date}");
     }
     // Like `git log`, the summary shows no diff for a merge commit.
     if parents.len() < 2 {
@@ -922,6 +947,8 @@ fn clean_commit_message(message: &str) -> String {
     while lines.last().is_some_and(|line| line.is_empty()) {
         lines.pop();
     }
+    // Runs of blank lines collapse to one, as in Git's whitespace cleanup.
+    lines.dedup_by(|b, a| a.is_empty() && b.is_empty());
     let mut cleaned = lines.join("\n");
     cleaned.push('\n');
     cleaned

@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 243 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 244 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-25, gate: 237 tests / 0 failed, 243 scenarios / 0 failures, `fmt`,
@@ -70,7 +70,6 @@ The command works for the common case; the listed options or edge cases are miss
   `--graph` over several root commits exits 128 by design; `--graph` with `--date-order` or
   `--first-parent` orders differently from git, and `--graph --format=format:%s` draws an
   extra row.
-* **`commit`** — `--amend --no-edit` is an unknown option (found by `s_rebase_interop`, which uses `--amend -m`).
 * **`rev-list`** — no `--skip`, `--max-age`/`--min-age`, `--left-right`, `--cherry-pick`,
   `--ancestry-path`, `--children`.
 * **`for-each-ref`** — no `--shell`/`--perl`/`--python`/`--tcl`, `--stdin`, `--start-after`,

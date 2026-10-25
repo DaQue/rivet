@@ -20,6 +20,10 @@ use crate::cli::GlobalArgs;
 /// Arguments to `rivet cherry-pick`.
 #[derive(Debug, clap::Args)]
 pub struct CherryPickArgs {
+    /// Keep the original message without starting an editor. Rivet never starts one.
+    #[arg(long = "no-edit")]
+    pub no_edit: bool,
+
     /// The commits to apply: revisions, or `A..B` ranges (oldest first).
     #[arg(value_name = "COMMIT")]
     pub commits: Vec<String>,

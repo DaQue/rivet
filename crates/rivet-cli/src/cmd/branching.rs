@@ -330,6 +330,10 @@ pub struct CheckoutArgs {
 ///   index.
 #[derive(Debug, clap::Args)]
 pub struct MergeArgs {
+    /// Accept the automatic merge message without starting an editor. Rivet never starts one.
+    #[arg(long = "no-edit")]
+    pub no_edit: bool,
+
     /// The commit to merge into the current branch.
     #[arg(value_name = "COMMIT")]
     pub commit: Option<String>,
@@ -1130,6 +1134,7 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
                 author: None,
                 paths: Vec::new(),
                 amend: false,
+                no_edit: false,
                 allow_empty: false,
                 allow_empty_message: false,
                 all: false,

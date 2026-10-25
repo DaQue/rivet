@@ -1031,3 +1031,11 @@ Checked by hand first (git 2.56): a `rebase -i` started by rivet and stopped at 
 Found while writing it: `commit --amend --no-edit` is an unknown option in rivet (recorded in `GAPS.md`; the scenario uses `--amend -m`).
 Gate after: fmt, clippy `-D warnings`, doc clean; 237 passed / 0 failed / 0 ignored; `scenarios.sh` 243 PASS / `failures: 0`.
 Item 4 (`hook list`, credential depth) not started: the brief says to stop after a green unit rather than start a subsystem that cannot be finished in the time left.
+
+## Block 9
+
+### Item 1 — `commit --amend --no-edit` (landed, scenario `s_commit_no_edit`, new)
+Base `0f2e186`: `--no-edit` was an unknown option on `commit`, `merge` and `cherry-pick` (`revert` already had it). `commit --amend --no-edit` now keeps the message of `HEAD` (whitespace-cleaned) and opens no editor; with no commits it prints `fatal: You have nothing to amend.` (exit 128). `merge --no-edit` and `cherry-pick --no-edit` are accepted; rivet never starts an editor for either. `s_rebase_interop` uses `--amend --no-edit` again.
+Found by the scenario, fixed in the same unit (all failed against git at the base): the commit summary of an amend no longer says `(root-commit)` when the amended commit is a root commit and now prints the ` Date:` line git shows for any amend; `clean_commit_message` collapses runs of blank lines as git's whitespace cleanup does.
+Not done: `commit --no-edit` without `--amend` and without a message still refuses with the editor message (git: nothing-to-commit status or `Aborting commit due to empty commit message.`). `PRIORITIES.md` is under `.claude/` and was not ticked.
+Gate after: fmt, clippy `-D warnings`, doc clean; 237 passed / 0 failed / 0 ignored; `scenarios.sh` 244 PASS / `failures: 0`.

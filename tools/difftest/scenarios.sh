@@ -7791,7 +7791,7 @@ s_rebase_interop() {
     v switch -q topic
     GIT_SEQUENCE_EDITOR="$seq" v rebase -i main
     echo "rc=$?"
-    echo more >>f1; v commit -q -a --amend -m c1
+    echo more >>f1; v commit -q -a --amend --no-edit
     vg rebase --continue
     echo "rc=$?"
     vg status
@@ -7817,7 +7817,7 @@ s_rebase_interop() {
     v switch -q -C topic "$orig"
     GIT_SEQUENCE_EDITOR="$seq" vg rebase -i main
     echo "rc=$?"
-    echo more >>f1; v commit -q -a --amend -m c1
+    echo more >>f1; v commit -q -a --amend --no-edit
     v rebase --continue
     echo "rc=$?"
     v status
@@ -7838,6 +7838,40 @@ s_rebase_interop() {
     v rebase --abort
     echo "rc=$?"
     v status
+}
+
+# `--no-edit`: `commit --amend` keeps the message (cleaned up as Git's whitespace mode does) and
+# opens no editor; `merge` and `cherry-pick` accept the flag.
+s_commit_no_edit() {
+    v init -q repo; cd repo
+    v commit --amend --no-edit
+    echo "rc=$?"
+    echo 0 >f; v add f; tick
+    v commit -q -m "subj
+
+body  
+ 
+ 
+trail"
+    echo 1 >>f; v add f; tick
+    v commit --amend --no-edit
+    echo "rc=$?"
+    v log -1 --format=%B | od -c
+    v cat-file -p HEAD | tail -n +5 | od -c
+    echo 2 >>f; v add f; tick
+    v commit --amend --no-edit -m "explicit"
+    v log --format=%s
+    v switch -q -c topic
+    echo t >t; v add t; tick; v commit -q -m "on topic"
+    v switch -q main
+    echo m >m; v add m; tick; v commit -q -m "on main"
+    v cherry-pick --no-edit topic
+    echo "rc=$?"
+    v log --format=%s
+    v reset -q --hard HEAD~1
+    v merge --no-edit topic
+    echo "rc=$?"
+    v log --format=%s
 }
 
 case "${1:-}" in
