@@ -8970,6 +8970,18 @@ s_status_file_pathspec() {
     rm d/g; v status -s -- d; v status -s -- d/g; v status -s -- .; v status -- d
 }
 
+s_ls_remote_patterns() {
+    g init -q src; cd src
+    tick; echo a >f; g add .; g commit -q -m c1
+    for b in a1 a2 b1 B1 x-y 'ab]c' 'e!f'; do g branch "$b"; done
+    g tag v1.0
+    for p in 'refs/heads/[ab]1' '*/[a-b]1' '*/[!a]1' '*/[^a]1' '*/[[:upper:]]1' '*/[[:digit:]]' \
+        '*/a[1-2]' '*/ab[]]c' '*/e\!f' '*/a\1' '*/a[1' '*/a[]' '*/[x-]y' '*v1.[0]' '*/[[:nope:]]1'; do
+        v ls-remote --heads --tags ../src "$p"
+    done
+    v ls-remote ../src 'refs/heads/[ab]1' 'refs/tags/v1.[0]'
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
@@ -9017,6 +9029,7 @@ for s in "$@"; do
         s_submodule_foreach) run_scenario "$s" none ;;
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;
         s_ls_remote) run_scenario "$s" none ;;
+        s_ls_remote_patterns) run_scenario "$s" none ;;
         s_clone_filter) run_scenario "$s" local viafile bare.git limit ;;
         s_clone_bundle_uri) run_scenario "$s" seeded viafile bare.git missing remote ;;
         s_bundle_clone) run_scenario "$s" all named all.git onside upstream nohead dotted odd.git ;;

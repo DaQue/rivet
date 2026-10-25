@@ -2655,7 +2655,8 @@ pub(super) fn print_merge_report(
     conflicted
 }
 
-/// Shell-style glob over branch and tag names: `*`, `?` and literal bytes.
+/// Shell-style glob over branch and tag names, as git's `wildmatch` with no flags: `*` and `?` cross
+/// `/`, `[...]` takes ranges, `!`/`^` negation and `[:class:]`, and `\` escapes the next byte.
 pub fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
     match (pattern.first(), text.first()) {
         (None, None) => true,
@@ -2663,8 +2664,78 @@ pub fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
             glob_match(&pattern[1..], text) || (!text.is_empty() && glob_match(pattern, &text[1..]))
         }
         (Some(b'?'), Some(_)) => glob_match(&pattern[1..], &text[1..]),
+        (Some(b'['), Some(t)) => match match_bracket(&pattern[1..], *t) {
+            Some((true, rest)) => glob_match(rest, &text[1..]),
+            _ => false,
+        },
+        (Some(b'\\'), Some(t)) => {
+            pattern.get(1) == Some(t) && glob_match(&pattern[2..], &text[1..])
+        }
         (Some(p), Some(t)) if p == t => glob_match(&pattern[1..], &text[1..]),
         _ => false,
+    }
+}
+
+/// Match `byte` against the bracket expression that follows an opening `[`. Returns whether it
+/// matched and the pattern after the closing `]`, or `None` for an unterminated or malformed one
+/// (which matches nothing, as in `wildmatch`).
+fn match_bracket(pattern: &[u8], byte: u8) -> Option<(bool, &[u8])> {
+    let mut i = 0;
+    let negated = matches!(pattern.first(), Some(b'!' | b'^'));
+    if negated {
+        i += 1;
+    }
+    let mut matched = false;
+    let mut first = true;
+    loop {
+        let c = *pattern.get(i)?;
+        if c == b']' && !first {
+            return Some((matched != negated, &pattern[i + 1..]));
+        }
+        first = false;
+        if c == b'['
+            && pattern.get(i + 1) == Some(&b':')
+            && let Some(len) = pattern[i + 2..].windows(2).position(|w| w == b":]")
+        {
+            let hit = match &pattern[i + 2..i + 2 + len] {
+                b"alnum" => byte.is_ascii_alphanumeric(),
+                b"alpha" => byte.is_ascii_alphabetic(),
+                b"blank" => byte == b' ' || byte == b'\t',
+                b"cntrl" => byte.is_ascii_control(),
+                b"digit" => byte.is_ascii_digit(),
+                b"graph" => byte.is_ascii_graphic(),
+                b"lower" => byte.is_ascii_lowercase(),
+                b"print" => byte.is_ascii_graphic() || byte == b' ',
+                b"punct" => byte.is_ascii_punctuation(),
+                b"space" => byte.is_ascii_whitespace() || byte == 0x0b,
+                b"upper" => byte.is_ascii_uppercase(),
+                b"xdigit" => byte.is_ascii_hexdigit(),
+                _ => return None,
+            };
+            matched |= hit;
+            i += 2 + len + 2;
+            continue;
+        }
+        let low = if c == b'\\' {
+            i += 1;
+            *pattern.get(i)?
+        } else {
+            c
+        };
+        i += 1;
+        let mut high = low;
+        if pattern.get(i) == Some(&b'-') && pattern.get(i + 1).is_some_and(|n| *n != b']') {
+            i += 1;
+            high = pattern[i];
+            if high == b'\\' {
+                i += 1;
+                high = *pattern.get(i)?;
+            }
+            i += 1;
+        }
+        if low <= byte && byte <= high {
+            matched = true;
+        }
     }
 }
 
@@ -2697,4 +2768,22 @@ fn show_local_changes(repository: &mut Repository) -> Result<()> {
         println!("{letter}\t{path}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod glob_tests {
+    use super::glob_match;
+
+    #[test]
+    fn brackets_ranges_classes_and_escapes_follow_wildmatch() {
+        assert!(glob_match(b"[ab]1", b"b1"));
+        assert!(!glob_match(b"[ab]1", b"c1"));
+        assert!(glob_match(b"[!a]1", b"b1") && !glob_match(b"[^a]1", b"a1"));
+        assert!(glob_match(b"a[1-2]", b"a2") && !glob_match(b"a[1-2]", b"a3"));
+        assert!(glob_match(b"[[:upper:]]1", b"B1") && !glob_match(b"[[:upper:]]1", b"b1"));
+        assert!(glob_match(b"ab[]]c", b"ab]c"));
+        assert!(glob_match(b"e\\!f", b"e!f") && !glob_match(b"\\*", b"x"));
+        assert!(!glob_match(b"a[1", b"a1") && !glob_match(b"[[:nope:]]", b"a"));
+        assert!(glob_match(b"*/[x-]y", b"q/-y") && !glob_match(b"[x-]y", b"x-y"));
+    }
 }

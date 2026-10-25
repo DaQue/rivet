@@ -1400,3 +1400,13 @@ ENOTDIR error is gone; staged and unstaged changes are now filtered by the paths
 Left undone (in `GAPS.md`): more than one pathspec, dirty-tree submodules.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 258 passed / 0 failed / 0 ignored,
 `scenarios.sh` 277 PASS / `failures: 0`.
+
+## ls-remote / branch-name glob: bracket expressions (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed; took `GAPS.md` section 2 (`ls-remote` patterns). `glob_match` in
+`cmd/branching.rs` (shared by `ls-remote` and branch/tag listing) now follows git's `wildmatch` with no flags: `[...]` with ranges,
+`!`/`^` negation, `]` first as a literal, `[:class:]` (unknown class or unterminated bracket matches nothing) and `\` escapes.
+Scenario `s_ls_remote_patterns` fails on `1273bbe` (brackets matched literally), passes now; Rust test
+`glob_tests::brackets_ranges_classes_and_escapes_follow_wildmatch`. Expected values were checked against `/usr/bin/git` in a scratch repo.
+Left undone: `status` with more than one pathspec (needs a public `StatusOptions` change), dirty-tree submodules.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 259 passed / 0 failed / 0 ignored,
+`scenarios.sh` 278 PASS / `failures: 0`.
