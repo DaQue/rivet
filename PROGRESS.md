@@ -988,3 +988,9 @@ The brief said git pushes the other refs and fails only the delete. Checked with
 Gate after: fmt, clippy `-D warnings`, doc clean; 235 passed / 0 failed / 0 ignored; `scenarios.sh` 239 PASS / `failures: 0`.
 Items 1–3 (`--autosquash`, `--edit-todo`, `stash branch`) are not started in this run so far.
 
+
+### Phase 7.1 — `rebase -i --autosquash` (landed, scenario `s_rebase_autosquash`)
+Base `267f141`: `--autosquash` was refused by name and `--no-autosquash` was an unknown flag. Now `rebase -i --autosquash` / `--no-autosquash` (last one wins, as in git) and `rebase.autoSquash` (honoured only with `-i`, as in git) reorder the todo exactly as git's `todo_list_rearrange_squash`: target by exact earlier subject, else commit id, else earlier-subject prefix; repeated `fixup! fixup! x` prefixes are stripped; fixups follow the target behind those already attached; `fixup!` becomes `fixup`, `squash!` becomes `squash`; `fixup! nomatch` and `fixup!x` (no space) stay `pick` in place. Compared byte for byte against git 2.56: the editor's todo, resulting history and ids, reflog, `status`, and a stop on the first reordered commit.
+Found by the scenario and fixed outside the todo: when a commit whose subject starts `squash! `/`fixup! `/`amend! ` is squashed, git comments that subject line out of the combined message (`# squash! feat B`); rivet kept it, so the commit ids differed. Checked also with hand-edited todos (`--no-autosquash`).
+Refused by name before anything moves (not differential, `crates/rivet-cli/tests/rebase_interactive.rs`): an `amend!` commit with a target (git writes `fixup -C`, not implemented), a `fixup!` naming another fixup commit by id (git's nested chain), an id naming a later commit, and `--autosquash` without `-i` (git runs an unedited interactive rebase).
+Gate after: fmt, clippy `-D warnings`, doc clean; 237 passed / 0 failed / 0 ignored; `scenarios.sh` 240 PASS / `failures: 0`.

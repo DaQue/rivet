@@ -77,7 +77,10 @@ fn options_that_are_not_implemented_are_refused_by_name() {
             "--rebase-merges",
         ),
         (vec!["rebase", "-i", "--keep-base", "main"], "--keep-base"),
-        (vec!["rebase", "-i", "--autosquash", "main"], "--autosquash"),
+        (
+            vec!["rebase", "--autosquash", "main"],
+            "--autosquash without -i",
+        ),
         (vec!["rebase", "-i", "-S", "main"], "--gpg-sign"),
     ] {
         let out = rivet(p, &args, &[]);
@@ -138,4 +141,51 @@ fn an_empty_message_puts_the_branch_back_where_it_was() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("empty commit message"));
     assert_untouched(p, &head);
     assert_eq!(git(p, &["log", "--format=%s", "main..topic"]), "two\none");
+}
+
+#[test]
+fn autosquash_cases_that_need_fixup_c_or_nested_chains_are_refused_before_anything_moves() {
+    for (subjects, expect) in [
+        (&["amend! one"][..], "needs 'fixup -C'"),
+        (&["fixup! one", "fixup! fixup! one", "squash! two"][..], ""),
+    ] {
+        let dir = repo();
+        let p = dir.path();
+        for (n, subject) in subjects.iter().enumerate() {
+            std::fs::write(p.join(format!("x{n}")), "x").unwrap();
+            git(p, &["add", "."]);
+            git(p, &["commit", "-qm", subject]);
+        }
+        let head = git(p, &["rev-parse", "HEAD"]);
+        let out = rivet(p, &["rebase", "-i", "--autosquash", "main"], &[]);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if expect.is_empty() {
+            // Fully supported: runs to the end with no stop.
+            assert_eq!(out.status.code(), Some(0), "{subjects:?}: {err}");
+            assert_eq!(git(p, &["log", "--format=%s", "-1"]), "two");
+            continue;
+        }
+        assert_eq!(out.status.code(), Some(128), "{subjects:?}: {err}");
+        assert!(err.contains(expect), "{subjects:?}: {err}");
+        assert_untouched(p, &head);
+    }
+}
+
+#[test]
+fn autosquash_onto_a_fixup_commit_is_refused_before_anything_moves() {
+    let dir = repo();
+    let p = dir.path();
+    std::fs::write(p.join("x0"), "x").unwrap();
+    git(p, &["add", "."]);
+    git(p, &["commit", "-qm", "fixup! one"]);
+    let target = git(p, &["rev-parse", "--short", "HEAD"]);
+    std::fs::write(p.join("x1"), "x").unwrap();
+    git(p, &["add", "."]);
+    git(p, &["commit", "-qm", &format!("fixup! {target}")]);
+    let head = git(p, &["rev-parse", "HEAD"]);
+    let out = rivet(p, &["rebase", "-i", "--autosquash", "main"], &[]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(128), "{err}");
+    assert!(err.contains("targets the fixup commit"), "{err}");
+    assert_untouched(p, &head);
 }

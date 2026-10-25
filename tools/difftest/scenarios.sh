@@ -7460,6 +7460,63 @@ s_push_refspec_forms() {
     (cd ../origin.git && v for-each-ref)
 }
 
+# `rebase -i --autosquash`: the todo order (exact subject, commit id, subject prefix, nested
+# `fixup! fixup!`, a fixup with no target, `fixup!` without the space), then the resulting history.
+# Each fixup adds its own file so that the reorder cannot conflict. `amend!` targets are refused by
+# rivet (they need `fixup -C`), so they are not in this differential scenario.
+s_rebase_autosquash() {
+    v init -q repo; cd repo
+    echo base >base; v add base; v commit -q -m base
+    v branch work
+    tick; echo main >main.txt; v add main.txt; v commit -q -m "main moves"
+    v switch -q work
+    for n in A B C; do tick; echo $n >$n; v add $n; v commit -q -m "feat $n"; done
+    local a; a=$(g rev-parse --short HEAD~2)
+    tick; echo 1 >f1; v add f1; v commit -q -m "fixup! feat A"
+    tick; echo 2 >f2; v add f2; v commit -q -m "squash! feat B"
+    tick; echo 3 >f3; v add f3; v commit -q -m "fixup! fixup! feat A"
+    tick; echo 4 >f4; v add f4; v commit -q -m "fixup! $a"
+    tick; echo 5 >f5; v add f5; v commit -q -m "fixup! nomatch"
+    tick; echo 6 >f6; v add f6; v commit -q -m "fixup! feat"
+    tick; echo 7 >f7; v add f7; v commit -q -m "fixup!feat B"
+    tick; echo 8 >f8; v add f8; v commit -q -m "squash! squash! feat C"
+    g branch orig
+    rebase_i_helpers
+    export GIT_EDITOR=true
+    for flags in "--autosquash" "--no-autosquash" "" "--autosquash --no-autosquash" "--no-autosquash --autosquash"; do
+        v switch -q work; v reset -q --hard orig
+        echo "== -i $flags"
+        GIT_SEQUENCE_EDITOR=cat v rebase -i $flags main
+        echo "rc=$?"
+        v log --format='%H %s' main..work
+        v reflog
+        v status
+    done
+    for flags in "" "--no-autosquash" "--autosquash"; do
+        v switch -q work; v reset -q --hard orig
+        v config rebase.autoSquash true
+        echo "== config true -i $flags"
+        GIT_SEQUENCE_EDITOR=cat v rebase -i $flags main
+        echo "rc=$?"
+        v log --format='%H %s' main..work
+        v config --unset rebase.autoSquash
+    done
+    # A squashed `fixup! …` / `squash! …` subject is commented out of the message, reordered or not.
+    for edit in '4s/^pick/squash/' '2s/^pick/squash/;4s/^pick/squash/;5s/^pick/fixup/' '5s/^pick/squash/;6s/^pick/squash/'; do
+        v switch -q work; v reset -q --hard orig
+        echo "== squash by hand: $edit"
+        SEQ="$edit" GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase -i --no-autosquash main
+        echo "rc=$?"
+        v log --format='%H%n%B' main..work
+    done
+    # Stop on the first reordered commit: the todo that is left and `status`.
+    v switch -q work; v reset -q --hard orig
+    GIT_SEQUENCE_EDITOR="sed -i -e 1s/^pick/edit/" v rebase -i --autosquash main
+    cat .git/rebase-merge/git-rebase-todo
+    v status
+    v rebase --abort
+}
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi

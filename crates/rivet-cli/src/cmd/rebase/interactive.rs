@@ -339,6 +339,83 @@ pub(super) struct Plan<'a> {
     pub onto_name: &'a str,
     pub commits: &'a [(ObjectId, String)],
     pub autostash: Option<ObjectId>,
+    /// Reorder `fixup!` / `squash!` commits next to their targets (`--autosquash`).
+    pub autosquash: bool,
+}
+
+/// The `fixup! `, `squash! ` or `amend! ` prefix of a subject: the todo command it asks for and
+/// the rest of the subject.
+fn fixupish(subject: &str) -> Option<(&'static str, &str)> {
+    [
+        ("fixup! ", "fixup"),
+        ("amend! ", "amend"),
+        ("squash! ", "squash"),
+    ]
+    .into_iter()
+    .find_map(|(prefix, kind)| subject.strip_prefix(prefix).map(|rest| (kind, rest)))
+}
+
+/// Git's `todo_list_rearrange_squash`: every `fixup!` / `squash!` commit follows the commit its
+/// subject names (an earlier subject exactly, else a commit id, else an earlier subject it is a
+/// prefix of), behind the fixups already attached to that commit. Returns `(command, index)` in
+/// todo order, or the reason this reorder is not reproduced (a wrong reorder rewrites history
+/// silently, so those cases refuse): `amend!` targets need `fixup -C`, and a target that is itself
+/// a fixup commit needs git's nested chains.
+fn autosquash_order(
+    repository: &Repository,
+    commits: &[(ObjectId, String)],
+) -> Result<Vec<(&'static str, usize)>, String> {
+    let mut by_subject: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut chains: Vec<Vec<(&'static str, usize)>> = vec![Vec::new(); commits.len()];
+    let mut attached = vec![false; commits.len()];
+    for (i, (_, subject)) in commits.iter().enumerate() {
+        let Some((kind, mut rest)) = fixupish(subject) else {
+            by_subject.entry(subject.as_str()).or_insert(i);
+            continue;
+        };
+        while let Some((_, inner)) = fixupish(rest.trim_start()) {
+            rest = inner;
+        }
+        let rest = rest.trim_start();
+        let target = if let Some(&j) = by_subject.get(rest) {
+            Some(j)
+        } else if let Ok(oid) = crate::cmd::resolve_commit(repository, rest)
+            && let Some(j) = commits.iter().position(|(c, _)| *c == oid)
+        {
+            if j >= i {
+                return Err(format!(
+                    "'{subject}' names a later commit of the todo list, which is not reproduced"
+                ));
+            }
+            Some(j)
+        } else {
+            commits[..i]
+                .iter()
+                .position(|(_, earlier)| earlier.starts_with(rest))
+        };
+        let Some(j) = target else { continue };
+        if fixupish(&commits[j].1).is_some() {
+            return Err(format!(
+                "'{subject}' targets the fixup commit '{}', which is not reproduced",
+                commits[j].1
+            ));
+        }
+        if kind == "amend" {
+            return Err(format!(
+                "'{subject}' needs 'fixup -C', which is not implemented"
+            ));
+        }
+        attached[i] = true;
+        chains[j].push((kind, i));
+    }
+    let mut order = Vec::with_capacity(commits.len());
+    for i in 0..commits.len() {
+        if !attached[i] {
+            order.push(("pick", i));
+            order.extend(chains[i].iter().copied());
+        }
+    }
+    Ok(order)
 }
 
 /// The hint Git prints after a bad todo list.
@@ -353,6 +430,19 @@ pub(super) fn begin(
     dir: &Path,
 ) -> Result<i32> {
     let comment = comment_char(repository);
+    let order = if plan.autosquash {
+        match autosquash_order(repository, plan.commits) {
+            Ok(order) => order,
+            Err(reason) => {
+                if let Some(stash) = plan.autostash {
+                    super::apply_autostash(repository, stash)?;
+                }
+                anyhow::bail!("rebase --autosquash: {reason}");
+            }
+        }
+    } else {
+        (0..plan.commits.len()).map(|i| ("pick", i)).collect()
+    };
     std::fs::create_dir_all(dir)?;
     write_state(dir, "head-name", &format!("{}\n", plan.head_name))?;
     write_state(dir, "onto", &format!("{}\n", plan.onto))?;
@@ -369,8 +459,9 @@ pub(super) fn begin(
     if plan.commits.is_empty() {
         text.push_str("noop\n");
     }
-    for (oid, subject) in plan.commits {
-        text.push_str(&format!("pick {} # {subject}\n", abbrev(oid)));
+    for (command, index) in &order {
+        let (oid, subject) = &plan.commits[*index];
+        text.push_str(&format!("{command} {} # {subject}\n", abbrev(oid)));
     }
     let range = format!("{}..{}", abbrev(&plan.upstream), abbrev(&plan.orig_head));
     text.push_str(&todo_footer(
@@ -667,6 +758,12 @@ pub(super) fn chain_add(
             "\n{c} The commit message #{count} will be skipped:\n\n{commented}"
         ));
     } else {
+        // Git comments out the `squash! …` / `fixup! …` subject of a squashed commit.
+        let message = if fixupish(&message).is_some() {
+            format!("{c} {message}")
+        } else {
+            message
+        };
         text.push_str(&format!(
             "\n{c} This is the commit message #{count}:\n\n{message}\n"
         ));

@@ -109,9 +109,13 @@ pub struct RebaseArgs {
     #[arg(short = 'S', long = "gpg-sign", num_args = 0..=1, require_equals = true)]
     pub gpg_sign: Option<Option<String>>,
 
-    /// Refused: move `fixup!` and `squash!` commits into place.
-    #[arg(long = "autosquash")]
+    /// With `--interactive`: move `fixup!` and `squash!` commits next to their targets.
+    #[arg(long = "autosquash", overrides_with = "no_autosquash")]
     pub autosquash: bool,
+
+    /// Do not reorder `fixup!` and `squash!` commits (overrides `rebase.autoSquash`).
+    #[arg(long = "no-autosquash", overrides_with = "autosquash")]
+    pub no_autosquash: bool,
 
     /// Refused: edit the remaining todo list.
     #[arg(long = "edit-todo")]
@@ -263,7 +267,10 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
         (!args.exec.is_empty(), "--exec"),
         (args.keep_base, "--keep-base"),
         (args.gpg_sign.is_some(), "--gpg-sign"),
-        (args.autosquash, "--autosquash"),
+        (
+            args.autosquash && !args.interactive,
+            "--autosquash without -i",
+        ),
         (args.edit_todo, "--edit-todo"),
     ] {
         if given {
@@ -366,6 +373,19 @@ pub(super) fn autostash_wanted(repository: &Repository, on: bool, off: bool) -> 
     }
     on || repository
         .config_value(BStr::new(b"rebase.autostash"))
+        .ok()
+        .flatten()
+        .and_then(|v| rivet_core::parse_bool(BStr::new(&v[..])).ok())
+        .unwrap_or(false)
+}
+
+/// Whether `--autosquash` is in effect for an interactive rebase: the flag, else `rebase.autoSquash`.
+fn autosquash_wanted(repository: &Repository, on: bool, off: bool) -> bool {
+    if off {
+        return false;
+    }
+    on || repository
+        .config_value(BStr::new(b"rebase.autosquash"))
         .ok()
         .flatten()
         .and_then(|v| rivet_core::parse_bool(BStr::new(&v[..])).ok())
@@ -642,6 +662,7 @@ fn start(
             onto_name: &onto_name,
             commits: &todo,
             autostash,
+            autosquash: autosquash_wanted(repository, args.autosquash, args.no_autosquash),
         };
         return interactive::begin(global, repository, &plan, dir);
     }
