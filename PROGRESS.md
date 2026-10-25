@@ -1141,3 +1141,16 @@ Scenario `s_rebase_break` (status while stopped, `--continue`, `b`, commit while
 (`break` was refused by name) and passes after. Rust test `rebase_interactive.rs`: `break` removed from the refusal list.
 Deliberately left: `label`, `reset`, `merge`, `update-ref`, `fixup -C`/`-c`; `--continue` after `break` does not check for a dirty tree as git may.
 Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 254 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 (3) — `submodule update --remote`
+Gate at `98b0214`: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 254 PASS / `failures: 0`.
+
+Landed (Remaining item 1): `submodule update --remote` (with `--checkout`). Each active submodule fetches from its own `origin` and checks out
+`refs/remotes/origin/<branch>`, where `<branch>` is `submodule.<name>.branch` from `.gitmodules` and `HEAD` when unset; `-N` skips the fetch.
+Real git's fetch here ignores `-q` (ref lines on stderr, reflog reason `fetch`), so rivet does the same. A missing remote branch is
+`fatal: Unable to find refs/remotes/origin/<b> revision in submodule path '<p>'`, exit 128. Scenario `s_submodule_update_remote` (default HEAD, branch
+`dev`, no-op repeat, `-N`, `-q`, `--checkout`, missing branch, re-clone after `rm -rf`, `--init`). It fails on `98b0214` (`--remote` was refused by name)
+and passes after.
+Deliberately left: `submodule.<name>.branch = .` is refused by name (no Rust test for the refusal yet); `--merge`/`--rebase` and the clone flags.
+New gap found and recorded in `GAPS.md`: `status` does not report a moved submodule (` M path`); I took that line out of the scenario.
+Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 255 PASS / `failures: 0`.

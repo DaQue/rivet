@@ -8207,6 +8207,40 @@ trail"
     v log --format=%s
 }
 
+# `submodule update --remote`: fetch the submodule's own remote and check out `submodule.<name>.branch`
+# of `.gitmodules` (the remote HEAD when unset) instead of the commit the superproject records.
+s_submodule_update_remote() {
+    sm_nested_top
+    g clone -q top clone
+    cd clone
+    v submodule update --init vendor/lib
+    (cd "$ROOT/lib" && tick && echo two >>l.txt && g commit -q -a -m two && g branch dev &&
+        g checkout -q dev && tick && echo d >d.txt && g add d.txt && g commit -q -m dev && g checkout -q main)
+    v submodule update --remote vendor/lib
+    sm_snap vendor/lib
+    v submodule status vendor/lib
+    v submodule update --remote vendor/lib
+    g config -f .gitmodules submodule.vendor/lib.branch dev
+    v submodule update --remote vendor/lib
+    sm_snap vendor/lib
+    (cd "$ROOT/lib" && tick && echo three >>l.txt && g checkout -q dev && echo e >>d.txt && g commit -q -a -m dev2 && g checkout -q main)
+    v submodule update -N --remote vendor/lib
+    v submodule update -q --remote vendor/lib
+    sm_snap vendor/lib
+    v submodule update --remote --checkout vendor/lib
+    g config -f .gitmodules submodule.vendor/lib.branch nosuch
+    v submodule update --remote vendor/lib
+    echo "rc=$?"
+    g config -f .gitmodules --unset submodule.vendor/lib.branch
+    rm -rf vendor/lib
+    v submodule update --remote vendor/lib
+    echo "rc=$?"
+    sm_snap vendor/lib
+    v submodule update --remote --init
+    echo "rc=$?"
+    sm_snap other
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
@@ -8244,6 +8278,7 @@ for s in "$@"; do
         s_submodule_add_urls) run_scenario "$s" none ;;
         s_submodule_update) run_scenario "$s" clone clone/vendor/lib ;;
         s_submodule_update_recursive) run_scenario "$s" clone ;;
+        s_submodule_update_remote) run_scenario "$s" clone ;;
         s_submodule_deinit) run_scenario "$s" clone clone2 ;;
         s_submodule_foreach) run_scenario "$s" none ;;
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;

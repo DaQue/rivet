@@ -1307,6 +1307,7 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
     let mut recursive = false;
     let mut force = false;
     let mut no_fetch = false;
+    let mut remote = false;
     let mut paths: Vec<String> = Vec::new();
     let mut only_paths = false;
     for word in args {
@@ -1317,9 +1318,9 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
             "--recursive" => recursive = true,
             "-f" | "--force" => force = true,
             "-N" | "--no-fetch" => no_fetch = true,
+            "--remote" => remote = true,
             "--checkout" => {}
-            "--remote"
-            | "--merge"
+            "--merge"
             | "--rebase"
             | "--depth"
             | "--reference"
@@ -1352,6 +1353,7 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
         recursive,
         force,
         no_fetch,
+        remote,
         quiet,
     };
     update_in(&mut repository, &root, &prefix, "", &paths, &options)
@@ -1362,6 +1364,7 @@ struct UpdateOptions {
     recursive: bool,
     force: bool,
     no_fetch: bool,
+    remote: bool,
     quiet: bool,
 }
 
@@ -1402,7 +1405,7 @@ fn update_in(
             eprintln!("fatal: no submodule mapping found in .gitmodules for path '{display}'");
             return Ok(128);
         };
-        let Some(oid) = recorded
+        let Some(mut oid) = recorded
             .iter()
             .find(|(path, _)| *path == link.path)
             .map(|(_, oid)| *oid)
@@ -1455,9 +1458,40 @@ fn update_in(
         }
         let mut sub = Repository::open_with(&git_dir, Some(&dest), None)
             .or_else(|_| Repository::open_or_discover(&dest))?;
+        let mut remote_fetched = false;
+        if options.remote {
+            // `--remote` follows the submodule's configured branch on its own remote, `HEAD` by default.
+            let branch = match setting(&gitmodules, name.as_ref(), "branch") {
+                None => "HEAD".to_string(),
+                Some(b) if b.as_slice() == b"." => match repository.head()? {
+                    rivet_core::HeadState::Attached { branch, .. } => {
+                        branch.short_name().to_string()
+                    }
+                    _ => anyhow::bail!(
+                        "submodule update: --remote with branch '.' needs an attached HEAD"
+                    ),
+                },
+                Some(b) => b.to_string(),
+            };
+            if !options.no_fetch {
+                // Git's own fetch here ignores `-q`: the ref lines and the reflog reason stay.
+                fetch_origin(&mut sub, false)?;
+                remote_fetched = true;
+            }
+            let full = format!("refs/remotes/origin/{branch}");
+            match super::resolve_commit(&sub, &full) {
+                Ok(found) => oid = found,
+                Err(_) => {
+                    eprintln!(
+                        "fatal: Unable to find {full} revision in submodule path '{display}'"
+                    );
+                    return Ok(128);
+                }
+            }
+        }
         let current = sub.head().ok().and_then(|head| head.oid());
         if fresh || current != Some(oid) || options.force {
-            if !sub.odb().contains(&oid) && !options.no_fetch {
+            if !sub.odb().contains(&oid) && !options.no_fetch && !remote_fetched {
                 fetch_origin(&mut sub, options.quiet)?;
             }
             if !sub.odb().contains(&oid) {
