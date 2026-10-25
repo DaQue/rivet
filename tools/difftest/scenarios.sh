@@ -2168,6 +2168,52 @@ s_stash_stack() {
     v stash pop -q
     v stash list
     v status --short
+    # create / store / save. A clean tree: create prints nothing and fails nothing.
+    v stash create
+    echo "rc=$?"
+    tick; echo cr >>a; echo ix >c; v add c; echo ut >untracked
+    v stash create
+    v stash create "two words"
+    v stash create -x y
+    v stash create ""
+    v stash list
+    v status --short
+    # store: the commit create printed, with and without -m, twice (the same id is a no-op).
+    tick; v stash create "to store"; sc=$(<"$TMPOUT")
+    v stash store
+    echo "rc=$?"
+    v stash store one two
+    echo "rc=$?"
+    v stash store nonexistent
+    echo "rc=$?"
+    v stash store HEAD
+    echo "rc=$?"
+    v stash store -q "$sc"
+    echo "rc=$?"
+    v stash store -m ignored "$sc"
+    echo "rc=$?"
+    v stash list
+    tick; echo cr2 >>a; v stash create "second"; sc=$(<"$TMPOUT")
+    v stash store -m "stored by hand" "$sc"
+    echo "rc=$?"
+    v stash list
+    v reflog show stash
+    v status --short
+    # save: push's old spelling; the message is the remaining words, which win over -m.
+    v stash save
+    echo "rc=$?"
+    v stash list
+    tick; echo s1 >>a; v stash save a b c
+    echo "rc=$?"
+    tick; echo s2 >>a; v stash save -m foo
+    tick; echo s3 >>a; v stash save -m foo bar
+    tick; echo s4 >>a; v stash save -q "quiet one"
+    tick; echo s5 >>a; v stash save ""
+    tick; echo s6 >>a; v stash save -u with untracked
+    v stash save -k
+    echo "rc=$?"
+    v stash list
+    v status --short
 }
 
 s_stash_conflict() {

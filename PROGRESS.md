@@ -1006,3 +1006,14 @@ Base `899efec`: `stash branch` did not parse. Now `stash branch <name> [<stash>]
 Found by the scenario in code `stash` already shared: with `--index` a refused or conflicted apply now prints `Index was not unstashed.` (git does, for `pop --index` too); the `The stash entry is kept in case you need it again.` line of a conflicted `pop` goes to stdout, not stderr (rivet wrote it to stderr).
 Gate after: fmt, clippy `-D warnings`, doc clean; 237 passed / 0 failed / 0 ignored; `scenarios.sh` 241 PASS / `failures: 0`.
 Items 3–5 (`clean -i`/`-e`, remaining sparse gaps, the interop seam) are not started.
+
+## Block 8
+
+### Item 0 — `clean -e` / `clean -i` (already landed in `139de11`; scenarios `s_clean_exclude`, `s_clean_interactive`)
+The brief's premise was stale: both were on `master` at the base and pass. Only `GAPS.md` still said "no `-i`/`-e`"; that line is replaced.
+
+### Item 1 — `stash create`, `store`, `save` (landed, scenario `s_stash_stack` extended)
+Base `f302f84`: all three were unknown subcommands. `create [<message>]` builds the commit `push` builds (same code path, `push_impl` in `stash.rs`) and prints its id without touching `refs/stash` or the work tree; every word, options included, is the message, and an empty message gives the `WIP on` text; a clean tree prints nothing, exit 0. `store [-m <msg>] [-q] <commit>` writes `refs/stash` plus a reflog entry (default message `Created via "git stash store".`), is a no-op for the id already on top, and gives git's errors: no/extra argument (`"git stash store" requires one <commit> argument`, 128), unknown revision (`Cannot update refs/stash with <arg>`, 128), a commit with fewer than two parents (`fatal: '<full id>' is not a stash-like commit`, 128). `save` is `push` with the message from the words (they win over `-m`; an empty one gives the `WIP on` text), `-u`/`-a`/`-k`/`-q`, "No local changes to save" on a clean tree; git's `save` takes no pathspec, so the "did you forget to git add" path is unreachable there. Found along the way: `stash push` on an unborn branch exits 128 in git (bare `stash` exits 1); rivet gave 1 for both.
+Compared with git 2.56 in the scenario: create on a clean and a dirty tree with staged, unstaged and untracked parts, four message forms, `list`/`status` unchanged afterwards, store with every error above, `-q`, `-m`, the repeat, a second store, `reflog show stash`, save with each option and message form.
+Not done (recorded in `GAPS.md`): `save` with an unknown option (clap's text, exit 2; git prints usage, 129), `save -- <words>`, `store` of a non-commit object (git adds an `error: object … is a tree` line).
+Gate after: fmt, clippy `-D warnings`, doc clean; 237 passed / 0 failed / 0 ignored; `scenarios.sh` 241 PASS / `failures: 0` (no new scenario name, one extended).

@@ -71,8 +71,11 @@ The command works for the common case; the listed options or edge cases are miss
   patches, whitespace options or `--reject` together with `--3way`.
 * **`format-patch` / `am`** — no cover letters, threading, `-k`, RFC 2047 headers,
   `--directory`, scissors, `am --3way`.
-* **`stash`** — no `create`/`store`/`save`. `stash branch` exists (`s_stash_branch`).
-* **`clean`** — no `-i`/`-e`.
+* **`stash`** — `create`, `store` and `save` exist (`s_stash_stack`), as does `branch`
+  (`s_stash_branch`). Not matched: `save` with an unknown option exits 2 with clap's text (git prints its
+  usage and exits 129), `save -- <words>` drops the `--` (git keeps it in the message), `store` of a
+  non-commit object prints only the `fatal:` line (git adds `error: object <id> is a tree, not a
+  commit`), and `-p`/`-S`/`--staged` are not implemented for any stash form.
 * **`gc` / `repack`** — no `--cruft`, `--geometric`, `--window`/`--depth`,
   `--max-pack-size`, `--max-cruft-size`, `--expire-to`, `--keep-largest-pack`,
   `gc.bigPackThreshold`; `repack -k` over several packs lists unreachable objects in a

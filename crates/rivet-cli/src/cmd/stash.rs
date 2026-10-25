@@ -5,8 +5,8 @@
 //! `I`. `refs/stash` points at the newest `W` and its reflog is the stack, so `git stash list`
 //! reads Rivet's stashes and the reverse. With `-u`/`-a` a third parent `U` (no parents, message
 //! `untracked files on <branch>: …`) holds the untracked (and ignored) files. A pathspec limits
-//! the work tree changes taken to matching tracked paths. `branch/create/store/save` are not
-//! implemented.
+//! the work tree changes taken to matching tracked paths. `create` builds the same commit without
+//! recording it, `store` records one, and `save` is the old spelling of `push`.
 
 use anyhow::Result;
 use bstr::{BStr, BString};
@@ -47,6 +47,68 @@ pub enum StashCommand {
     Clear,
     /// Check out a new branch at the commit a stash was made on, apply the stash there and drop it.
     Branch(BranchArgs),
+    /// Build a stash commit and print its id, without touching `refs/stash` or the work tree.
+    Create(CreateArgs),
+    /// Record a commit made by `stash create` as the newest stash.
+    Store(StoreArgs),
+    /// Deprecated alias of `push`: the message is the remaining words.
+    Save(SaveArgs),
+}
+
+/// Arguments of `stash create`: every word, options included, is part of the message.
+#[derive(Debug, clap::Args)]
+pub struct CreateArgs {
+    /// The stash message, words joined by spaces.
+    #[arg(
+        value_name = "MESSAGE",
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
+    pub words: Vec<String>,
+}
+
+/// Arguments of `stash store`.
+#[derive(Debug, clap::Args)]
+pub struct StoreArgs {
+    /// Use this text as the reflog message.
+    #[arg(short = 'm', long = "message", value_name = "MESSAGE")]
+    pub message: Option<String>,
+
+    /// Be quiet.
+    #[arg(short = 'q', long = "quiet")]
+    pub quiet: bool,
+
+    /// `<commit>`; counted by hand to give git's message.
+    #[arg(value_name = "COMMIT")]
+    pub words: Vec<String>,
+}
+
+/// Arguments of `stash save`.
+#[derive(Debug, clap::Args)]
+pub struct SaveArgs {
+    /// Use this text as the stash message (words given after the options win).
+    #[arg(short = 'm', long = "message", value_name = "MESSAGE")]
+    pub message: Option<String>,
+
+    /// Also stash untracked files.
+    #[arg(short = 'u', long = "include-untracked")]
+    pub include_untracked: bool,
+
+    /// Also stash ignored files.
+    #[arg(short = 'a', long = "all")]
+    pub all: bool,
+
+    /// Leave the index as it is.
+    #[arg(short = 'k', long = "keep-index")]
+    pub keep_index: bool,
+
+    /// Be quiet.
+    #[arg(short = 'q', long = "quiet")]
+    pub quiet: bool,
+
+    /// The stash message, words joined by spaces.
+    #[arg(value_name = "MESSAGE")]
+    pub words: Vec<String>,
 }
 
 /// Arguments of `stash branch`: the new branch's name and, optionally, which stash.
@@ -139,9 +201,9 @@ pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
                 );
                 return Ok(129);
             }
-            push(global, &mut repository, &args.push)
+            push(global, &mut repository, &args.push, true)
         }
-        Some(StashCommand::Push(push_args)) => push(global, &mut repository, push_args),
+        Some(StashCommand::Push(push_args)) => push(global, &mut repository, push_args, false),
         Some(StashCommand::List) => list(&repository),
         Some(StashCommand::Show(show_args)) => show(&repository, show_args),
         Some(StashCommand::Apply(r)) => apply(global, &mut repository, r, false, false),
@@ -152,7 +214,75 @@ pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
             Ok(0)
         }
         Some(StashCommand::Branch(b)) => branch(global, repository, b),
+        Some(StashCommand::Create(c)) => {
+            let message = c.words.join(" ");
+            let push_args = PushArgs {
+                message: (!message.is_empty()).then_some(message),
+                ..PushArgs::default()
+            };
+            push_impl(true, &mut repository, &push_args, Mode::Create)
+        }
+        Some(StashCommand::Store(s)) => store(&repository, s),
+        Some(StashCommand::Save(s)) => {
+            let message = if s.words.is_empty() {
+                s.message.clone()
+            } else {
+                Some(s.words.join(" "))
+            };
+            let push_args = PushArgs {
+                message: message.filter(|m| !m.is_empty()),
+                include_untracked: s.include_untracked,
+                all: s.all,
+                keep_index: s.keep_index,
+                paths: Vec::new(),
+            };
+            push_impl(
+                global.quiet || s.quiet,
+                &mut repository,
+                &push_args,
+                Mode::Push { unborn_code: 128 },
+            )
+        }
     }
+}
+
+/// `stash store [-m <message>] <commit>`: make a stash-like commit the newest stash.
+fn store(repository: &Repository, args: &StoreArgs) -> Result<i32> {
+    let [spec] = args.words.as_slice() else {
+        eprintln!("\"git stash store\" requires one <commit> argument");
+        return Ok(128);
+    };
+    let Ok(oid) = super::resolve_rev(repository, spec) else {
+        eprintln!("Cannot update refs/stash with {spec}");
+        return Ok(128);
+    };
+    // A stash is a commit with the base as first parent and the index commit as second.
+    if repository
+        .commit_parents(oid)
+        .map_or(true, |parents| parents.len() < 2)
+    {
+        eprintln!("fatal: '{oid}' is not a stash-like commit");
+        return Ok(128);
+    }
+    let name = stash_ref();
+    let old = repository
+        .refs()
+        .try_read(&name)?
+        .map(|_| repository.refs().resolve_oid(&name))
+        .transpose()?
+        .unwrap_or_else(|| ObjectId::zero(repository.format()));
+    if old == oid {
+        return Ok(0);
+    }
+    let message = args
+        .message
+        .clone()
+        .unwrap_or_else(|| "Created via \"git stash store\".".to_string());
+    repository.refs().set_direct(&name, oid, None)?;
+    let who = repository.committer_signature()?;
+    let entry = ReflogEntry::new(old, oid, who, BString::from(message.as_str()));
+    repository.refs().append_reflog(&name, &entry)?;
+    Ok(0)
 }
 
 /// `stash branch <name> [<stash>]`: `checkout -b <name> <stash^>`, `apply --index`, then drop the
@@ -236,8 +366,27 @@ fn tree_of(
     Ok(index.write_tree(repository.odb())?)
 }
 
-fn push(global: &GlobalArgs, repository: &mut Repository, args: &PushArgs) -> Result<i32> {
-    let quiet = global.quiet;
+/// What `push_impl` does once it has the stash commit.
+#[derive(Clone, Copy)]
+enum Mode {
+    /// Record it in `refs/stash` and reset the work tree; `unborn_code` is the exit status on an
+    /// unborn branch (git's bare `stash` gives 1, `push`/`save` give 128).
+    Push { unborn_code: i32 },
+    /// Print its id and stop; a clean tree prints nothing.
+    Create,
+}
+
+fn push(
+    global: &GlobalArgs,
+    repository: &mut Repository,
+    args: &PushArgs,
+    bare: bool,
+) -> Result<i32> {
+    let unborn_code = if bare { 1 } else { 128 };
+    push_impl(global.quiet, repository, args, Mode::Push { unborn_code })
+}
+
+fn push_impl(quiet: bool, repository: &mut Repository, args: &PushArgs, mode: Mode) -> Result<i32> {
     let mut specs = Vec::new();
     for path in &args.paths {
         specs.push(super::worktree_path(repository, path, "stash")?);
@@ -245,7 +394,10 @@ fn push(global: &GlobalArgs, repository: &mut Repository, args: &PushArgs) -> Re
     let head = repository.head()?;
     let Some(head_oid) = head.oid() else {
         eprintln!("You do not have the initial commit yet");
-        return Ok(1);
+        return Ok(match mode {
+            Mode::Push { unborn_code } => unborn_code,
+            Mode::Create => 128,
+        });
     };
     if repository.index().has_conflicts() {
         eprintln!("error: could not write index");
@@ -313,7 +465,9 @@ fn push(global: &GlobalArgs, repository: &mut Repository, args: &PushArgs) -> Re
         untracked_files.sort();
     }
     if !has_tracked_changes && untracked_files.is_empty() {
-        println!("No local changes to save");
+        if matches!(mode, Mode::Push { .. }) {
+            println!("No local changes to save");
+        }
         return Ok(0);
     }
 
@@ -352,6 +506,10 @@ fn push(global: &GlobalArgs, repository: &mut Repository, args: &PushArgs) -> Re
         parents.push(commit_object(repository, tree, &[], &untracked_message)?);
     }
     let stash_commit = commit_object(repository, work_tree, &parents, &message)?;
+    if matches!(mode, Mode::Create) {
+        println!("{stash_commit}");
+        return Ok(0);
+    }
 
     let name = stash_ref();
     let old = repository
