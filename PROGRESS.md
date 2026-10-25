@@ -1178,3 +1178,15 @@ Scenario `s_submodule_update_rebase` (fast-forward, replay of a local commit, al
 detached HEAD). It fails on `f431682` (`--rebase` was refused by name) and passes after.
 Deliberately left: a fresh clone combined with `--rebase`, and the clone flags (`--depth`, `--reference`, `--filter`, `--single-branch`, `-j`).
 Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 257 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 (6) — `submodule update --depth` / `-j`
+Gate at `01d9dbf`: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 257 PASS / `failures: 0`.
+
+Landed (Remaining item 3, first part): `submodule update --depth <n>` / `--depth=<n>`, `-j <n>` / `-jN` / `--jobs[=]<n>`, and the no-op `--[no-]recommend-shallow` / `--progress`.
+Integer values follow git's parser (optional k/m/g suffix; `error: option `depth' expects an integer value…`, exit 129; missing value prints the submodule usage, exit 1).
+For a local-path source git ignores `--depth` with `warning: --depth is ignored in local clones; use file:// instead.` but still implies `--single-branch`, so the module's
+`remote.origin.fetch` is narrowed to the cloned branch; rivet does the same. Jobs run sequentially (output is identical for the transcripts compared).
+Scenario `s_submodule_update_depth` fails on `01d9dbf` (the flag was refused by name) and passes after. Rust test file `submodule_update_refusals.rs` covers the refusals.
+Deliberately left, refused by name: `--depth` with a `file://`/network URL (needs shallow clone), a source with several branches under `--depth`, `--reference`, `--dissociate`,
+`--filter`, `--single-branch`, `--no-single-branch`. Recorded in `GAPS.md`.
+Gate after: fmt, clippy `-D warnings`, doc clean; 250 passed / 0 failed / 0 ignored; `scenarios.sh` 258 PASS / `failures: 0`.

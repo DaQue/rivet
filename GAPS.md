@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 254 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 258 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-25, gate: 248 tests / 0 failed, 253 scenarios / 0 failures, `fmt`,
@@ -58,9 +58,12 @@ The command or subsystem is absent; it either fails at the argument parser or re
 * **`bundle-uri`**, SHA-256 bundles, and `clone`/`ls-remote` from a bundle file. Creating,
   listing, verifying and unbundling bundles works; fetching *from* a bundle works only as a
   remote URL.
-* **Submodule advance/update modes** — `--depth`,
-  `--reference`, `--filter`, `--single-branch` and `-j` are
-  refused with an explicit "not implemented". `checkout`, `merge` and `rebase` (`--merge`, `--rebase`, `submodule.<name>.update`) work. `update --remote` works
+* **Submodule clone flags** — `update --depth` works only for a local-path source (git ignores it with
+  a warning; rivet narrows the fetch refspec to the one branch, and refuses a source with several
+  branches). With a `file://` or network URL git makes a shallow clone, which rivet's `clone` cannot
+  write: refused by name. `--reference`, `--dissociate`, `--filter` and `--single-branch` are refused
+  with "not implemented". `-j`/`--jobs` is validated and accepted but runs sequentially.
+  `checkout`, `merge` and `rebase` (`--merge`, `--rebase`, `submodule.<name>.update`) work. `update --remote` works
   (branch from `.gitmodules`, remote `HEAD` by default); `submodule.<name>.branch = .` is refused.
 * **`status` of a moved submodule** — a gitlink whose submodule `HEAD` differs from the index (` M path`)
   is not reported by `status`/`status --short`.

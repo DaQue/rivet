@@ -8315,6 +8315,29 @@ s_submodule_update_rebase() {
     sm_snap vendor/lib
 }
 
+s_submodule_update_depth() {
+    sm_nested_top
+    g clone -q top clone
+    cd clone
+    v submodule update --init --depth 1 vendor/lib
+    echo "rc=$?"
+    sm_snap vendor/lib
+    v submodule deinit -q -f vendor/lib
+    v submodule update --init -q --depth=2 -j 2 vendor/lib
+    echo "rc=$?"
+    sm_snap vendor/lib
+    v submodule update --init -j2 other
+    echo "rc=$?"
+    v submodule update --depth abc
+    echo "rc=$?"
+    v submodule update --jobs=x
+    echo "rc=$?"
+    v submodule update --depth 1k --jobs 1
+    echo "rc=$?"
+    v submodule update -j
+    echo "rc=$?"
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
@@ -8355,6 +8378,7 @@ for s in "$@"; do
         s_submodule_update_remote) run_scenario "$s" clone ;;
         s_submodule_update_merge) run_scenario "$s" clone ;;
         s_submodule_update_rebase) run_scenario "$s" clone ;;
+        s_submodule_update_depth) run_scenario "$s" clone ;;
         s_submodule_deinit) run_scenario "$s" clone clone2 ;;
         s_submodule_foreach) run_scenario "$s" none ;;
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;

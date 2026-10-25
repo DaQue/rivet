@@ -1011,7 +1011,7 @@ fn submodule_add(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Resul
             println!("Adding existing repo at '{sm_path}' to the index");
         }
     } else {
-        if let Err(code) = clone_submodule(&dest, &git_dir, &realrepo, quiet) {
+        if let Err(code) = clone_submodule(&dest, &git_dir, &realrepo, quiet, None) {
             return Ok(code);
         }
         if let Err(code) = checkout_branch(&dest, &git_dir, branch.as_deref(), &sm_path) {
@@ -1131,6 +1131,7 @@ fn clone_submodule(
     git_dir: &Path,
     url: &str,
     quiet: bool,
+    depth: Option<&str>,
 ) -> std::result::Result<(), i32> {
     let failed = |message: String| {
         eprintln!("fatal: {message}");
@@ -1162,6 +1163,17 @@ fn clone_submodule(
     }
     if !quiet {
         eprintln!("Cloning into '{}'...", dest.display());
+    }
+    if depth.is_some() {
+        if url.contains("://") {
+            let _ = std::fs::remove_dir_all(git_dir);
+            let _ = std::fs::remove_dir_all(dest);
+            eprintln!(
+                "fatal: submodule update: --depth with a file:// or network URL is not implemented"
+            );
+            return Err(128);
+        }
+        eprintln!("warning: --depth is ignored in local clones; use file:// instead.");
     }
     let setup = || -> Result<Repository> {
         std::fs::create_dir_all(dest)?;
@@ -1203,6 +1215,33 @@ fn clone_submodule(
             false,
         )
         .map(|_| ())
+    });
+    // `--depth` implies `--single-branch`: the clone's fetch refspec names only the cloned branch.
+    // Narrowing is only honest when the source had a single branch; anything else is refused.
+    let result = result.and_then(|()| {
+        if depth.is_none() {
+            return Ok(());
+        }
+        let mut module = Repository::open_with(git_dir, Some(dest), None)?;
+        let tracked: Vec<String> = module
+            .refs()
+            .list(b"refs/remotes/origin/")?
+            .into_iter()
+            .map(|(name, _)| String::from_utf8_lossy(name.as_bytes()).into_owned())
+            .filter(|name| name != "refs/remotes/origin/HEAD")
+            .collect();
+        let [only] = tracked.as_slice() else {
+            anyhow::bail!(
+                "submodule update: --depth on a source with several branches is not implemented"
+            );
+        };
+        let branch = only.trim_start_matches("refs/remotes/origin/");
+        module.config_mut().set(
+            BStr::new("remote.origin.fetch"),
+            format!("+refs/heads/{branch}:refs/remotes/origin/{branch}").as_bytes(),
+        )?;
+        module.write_config()?;
+        Ok(())
     });
     match result {
         Ok(()) => {
@@ -1311,7 +1350,9 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
     let mut strategy_flag: Option<&'static str> = None;
     let mut paths: Vec<String> = Vec::new();
     let mut only_paths = false;
-    for word in args {
+    let mut depth: Option<String> = None;
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
         match word.as_str() {
             _ if only_paths => paths.push(word.clone()),
             "-q" | "--quiet" => quiet = true,
@@ -1323,19 +1364,31 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
             "--checkout" => strategy_flag = Some("checkout"),
             "--merge" => strategy_flag = Some("merge"),
             "--rebase" => strategy_flag = Some("rebase"),
-            "--depth"
-            | "--reference"
-            | "--filter"
-            | "--single-branch"
-            | "--no-single-branch"
-            | "--dissociate"
-            | "--jobs"
-            | "-j"
-            | "--recommend-shallow"
-            | "--no-recommend-shallow"
-            | "--progress" => {
+            "--depth" | "--jobs" | "-j" => {
+                let Some(value) = words.next() else {
+                    eprint!("{USAGE}");
+                    return Ok(1);
+                };
+                if let Some(code) = take_int_option(word, value, &mut depth) {
+                    return Ok(code);
+                }
+            }
+            other if other.starts_with("--depth=") || other.starts_with("--jobs=") => {
+                let (name, value) = other.split_once('=').unwrap_or((other, ""));
+                if let Some(code) = take_int_option(name, value, &mut depth) {
+                    return Ok(code);
+                }
+            }
+            other if other.starts_with("-j") && other.len() > 2 && !other.starts_with("--") => {
+                if let Some(code) = take_int_option("-j", &other[2..], &mut depth) {
+                    return Ok(code);
+                }
+            }
+            "--reference" | "--filter" | "--single-branch" | "--no-single-branch"
+            | "--dissociate" => {
                 anyhow::bail!("submodule update: {word} is not implemented")
             }
+            "--recommend-shallow" | "--no-recommend-shallow" | "--progress" => {}
             "--" => only_paths = true,
             other if other.starts_with('-') => {
                 eprint!("{USAGE}");
@@ -1357,8 +1410,26 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
         remote,
         strategy_flag,
         quiet,
+        depth,
     };
     update_in(&mut repository, &root, &prefix, "", &paths, &options)
+}
+
+/// Validate the integer value of `--depth` / `--jobs` the way git's option parser does (optional
+/// `k`/`m`/`g` suffix) and record `--depth`. `Some(code)` is the exit status after the error.
+fn take_int_option(name: &str, value: &str, depth: &mut Option<String>) -> Option<i32> {
+    let digits = value.trim_end_matches(['k', 'K', 'm', 'M', 'g', 'G']);
+    let suffix = value.len() - digits.len();
+    let numeric = digits.strip_prefix(['-', '+']).unwrap_or(digits);
+    if suffix > 1 || numeric.is_empty() || !numeric.bytes().all(|b| b.is_ascii_digit()) {
+        let shown = if name == "--depth" { "depth" } else { "jobs" };
+        eprintln!("error: option `{shown}' expects an integer value with an optional k/m/g suffix");
+        return Some(129);
+    }
+    if name == "--depth" {
+        *depth = Some(value.to_string());
+    }
+    None
 }
 
 struct UpdateOptions {
@@ -1370,6 +1441,8 @@ struct UpdateOptions {
     /// `--checkout` / `--merge` / `--rebase`: wins over `submodule.<name>.update`.
     strategy_flag: Option<&'static str>,
     quiet: bool,
+    /// `--depth <n>`: passed verbatim to the submodule's own clone.
+    depth: Option<String>,
 }
 
 /// Bring the submodules of `repository` to the commits its index records.
@@ -1460,8 +1533,13 @@ fn update_in(
                     eprintln!("Maybe you want to use 'update --init'?");
                     continue;
                 };
-                if let Err(code) = clone_submodule(&dest, &git_dir, &url.to_string(), options.quiet)
-                {
+                if let Err(code) = clone_submodule(
+                    &dest,
+                    &git_dir,
+                    &url.to_string(),
+                    options.quiet,
+                    options.depth.as_deref(),
+                ) {
                     return Ok(code);
                 }
             }
