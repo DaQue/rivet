@@ -1347,3 +1347,13 @@ Landed `--ancestry-path` (`s_rev_list_ancestry_path`, fails on `9095754`: unknow
 Left undone (in `GAPS.md`): `--ancestry-path=<commit>`, `--cherry-mark`, `--cherry-pick`, `--children`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
 `scenarios.sh` 272 PASS / `failures: 0`.
+
+## diff --color, log -p --color (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed; took `GAPS.md` section 2 top-down (`log`). Landed `diff --color[=when]`/`--no-color` and
+`log --color -p` (`s_diff_color`, fails on `280ff41`: unknown option / "coloured diff output is not implemented"). The plain patch from
+`format_unified` is painted in the CLI (`colorize_patch`, no core API change): bold headers, cyan `@@` with git's empty-colour function context,
+red removals, green additions, red background on trailing whitespace of added lines; `--name-only`/`--name-status` stay plain as in git.
+Refused by name, with Rust tests in `tests/diff_color.rs`: `--stat` under colour, any `color.diff*` setting, a space before a tab in an added line,
+coloured unmerged-path output. Left undone: `show --color`, coloured `--stat`, `color.diff.*` palettes.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 255 passed / 0 failed / 0 ignored,
+`scenarios.sh` 273 PASS / `failures: 0`.

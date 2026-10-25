@@ -275,6 +275,14 @@ pub struct DiffArgs {
     #[arg(long = "exit-code")]
     pub exit_code: bool,
 
+    /// Paint the patch: `always`, `never` or `auto` (a bare `--color` means `always`).
+    #[arg(long = "color", value_name = "WHEN", require_equals = true, num_args = 0..=1, overrides_with = "no_color")]
+    pub color: Option<Option<String>>,
+
+    /// Do not paint the patch.
+    #[arg(long = "no-color", overrides_with = "color")]
+    pub no_color: bool,
+
     /// Print this many lines of context.
     #[arg(short = 'U', long = "unified", value_name = "LINES")]
     pub context: Option<usize>,
@@ -463,12 +471,20 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     let palette = match log_color(&repository, args)? {
         Ok(false) => None,
         Ok(true) => {
-            if diff_mode.is_some() {
-                anyhow::bail!("log: coloured diff output is not implemented");
+            match diff_mode {
+                Some(DiffMode::Stat) => {
+                    anyhow::bail!("log: coloured diff output is not implemented")
+                }
+                Some(DiffMode::Patch) => check_default_diff_colors(&repository)?,
+                _ => {}
             }
             Some(log_palette(&repository)?)
         }
         Err(code) => return Ok(code),
+    };
+    let diff_mode = match diff_mode {
+        Some(DiffMode::Patch) if palette.is_some() => Some(DiffMode::ColorPatch),
+        other => other,
     };
     let shifts = if args.graph {
         root_shifts(&repository, &oids, args.first_parent)?
@@ -713,6 +729,17 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
         anyhow::bail!("diff: whitespace-ignoring options are not implemented");
     }
 
+    let color = match resolve_color(&repository, args.no_color, args.color.as_ref())? {
+        Ok(color) => color,
+        Err(code) => return Ok(code),
+    };
+    if color {
+        check_default_diff_colors(&repository)?;
+        if args.stat {
+            anyhow::bail!("diff: coloured --stat is not implemented");
+        }
+    }
+
     let mut options = rivet_core::DiffOptions::new();
     if let Some(n) = args.context {
         options.context = n;
@@ -846,8 +873,14 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
             rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
         } else {
             rivet_core::format_unified(&diff, format, &mut out)?;
+            if color {
+                out = colorize_patch(&out)?;
+            }
         }
     } else {
+        if color {
+            anyhow::bail!("diff: coloured output of unmerged paths is not implemented");
+        }
         // One chunk of output per path, merged in path order with the ordinary changes.
         let mode = if args.name_only {
             DiffMode::NameOnly
@@ -1010,9 +1043,124 @@ pub(super) fn abbrev(repository: &Repository, oid: &ObjectId, full: bool) -> Str
 #[derive(Clone, Copy)]
 enum DiffMode {
     Patch,
+    /// [`DiffMode::Patch`] painted with git's default diff colours.
+    ColorPatch,
     Stat,
     NameOnly,
     NameStatus,
+}
+
+/// `color.diff` and `color.diff.<slot>` change what [`colorize_patch`] would write; it only knows
+/// git's defaults, so a repository that sets any of them is refused by name.
+fn check_default_diff_colors(repository: &Repository) -> Result<()> {
+    for key in [
+        "color.diff",
+        "color.diff.context",
+        "color.diff.plain",
+        "color.diff.meta",
+        "color.diff.frag",
+        "color.diff.func",
+        "color.diff.old",
+        "color.diff.new",
+        "color.diff.whitespace",
+    ] {
+        if repository
+            .config_value(BStr::new(key.as_bytes()))?
+            .is_some()
+        {
+            anyhow::bail!("not implemented: {key} when painting a patch");
+        }
+    }
+    Ok(())
+}
+
+/// Paints the plain patch `format_unified` wrote the way `git diff --color=always` does with the
+/// default palette: bold file headers, cyan hunk headers, red removals, green additions, and a
+/// red background on trailing whitespace of an added line. A space before a tab in the indent of
+/// an added line is highlighted by git as well; that is refused rather than guessed.
+fn colorize_patch(plain: &[u8]) -> Result<Vec<u8>> {
+    const RESET: &[u8] = b"\x1b[m";
+    const BOLD: &[u8] = b"\x1b[1m";
+    const FRAG: &[u8] = b"\x1b[36m";
+    const OLD: &[u8] = b"\x1b[31m";
+    const NEW: &[u8] = b"\x1b[32m";
+    const BAD: &[u8] = b"\x1b[41m";
+    let mut out = Vec::with_capacity(plain.len() * 2);
+    let mut in_hunk = false;
+    for line in plain.split_inclusive(|&b| b == b'\n') {
+        let (text, newline) = match line.strip_suffix(b"\n") {
+            Some(text) => (text, &b"\n"[..]),
+            None => (line, &b""[..]),
+        };
+        if text.starts_with(b"diff --git ") {
+            in_hunk = false;
+        } else if text.starts_with(b"@@ ") {
+            in_hunk = true;
+        }
+        if !in_hunk {
+            if text.starts_with(b"Binary files ") {
+                out.extend_from_slice(text);
+            } else {
+                out.extend_from_slice(BOLD);
+                out.extend_from_slice(text);
+                out.extend_from_slice(RESET);
+            }
+        } else if text.starts_with(b"@@ ") {
+            // The header proper is cyan; git writes the function context after an empty colour.
+            let end = text[3..]
+                .windows(2)
+                .position(|w| w == b"@@")
+                .map_or(text.len(), |at| at + 3 + 2);
+            out.extend_from_slice(FRAG);
+            out.extend_from_slice(&text[..end]);
+            out.extend_from_slice(RESET);
+            if end < text.len() {
+                out.push(b' ');
+                out.extend_from_slice(RESET);
+                out.extend_from_slice(&text[end + 1..]);
+                out.extend_from_slice(RESET);
+            }
+        } else if let Some(body) = text.strip_prefix(b"+") {
+            let kept = body
+                .iter()
+                .rposition(|b| !matches!(b, b' ' | b'\t' | b'\r' | 0x0b | 0x0c))
+                .map_or(0, |at| at + 1);
+            let indent: Vec<u8> = body
+                .iter()
+                .copied()
+                .take_while(|b| matches!(b, b' ' | b'\t'))
+                .collect();
+            if indent
+                .iter()
+                .position(|&b| b == b' ')
+                .is_some_and(|space| indent[space..].contains(&b'\t'))
+            {
+                anyhow::bail!("not implemented: highlighting a space before a tab in a patch");
+            }
+            out.extend_from_slice(NEW);
+            out.push(b'+');
+            out.extend_from_slice(RESET);
+            if kept > 0 {
+                out.extend_from_slice(NEW);
+                out.extend_from_slice(&body[..kept]);
+                out.extend_from_slice(RESET);
+            }
+            if kept < body.len() {
+                out.extend_from_slice(BAD);
+                out.extend_from_slice(&body[kept..]);
+                out.extend_from_slice(RESET);
+            }
+        } else if text.starts_with(b"-") {
+            out.extend_from_slice(OLD);
+            out.extend_from_slice(text);
+            out.extend_from_slice(RESET);
+        } else {
+            out.extend_from_slice(text);
+            out.extend_from_slice(RESET);
+        }
+        out.extend_from_slice(newline);
+    }
+    Ok(out)
 }
 
 fn write_diff(
@@ -1031,6 +1179,11 @@ fn write_diff(
         DiffMode::NameStatus => rivet_core::format_name_status(diff, out)?,
         DiffMode::Stat => rivet_core::format_stat_sized(diff, Some(repository.odb()), out)?,
         DiffMode::Patch => rivet_core::format_unified(diff, repository.format(), out)?,
+        DiffMode::ColorPatch => {
+            let mut plain = Vec::new();
+            rivet_core::format_unified(diff, repository.format(), &mut plain)?;
+            out.extend_from_slice(&colorize_patch(&plain)?);
+        }
     }
     Ok(())
 }
@@ -1132,6 +1285,7 @@ fn unmerged_chunk(
             out.push(b'\n');
         }
         DiffMode::Stat => unreachable!("--stat of conflicted paths is refused earlier"),
+        DiffMode::ColorPatch => unreachable!("coloured conflicted paths are refused earlier"),
     }
     if let (false, Some(ours)) = (cached, &ours) {
         let file = rivet_core::diff::entry_diff(
@@ -1226,13 +1380,22 @@ fn decoration_map(
 /// says `always`, `never`, `auto` or a boolean (true meaning `auto`). `Err(status)` means a usage
 /// error was already reported.
 fn log_color(repository: &Repository, args: &LogArgs) -> Result<std::result::Result<bool, i32>> {
+    resolve_color(repository, args.no_color, args.color.as_ref())
+}
+
+/// [`log_color`] for any command that has `--color[=when]` and `--no-color`.
+fn resolve_color(
+    repository: &Repository,
+    no_color: bool,
+    color: Option<&Option<String>>,
+) -> Result<std::result::Result<bool, i32>> {
     use std::io::IsTerminal;
     let auto =
         || std::io::stdout().is_terminal() && std::env::var_os("TERM").is_none_or(|t| t != "dumb");
-    if args.no_color {
+    if no_color {
         return Ok(Ok(false));
     }
-    match args.color.as_ref().map(|when| when.as_deref()) {
+    match color.map(|when| when.as_deref()) {
         Some(None) | Some(Some("always")) => return Ok(Ok(true)),
         Some(Some("never")) => return Ok(Ok(false)),
         Some(Some("auto")) => return Ok(Ok(auto())),

@@ -8881,6 +8881,34 @@ s_submodule_update_reference() {
     echo "rc=$?"
 }
 
+# `diff --color` / `log -p --color`: bold headers, cyan hunks, red/green lines, red trailing whitespace.
+s_diff_color() {
+    v init -q repo; cd repo
+    printf 'int main() {\n x;\n y;\n z;\n}\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nlast' >f
+    printf 'bin\0' >b
+    echo gone >g
+    g add .; tick; g commit -q -m one
+    printf 'int main() {\n x;\n y2  \n z;\n}\nl1\nl2\nl3\nl4\nl5\nl6\nl7\n\nl8\nlast2' >f
+    printf 'bin\0x' >b
+    rm g
+    printf 'new\n\n' >n
+    chmod +x n
+    v diff --color
+    v add -A
+    v diff --color --cached
+    v diff --color=always --cached
+    v diff --cached --color=never
+    v diff --color=always --cached --no-color
+    v diff --color=sometimes --cached
+    echo "rc=$?"
+    v diff --color=always --cached --name-status
+    tick; g commit -q -m two
+    v log --color=always -p
+    v log --color=always -p --oneline
+    v diff --color=always HEAD~1 HEAD -- f
+    v diff --color=always HEAD~1 HEAD --name-only
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
