@@ -1255,3 +1255,13 @@ A path that is not a repository prints git's three-part error (128); a regular f
 Scenario `s_ls_remote` fails on `8e70a6c` (the subcommand does not exist) and passes after. Rust test `ls_remote_refusals` covers `--sort`, `--upload-pack`, `-o`, refused by name.
 Deliberately left: `bundle-uri`, SHA-256 bundles, `[...]` in patterns, `fetch` from a bundle is unchanged. `GAPS.md` updated.
 Gate after: fmt, clippy `-D warnings`, doc clean; 252 passed / 0 failed / 0 ignored; `scenarios.sh` 264 PASS / `failures: 0`.
+
+## sparse-checkout clean (2026-10-25)
+Landed `sparse-checkout clean [-n|-f|-v]` (`s_sparse_clean`, fails on `5c8a50b`). Cone mode only; refuses with git's
+fatal text when sparse checkout is off or not a cone, and without `-f`/`-n`. A directory is removed when every index entry
+below it is skip-worktree (topmost such directory), along with untracked and ignored files left in it; a directory with
+a modified tracked file stays; untracked directories with no index entries are never touched. `-v` lists files.
+Left undone (in `GAPS.md`): `set`/`reapply` over a skip-worktree path whose file came back with other content (git warns
+and clears the bit), readdir ordering of `-v` output.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
+`scenarios.sh` 265 PASS / `failures: 0`.

@@ -40,6 +40,9 @@ fn subcommand_usage(sub: &str) -> &'static str {
             "usage: git sparse-checkout reapply [--[no-]cone] [--[no-]sparse-index]\n\n    --[no-]cone           initialize the sparse-checkout in cone mode\n    --[no-]sparse-index   toggle the use of a sparse index\n\n"
         }
         "disable" => "usage: git sparse-checkout disable\n\n",
+        "clean" => {
+            "usage: git sparse-checkout clean [-n|--dry-run]\n\n    -n, --[no-]dry-run    dry run\n    -f, --[no-]force      force\n    -v, --[no-]verbose    report each affected file, not just directories\n\n"
+        }
         _ => "usage: git sparse-checkout list\n\n",
     }
 }
@@ -86,7 +89,7 @@ fn parse_options(args: &[String], allowed: &[&str]) -> std::result::Result<Optio
 ///
 /// # Caveats
 ///
-/// `clean` and the sparse index (`--sparse-index`) are not implemented. In cone mode, paths given
+/// The sparse index (`--sparse-index`) is not implemented. In cone mode, paths given
 /// on the command line to `set` and `add` are relative to the current directory and those read from
 /// `--stdin` to the work tree root; free-form patterns need the top-level directory.
 pub fn run_sparse_checkout(global: &GlobalArgs, args: &SparseArgs) -> Result<i32> {
@@ -102,7 +105,8 @@ pub fn run_sparse_checkout(global: &GlobalArgs, args: &SparseArgs) -> Result<i32
         "list" | "disable" => &[],
         "check-rules" => return check_rules(global, rest),
         "clean" => {
-            anyhow::bail!("sparse-checkout {sub} is not implemented");
+            let repository = super::open(global)?;
+            return clean(&repository, rest);
         }
         other => {
             eprintln!("error: unknown subcommand: `{other}'");
@@ -281,6 +285,138 @@ fn check_rules(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         }
     }
     out.flush()?;
+    Ok(0)
+}
+
+/// Every file below `dir` (relative to `root`, `/`-separated), the files of a directory before its
+/// subdirectories, each group sorted by name.
+fn files_below(root: &std::path::Path, dir: &str, out: &mut Vec<String>) {
+    let Ok(read) = std::fs::read_dir(root.join(dir)) else {
+        return;
+    };
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => dirs.push(name),
+            Ok(_) => files.push(name),
+            Err(_) => {}
+        }
+    }
+    files.sort();
+    dirs.sort();
+    out.extend(files.into_iter().map(|f| format!("{dir}/{f}")));
+    for sub in dirs {
+        files_below(root, &format!("{dir}/{sub}"), out);
+    }
+}
+
+/// `sparse-checkout clean`: remove the directories outside the cone that only hold `skip-worktree`
+/// entries and whatever untracked or ignored files were left in them.
+fn clean(repository: &Repository, args: &[String]) -> Result<i32> {
+    if !repository.sparse_enabled()? {
+        eprintln!("fatal: must be in a sparse-checkout to clean directories");
+        return Ok(128);
+    }
+    if !repository.sparse_cone_setting()?.unwrap_or(false) {
+        eprintln!("fatal: must be in a cone-mode sparse-checkout to clean directories");
+        return Ok(128);
+    }
+    let (mut dry_run, mut force, mut verbose) = (false, false, false);
+    let mut only_paths = false;
+    for arg in args {
+        if only_paths || !arg.starts_with('-') || arg == "-" {
+            continue;
+        }
+        let bad = |text: String| {
+            eprintln!("error: {text}");
+            eprint!("{}", subcommand_usage("clean"));
+            Ok(129)
+        };
+        match arg.as_str() {
+            "--" => only_paths = true,
+            "--dry-run" => dry_run = true,
+            "--no-dry-run" => dry_run = false,
+            "--force" => force = true,
+            "--no-force" => force = false,
+            "--verbose" => verbose = true,
+            "--no-verbose" => verbose = false,
+            long if long.starts_with("--") => {
+                return bad(format!("unknown option `{}'", &long[2..]));
+            }
+            shorts => {
+                for letter in shorts[1..].chars() {
+                    match letter {
+                        'n' => dry_run = true,
+                        'f' => force = true,
+                        'v' => verbose = true,
+                        other => return bad(format!("unknown switch `{other}'")),
+                    }
+                }
+            }
+        }
+    }
+    if !dry_run && !force {
+        eprintln!("fatal: for safety, refusing to clean without one of --force or --dry-run");
+        return Ok(128);
+    }
+    let Some(root) = repository
+        .worktree()?
+        .root()
+        .map(std::path::Path::to_path_buf)
+    else {
+        eprintln!("fatal: this operation must be run in a work tree");
+        return Ok(128);
+    };
+    // A directory is clean-able when every index entry below it is skip-worktree; the topmost such
+    // directory above a skipped entry is the one git reports.
+    let mut all_skipped: std::collections::BTreeMap<String, bool> = Default::default();
+    for entry in repository.index().entries() {
+        let path = entry.path.to_str_lossy().into_owned();
+        let mut end = 0;
+        while let Some(slash) = path[end..].find('/') {
+            end += slash;
+            let flag = all_skipped.entry(path[..end].to_string()).or_insert(true);
+            *flag &= entry.skip_worktree();
+            end += 1;
+        }
+    }
+    let mut candidates: BTreeSet<String> = BTreeSet::new();
+    for entry in repository.index().entries() {
+        if !entry.skip_worktree() {
+            continue;
+        }
+        let path = entry.path.to_str_lossy().into_owned();
+        let mut end = 0;
+        while let Some(slash) = path[end..].find('/') {
+            end += slash;
+            if all_skipped[&path[..end]] {
+                candidates.insert(path[..end].to_string());
+                break;
+            }
+            end += 1;
+        }
+    }
+    let verb = if dry_run { "Would remove" } else { "Removing" };
+    for dir in candidates {
+        let on_disk = std::fs::symlink_metadata(root.join(&dir)).is_ok_and(|m| m.is_dir());
+        if !on_disk {
+            continue;
+        }
+        if verbose {
+            let mut files = Vec::new();
+            files_below(&root, &dir, &mut files);
+            for file in files {
+                println!("{verb} {file}");
+            }
+        } else {
+            println!("{verb} {dir}/");
+        }
+        if !dry_run {
+            std::fs::remove_dir_all(root.join(&dir))?;
+        }
+    }
     Ok(0)
 }
 

@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 264 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 265 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-25, gate: 252 tests / 0 failed, 264 scenarios / 0 failures, `fmt`,
@@ -18,7 +18,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
 * **Partial clone** — `--filter` and promisor/partial clones are not implemented.
 * **Sparse checkout** — `sparse-checkout init`/`set`/`add`/`list`/`reapply`/`disable`/`check-rules` exist
   (cone mode and `--no-cone`, `--stdin`, `--skip-checks`; `check-rules` with `-z`, `--cone`/`--no-cone`,
-  `--rules-file`, C-quoted input and output); `clean` and the sparse index do not. `--sparse-index` is refused by name before anything is
+  `--rules-file`, C-quoted input and output; `clean` with `-n`/`-f`/`-v`, `s_sparse_clean`); the sparse index does not. `--sparse-index` is refused by name before anything is
   touched, and an index that real git wrote with the `sdir` extension is refused on read
   (`not implemented yet`), because treating its directory entries as files reports every path under
   them as deleted (`crates/rivet-cli/tests/sparse_index.rs`). `--no-sparse-index` is accepted and
@@ -35,8 +35,11 @@ The command or subsystem is absent; it either fails at the argument parser or re
   `add`), `restore`/`checkout -- <path>`, `diff`, `status`, `commit -a`, `add -u`, `ls-files -t`
   and `worktree add` (the new work tree inherits the definition). A merge whose conflict lands outside
   the definition matches git, including `merge --abort` (`s_sparse_leftovers`). Not covered, so they may
-  ignore the definition: `clean`/`update-index` details, `am`, `bisect`, and `git sparse-checkout set`
+  ignore the definition: `update-index` details, `am`, `bisect`, and `git sparse-checkout set`
   leaving a directory that holds untracked files (the warning is printed, git also tries to remove it).
+  `sparse-checkout set`/`reapply` over a skip-worktree path whose file reappeared with other content
+  does nothing (git warns "not up to date" and clears the bit). `clean -v` lists the files of one
+  directory sorted (git uses readdir order), and a nested repository's `.git` is walked like any directory.
   `check-rules` run with a pattern file but `core.sparseCheckout` off, and a path starting with `/` in
   non-cone mode, are not compared.
 * **`rebase --interactive`** — `pick`/`reword`/`edit`/`squash`/`fixup`/`drop`/`noop`, the editable todo list,

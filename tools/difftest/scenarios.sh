@@ -8180,6 +8180,48 @@ s_stash_branch() {
     v stash list
 }
 
+s_sparse_clean() {
+    v init -q repo; cd repo
+    mkdir -p a b/deep b/other c/y c/z d/e; echo 1 >a/f; echo 2 >b/f; echo 3 >b/deep/g; echo 4 >b/other/f
+    echo 5 >c/f; echo 6 >c/y/g; echo 7 >c/z/h; echo 8 >d/e/f; echo 9 >top
+    v add .; v commit -q -m one
+    # Not sparse yet, then free-form patterns: both refuse before looking at the options.
+    v sparse-checkout clean -n; echo "rc=$?"
+    v sparse-checkout clean --bogus; echo "rc=$?"
+    v sparse-checkout set --no-cone /a/; echo "rc=$?"
+    v sparse-checkout clean -n; echo "rc=$?"
+    v sparse-checkout clean --bogus; echo "rc=$?"
+    v sparse-checkout set --cone a b/deep
+    # Nothing left over: silent, with or without -f.
+    v sparse-checkout clean -n; echo "rc=$?"
+    v sparse-checkout clean -f; echo "rc=$?"
+    v sparse-checkout clean; echo "rc=$?"
+    v sparse-checkout clean --no-force --no-dry-run; echo "rc=$?"
+    v sparse-checkout clean --bogus; echo "rc=$?"
+    v sparse-checkout clean -x; echo "rc=$?"
+    # Leftovers: untracked and ignored files under skipped directories, a modified tracked file that
+    # keeps c/ alive, untracked directories git never looked at, files inside the cone.
+    echo '*.log' >.git/info/exclude
+    mkdir -p b/other/sub d/e/new zz a/inner
+    echo u >b/other/sub/u; echo i >b/other/x.log; echo n >d/e/new/n; echo t >d/top.txt
+    echo q >zz/q; echo m >a/inner/m; echo u >b/uf
+    v sparse-checkout clean -n; echo "rc=$?"
+    v sparse-checkout clean -nv; echo "rc=$?"
+    v sparse-checkout clean -n -f; echo "rc=$?"
+    v sparse-checkout clean -f; echo "rc=$?"
+    mkdir -p d/e/new; echo n >d/e/new/n
+    v sparse-checkout set a c; echo mod >c/f
+    v sparse-checkout set a
+    mkdir -p c/y c/z; echo u >c/y/u; echo u >c/z/u
+    v sparse-checkout clean -nv; echo "rc=$?"
+    v sparse-checkout clean -fv; echo "rc=$?"
+    v sparse-checkout clean -f -n; echo "rc=$?"
+    v sparse-checkout clean -f -- extra; echo "rc=$?"
+    mkdir -p d/e/new; echo n >d/e/new/n
+    (cd d/e/new && v sparse-checkout clean -f -v; echo "rc=$?")
+    (cd a && v sparse-checkout clean -n; echo "rc=$?")
+}
+
 s_sparse_leftovers() {
     v init -q repo; cd repo
     mkdir -p d/e f; echo 1 >a; echo 2 >d/x; echo 3 >d/e/y; echo 4 >f/z
