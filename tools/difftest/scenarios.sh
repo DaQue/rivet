@@ -7327,6 +7327,48 @@ s_rebase_i_stops() {
     rebase_i_run '1s/^pick/edit/'
     v rebase --continue
     v reflog
+    # --edit-todo: nothing to edit, what the editor sees, a valid edit, a bad one fixed by another
+    # edit, an editor that fails, and an emptied list.
+    v rebase --edit-todo
+    todo_state() { cat .git/rebase-merge/git-rebase-todo; echo "-- backup"; cat .git/rebase-merge/git-rebase-todo.backup; echo "-- end/msgnum"; cat .git/rebase-merge/end .git/rebase-merge/msgnum; v status; }
+    rebase_i_run '1s/^pick/edit/'
+    GIT_SEQUENCE_EDITOR=cat v rebase --edit-todo
+    echo "rc=$?"
+    todo_state
+    SEQ='2d;1s/^pick/reword/' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase --edit-todo
+    echo "rc=$?"
+    todo_state
+    GIT_SEQUENCE_EDITOR=false v rebase --edit-todo
+    echo "rc=$?"
+    todo_state
+    SEQ='s/^reword/pick/' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase --edit-todo
+    SEQ='s/^pick/foo/' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase --edit-todo
+    echo "rc=$?"
+    todo_state
+    v rebase --continue
+    echo "rc=$?"
+    SEQ='s/^foo/pick/' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase --edit-todo
+    echo "rc=$?"
+    todo_state
+    GIT_EDITOR="$PWD/../msg.sh" v rebase --continue
+    echo "rc=$?"
+    v log --format='%H %s' main..topic
+    rebase_i_run '2s/^pick/edit/'
+    SEQ='/^pick/d' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase --edit-todo
+    echo "rc=$?"
+    v status
+    v rebase --continue
+    v log --format='%H %s' main..topic
+    v reflog
+    # A list that was invalid from the start (first command a fixup), fixed with --edit-todo.
+    rebase_i_run '1s/^pick/fixup/'
+    GIT_SEQUENCE_EDITOR=cat v rebase --edit-todo
+    echo "rc=$?"
+    todo_state
+    SEQ='s/^fixup/pick/' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase --edit-todo
+    todo_state
+    v rebase --continue
+    v log --format='%H %s' main..topic
 }
 
 s_rebase_i_conflict() {

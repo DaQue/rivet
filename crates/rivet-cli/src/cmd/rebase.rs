@@ -117,7 +117,7 @@ pub struct RebaseArgs {
     #[arg(long = "no-autosquash", overrides_with = "autosquash")]
     pub no_autosquash: bool,
 
-    /// Refused: edit the remaining todo list.
+    /// Edit the remaining todo list of an interactive rebase.
     #[arg(long = "edit-todo")]
     pub edit_todo: bool,
 }
@@ -271,7 +271,6 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
             args.autosquash && !args.interactive,
             "--autosquash without -i",
         ),
-        (args.edit_todo, "--edit-todo"),
     ] {
         if given {
             anyhow::bail!("rebase {what} is not implemented");
@@ -283,6 +282,7 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
         args.skip,
         args.quit,
         args.show_current_patch,
+        args.edit_todo,
     ]
     .iter()
     .filter(|on| **on)
@@ -296,6 +296,9 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
         if !dir.is_dir() {
             eprintln!("fatal: no rebase in progress");
             return Ok(128);
+        }
+        if args.edit_todo {
+            return interactive::edit_todo(&repository, &dir);
         }
         if args.abort {
             return abort(&mut repository, &dir);
@@ -963,9 +966,7 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
         let Some(cmd) = interactive::Cmd::parse(word) else {
             eprintln!("error: invalid command '{word}'");
             eprintln!("error: invalid line 1: {line}");
-            eprintln!(
-                "You can fix this with 'git rebase --edit-todo' and then run 'git rebase --continue'.\nOr you can abort the rebase with 'git rebase --abort'."
-            );
+            eprintln!("error: please fix this using 'git rebase --edit-todo'.");
             return Ok(1);
         };
         let rest: String = lines.iter().map(|l| format!("{l}\n")).collect();
@@ -977,7 +978,12 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
         done.push('\n');
         let counted = cmd != interactive::Cmd::Noop;
         let msgnum: usize = read_state(dir, "msgnum").parse().unwrap_or(0) + usize::from(counted);
-        let end = read_state(dir, "end");
+        // Git counts what is done plus what is left each time, so an edited list shows its new size.
+        let end = [&done, &rest]
+            .iter()
+            .flat_map(|text| text.lines())
+            .filter(|l| l.split_whitespace().next() != Some("noop") && !l.trim().is_empty())
+            .count();
         write_state(dir, "git-rebase-todo", &rest)?;
         write_state(dir, "done", &done)?;
         write_state(dir, "msgnum", &format!("{msgnum}\n"))?;

@@ -151,6 +151,21 @@ fn recomment(text: &str, comment: char) -> String {
 /// Run an editor on `file`: for the todo list the sequence editor first, then the usual chain
 /// (`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`). `Ok(false)` when the editor failed.
 pub(super) fn run_editor(repository: &Repository, sequence: bool, file: &Path) -> Result<bool> {
+    let editor = editor_command(repository, sequence);
+    if editor == ":" {
+        return Ok(true);
+    }
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{editor} \"$@\""))
+        .arg(&editor)
+        .arg(file)
+        .status()?;
+    Ok(status.success())
+}
+
+/// The editor command `run_editor` uses.
+fn editor_command(repository: &Repository, sequence: bool) -> String {
     let config = |key: &str| {
         repository
             .config_value(BStr::new(key.as_bytes()))
@@ -163,22 +178,12 @@ pub(super) fn run_editor(repository: &Repository, sequence: bool, file: &Path) -
     if sequence {
         editor = env("GIT_SEQUENCE_EDITOR").or_else(|| config("sequence.editor"));
     }
-    let editor = editor
+    editor
         .or_else(|| env("GIT_EDITOR"))
         .or_else(|| config("core.editor"))
         .or_else(|| env("VISUAL"))
         .or_else(|| env("EDITOR"))
-        .unwrap_or_else(|| "vi".to_string());
-    if editor == ":" {
-        return Ok(true);
-    }
-    let status = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("{editor} \"$@\""))
-        .arg(&editor)
-        .arg(file)
-        .status()?;
-    Ok(status.success())
+        .unwrap_or_else(|| "vi".to_string())
 }
 
 /// Strip comment lines and trailing blanks, squeeze runs of empty lines and trim the ends, as
@@ -852,4 +857,99 @@ pub(super) fn finish_chain_after_skip(
         );
     }
     Ok(true)
+}
+
+/// Git refuses a list whose first command (past `drop` and `noop`) melds into a previous commit.
+fn leading_fixup_error(items: &[Item]) -> Option<String> {
+    items
+        .iter()
+        .find(|i| i.cmd != Cmd::Drop && i.cmd != Cmd::Noop)
+        .filter(|first| first.cmd.is_fixup())
+        .map(|first| format!("cannot '{}' without a previous commit", first.cmd.name()))
+}
+
+/// The footer of the todo list `--edit-todo` opens: the command help up to the warning about removed
+/// lines, then what the editing is for.
+fn edit_todo_footer(comment: char) -> String {
+    let help = HELP.split("# However").next().unwrap_or(HELP);
+    let text = format!(
+        "{help}# You are editing the todo file of an ongoing interactive rebase.\n# To continue rebase after editing, run:\n#     git rebase --continue\n#\n"
+    );
+    recomment(&text, comment)
+}
+
+/// `rebase --edit-todo`: let the user edit what is left of the todo list. The list is saved with
+/// full ids; a list with invalid lines is saved as typed and reported, to be fixed with another
+/// `--edit-todo`. The pre-edit list (and the help) is kept as `git-rebase-todo.backup`.
+pub(super) fn edit_todo(repository: &Repository, dir: &Path) -> Result<i32> {
+    if !is_interactive(dir) {
+        anyhow::bail!("rebase --edit-todo is only implemented for an interactive rebase");
+    }
+    let comment = comment_char(repository);
+    let path = dir.join("git-rebase-todo");
+    let original = read_state(dir, "git-rebase-todo");
+    let footer = edit_todo_footer(comment);
+    let abbrev = |oid: &ObjectId| crate::cmd::history::abbrev(repository, oid, false);
+    let (backup, mut shown) = match parse_todo(repository, &original, comment) {
+        Parsed::Refused(message) => anyhow::bail!(message),
+        Parsed::Items(items) => {
+            if let Some(error) = leading_fixup_error(&items) {
+                eprintln!("error: {error}");
+            }
+            let mut shown = String::new();
+            for item in &items {
+                match item.oid {
+                    Some(oid) => shown.push_str(&format!(
+                        "{} {} # {}\n",
+                        item.cmd.name(),
+                        abbrev(&oid),
+                        super::subject_of(repository, &oid)?
+                    )),
+                    None => shown.push_str("noop\n"),
+                }
+            }
+            (todo_lines(repository, &items)?, shown)
+        }
+        Parsed::Invalid(errors) => {
+            for error in errors {
+                eprintln!("error: {error}");
+            }
+            (original.clone(), original.clone())
+        }
+    };
+    if !shown.is_empty() && !shown.ends_with('\n') {
+        shown.push('\n');
+    }
+    write_state(dir, "git-rebase-todo.backup", &format!("{backup}{footer}"))?;
+    std::fs::write(&path, format!("{shown}{footer}"))?;
+    if !run_editor(repository, true, &path)? {
+        eprintln!(
+            "error: there was a problem with the editor '{}'",
+            editor_command(repository, true)
+        );
+        return Ok(1);
+    }
+    let edited = std::fs::read_to_string(&path)?;
+    match parse_todo(repository, &edited, comment) {
+        Parsed::Items(items) => {
+            if let Some(error) = leading_fixup_error(&items) {
+                eprintln!("error: {error}");
+                eprintln!("{FIX_HINT}");
+                return Ok(1);
+            }
+            std::fs::write(&path, todo_lines(repository, &items)?)?;
+            Ok(0)
+        }
+        Parsed::Invalid(errors) => {
+            for error in errors {
+                eprintln!("error: {error}");
+            }
+            eprintln!("{FIX_HINT}");
+            Ok(1)
+        }
+        Parsed::Refused(message) => {
+            std::fs::write(&path, original)?;
+            anyhow::bail!(message)
+        }
+    }
 }

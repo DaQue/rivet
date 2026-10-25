@@ -33,7 +33,8 @@ The command or subsystem is absent; it either fails at the argument parser or re
 * **`rebase --interactive`** — `pick`/`reword`/`edit`/`squash`/`fixup`/`drop`/`noop`, the editable todo list,
   `--continue`/`--skip`/`--abort` work (`s_rebase_i`, `s_rebase_i_stops`, `s_rebase_i_conflict`).
   Refused by name, before anything is touched: `--root`, `--rebase-merges`, `--exec`/`-x`, `--keep-base`,
-  `--edit-todo`, signing, `--autosquash` without `-i` (git runs it as an unedited interactive rebase),
+  signing, `--edit-todo` outside an interactive rebase (rivet's plain rebase has no todo to edit),
+  `--autosquash` without `-i` (git runs it as an unedited interactive rebase),
   `--autosquash` over an `amend!` commit that has a target (needs `fixup -C`) or a `fixup!` that names
   another fixup commit by id (`s_rebase_autosquash` covers the rest, plus `--no-autosquash` and
   `rebase.autoSquash`), and the todo commands `exec`, `break`, `label`, `reset`, `merge`,
