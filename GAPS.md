@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 244 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 246 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 237 tests / 0 failed, 243 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 240 tests / 0 failed, 246 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -136,9 +136,10 @@ The command works for the common case; the listed options or edge cases are miss
   `git-credential-<name>`; an empty value resets), `credential.useHttpPath`, `credential.username`,
   URL userinfo, `GIT_ASKPASS`/`core.askPass`/`SSH_ASKPASS` and a terminal prompt (`/dev/tty`,
   `GIT_TERMINAL_PROMPT=0` refuses) are consulted when an HTTP(S) remote answers `401`, with git's
-  `get`/`store`/`erase` stream (capabilities and `wwwauth[]` included). Not implemented: helper
-  output other than `username`/`password` (`quit`, `password_expiry_utc`, `authtype`/`state`
-  multi-round auth, URL rewriting by a helper), `credential.<url>.*` keys other than `helper`,
+  `get`/`store`/`erase` stream (capabilities and `wwwauth[]` included). Helper output `quit`,
+  `password_expiry_utc` (an expired password is dropped) and `oauth_refresh_token` (handed back to
+  `store`/`erase`) work (`s_credential_keys`). Not implemented: helper output `authtype`/`credential`/
+  `state` (multi-round auth), `url=` (URL rewriting by a helper), `credential.<url>.*` keys other than `helper`,
   `useHttpPath` and `username`, `http.proxy` credentials, `credential.interactive`, the
   `git credential` command, and credentials for `ssh://` (the ssh program asks). Covered by
   `s_credential` against a local Basic-auth server; a `401` that first appears on a POST (not the

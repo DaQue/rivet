@@ -872,9 +872,13 @@ impl HttpTransport {
             if asked {
                 // What was sent was refused: the helpers must not keep it.
                 if let Some((user, password)) = self.credentials.take() {
-                    let mut credential = settings.credential_for(url, wwwauth);
-                    credential.username = Some(user);
-                    credential.password = Some(password);
+                    let mut credential = self.pending_approval.take().unwrap_or_else(|| {
+                        let mut fresh = settings.credential_for(url, Vec::new());
+                        fresh.username = Some(user);
+                        fresh.password = Some(password);
+                        fresh
+                    });
+                    credential.wwwauth = wwwauth;
                     settings.reject(&credential);
                 }
                 self.pending_approval = None;
@@ -886,7 +890,9 @@ impl HttpTransport {
                 credential.username = Some(user.clone());
                 credential.password = Some(password.clone());
             } else {
-                settings.fill(&mut credential);
+                if let Err(reason) = settings.fill(&mut credential) {
+                    return Err(Error::Authentication { url: shown, reason });
+                }
             }
             for (what, missing) in [
                 ("Username", credential.username.is_none()),
@@ -901,6 +907,12 @@ impl HttpTransport {
                     Err(why) => {
                         let mut host = credential.protocol.clone();
                         host.push_str("://");
+                        if what == "Password"
+                            && let Some(user) = &credential.username
+                        {
+                            host.push_str(&bstr::ByteSlice::to_str_lossy(user.as_slice()));
+                            host.push('@');
+                        }
                         host.push_str(&credential.host);
                         return Err(Error::Authentication {
                             url: BString::from(host.as_str()),

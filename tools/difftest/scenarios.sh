@@ -994,6 +994,62 @@ s_credential() {
     kill $server 2>/dev/null; wait $server 2>/dev/null
 }
 
+# Helper output beyond username/password: `password_expiry_utc`, `oauth_refresh_token` (handed back to
+# store/erase), an expired password (discarded, then the next helper or the prompt), and `quit=1`.
+cred_helper_out() {  # <root> <name> <shell commands run on get>
+    local root=$1 name=$2
+    cat >"$root/$name.sh" <<HELPER_END
+#!/bin/sh
+echo "== $name \$1" >>"$root/helper.log"
+sed 's/^/  in: /' >>"$root/helper.log"
+if [ "\$1" = get ]; then $3; fi
+HELPER_END
+    chmod +x "$root/$name.sh"
+}
+
+s_credential_keys() {
+    local port=18794 root=$PWD
+    mkdir -p repos
+    g init -q --bare repos/o.git; g -C repos/o.git config http.receivepack true
+    g clone -q repos/o.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    python3 "$AUTHSERVER" $port "$root/repos" alice s3cret "$root/req.log" >/dev/null 2>&1 &
+    local server=$!
+    sleep 1
+    local url=http://127.0.0.1:$port/o.git
+    export GIT_TERMINAL_PROMPT=0
+    cred_helper "$root" good alice s3cret
+    cred_helper_out "$root" exp 'echo username=alice; echo password=s3cret; echo password_expiry_utc=4102444800; echo oauth_refresh_token=rt1'
+    cred_helper_out "$root" stale 'echo username=alice; echo password=wrong; echo password_expiry_utc=4102444800; echo oauth_refresh_token=rt2'
+    cred_helper_out "$root" old 'echo username=alice; echo password=s3cret; echo password_expiry_utc=1000'
+    cred_helper_out "$root" quit 'echo quit=1'
+    cred_helper_out "$root" quitfull 'echo username=alice; echo password=s3cret; echo quit=1'
+    # the expiry and the refresh token come back on store
+    v config --global credential.helper "$root/exp.sh"
+    v clone -q $url c_exp; cred_dump "$root"
+    # ... and on erase when the server refuses the password
+    v config --global credential.helper "$root/stale.sh"
+    v clone -q $url c_stale; cred_dump "$root"
+    # an expired password is dropped (the user name stays) and the next helper is asked
+    v config --global credential.helper "$root/old.sh"
+    v config --global --add credential.helper "$root/good.sh"
+    v clone -q $url c_old; cred_dump "$root"
+    # nobody else to ask: the prompt names the user
+    v config --global --unset-all credential.helper
+    v config --global credential.helper "$root/old.sh"
+    v clone -q $url c_old2; cred_dump "$root"
+    # quit stops the helpers that follow, but not when the credential is already complete
+    v config --global --unset-all credential.helper
+    v config --global credential.helper "$root/quit.sh"
+    v config --global --add credential.helper "$root/good.sh"
+    v clone -q $url c_quit; cred_dump "$root"
+    v config --global --unset-all credential.helper
+    v config --global credential.helper "$root/quitfull.sh"
+    v config --global --add credential.helper "$root/good.sh"
+    v clone -q $url c_quitfull; cred_dump "$root"
+    kill $server 2>/dev/null; wait $server 2>/dev/null
+}
+
 s_basic_commit() {
     v init -q repo; cd repo
     echo hello >a.txt; mkdir -p dir/sub; echo deep >dir/sub/b.txt; echo x >dir/c
@@ -7913,6 +7969,7 @@ for s in "$@"; do
     case $s in
         s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash|s_push_refspec_forms) run_scenario "$s" repo origin.git ;;
         s_credential) run_scenario "$s" c_ok c5 ;;
+        s_credential_keys) run_scenario "$s" c_exp c_quitfull ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
         s_sparse_linked) run_scenario "$s" repo wt ;;
         s_hooks_clone) run_scenario "$s" c1 c2 c4 bare.git wt1 wt2 wt3 wt4 wt5 ;;

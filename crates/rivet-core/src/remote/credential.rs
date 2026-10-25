@@ -41,6 +41,12 @@ pub struct Credential {
     pub password: Option<BString>,
     /// The `WWW-Authenticate` header values of the challenge that asked for it.
     pub wwwauth: Vec<String>,
+    /// When the password stops being valid (`password_expiry_utc`, seconds since the epoch), if a
+    /// helper said so. A helper's `store` and `erase` hear it back.
+    pub password_expiry_utc: Option<i64>,
+    /// The OAuth refresh token a helper handed out (`oauth_refresh_token`), passed back to
+    /// `store` and `erase`.
+    pub oauth_refresh_token: Option<BString>,
 }
 
 impl std::fmt::Debug for Credential {
@@ -232,11 +238,19 @@ impl CredentialSettings {
             username: url.user.clone().or_else(|| self.username.clone()),
             password: url.password.clone(),
             wwwauth,
+            ..Credential::default()
         }
     }
 
     /// Ask the helpers for a user name and password (`get`), stopping at the first that gives both.
-    pub fn fill(&self, credential: &mut Credential) {
+    ///
+    /// A password whose `password_expiry_utc` has passed is discarded, as Git does, so the next
+    /// helper (or the prompt) is asked for it.
+    ///
+    /// # Errors
+    ///
+    /// Git's text when a helper that did not complete the credential said `quit=1`.
+    pub fn fill(&self, credential: &mut Credential) -> std::result::Result<(), String> {
         for helper in &self.helpers {
             if credential.username.is_some() && credential.password.is_some() {
                 break;
@@ -246,14 +260,36 @@ impl CredentialSettings {
             else {
                 continue;
             };
+            let mut quit = false;
             for line in output.lines() {
                 if let Some(value) = line.strip_prefix(b"username=") {
                     credential.username = Some(BString::from(value));
                 } else if let Some(value) = line.strip_prefix(b"password=") {
                     credential.password = Some(BString::from(value));
+                } else if let Some(value) = line.strip_prefix(b"oauth_refresh_token=") {
+                    credential.oauth_refresh_token = Some(BString::from(value));
+                } else if let Some(value) = line.strip_prefix(b"password_expiry_utc=") {
+                    credential.password_expiry_utc =
+                        value.to_str().ok().and_then(|v| v.parse().ok());
+                } else if let Some(value) = line.strip_prefix(b"quit=") {
+                    quit = crate::config::parse_bool(BStr::new(value)).unwrap_or(false);
                 }
             }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() as i64);
+            if credential.password_expiry_utc.is_some_and(|at| at < now) {
+                credential.password = None;
+                credential.password_expiry_utc = None;
+            }
+            if credential.username.is_some() && credential.password.is_some() {
+                return Ok(());
+            }
+            if quit {
+                return Err(format!("credential helper '{helper}' told us to quit"));
+            }
         }
+        Ok(())
     }
 
     /// Tell every helper the credential worked (`store`).
@@ -383,6 +419,16 @@ fn input(credential: &Credential, operation: Operation) -> Vec<u8> {
         out.extend_from_slice(password);
         out.push(b'\n');
     }
+    if operation != Operation::Get {
+        if let Some(token) = &credential.oauth_refresh_token {
+            out.extend_from_slice(b"oauth_refresh_token=");
+            out.extend_from_slice(token);
+            out.push(b'\n');
+        }
+        if let Some(at) = credential.password_expiry_utc {
+            out.extend_from_slice(format!("password_expiry_utc={at}\n").as_bytes());
+        }
+    }
     if operation != Operation::Store {
         for challenge in &credential.wwwauth {
             out.extend_from_slice(format!("wwwauth[]={challenge}\n").as_bytes());
@@ -482,6 +528,57 @@ mod tests {
         assert_eq!(
             input(&credential, Operation::Erase),
             b"protocol=http\nhost=h:1\npath=o.git\nusername=u\npassword=p\nwwwauth[]=Basic realm=\"r\"\n"
+        );
+    }
+
+    #[test]
+    fn store_and_erase_hear_the_expiry_and_refresh_token() {
+        let credential = Credential {
+            protocol: "http".into(),
+            host: "h".into(),
+            username: Some("u".into()),
+            password: Some("p".into()),
+            password_expiry_utc: Some(42),
+            oauth_refresh_token: Some("rt".into()),
+            ..Credential::default()
+        };
+        let expected: &[u8] =
+            b"protocol=http\nhost=h\nusername=u\npassword=p\noauth_refresh_token=rt\npassword_expiry_utc=42\n";
+        assert_eq!(input(&credential, Operation::Store), expected);
+        assert_eq!(input(&credential, Operation::Erase), expected);
+        assert!(!input(&credential, Operation::Get).contains_str("rt"));
+    }
+
+    #[test]
+    fn fill_drops_an_expired_password_and_honours_quit() {
+        let settings = |script: &str| CredentialSettings {
+            helpers: vec![format!("!{script}")],
+            ..CredentialSettings::default()
+        };
+        let mut credential = Credential::default();
+        settings("echo username=a; echo password=b; echo password_expiry_utc=1; true")
+            .fill(&mut credential)
+            .unwrap();
+        assert_eq!(
+            credential.username.as_ref().map(|v| v.as_slice()),
+            Some(&b"a"[..])
+        );
+        assert_eq!(credential.password, None);
+        let mut credential = Credential::default();
+        let error = settings("echo username=a; echo quit=1; true")
+            .fill(&mut credential)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "credential helper '!echo username=a; echo quit=1; true' told us to quit"
+        );
+        let mut credential = Credential::default();
+        settings("echo username=a; echo password=b; echo quit=1; true")
+            .fill(&mut credential)
+            .unwrap();
+        assert_eq!(
+            credential.password.as_ref().map(|v| v.as_slice()),
+            Some(&b"b"[..])
         );
     }
 

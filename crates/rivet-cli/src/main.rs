@@ -130,7 +130,8 @@ fn main() -> ExitCode {
             if let Some(rivet_core::Error::Authentication { url, reason }) =
                 error.downcast_ref::<rivet_core::Error>()
             {
-                if reason.starts_with("could not read ") {
+                if reason.starts_with("could not read ") || reason.starts_with("credential helper ")
+                {
                     eprintln!("fatal: {reason}");
                 } else {
                     let url = url.to_string();
