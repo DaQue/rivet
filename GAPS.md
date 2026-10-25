@@ -61,7 +61,9 @@ The command or subsystem is absent; it either fails at the argument parser or re
 * **Submodule clone flags** — `update --depth` works only for a local-path source (git ignores it with
   a warning; rivet narrows the fetch refspec to the one branch, and refuses a source with several
   branches). With a `file://` or network URL git makes a shallow clone, which rivet's `clone` cannot
-  write: refused by name. `--reference`, `--dissociate`, `--filter` and `--single-branch` are refused
+  write: refused by name. `--single-branch` / `--no-single-branch` work like `--depth`'s narrowing: the
+  fetch refspec names the one cloned branch, and a source with several branches is refused by name (rivet's
+  `clone` cannot fetch a single branch only). `--reference`, `--dissociate` and `--filter` are refused
   with "not implemented". `-j`/`--jobs` is validated and accepted but runs sequentially.
   `checkout`, `merge` and `rebase` (`--merge`, `--rebase`, `submodule.<name>.update`) work. `update --remote` works
   (branch from `.gitmodules`, remote `HEAD` by default); `submodule.<name>.branch = .` is refused.

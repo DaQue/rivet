@@ -63,10 +63,33 @@ fn depth_on_a_url_clone_is_refused_and_leaves_nothing_behind() {
 }
 
 #[test]
-fn reference_and_single_branch_are_refused_by_name() {
+fn single_branch_on_a_source_with_several_branches_is_refused_and_leaves_nothing_behind() {
+    let clone = fixture("sm-single-branch");
+    git(&clone.parent().unwrap().join("sub"), &["branch", "other"]);
+    let rivet = env!("CARGO_BIN_EXE_rivet");
+    let out = run(
+        rivet,
+        &clone,
+        &["submodule", "update", "--init", "--single-branch"],
+    );
+    assert_eq!(out.status.code(), Some(128));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "--single-branch (or --depth) on a source with several branches is not implemented"
+        ),
+        "{stderr}"
+    );
+    assert!(!clone.join("s/.git").exists());
+    assert!(!clone.join(".git/modules/s").exists());
+    let _ = std::fs::remove_dir_all(clone.parent().unwrap());
+}
+
+#[test]
+fn reference_and_filter_are_refused_by_name() {
     let clone = fixture("sm-reference");
     let rivet = env!("CARGO_BIN_EXE_rivet");
-    for flag in ["--reference", "--single-branch", "--dissociate", "--filter"] {
+    for flag in ["--reference", "--dissociate", "--filter"] {
         let out = run(rivet, &clone, &["submodule", "update", "--init", flag]);
         assert!(!out.status.success(), "{flag}");
         let stderr = String::from_utf8_lossy(&out.stderr);

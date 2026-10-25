@@ -1190,3 +1190,13 @@ Scenario `s_submodule_update_depth` fails on `01d9dbf` (the flag was refused by 
 Deliberately left, refused by name: `--depth` with a `file://`/network URL (needs shallow clone), a source with several branches under `--depth`, `--reference`, `--dissociate`,
 `--filter`, `--single-branch`, `--no-single-branch`. Recorded in `GAPS.md`.
 Gate after: fmt, clippy `-D warnings`, doc clean; 250 passed / 0 failed / 0 ignored; `scenarios.sh` 258 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 (7) — `submodule update --single-branch` / `--no-single-branch`
+Gate at `846b30e`: fmt, clippy `-D warnings`, doc clean; 250 passed / 0 failed / 0 ignored; `scenarios.sh` 258 PASS / `failures: 0`.
+
+Landed (Remaining item 3, second part): `submodule update --single-branch` and `--no-single-branch` (last one wins). `--single-branch` narrows the new module's
+`remote.origin.fetch` to the cloned branch, as `--depth` already did; `--no-single-branch` keeps `+refs/heads/*` even with `--depth` (verified with `/usr/bin/git`).
+Scenario `s_submodule_update_single_branch` fails on `846b30e` (flag refused by name) and passes after.
+Deliberately left, refused by name: `--single-branch`/`--depth` on a source with several branches (rivet's `clone` fetches every branch; Rust test
+`single_branch_on_a_source_with_several_branches_is_refused_and_leaves_nothing_behind`), `--reference`, `--dissociate`, `--filter`. `GAPS.md` updated.
+Gate after: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 259 PASS / `failures: 0`.

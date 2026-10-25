@@ -8338,6 +8338,25 @@ s_submodule_update_depth() {
     echo "rc=$?"
 }
 
+# `submodule update --single-branch` / `--no-single-branch`: the clone's fetch refspec names one branch or all.
+s_submodule_update_single_branch() {
+    sm_nested_top
+    g clone -q top clone
+    cd clone
+    v submodule update --init --single-branch vendor/lib
+    echo "rc=$?"
+    sm_snap vendor/lib
+    g -C vendor/lib config --get-all remote.origin.fetch
+    v submodule deinit -q -f vendor/lib
+    v submodule update --init -q --depth 1 --no-single-branch vendor/lib
+    echo "rc=$?"
+    sm_snap vendor/lib
+    g -C vendor/lib config --get-all remote.origin.fetch
+    v submodule update --init --single-branch --no-single-branch other
+    echo "rc=$?"
+    g -C other config --get-all remote.origin.fetch
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
@@ -8375,6 +8394,7 @@ for s in "$@"; do
         s_submodule_add_urls) run_scenario "$s" none ;;
         s_submodule_update) run_scenario "$s" clone clone/vendor/lib ;;
         s_submodule_update_recursive) run_scenario "$s" clone ;;
+        s_submodule_update_single_branch) run_scenario "$s" clone ;;
         s_submodule_update_remote) run_scenario "$s" clone ;;
         s_submodule_update_merge) run_scenario "$s" clone ;;
         s_submodule_update_rebase) run_scenario "$s" clone ;;

@@ -1011,7 +1011,7 @@ fn submodule_add(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Resul
             println!("Adding existing repo at '{sm_path}' to the index");
         }
     } else {
-        if let Err(code) = clone_submodule(&dest, &git_dir, &realrepo, quiet, None) {
+        if let Err(code) = clone_submodule(&dest, &git_dir, &realrepo, quiet, None, None) {
             return Ok(code);
         }
         if let Err(code) = checkout_branch(&dest, &git_dir, branch.as_deref(), &sm_path) {
@@ -1132,6 +1132,7 @@ fn clone_submodule(
     url: &str,
     quiet: bool,
     depth: Option<&str>,
+    single_branch: Option<bool>,
 ) -> std::result::Result<(), i32> {
     let failed = |message: String| {
         eprintln!("fatal: {message}");
@@ -1216,10 +1217,12 @@ fn clone_submodule(
         )
         .map(|_| ())
     });
-    // `--depth` implies `--single-branch`: the clone's fetch refspec names only the cloned branch.
-    // Narrowing is only honest when the source had a single branch; anything else is refused.
+    // `--depth` implies `--single-branch` unless `--no-single-branch` came last: the clone's fetch
+    // refspec names only the cloned branch. Narrowing is only honest when the source had a single
+    // branch; anything else is refused.
+    let narrow = single_branch.unwrap_or(depth.is_some());
     let result = result.and_then(|()| {
-        if depth.is_none() {
+        if !narrow {
             return Ok(());
         }
         let mut module = Repository::open_with(git_dir, Some(dest), None)?;
@@ -1232,7 +1235,7 @@ fn clone_submodule(
             .collect();
         let [only] = tracked.as_slice() else {
             anyhow::bail!(
-                "submodule update: --depth on a source with several branches is not implemented"
+                "submodule update: --single-branch (or --depth) on a source with several branches is not implemented"
             );
         };
         let branch = only.trim_start_matches("refs/remotes/origin/");
@@ -1351,6 +1354,7 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
     let mut paths: Vec<String> = Vec::new();
     let mut only_paths = false;
     let mut depth: Option<String> = None;
+    let mut single_branch: Option<bool> = None;
     let mut words = args.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
@@ -1384,8 +1388,9 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
                     return Ok(code);
                 }
             }
-            "--reference" | "--filter" | "--single-branch" | "--no-single-branch"
-            | "--dissociate" => {
+            "--single-branch" => single_branch = Some(true),
+            "--no-single-branch" => single_branch = Some(false),
+            "--reference" | "--filter" | "--dissociate" => {
                 anyhow::bail!("submodule update: {word} is not implemented")
             }
             "--recommend-shallow" | "--no-recommend-shallow" | "--progress" => {}
@@ -1411,6 +1416,7 @@ fn submodule_update(global: &GlobalArgs, mut quiet: bool, args: &[String]) -> Re
         strategy_flag,
         quiet,
         depth,
+        single_branch,
     };
     update_in(&mut repository, &root, &prefix, "", &paths, &options)
 }
@@ -1443,6 +1449,8 @@ struct UpdateOptions {
     quiet: bool,
     /// `--depth <n>`: passed verbatim to the submodule's own clone.
     depth: Option<String>,
+    /// `--single-branch` / `--no-single-branch`, the last one given.
+    single_branch: Option<bool>,
 }
 
 /// Bring the submodules of `repository` to the commits its index records.
@@ -1539,6 +1547,7 @@ fn update_in(
                     &url.to_string(),
                     options.quiet,
                     options.depth.as_deref(),
+                    options.single_branch,
                 ) {
                     return Ok(code);
                 }
