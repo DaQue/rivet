@@ -145,8 +145,10 @@ The command works for the common case; the listed options or edge cases are miss
   `store`/`erase`) work (`s_credential_keys`), as do `authtype` with `credential` (an
   `Authorization: <authtype> <credential>` header, `s_credential_authtype`) and `url=` (replaces the credential;
   `s_credential_url`; `store`/`erase` still go to the helpers chosen for the original URL, git re-selects them
-  for the new one). Not implemented: helper
-  output `state[]`/`continue` (multi-round auth), `credential.<url>.*` keys other than `helper`,
+  for the new one). Helper output `state[]` and `continue=1` (with `capability[]=state`) come back to
+  `store`/`erase` (`s_credential_state`); the multi-round retry itself is not implemented (git re-runs the
+  helper chain with the state after a rejected `continue=1` credential, rivet erases and fails), nor is
+  `state[]` shown to a later helper's `get`. Not implemented: `credential.<url>.*` keys other than `helper`,
   `useHttpPath` and `username`, `http.proxy` credentials, `credential.interactive`, the
   `git credential` command, and credentials for `ssh://` (the ssh program asks). Covered by
   `s_credential` against a local Basic-auth server; a `401` that first appears on a POST (discovery

@@ -1184,6 +1184,37 @@ s_credential_url() {
     kill $server 2>/dev/null; wait $server 2>/dev/null
 }
 
+# Helper output `state[]` and `continue`: kept only when the helper announced `capability[]=state`,
+# then handed back (with that capability line) to `store` and `erase`, after `wwwauth[]`.
+s_credential_state() {
+    local port=18797 port2=18798 root=$PWD
+    mkdir -p repos
+    g init -q --bare repos/o.git; g -C repos/o.git config http.receivepack true
+    g clone -q repos/o.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    AUTH_BEARER=tok123 python3 "$AUTHSERVER" $port "$root/repos" x y "$root/req.log" >/dev/null 2>&1 &
+    local server=$!
+    python3 "$AUTHSERVER" $port2 "$root/repos" alice s3cret "$root/req2.log" >/dev/null 2>&1 &
+    local server2=$!
+    sleep 1
+    export GIT_TERMINAL_PROMPT=0
+    cred_helper_out "$root" both 'echo capability[]=authtype; echo capability[]=state; echo authtype=Bearer; echo credential=tok123; echo state[]=foo:bar; echo continue=1'
+    cred_helper_out "$root" rejected 'echo capability[]=authtype; echo capability[]=state; echo authtype=Bearer; echo credential=bad; echo state[]=s1; echo state[]=s2'
+    cred_helper_out "$root" stateonly 'echo capability[]=state; echo username=alice; echo password=s3cret; echo state[]=d1'
+    cred_helper_out "$root" nocap 'echo username=alice; echo password=s3cret; echo state[]=ignored; echo continue=1'
+    v config --global credential.helper "$root/both.sh"
+    v clone -q http://127.0.0.1:$port/o.git c_both; cred_dump "$root"
+    v config --global credential.helper "$root/rejected.sh"
+    v clone -q http://127.0.0.1:$port/o.git c_rej; cred_dump "$root"
+    v config --global credential.helper "$root/stateonly.sh"
+    v clone -q http://127.0.0.1:$port2/o.git c_stateonly; cred_dump "$root"
+    rm -f "$root/req2.log"
+    v config --global credential.helper "$root/nocap.sh"
+    v clone -q http://127.0.0.1:$port2/o.git c_nocap; cred_dump "$root"
+    rm -f "$root/req2.log"
+    kill $server $server2 2>/dev/null; wait $server $server2 2>/dev/null
+}
+
 s_basic_commit() {
     v init -q repo; cd repo
     echo hello >a.txt; mkdir -p dir/sub; echo deep >dir/sub/b.txt; echo x >dir/c
@@ -8106,6 +8137,7 @@ for s in "$@"; do
         s_credential_post) run_scenario "$s" c_post ;;
         s_credential_keys) run_scenario "$s" c_exp c_quitfull ;;
         s_credential_authtype) run_scenario "$s" c_bearer c_bare c_first ;;
+        s_credential_state) run_scenario "$s" c_both c_stateonly c_nocap ;;
         s_credential_url) run_scenario "$s" c_same c_moved c_cleared c_junk c_nl ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
         s_sparse_linked) run_scenario "$s" repo wt ;;

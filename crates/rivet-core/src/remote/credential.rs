@@ -58,6 +58,13 @@ pub struct Credential {
     /// A helper said `capability[]=authtype`; `store` and `erase` then hear `authtype` and
     /// `credential` back, preceded by that line.
     pub capa_authtype: bool,
+    /// A helper said `capability[]=state`; `store` and `erase` then hear that line, the helper's
+    /// `continue` and its `state[]` values back.
+    pub capa_state: bool,
+    /// The opaque `state[]` values a helper handed out, in the order it gave them.
+    pub state: Vec<BString>,
+    /// A helper said `continue=1`: it expects another round of authentication.
+    pub multistage: bool,
 }
 
 /// Undo `%XX` escapes; a `%` not followed by two hex digits stays as it is (as in Git).
@@ -371,6 +378,16 @@ impl CredentialSettings {
                     credential.password = Some(BString::from(value));
                 } else if line == b"capability[]=authtype" {
                     credential.capa_authtype = !credential.plain_get;
+                } else if line == b"capability[]=state" {
+                    credential.capa_state = !credential.plain_get;
+                } else if let Some(value) = line.strip_prefix(b"state[]=") {
+                    credential.state.push(BString::from(value));
+                } else if let Some(value) = line.strip_prefix(b"continue=") {
+                    credential.multistage = value
+                        .to_str()
+                        .ok()
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .is_some_and(|v| v != 0);
                 } else if let Some(value) = line.strip_prefix(b"authtype=") {
                     credential.authtype = Some(String::from_utf8_lossy(value).into_owned());
                 } else if let Some(value) = line.strip_prefix(b"credential=") {
@@ -513,8 +530,14 @@ fn input(credential: &Credential, operation: Operation) -> Vec<u8> {
     if operation == Operation::Get && !credential.plain_get {
         out.extend_from_slice(b"capability[]=authtype\ncapability[]=state\n");
     }
+    let echo_state = operation != Operation::Get && credential.capa_state;
     if operation != Operation::Get && credential.capa_authtype {
         out.extend_from_slice(b"capability[]=authtype\n");
+    }
+    if echo_state {
+        out.extend_from_slice(b"capability[]=state\n");
+    }
+    if operation != Operation::Get && credential.capa_authtype {
         if let Some(authtype) = &credential.authtype {
             out.extend_from_slice(format!("authtype={authtype}\n").as_bytes());
         }
@@ -559,6 +582,16 @@ fn input(credential: &Credential, operation: Operation) -> Vec<u8> {
     if operation != Operation::Store {
         for challenge in &credential.wwwauth {
             out.extend_from_slice(format!("wwwauth[]={challenge}\n").as_bytes());
+        }
+    }
+    if echo_state {
+        if credential.multistage {
+            out.extend_from_slice(b"continue=1\n");
+        }
+        for value in &credential.state {
+            out.extend_from_slice(b"state[]=");
+            out.extend_from_slice(value);
+            out.push(b'\n');
         }
     }
     out
@@ -634,6 +667,35 @@ mod tests {
         assert_eq!(
             input(&credential, Operation::Store),
             b"capability[]=authtype\nauthtype=Bearer\ncredential=tok\nprotocol=http\nhost=h:1\n"
+        );
+    }
+
+    #[test]
+    fn state_and_continue_come_back_on_store_only_when_the_helper_announced_state() {
+        let mut credential = Credential {
+            protocol: "http".into(),
+            host: "h:1".into(),
+            username: Some(BString::from("u")),
+            password: Some(BString::from("p")),
+            wwwauth: vec!["Basic".into()],
+            state: vec![BString::from("a:b"), BString::from("c")],
+            multistage: true,
+            ..Credential::default()
+        };
+        assert_eq!(
+            input(&credential, Operation::Store),
+            b"protocol=http\nhost=h:1\nusername=u\npassword=p\n"
+        );
+        credential.capa_state = true;
+        assert_eq!(
+            input(&credential, Operation::Erase),
+            b"capability[]=state\nprotocol=http\nhost=h:1\nusername=u\npassword=p\nwwwauth[]=Basic\ncontinue=1\nstate[]=a:b\nstate[]=c\n"
+                as &[u8]
+        );
+        assert!(
+            !input(&credential, Operation::Get)
+                .windows(6)
+                .any(|w| w == b"state[")
         );
     }
 
