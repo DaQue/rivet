@@ -52,8 +52,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   another fixup commit by id (`s_rebase_autosquash` covers the rest, plus `--no-autosquash` and
   `rebase.autoSquash`), and the todo commands `label`, `reset`, `merge`
   and `update-ref`. A rebase stopped inside a `fixup -C`/`-c` chain and resumed by the other implementation
-  is not compared (git leaves no `message-fixup` there; rivet writes one). `fixup -C<commit>` with the
-  flag glued to the commit is not parsed. An empty message from the editor aborts the whole rebase back to the
+  is not compared (git leaves no `message-fixup` there; rivet writes one). An empty message from the editor aborts the whole rebase back to the
   original tip (git stops with the commit pending). The editor sees the message plus git's `#` footer, not
   the `git status` template. `post-rewrite` lines for a squash chain are not compared with git.
 * **Rebase interop** — a rebase that rivet starts (plain or `-i`) can be resumed, skipped or aborted by real

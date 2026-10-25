@@ -402,6 +402,13 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
         if cmd == Cmd::Fixup && Flag::parse(target) != Flag::None {
             flag = Flag::parse(target);
             target = words.next().unwrap_or_default();
+        } else if cmd == Cmd::Fixup && target.len() > 2 && target.is_char_boundary(2) {
+            // The flag glued to the commit: `fixup -C<commit>`.
+            let (head, rest) = target.split_at(2);
+            if Flag::parse(head) != Flag::None {
+                flag = Flag::parse(head);
+                target = rest;
+            }
         }
         match crate::cmd::resolve_commit(repository, target) {
             Ok(oid) => items.push(Item {

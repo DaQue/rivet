@@ -1277,3 +1277,8 @@ Left undone (in `GAPS.md`): `amend!` autosquash (needs the `amend!` line strippe
 real git (git writes no `message-fixup` there), `fixup -C<commit>` glued form.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
 `scenarios.sh` 266 PASS / `failures: 0`.
+
+## rebase -i `fixup -C<commit>` glued form (2026-10-25)
+Landed the flag glued to the commit in a todo line (`fixup -C<id>`, `fixup -c<id>`; `fixup -Cxyz` reports `could not parse 'xyz'`) —
+real git parses it like the spaced form. `s_rebase_fixup_c` extended; it fails on `a46c3bd` and passes after. `GAPS.md` updated.
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 252 passed / 0 failed / 0 ignored; `scenarios.sh` 266 PASS / `failures: 0`.

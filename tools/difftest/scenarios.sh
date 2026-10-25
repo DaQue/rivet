@@ -8032,6 +8032,13 @@ s_rebase_fixup_c() {
     v rebase --abort
     rebase_i_run '2s/^pick/squash -C/'
     v rebase --abort
+    # The flag glued to the commit parses like the spaced form.
+    rebase_i_run '2s/^pick \([0-9a-f]*\).*/fixup -C\1/'
+    v reflog
+    rebase_i_run '2s/^pick \([0-9a-f]*\).*/fixup -c\1/'
+    v reflog
+    rebase_i_run '2s/^pick/fixup -Cxyz/'
+    v rebase --abort
     v reflog
 }
 
