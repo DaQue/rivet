@@ -1432,3 +1432,13 @@ Scenario `s_rev_list_cherry` fails on `762e11c` (unknown option), passes now; ex
 Left undone (in `GAPS.md`): `--cherry` and `log --cherry-mark`/`--cherry-pick`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 259 passed / 0 failed / 0 ignored,
 `scenarios.sh` 280 PASS / `failures: 0`.
+
+## status: dirty submodule trees (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed; took `GAPS.md` section 2 (`status` of a submodule). `moved_submodules` in
+`cmd/snapshot.rs` now also runs a status inside each checked-out submodule: tracked/staged changes give `modified content`, untracked
+files `untracked content`. Long status prints `(new commits, modified content, untracked content)` and git's "commit or discard the
+untracked or modified content in submodules" hint; `--short` prints ` m` / ` ?` (` M` when new commits too), `--porcelain` stays ` M`.
+Scenario `s_status_dirty_submodule` fails on `6dd4801` (dirty submodule not reported), passes now; expected output checked against `/usr/bin/git`.
+Left undone (in `GAPS.md`): nested dirty submodules, `--ignore-submodules` / `status.submoduleSummary`, `status` with several pathspecs.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 259 passed / 0 failed / 0 ignored,
+`scenarios.sh` 281 PASS / `failures: 0`.

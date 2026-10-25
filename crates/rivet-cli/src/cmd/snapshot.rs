@@ -1058,16 +1058,17 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     };
     status.staged.retain(|e| e.kind != ChangeKind::Unmerged);
     status.unstaged.retain(|e| e.kind != ChangeKind::Unmerged);
-    // `unstaged_changes` skips gitlinks; a submodule checked out at another commit is ` M`.
+    // `unstaged_changes` skips gitlinks; a submodule checked out at another commit or with a dirty
+    // tree is ` M` (` m` / ` ?` when only its content differs).
     let moved_submodules = moved_submodules(&repository, &options.pathspec);
-    for (path, index_oid, head_oid, mode) in &moved_submodules {
+    for sub in &moved_submodules {
         status.unstaged.push(rivet_core::worktree::StatusEntry {
-            path: path.clone(),
+            path: sub.path.clone(),
             kind: ChangeKind::Modified,
-            old_oid: Some(*index_oid),
-            new_oid: Some(*head_oid),
-            old_mode: Some(*mode),
-            new_mode: Some(*mode),
+            old_oid: Some(sub.index_oid),
+            new_oid: Some(sub.head_oid),
+            old_mode: Some(sub.mode),
+            new_mode: Some(sub.mode),
         });
     }
     status.unstaged.sort_by(|a, b| a.path.cmp(&b.path));
@@ -1167,7 +1168,12 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
                 };
         }
         for entry in &status.unstaged {
-            lines.entry(entry.path.clone()).or_insert((' ', ' ')).1 = entry.kind.code();
+            let code = match moved_submodules.iter().find(|s| s.path == entry.path) {
+                Some(sub) if args.porcelain.is_none() && !sub.new_commits && sub.modified => 'm',
+                Some(sub) if args.porcelain.is_none() && !sub.new_commits && sub.untracked => '?',
+                _ => entry.kind.code(),
+            };
+            lines.entry(entry.path.clone()).or_insert((' ', ' ')).1 = code;
         }
         let mut rendered: Vec<(BString, String)> = lines
             .into_iter()
@@ -1337,15 +1343,31 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             println!("  (use \"git add <file>...\" to update what will be committed)");
         }
         println!("  (use \"git restore <file>...\" to discard changes in working directory)");
+        if moved_submodules.iter().any(|s| s.modified || s.untracked) {
+            println!("  (commit or discard the untracked or modified content in submodules)");
+        }
         for entry in &status.unstaged {
-            let moved = moved_submodules
-                .iter()
-                .any(|(path, ..)| *path == entry.path);
+            let why: Vec<&str> = match moved_submodules.iter().find(|s| s.path == entry.path) {
+                Some(sub) => [
+                    (sub.new_commits, "new commits"),
+                    (sub.modified, "modified content"),
+                    (sub.untracked, "untracked content"),
+                ]
+                .into_iter()
+                .filter_map(|(on, text)| on.then_some(text))
+                .collect(),
+                None => Vec::new(),
+            };
+            let suffix = if why.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", why.join(", "))
+            };
             println!(
                 "\t{:<12}{}{}",
                 section_label(entry.kind),
                 q(&entry.path, false),
-                if moved { " (new commits)" } else { "" }
+                suffix
             );
         }
         wrote_section = true;
@@ -1399,18 +1421,25 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     Ok(0)
 }
 
-/// Gitlinks in the index whose checked-out submodule `HEAD` is not the recorded commit.
+/// A gitlink whose checked-out submodule differs from what the index records.
+struct SubmoduleState {
+    path: BString,
+    index_oid: rivet_core::hash::ObjectId,
+    head_oid: rivet_core::hash::ObjectId,
+    mode: rivet_core::object::EntryMode,
+    /// The submodule's `HEAD` is not the recorded commit.
+    new_commits: bool,
+    /// Tracked content differs from its `HEAD` or index.
+    modified: bool,
+    /// The submodule has untracked files.
+    untracked: bool,
+}
+
+/// Gitlinks in the index whose checked-out submodule `HEAD` is not the recorded commit, or whose
+/// work tree is dirty.
 ///
 /// A submodule that is not checked out, or whose `HEAD` cannot be read, is not reported, as in git.
-fn moved_submodules(
-    repository: &rivet_core::Repository,
-    pathspec: &[u8],
-) -> Vec<(
-    BString,
-    rivet_core::hash::ObjectId,
-    rivet_core::hash::ObjectId,
-    rivet_core::object::EntryMode,
-)> {
+fn moved_submodules(repository: &rivet_core::Repository, pathspec: &[u8]) -> Vec<SubmoduleState> {
     let Some(root) = repository.worktree_path().map(std::path::Path::to_path_buf) else {
         return Vec::new();
     };
@@ -1430,11 +1459,30 @@ fn moved_submodules(
         if !dir.join(".git").exists() {
             continue;
         }
-        let head = rivet_core::Repository::open_or_discover(&dir)
-            .ok()
-            .and_then(|sub| sub.head().ok()?.oid());
-        if let Some(head) = head.filter(|head| *head != entry.oid) {
-            out.push((entry.path.clone(), entry.oid, head, entry.mode));
+        let Ok(mut sub) = rivet_core::Repository::open_or_discover(&dir) else {
+            continue;
+        };
+        let Some(head) = sub.head().ok().and_then(|head| head.oid()) else {
+            continue;
+        };
+        let (modified, untracked) = match sub.status(&StatusOptions::new()) {
+            Ok(inner) => (
+                !inner.staged.is_empty() || !inner.unstaged.is_empty(),
+                !inner.untracked.is_empty(),
+            ),
+            Err(_) => (false, false),
+        };
+        let new_commits = head != entry.oid;
+        if new_commits || modified || untracked {
+            out.push(SubmoduleState {
+                path: entry.path.clone(),
+                index_oid: entry.oid,
+                head_oid: head,
+                mode: entry.mode,
+                new_commits,
+                modified,
+                untracked,
+            });
         }
     }
     out

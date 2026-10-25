@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 280 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 281 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 259 tests / 0 failed, 280 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 259 tests / 0 failed, 281 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -86,9 +86,10 @@ The command or subsystem is absent; it either fails at the argument parser or re
   not read alternates); `--dissociate` leaves none. `-j`/`--jobs` is validated and accepted but runs sequentially.
   `checkout`, `merge` and `rebase` (`--merge`, `--rebase`, `submodule.<name>.update`) work. `update --remote` works
   (branch from `.gitmodules`, remote `HEAD` by default); `submodule.<name>.branch = .` is refused.
-* **`status` of a submodule** — a submodule whose `HEAD` differs from the index is reported (` M path`,
-  `modified:   path (new commits)`, `s_status_moved_submodule`). Not reported: a submodule with the
-  recorded `HEAD` but a dirty tree (`(modified content)`, `(untracked content)`), and `diff`/`commit -a`/`add -u`
+* **`status` of a submodule** — a submodule whose `HEAD` differs from the index, or whose tree is dirty, is reported
+  (` M path`, `modified:   path (new commits, modified content, untracked content)`, short ` m` / ` ?`, git's
+  "commit or discard" hint; `s_status_moved_submodule`, `s_status_dirty_submodule`). A dirty nested submodule inside a
+  submodule, and `status.submoduleSummary` / `diff.ignoreSubmodules` / `--ignore-submodules`, are not compared. `diff`/`commit -a`/`add -u`
   still skip gitlinks. `status` takes one pathspec only (git takes several).
 
 ## 2. Implemented, but partial

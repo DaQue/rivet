@@ -9016,6 +9016,34 @@ s_status_moved_submodule() {
     v status; v status --short
 }
 
+# `status` of a submodule with a dirty tree: `(modified content)`, `(untracked content)`, both, and
+# combined with `new commits`; short codes ` m`, ` ?`, ` M`; the "commit or discard" hint line.
+s_status_dirty_submodule() {
+    g config --global protocol.file.allow always
+    g init -q lib; (cd lib && tick && echo 1 >f && g add f && g commit -q -m l1 && tick && echo 2 >>f && g commit -q -a -m l2)
+    g init -q repo; cd repo
+    tick; echo t >t; g add t; g commit -q -m t1
+    g submodule add -q ../lib sub
+    tick; g commit -q -m subs
+    v status
+    echo x >sub/f
+    v status; v status --short; v status --porcelain
+    echo n >sub/new
+    v status; v status --short
+    (cd sub && g checkout -q -- f)
+    v status; v status --short; v status --porcelain
+    rm sub/new
+    echo s >sub/staged; (cd sub && g add staged)
+    v status; v status --short
+    (cd sub && g reset -q --hard)
+    echo n >sub/new
+    (cd sub && g checkout -q HEAD~1)
+    v status; v status --short
+    echo y >sub/f
+    v status; v status --short
+    v status -s -- sub
+}
+
 # `status -- <file>`: a pathspec that names a file (tracked, untracked, in a subdirectory, absent).
 s_status_file_pathspec() {
     g init -q repo; cd repo
