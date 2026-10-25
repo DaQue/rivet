@@ -89,7 +89,7 @@ pub struct RebaseArgs {
     #[arg(short = 'i', long = "interactive")]
     pub interactive: bool,
 
-    /// Rebase every commit down to the root (refused with `--interactive`).
+    /// Rebase every commit down to the root.
     #[arg(long = "root")]
     pub root: bool,
 
@@ -270,7 +270,6 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
         }
     }
     for (given, what) in [
-        (args.root && args.interactive, "--root"),
         (args.rebase_merges.is_some(), "--rebase-merges"),
         (
             !args.exec.is_empty() && !args.interactive,
@@ -563,6 +562,7 @@ fn start(
         ),
         None => upstream,
     };
+    let mut squash_onto = None;
     if args.root && onto.is_none() {
         // Without `--onto` the commits are replayed onto an empty commit, which git writes without
         // its (empty) tree.
@@ -576,6 +576,7 @@ fn start(
         let virtual_onto = repository.odb().write_raw(ObjectKind::Commit, &body)?;
         onto_name = virtual_onto.to_string();
         onto = Some(virtual_onto);
+        squash_onto = onto;
     }
     // With `--root` every commit not reachable from the new base is replayed.
     if args.root {
@@ -742,6 +743,8 @@ fn start(
             autostash,
             autosquash: autosquash_wanted(repository, args.autosquash, args.no_autosquash),
             exec: &args.exec,
+            root: args.root,
+            squash_onto,
         };
         return interactive::begin(global, repository, &plan, dir);
     }
@@ -980,7 +983,11 @@ fn commit_pick(
     let committer = repository.committer_signature()?;
     let mut builder = rivet_core::CommitBuilder::new();
     builder.tree(tree);
-    builder.parent(parent);
+    // A `--root` rebase starts from a virtual empty commit that the first real commit replaces.
+    let squash_onto = read_state(&rebase_dir(repository), "squash-onto");
+    if squash_onto.trim() != parent.to_string() {
+        builder.parent(parent);
+    }
     builder.author(author.clone());
     builder.committer(committer.clone());
     builder.message(BStr::new(message));

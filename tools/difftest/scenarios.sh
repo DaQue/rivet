@@ -8152,6 +8152,83 @@ s_rebase_root() {
     echo "rc=$?"
 }
 
+# `rebase -i --root`: the todo list starts at the root commit and the footer names the virtual empty
+# base; unedited picks fast-forward onto it, and reword/edit/squash/drop/exec work on the root like on
+# any other commit, with and without `--onto`.
+s_rebase_root_i() {
+    rebase_repo
+    rebase_i_helpers
+    v switch -q topic
+    g branch orig topic
+    GIT_SEQUENCE_EDITOR=cat v rebase -i --root
+    echo "rc=$?"
+    v log --format='%H %p %s' --graph
+    v reflog
+    cat .git/ORIG_HEAD
+    ls .git/rebase-merge
+    v fsck
+    # Reword the root itself, drop a middle commit.
+    v reset -q --hard orig
+    SEQ='1s/^pick/reword/;2d' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" GIT_EDITOR="$PWD/../msg.sh" v rebase -i --root
+    echo "rc=$?"
+    v log --format='%H %p %an %s%n%b' --graph
+    v reflog -8
+    # Stop on the root, amend it, continue; then squash the second commit into it.
+    v reset -q --hard orig
+    SEQ='1s/^pick/edit/' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase -i --root
+    echo "rc=$?"
+    v status
+    cat .git/rebase-merge/done
+    echo amended >>a; v commit -q -a --amend -m 'root amended'
+    v rebase --continue
+    echo "rc=$?"
+    v log --format='%H %p %s' --graph
+    v reset -q --hard orig
+    SEQ='2s/^pick/squash/' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" GIT_EDITOR=true v rebase -i --root
+    echo "rc=$?"
+    v log --format='%H %p %s%n%b' --graph
+    v reflog -8
+    # Dropping the root leaves the next commit as the new root.
+    v reset -q --hard orig
+    SEQ='1d' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase -i --root
+    echo "rc=$?"
+    v log --format='%H %p %s' --graph
+    v status
+    cat .git/rebase-merge/squash-onto
+    v rebase --abort
+    # `--exec`, a branch argument, and an interactive `--root --onto`.
+    v reset -q --hard orig
+    v switch -q main
+    GIT_SEQUENCE_EDITOR=cat v rebase -i --root -x 'echo X' topic
+    echo "rc=$?"
+    v log --format='%H %p %s' --graph
+    v reset -q --hard orig
+    v switch -q -c moved main
+    GIT_SEQUENCE_EDITOR=cat v rebase -i --root --onto topic
+    echo "rc=$?"
+    v log --format='%H %p %s' --graph
+    v reflog -8
+    # An unrelated root conflicts like any pick; the todo and `done` show the root.
+    v switch -q --orphan lone
+    printf 'x\n' >a; echo l >l; v add a l; tick; v commit -q -m L1
+    echo l2 >>l; tick; v commit -q -a -m L2
+    GIT_SEQUENCE_EDITOR=cat v rebase -i --root --onto main
+    echo "rc=$?"
+    v status
+    cat .git/rebase-merge/done
+    printf 'x\n' >a; v add a
+    v rebase --continue >/dev/null 2>&1
+    echo "rc=$?"
+    v log --format='%H %p %s' --graph
+    v reflog -8
+    # pre-rebase sees `--root` where the upstream would be.
+    mkdir -p .git/hooks
+    printf '#!/bin/sh\necho "pre-rebase $@" >&2\n' >.git/hooks/pre-rebase
+    chmod +x .git/hooks/pre-rebase
+    GIT_SEQUENCE_EDITOR=cat v rebase -i --root
+    echo "rc=$?"
+}
+
 # `stash branch`: the argument errors, a branch made at the stash's base with the index and the
 # untracked files restored, `post-checkout` for the new branch, an explicit stash, and the two ways
 # it can fail (the checkout refuses, the apply refuses) which must keep the stash.

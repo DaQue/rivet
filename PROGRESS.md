@@ -1304,3 +1304,12 @@ Left undone (in `GAPS.md`): a ref that moved since the start, a ref checked out 
 `rebase.updateRefs` generating the lines, `merge`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
 `scenarios.sh` 268 PASS / `failures: 0`.
+
+## rebase -i --root (2026-10-25)
+Landed `rebase -i --root` (with `--onto`, `-x`, a branch argument), `s_rebase_root_i`; it fails on `b5eb58e` (flag refused by name) and passes after.
+The todo footer names the tip only (`# Rebase <tip> onto <base>`); the virtual empty base is written to `rebase-merge/squash-onto`
+and the first commit made on top of it has no parent, as in git (dropping the root leaves the next commit a root commit).
+The refusal Rust test no longer lists `--root`. `GAPS.md` updated. `PRIORITIES.md` was stale (its queue is landed per `git log`); not edited.
+Left undone: more than one positional argument with `--root` (git's full usage text).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 252 passed / 0 failed / 0 ignored,
+`scenarios.sh` 269 PASS / `failures: 0`.

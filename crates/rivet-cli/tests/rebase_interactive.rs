@@ -74,7 +74,6 @@ fn options_that_are_not_implemented_are_refused_by_name() {
             "--exec without -i",
         ),
         (vec!["rebase", "-x", "true", "main"], "--exec without -i"),
-        (vec!["rebase", "-i", "--root"], "--root"),
         (
             vec!["rebase", "-i", "--rebase-merges", "main"],
             "--rebase-merges",

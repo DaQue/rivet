@@ -533,6 +533,11 @@ pub(super) struct Plan<'a> {
     pub autosquash: bool,
     /// The `--exec` commands, run after every commit (after the whole chain for `squash`/`fixup`).
     pub exec: &'a [String],
+    /// `--root`: the todo list starts at the root commit, so its footer names the tip only.
+    pub root: bool,
+    /// The virtual empty commit a `--root` rebase without `--onto` starts from; the first commit
+    /// made on top of it becomes a root commit again.
+    pub squash_onto: Option<ObjectId>,
 }
 
 /// The `fixup! `, `squash! ` or `amend! ` prefix of a subject: the todo command it asks for and
@@ -639,6 +644,9 @@ pub(super) fn begin(
     write_state(dir, "head-name", &format!("{}\n", plan.head_name))?;
     write_state(dir, "onto", &format!("{}\n", plan.onto))?;
     write_state(dir, "orig-head", &format!("{}\n", plan.orig_head))?;
+    if let Some(squash_onto) = plan.squash_onto {
+        write_state(dir, "squash-onto", &format!("{squash_onto}\n"))?;
+    }
     write_state(dir, "interactive", "")?;
     write_state(dir, "rivet-interactive", "")?;
     write_state(dir, "done", "")?;
@@ -666,7 +674,11 @@ pub(super) fn begin(
             }
         }
     }
-    let range = format!("{}..{}", abbrev(&plan.upstream), abbrev(&plan.orig_head));
+    let range = if plan.root {
+        abbrev(&plan.orig_head)
+    } else {
+        format!("{}..{}", abbrev(&plan.upstream), abbrev(&plan.orig_head))
+    };
     text.push_str(&todo_footer(
         comment,
         &range,
