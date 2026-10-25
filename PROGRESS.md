@@ -1113,3 +1113,18 @@ Gate at `a62bcc5`: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test
 - Not started, deliberately: 4 sparse index, 7 advanced `rebase -i` todo commands, 8 partial clone / `bundle-uri`. Each is a subsystem that cannot be proven against git in one unit.
 
 I did not tick the queue: the brief forbids editing `.claude/`. The supervisor should refresh PRIORITIES.md.
+
+## Loop iteration 2026-10-25 — `rebase -i` `exec` todo lines and `--exec`/`-x` with `-i`
+Gate at `df6cd53`: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 252 PASS / `failures: 0`.
+
+Landed (priority 7, the `exec` part only): `exec <cmd>` / `x <cmd>` todo lines and `rebase -i -x <cmd>` (repeatable; one `exec` line after
+every commit, after the whole chain for `squash`/`fixup`, counted in the `(N commands)` footer). The command runs from the work tree root,
+a bare word is started directly (git's "cannot run X: No such file or directory"), anything else through `sh -c`; `Executing: …` and the
+`Rebasing (n/m)` counter go to stderr; a failing command stops with git's `warning: execution failed` text, exit 1, and `--continue` goes on.
+Scenario `s_rebase_exec` (generated todo, stdout/stderr, failing exec + `--continue`, exec writing into the tree, empty `exec` line error, reflogs).
+It fails on `df6cd53` (`exec` was refused by name) and passes after. Rust test `rebase_interactive.rs` updated: `--exec` without `-i` is refused as
+`rebase --exec without -i is not implemented`; the `exec` todo-line case was removed from the refusal list.
+Deliberately left: `--exec` without `-i` (git runs it as an unedited interactive rebase), `break`, `label`, `reset`, `merge`, `update-ref`, `fixup -C`;
+`--continue` after a failed exec does not re-check for staged/unstaged changes the way git does; exec exit-status handling beyond success/failure
+(e.g. `reschedule-failed-exec`) is not implemented.
+Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 253 PASS / `failures: 0`.

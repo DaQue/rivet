@@ -9,8 +9,8 @@
 //!
 //! # What is refused
 //!
-//! `exec`, `break`, `label`, `reset`, `merge`, `update-ref` and `fixup -C`/`-c` lines in the todo
-//! list are refused by name *before* anything is touched, like `--exec`, `--root`,
+//! `break`, `label`, `reset`, `merge`, `update-ref` and `fixup -C`/`-c` lines in the todo
+//! list are refused by name *before* anything is touched, like `--exec` without `-i`, `--root`,
 //! `--rebase-merges`, `--keep-base`, `--autosquash`, `--edit-todo` and signing on the command line.
 //!
 //! # Caveats
@@ -38,6 +38,7 @@ pub(super) enum Cmd {
     Fixup,
     Drop,
     Noop,
+    Exec,
 }
 
 impl Cmd {
@@ -51,6 +52,7 @@ impl Cmd {
             "fixup" | "f" => Cmd::Fixup,
             "drop" | "d" => Cmd::Drop,
             "noop" => Cmd::Noop,
+            "exec" | "x" => Cmd::Exec,
             _ => return None,
         })
     }
@@ -65,6 +67,7 @@ impl Cmd {
             Cmd::Fixup => "fixup",
             Cmd::Drop => "drop",
             Cmd::Noop => "noop",
+            Cmd::Exec => "exec",
         }
     }
 
@@ -239,8 +242,26 @@ pub(super) fn edit_message(repository: &Repository, message: &[u8]) -> Result<Op
 /// One parsed todo line.
 pub(super) struct Item {
     pub cmd: Cmd,
-    /// `None` for `noop`.
+    /// `None` for `noop` and `exec`.
     pub oid: Option<ObjectId>,
+    /// The shell command of an `exec` line.
+    pub text: Option<String>,
+}
+
+impl Item {
+    /// The line for the state files and the editor, with `name` standing for the commit.
+    fn line(&self, repository: &Repository, name: impl Fn(&ObjectId) -> String) -> Result<String> {
+        Ok(match (&self.oid, &self.text) {
+            (Some(oid), _) => format!(
+                "{} {} # {}\n",
+                self.cmd.name(),
+                name(oid),
+                super::subject_of(repository, oid)?
+            ),
+            (None, Some(text)) => format!("exec {text}\n"),
+            (None, None) => "noop\n".to_string(),
+        })
+    }
 }
 
 /// What the edited todo list turned out to be.
@@ -265,7 +286,6 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
         let mut words = line.split_whitespace();
         let word = words.next().unwrap_or_default();
         let name = match word {
-            "x" | "exec" => Some("exec"),
             "b" | "break" => Some("break"),
             "l" | "label" => Some("label"),
             "t" | "reset" => Some("reset"),
@@ -278,13 +298,31 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
                 "rebase: '{name}' in the todo list is not implemented"
             ));
         }
+        if matches!(word, "x" | "exec") {
+            let command = line[word.len()..].trim();
+            if command.is_empty() {
+                errors.push("missing arguments for exec".to_string());
+                errors.push(format!("invalid line {}: {raw}", number + 1));
+            } else {
+                items.push(Item {
+                    cmd: Cmd::Exec,
+                    oid: None,
+                    text: Some(command.to_string()),
+                });
+            }
+            continue;
+        }
         let Some(cmd) = Cmd::parse(word) else {
             errors.push(format!("invalid command '{word}'"));
             errors.push(format!("invalid line {}: {raw}", number + 1));
             continue;
         };
         if cmd == Cmd::Noop {
-            items.push(Item { cmd, oid: None });
+            items.push(Item {
+                cmd,
+                oid: None,
+                text: None,
+            });
             continue;
         }
         let Some(mut target) = words.next() else {
@@ -304,6 +342,7 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
             Ok(oid) => items.push(Item {
                 cmd,
                 oid: Some(oid),
+                text: None,
             }),
             Err(_) => {
                 errors.push(format!("could not parse '{target}'"));
@@ -322,14 +361,7 @@ pub(super) fn parse_todo(repository: &Repository, text: &str, comment: char) -> 
 pub(super) fn todo_lines(repository: &Repository, items: &[Item]) -> Result<String> {
     let mut out = String::new();
     for item in items {
-        match item.oid {
-            Some(oid) => out.push_str(&format!(
-                "{} {oid} # {}\n",
-                item.cmd.name(),
-                super::subject_of(repository, &oid)?
-            )),
-            None => out.push_str("noop\n"),
-        }
+        out.push_str(&item.line(repository, |oid| oid.to_string())?);
     }
     Ok(out)
 }
@@ -346,6 +378,8 @@ pub(super) struct Plan<'a> {
     pub autostash: Option<ObjectId>,
     /// Reorder `fixup!` / `squash!` commits next to their targets (`--autosquash`).
     pub autosquash: bool,
+    /// The `--exec` commands, run after every commit (after the whole chain for `squash`/`fixup`).
+    pub exec: &'a [String],
 }
 
 /// The `fixup! `, `squash! ` or `amend! ` prefix of a subject: the todo command it asks for and
@@ -464,16 +498,27 @@ pub(super) fn begin(
     if plan.commits.is_empty() {
         text.push_str("noop\n");
     }
-    for (command, index) in &order {
+    let mut commands = 0;
+    for (n, (command, index)) in order.iter().enumerate() {
         let (oid, subject) = &plan.commits[*index];
         text.push_str(&format!("{command} {} # {subject}\n", abbrev(oid)));
+        commands += 1;
+        let chained = order
+            .get(n + 1)
+            .is_some_and(|(next, _)| matches!(*next, "fixup" | "squash"));
+        if !chained {
+            for command in plan.exec {
+                text.push_str(&format!("exec {command}\n"));
+                commands += 1;
+            }
+        }
     }
     let range = format!("{}..{}", abbrev(&plan.upstream), abbrev(&plan.orig_head));
     text.push_str(&todo_footer(
         comment,
         &range,
         &abbrev(&plan.onto),
-        plan.commits.len(),
+        if plan.commits.is_empty() { 0 } else { commands },
     ));
     let todo_path = dir.join("git-rebase-todo");
     std::fs::write(&todo_path, text)?;
@@ -898,15 +943,7 @@ pub(super) fn edit_todo(repository: &Repository, dir: &Path) -> Result<i32> {
             }
             let mut shown = String::new();
             for item in &items {
-                match item.oid {
-                    Some(oid) => shown.push_str(&format!(
-                        "{} {} # {}\n",
-                        item.cmd.name(),
-                        abbrev(&oid),
-                        super::subject_of(repository, &oid)?
-                    )),
-                    None => shown.push_str("noop\n"),
-                }
+                shown.push_str(&item.line(repository, abbrev)?);
             }
             (todo_lines(repository, &items)?, shown)
         }

@@ -7866,6 +7866,44 @@ s_rebase_autosquash() {
     v rebase --abort
 }
 
+# `exec` todo lines and `rebase -i --exec`: the generated todo list (one exec per -x, after a whole
+# squash/fixup chain), stdout/stderr of the command, a failing command that stops the rebase, and
+# `--continue` afterwards. `--exec` without -i is still refused by name (GAPS.md).
+s_rebase_exec() {
+    rebase_repo
+    g branch orig topic
+    rebase_i_helpers
+    GIT_SEQUENCE_EDITOR=cat v rebase -i -x 'echo A' main topic
+    echo "rc=$?"
+    v log --format='%H %s' main..topic
+    v reflog
+    v switch -q topic
+    v reset -q --hard orig
+    GIT_SEQUENCE_EDITOR=cat v rebase -i -x 'echo A' -x 'echo B' main
+    echo "rc=$?"
+    v switch -q topic
+    v reset -q --hard orig
+    SEQ='2s/^pick/squash/' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" GIT_EDITOR=true v rebase -i -x 'echo C' main
+    echo "rc=$?"
+    v log --format='%H %s' main..topic
+    # A failing exec stops with the commit applied; --continue goes on.
+    rebase_i_run '1a exec echo before; false'
+    v status
+    v rebase --continue
+    echo "rc=$?"
+    v log --format='%H %s' main..topic
+    v status
+    # exec writes into the work tree and runs from its root.
+    rebase_i_run '2a exec echo made > made.txt'
+    v status
+    rebase_i_run '1a x pwd >/dev/null && test -f a'
+    rebase_i_run '1a exec false'
+    v rebase --abort
+    rebase_i_run '1a exec'
+    v rebase --abort
+    v reflog
+}
+
 # `stash branch`: the argument errors, a branch made at the stash's base with the index and the
 # untracked files restored, `post-checkout` for the new branch, an explicit stash, and the two ways
 # it can fail (the checkout refuses, the apply refuses) which must keep the stash.

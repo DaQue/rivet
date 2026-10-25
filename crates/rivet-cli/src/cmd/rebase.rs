@@ -13,7 +13,7 @@
 //!
 //! # What is refused
 //!
-//! `--root`, `--rebase-merges`, `--exec`, `--keep-base`, `--autosquash`, `--edit-todo` and signing
+//! `--root`, `--rebase-merges`, `--exec` without `-i`, `--keep-base`, `--autosquash`, `--edit-todo` and signing
 //! are accepted by the grammar only to be refused by name; the other options Git has are not in the
 //! grammar, so they fail at the command line instead of being ignored. What `--interactive` refuses
 //! is listed in [`interactive`].
@@ -264,7 +264,10 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
     for (given, what) in [
         (args.root, "--root"),
         (args.rebase_merges.is_some(), "--rebase-merges"),
-        (!args.exec.is_empty(), "--exec"),
+        (
+            !args.exec.is_empty() && !args.interactive,
+            "--exec without -i",
+        ),
         (args.keep_base, "--keep-base"),
         (args.gpg_sign.is_some(), "--gpg-sign"),
         (
@@ -668,6 +671,7 @@ fn start(
             commits: &todo,
             autostash,
             autosquash: autosquash_wanted(repository, args.autosquash, args.no_autosquash),
+            exec: &args.exec,
         };
         return interactive::begin(global, repository, &plan, dir);
     }
@@ -996,6 +1000,20 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             interactive::flush_pending(repository, dir)?;
         }
 
+        if cmd == interactive::Cmd::Exec {
+            if !global.quiet {
+                eprint!("Rebasing ({msgnum}/{end})\r");
+            }
+            let command = line[line.find(char::is_whitespace).unwrap_or(line.len())..].trim();
+            if !run_exec(repository, command) {
+                eprintln!(
+                    "warning: execution failed: {command}\nYou can fix the problem, and then run\n\n  git rebase --continue\n\n"
+                );
+                return Ok(1);
+            }
+            continue;
+        }
+
         let hex = line
             .split_whitespace()
             .nth(1)
@@ -1127,6 +1145,34 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
         }
     }
     finish(global, repository, dir)
+}
+
+/// Run an `exec` line in the work tree the way git does: a bare word is started directly, anything
+/// else goes through `sh -c`. Its stdout is ours; `Executing:` goes to stderr. `false` when it failed.
+fn run_exec(repository: &Repository, command: &str) -> bool {
+    eprintln!("Executing: {command}");
+    let bare = !command.contains(|c: char| "|&;<>()$`\\\"' \t\n*?[#~=%".contains(c));
+    let mut process = if bare {
+        std::process::Command::new(command)
+    } else {
+        let mut sh = std::process::Command::new("sh");
+        sh.arg("-c").arg(command);
+        sh
+    };
+    if let Some(root) = repository.worktree_path() {
+        process.current_dir(root);
+    }
+    match process.status() {
+        Ok(status) => status.success(),
+        Err(error) => {
+            let reason = match error.kind() {
+                std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
+                _ => error.to_string(),
+            };
+            eprintln!("error: cannot run {command}: {reason}");
+            false
+        }
+    }
 }
 
 /// Append `<old> <new>` to the rewritten list that `post-rewrite` reads at the end.
