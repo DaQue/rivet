@@ -105,6 +105,11 @@ state_of() {
 
 run_scenario() {
     local name=$1; shift
+    if ! declare -F "$name" >/dev/null; then
+        echo "FAIL $name  (no such scenario)"
+        FAILURES=$((FAILURES + 1))
+        return 1
+    fi
     local base; base=$(mktemp -d "${TMPDIR:-/tmp}/difftest.XXXXXX")
     TMPOUT=$base/out TMPERR=$base/err; base_stop=$base/stopped
     for IMPL in git rivet; do

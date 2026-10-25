@@ -7840,6 +7840,12 @@ s_rebase_interop() {
     v status
 }
 
+case "${1:-}" in
+    -h|--help)
+        declare -F | awk '{print $3}' | grep '^s_'
+        exit 0 ;;
+esac
+
 if [ $# -eq 0 ]; then
     set -- $(declare -F | awk '{print $3}' | grep '^s_')
 fi
