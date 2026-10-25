@@ -346,10 +346,18 @@ pub fn compute(
     ignore: &IgnoreStack,
     options: &StatusOptions,
 ) -> Result<Status> {
-    let staged = staged_changes(index, head_tree, odb)?;
+    let mut staged = staged_changes(index, head_tree, odb)?;
     let mut stat_cache = crate::worktree::StatCache::new();
-    let unstaged = unstaged_changes(worktree, index, odb, options.refresh, &mut stat_cache)?;
+    let mut unstaged = unstaged_changes(worktree, index, odb, options.refresh, &mut stat_cache)?;
     let (untracked, ignored) = untracked_paths(worktree, index, ignore, options)?;
+    if !options.pathspec.is_empty() && options.pathspec != "." {
+        let spec: &[u8] = options.pathspec.as_ref();
+        let covered = |path: &[u8]| {
+            path == spec || (path.starts_with(spec) && path.get(spec.len()) == Some(&b'/'))
+        };
+        staged.retain(|e| covered(&e.path[..]));
+        unstaged.retain(|e| covered(&e.path[..]));
+    }
     Ok(Status {
         staged,
         unstaged,
@@ -633,10 +641,33 @@ pub fn untracked_paths(
     let mut walk_options = crate::worktree::WorktreeWalkOptions::new();
     walk_options.include_ignored = options.ignored;
     walk_options.recursive = true;
-    if !options.pathspec.is_empty() {
-        walk_options.prefix(BStr::new(&options.pathspec));
+    // A pathspec that names a file cannot be a walk prefix (`read_dir` fails with ENOTDIR): walk
+    // its parent directory and keep only that file.
+    let mut only_file: Option<BString> = None;
+    if !options.pathspec.is_empty() && options.pathspec != "." {
+        let names_file = worktree.root().is_some_and(|root| {
+            use std::os::unix::ffi::OsStrExt;
+            std::fs::symlink_metadata(root.join(std::ffi::OsStr::from_bytes(&options.pathspec[..])))
+                .map_or(true, |m| !m.is_dir())
+        });
+        if names_file {
+            let bytes: &[u8] = options.pathspec.as_ref();
+            let parent = bytes
+                .iter()
+                .rposition(|b| *b == b'/')
+                .map_or(&bytes[..0], |i| &bytes[..i]);
+            if !parent.is_empty() {
+                walk_options.prefix(BStr::new(parent));
+            }
+            only_file = Some(options.pathspec.clone());
+        } else {
+            walk_options.prefix(BStr::new(&options.pathspec));
+        }
     }
-    let entries = worktree.walk(ignore, &walk_options)?;
+    let mut entries = worktree.walk(ignore, &walk_options)?;
+    if let Some(file) = &only_file {
+        entries.retain(|e| e.path == *file);
+    }
 
     // Every path the index knows, plus every directory that contains one. Membership of
     // `tracked_dirs` is what distinguishes a directory whose untracked children are reported

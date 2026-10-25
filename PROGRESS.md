@@ -1390,3 +1390,13 @@ Left undone (in `GAPS.md`): dirty-tree submodules (`modified content`/`untracked
 and `status -- <file>` which fails with an i/o error (found while writing the scenario, pre-existing).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 258 passed / 0 failed / 0 ignored,
 `scenarios.sh` 276 PASS / `failures: 0`.
+
+## status -- <pathspec> (2026-10-25)
+Queue in `.claude/PRIORITIES.md` was already fully landed; took the `status -- <file>` item left in `GAPS.md` section 1. Landed in
+`rivet-core` `worktree/status.rs`: a pathspec naming a file (or a path that does not exist) no longer becomes a walk prefix, so the
+ENOTDIR error is gone; staged and unstaged changes are now filtered by the pathspec (file or directory), which they were not before
+(`status -s -- new` also printed every modified tracked file); `.` means no filter. Scenario `s_status_file_pathspec` fails on
+`c166687` (i/o error, and unfiltered tracked changes), passes now.
+Left undone (in `GAPS.md`): more than one pathspec, dirty-tree submodules.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 258 passed / 0 failed / 0 ignored,
+`scenarios.sh` 277 PASS / `failures: 0`.

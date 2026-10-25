@@ -8960,6 +8960,16 @@ s_status_moved_submodule() {
     v status; v status --short
 }
 
+# `status -- <file>`: a pathspec that names a file (tracked, untracked, in a subdirectory, absent).
+s_status_file_pathspec() {
+    g init -q repo; cd repo
+    tick; echo a >f; mkdir d; echo b >d/g; g add .; g commit -q -m c1
+    echo c >>f; echo n >new; echo m >d/new2; echo o >d/h
+    v status -- f; v status -s -- f; v status -s -- new; v status -s -- d/new2
+    v status -s -- d/g; v status -s -- nope; v status --porcelain -- d/h
+    rm d/g; v status -s -- d; v status -s -- d/g; v status -s -- .; v status -- d
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
