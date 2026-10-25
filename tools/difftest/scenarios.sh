@@ -3496,6 +3496,20 @@ s_rebase_cherry_and_merges() {
     v ls-files
 }
 
+s_rebase_quiet_skipped() {
+    v init -q repo; cd repo
+    echo 0 >base; v add .; v commit -q -m base
+    v branch topic
+    tick; echo m >m; v add m; v commit -q -m "main first"
+    tick; echo 1 >x; v add x; v commit -q -m "add x"
+    v switch -q topic
+    tick; echo 1 >x; v add x; v commit -q -m "add x (same patch)"
+    tick; echo t >t; v add t; v commit -q -m "topic t"
+    v rebase -q main
+    v log --oneline
+    v reflog
+}
+
 s_rebase_dirty() {
     rebase_repo
     v switch -q topic

@@ -638,10 +638,12 @@ fn start(
             continue;
         }
         if !upstream_ids.is_empty() && upstream_ids.contains(&patch_id(repository, &oid)?) {
-            eprintln!(
-                "warning: skipped previously applied commit {}",
-                super::history::abbrev(repository, &oid, false)
-            );
+            if !global.quiet {
+                eprintln!(
+                    "warning: skipped previously applied commit {}",
+                    super::history::abbrev(repository, &oid, false)
+                );
+            }
             skipped = true;
             continue;
         }

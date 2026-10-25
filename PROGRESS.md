@@ -1093,3 +1093,9 @@ Base `742ea96`: `s_credential_state` fails there (checked by stashing `crates/`)
 API: `Credential` gains `capa_state`, `state`, `multistage`. Rust test: `state_and_continue_come_back_on_store_only_when_the_helper_announced_state`.
 Not done (in `GAPS.md`): the multi-round retry (real git re-runs the helper chain with `state[]` after a rejected `continue=1` credential instead of erasing), `state[]`/`continue` in a later helper's `get`, `ssh://` invocation.
 Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 251 PASS / `failures: 0`.
+
+### `rebase -q` and skipped patch-equivalent commits (landed, scenario `s_rebase_quiet_skipped`, new)
+`PRIORITIES.md` is still stale (items 1, 2, 5, 6 are in `git log`; item 3's remainder and item 4 were probed: `sparse-checkout` from a linked worktree already matches git byte for byte). This session took the first open `GAPS.md` section 1 line instead.
+Base `cee9d3b`: `s_rebase_quiet_skipped` fails there. `rebase -q` dropped no output: `warning: skipped previously applied commit <id>` was printed unconditionally. Probed against `/usr/bin/git` 2.56: under `-q` the `warning:` line is gone, the two `hint:` lines stay. The warning is now guarded by `global.quiet` in `crates/rivet-cli/src/cmd/rebase.rs`; the hints are untouched. No API change, no Rust test needed (CLI-only text).
+Not done: `PRIORITIES.md` items 3 (multi-round retry, `ssh://`), 4 (sparse index), 7, 8.
+Gate after: fmt, clippy `-D warnings`, doc clean; 248 passed / 0 failed / 0 ignored; `scenarios.sh` 252 PASS / `failures: 0`.

@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 248 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 252 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 245 tests / 0 failed, 248 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 248 tests / 0 failed, 252 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -15,7 +15,6 @@ only the first two are defects.
 
 The command or subsystem is absent; it either fails at the argument parser or refuses by name.
 
-* **`rebase -q`** prints `warning: skipped previously applied commit <id>`; git is silent under `-q`.
 * **Partial clone** — `--filter` and promisor/partial clones are not implemented.
 * **Sparse checkout** — `sparse-checkout init`/`set`/`add`/`list`/`reapply`/`disable`/`check-rules` exist
   (cone mode and `--no-cone`, `--stdin`, `--skip-checks`; `check-rules` with `-z`, `--cone`/`--no-cone`,
