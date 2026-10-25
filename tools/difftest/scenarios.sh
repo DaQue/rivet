@@ -7181,6 +7181,42 @@ s_bundle_clone() {
     (cd dotted && v log --oneline -1)
 }
 
+s_ls_remote() {
+    g init -q src; cd src
+    for i in 1 2 3; do tick; echo "line $i" >>f; g add .; g commit -q -m "c$i"; done
+    g tag light HEAD~1; tick; g tag -a ann -m annotated; g branch side HEAD~1
+    v bundle create ../all.bundle --all
+    cd ..
+    echo hello >notbundle
+    v ls-remote src
+    v ls-remote --heads src
+    v ls-remote -t src
+    v ls-remote --refs src
+    v ls-remote --heads --tags src
+    v ls-remote src 'ma*' refs/tags/ann
+    v ls-remote src HEAD
+    v ls-remote --symref src HEAD
+    v ls-remote --symref src
+    v ls-remote src nothing
+    v ls-remote --exit-code src nothing
+    v ls-remote --exit-code src side
+    v ls-remote -q src nothing
+    v ls-remote --get-url src
+    v ls-remote file://$ROOT/src
+    v ls-remote all.bundle
+    v ls-remote --refs all.bundle
+    v ls-remote nosuch
+    v ls-remote notbundle
+    cd src
+    v remote add o ../src
+    v ls-remote o
+    v ls-remote --get-url o
+    v ls-remote --heads o 'si*'
+    v ls-remote
+    v ls-remote -q
+    v ls-remote ../src
+}
+
 # The four small divergences that were left open after the worktree block.
 s_reset_current_branch() {
     v init -q repo; cd repo
@@ -8568,6 +8604,7 @@ for s in "$@"; do
         s_submodule_deinit) run_scenario "$s" clone clone2 ;;
         s_submodule_foreach) run_scenario "$s" none ;;
         s_bundle_roundtrip) run_scenario "$s" empty e2 e3 e4 ;;
+        s_ls_remote) run_scenario "$s" none ;;
         s_bundle_clone) run_scenario "$s" all named all.git onside upstream nohead dotted odd.git ;;
         s_submodule_set) run_scenario "$s" clone ;;
         s_submodule_absorb) run_scenario "$s" top top/vendor/lib ;;

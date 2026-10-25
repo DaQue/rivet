@@ -40,8 +40,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
     am, apply, archive, bisect, blame, branching, bundle, cherry, clean, format_patch, grep,
-    history, hook, ignore, maintenance, mv, notes, packrefs, plumbing, query, rebase, reflog,
-    remote, sequencer, setup, snapshot, sparse, stash, submodule, symbolicref, tag, worktree,
+    history, hook, ignore, lsremote, maintenance, mv, notes, packrefs, plumbing, query, rebase,
+    reflog, remote, sequencer, setup, snapshot, sparse, stash, submodule, symbolicref, tag,
+    worktree,
 };
 
 /// The `rivet` command line.
@@ -320,6 +321,9 @@ pub enum Commands {
 
     /// Run a hook by name.
     Hook(hook::HookArgs),
+
+    /// List references in a remote repository or bundle file.
+    LsRemote(lsremote::LsRemoteArgs),
 
     /// Read, write or delete a symbolic ref.
     #[command(name = "symbolic-ref")]

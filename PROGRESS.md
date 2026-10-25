@@ -1244,3 +1244,14 @@ three-part error (`does not look like a v2 or v3 bundle file`, `invalid gitfile 
 passes after. `GAPS.md` updated.
 Deliberately left: `ls-remote` (the subcommand does not exist at all, for any remote), `bundle-uri`, SHA-256 bundles.
 Gate after: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 263 PASS / `failures: 0`.
+
+## Loop iteration 2026-10-25 (12) — `ls-remote`
+Gate at `8e70a6c`: fmt, clippy `-D warnings`, doc clean; 251 passed / 0 failed / 0 ignored; `scenarios.sh` 263 PASS / `failures: 0`.
+
+Landed (Remaining item 6, `ls-remote` part): `rivet ls-remote [--heads] [-t|--tags] [--refs] [--symref] [--exit-code] [--get-url] [-q] [<repository> [<pattern>…]]` for a path, `file://` url,
+configured remote, or bundle file. Patterns are matched like git's `*/<pattern>` against `/<refname>`, and a peeled tag (`^{}`) is filtered as a ref of its own. With no repository
+argument it uses the branch's upstream remote, then `origin`, then the only configured remote, else `fatal: No remote configured to list refs from.` (128); `From <url>` goes to stderr unless `-q`.
+A path that is not a repository prints git's three-part error (128); a regular file that is not a bundle prints `fatal: invalid gitfile format: <name>`. Exit 2 with `--exit-code` when nothing matched.
+Scenario `s_ls_remote` fails on `8e70a6c` (the subcommand does not exist) and passes after. Rust test `ls_remote_refusals` covers `--sort`, `--upload-pack`, `-o`, refused by name.
+Deliberately left: `bundle-uri`, SHA-256 bundles, `[...]` in patterns, `fetch` from a bundle is unchanged. `GAPS.md` updated.
+Gate after: fmt, clippy `-D warnings`, doc clean; 252 passed / 0 failed / 0 ignored; `scenarios.sh` 264 PASS / `failures: 0`.

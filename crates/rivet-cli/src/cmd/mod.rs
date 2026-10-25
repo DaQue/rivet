@@ -47,6 +47,7 @@ pub mod grep;
 pub mod history;
 pub mod hook;
 pub mod ignore;
+pub mod lsremote;
 pub mod maintenance;
 pub mod mv;
 pub mod notes;
@@ -165,6 +166,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Shortlog(args) => query::run_shortlog(&global, &args),
         Commands::Notes(args) => notes::run_notes(&global, &args),
         Commands::Hook(args) => hook::run_hook(&global, &args),
+        Commands::LsRemote(args) => lsremote::run_ls_remote(&global, &args),
         Commands::SymbolicRef(args) => symbolicref::run_symbolic_ref(&global, &args),
     }
 }

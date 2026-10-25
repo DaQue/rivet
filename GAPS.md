@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 258 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 264 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 248 tests / 0 failed, 253 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 252 tests / 0 failed, 264 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -55,9 +55,10 @@ The command or subsystem is absent; it either fails at the argument parser or re
   (`s_rebase_interop`: edit stop, squash, conflict, reword). rivet's `rebase-merge/` carries one extra file,
   `rivet-interactive`, which git ignores; a git-written state lacks it and rivet does not need it. Plain
   (non-`-i`) rebase states written by git are not compared.
-* **`bundle-uri`**, SHA-256 bundles, and `ls-remote` (the subcommand does not exist at all).
-  Creating, listing, verifying and unbundling bundles works; fetching and cloning *from* a bundle
-  file work (`s_bundle_clone`).
+* **`bundle-uri`** and SHA-256 bundles. Creating, listing, verifying and unbundling bundles works;
+  fetching, cloning and `ls-remote` *from* a bundle file work (`s_bundle_clone`, `s_ls_remote`).
+  `ls-remote --sort`, `--upload-pack` and `--server-option` are refused by name (Rust test
+  `ls_remote_refusals`); its patterns understand `*` and `?` but not `[...]`.
 * **Submodule clone flags** — `update --depth` works only for a local-path source (git ignores it with
   a warning; rivet narrows the fetch refspec to the one branch, and refuses a source with several
   branches). With a `file://` or network URL git makes a shallow clone, which rivet's `clone` cannot
