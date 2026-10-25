@@ -868,6 +868,32 @@ s_hooks_run() {
     dump_hooklog
 }
 
+s_hooks_list() {
+    v init -q repo; cd repo
+    mkdir sub
+    v hook list pre-commit
+    install_hooks pre-commit
+    v hook list pre-commit
+    v hook list -z pre-commit
+    v hook list --show-scope pre-commit
+    (cd sub && v hook list pre-commit)
+    v hook list post-commit
+    v hook list not-a-hook
+    v hook list --allow-unknown-hook-name not-a-hook
+    v hook list
+    v hook list pre-commit post-commit
+    chmod -x .git/hooks/pre-commit
+    v hook list pre-commit
+    mkdir custom
+    printf '%s' "$hook_script" >custom/pre-commit
+    chmod +x custom/pre-commit
+    v config core.hooksPath custom
+    v hook list pre-commit
+    v config core.hooksPath empty-dir
+    v hook list pre-commit
+    dump_hooklog
+}
+
 # Credentials: an HTTP server that wants Basic auth (alice / s3cret), helpers that log what they are
 # told into `helper.log`, and the server's own request log. Both logs go into the transcript.
 cred_helper() {  # <root> <name> <user> <password>: a helper that answers `get` with that credential
