@@ -1486,3 +1486,17 @@ against `/usr/bin/git`. The matching line in `GAPS.md` is removed.
 Left undone (in `GAPS.md`): `update-index` details, `am`, `bisect` and sparse, `set` over a directory with untracked files.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
 `scenarios.sh` 285 PASS / `failures: 0`.
+
+## for-each-ref --include-root-refs (2026-10-25)
+`.claude/PRIORITIES.md` is fully landed (every "Remaining" item has its commit in `git log`), so this took `GAPS.md` section 2
+(`for-each-ref`). `ForEachRefArgs` gains `--include-root-refs` / `--no-include-root-refs` (last one wins). Root refs are the files
+directly in the git directory named `HEAD` or made only of `[A-Z_]` and ending in `_HEAD`, minus `FETCH_HEAD` and `MERGE_HEAD`;
+directories and dangling symrefs are skipped silently, an unreadable file prints `warning: ignoring broken ref <name>`. They sort
+by plain name (so before `refs/…`), `%(symref)` now reads them, and `--merged`/`--no-merged`/`--contains`/`--no-contains` drop them
+as git does (`--points-at` keeps them).
+Scenario `s_for_each_ref_root_refs` fails on `9341dcd` (unknown option), passes now; expected values checked against `/usr/bin/git` 2.56.0.
+New edge found and recorded in `GAPS.md`, not fixed: for-each-ref patterns and `--exclude` globs let `*`/`?` cross `/` and take `[...]`
+literally, unlike git; the scenario avoids globs that would hit `refs/ROOTISH_HEAD`.
+Left undone (in `GAPS.md`): `version:`/`v:` sort, linked work tree root refs.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
+`scenarios.sh` 286 PASS / `failures: 0`.

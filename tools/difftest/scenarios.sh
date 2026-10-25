@@ -5023,6 +5023,44 @@ s_for_each_ref_stdin_start() {
     STDIN_FILE=pat.txt v for-each-ref "$fmt" --stdin --start-after="$first"
 }
 
+s_for_each_ref_root_refs() {
+    fer_repo
+    local fmt='--format=%(refname)|%(refname:short)|%(objecttype)|%(symref)' oid
+    oid=$(g rev-parse HEAD)
+    v for-each-ref "$fmt"
+    v for-each-ref --include-root-refs "$fmt"
+    for n in ORIG_HEAD CHERRY_PICK_HEAD REBASE_HEAD A_HEAD AA_B_HEAD _HEAD FETCH_HEAD MERGE_HEAD HEAD2 HEAD_ HEADHEAD lower_HEAD Head X-HEAD FOO_ORIG STASH; do
+        echo "$oid" >".git/$n"
+    done
+    mkdir .git/DIR_HEAD
+    echo "ref: refs/heads/main" >.git/SYM_HEAD
+    echo "ref: refs/heads/nonexistent" >.git/DANG_HEAD
+    echo "$oid" >.git/refs/ROOTISH_HEAD
+    v for-each-ref --include-root-refs "$fmt"
+    v for-each-ref --include-root-refs --no-include-root-refs "$fmt"
+    v for-each-ref --no-include-root-refs --include-root-refs "$fmt"
+    v for-each-ref --include-root-refs "$fmt" HEAD 'SYM*'
+    v for-each-ref --include-root-refs "$fmt" 'A*_HEAD'
+    v for-each-ref --include-root-refs "$fmt" ORIG
+    v for-each-ref --include-root-refs "$fmt" refs/heads
+    v for-each-ref --include-root-refs "$fmt" --exclude='A*_HEAD' --exclude='ORIG*'
+    v for-each-ref --include-root-refs "$fmt" --exclude=HEAD --count=3
+    v for-each-ref --include-root-refs "$fmt" --sort=-refname --count=4
+    v for-each-ref --include-root-refs "$fmt" --start-after=ORIG_HEAD
+    v for-each-ref --include-root-refs --format='%(HEAD) %(refname) %(objectname:short) %(upstream)' HEAD
+    v for-each-ref --include-root-refs --merged=HEAD "$fmt" 'ORIG*' HEAD refs/heads/main
+    v for-each-ref --include-root-refs --no-contains=HEAD "$fmt"
+    v for-each-ref --include-root-refs --contains=HEAD "$fmt"
+    v for-each-ref --include-root-refs --points-at=HEAD "$fmt"
+    printf 'HEAD\nrefs/tags\n' >pat.txt
+    STDIN_FILE=pat.txt v for-each-ref --include-root-refs "$fmt" --stdin
+    echo garbage >.git/BAD_HEAD
+    v for-each-ref --include-root-refs "$fmt"
+    v for-each-ref "$fmt"
+    g pack-refs --all
+    v for-each-ref --include-root-refs "$fmt"
+}
+
 s_for_each_ref_upstream() {
     fer_repo
     v for-each-ref --format='%(refname:short) up=%(upstream) short=%(upstream:short) track=%(upstream:track) ts=%(upstream:trackshort) nb=%(upstream:track,nobracket) rn=%(upstream:remotename) rr=%(upstream:remoteref)' refs/heads

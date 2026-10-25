@@ -819,15 +819,23 @@ pub(super) fn atom_value(atom: &str, item: &RefItem, context: &Context) -> Eval<
             if deref {
                 return text(String::new());
             }
-            let found = context
-                .repository
-                .refs()
-                .list(b"refs/")
-                .map_err(|e| Fatal(e.to_string()))?
-                .into_iter()
-                .find(|(n, _)| n.as_bytes() == item.name.as_bytes());
+            let found = if item.name.starts_with("refs/") {
+                context
+                    .repository
+                    .refs()
+                    .list(b"refs/")
+                    .map_err(|e| Fatal(e.to_string()))?
+                    .into_iter()
+                    .find(|(n, _)| n.as_bytes() == item.name.as_bytes())
+                    .map(|(_, target)| target)
+            } else {
+                // A root ref (`HEAD`, `ORIG_HEAD`, …) lives directly in the git directory.
+                rivet_core::RefName::from_bytes(item.name.as_bytes())
+                    .ok()
+                    .and_then(|name| context.repository.refs().read(&name).ok())
+            };
             text(match found {
-                Some((_, rivet_core::RefTarget::Symbolic(target))) => lossy(target.as_bytes()),
+                Some(rivet_core::RefTarget::Symbolic(target)) => lossy(target.as_bytes()),
                 _ => String::new(),
             })
         }
@@ -1243,6 +1251,44 @@ pub(super) fn run(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<
     }
 }
 
+/// The refs git lists under `--include-root-refs`: files directly in the git directory named
+/// `HEAD` or made of `[A-Z_]` ending in `_HEAD`, except `FETCH_HEAD` and `MERGE_HEAD`. A file
+/// that is not a ref gets git's warning, a symref that points nowhere is left out silently.
+fn root_refs(repository: &Repository) -> Vec<(String, ObjectId)> {
+    let Ok(entries) = std::fs::read_dir(repository.refs().git_dir()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let shaped = name.bytes().all(|b| b.is_ascii_uppercase() || b == b'_')
+            && (name == "HEAD" || name.ends_with("_HEAD"));
+        if !shaped
+            || name == "FETCH_HEAD"
+            || name == "MERGE_HEAD"
+            || !entry
+                .file_type()
+                .is_ok_and(|t| t.is_file() || t.is_symlink())
+        {
+            continue;
+        }
+        let Ok(refname) = rivet_core::RefName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        match repository.refs().read(&refname) {
+            Ok(_) => {
+                if let Ok(oid) = repository.refs().resolve_oid(&refname) {
+                    out.push((name, oid));
+                }
+            }
+            Err(_) => eprintln!("warning: ignoring broken ref {name}"),
+        }
+    }
+    out
+}
+
 fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<i32>> {
     let repository = super::open(global)?;
     if args.start_after.is_some() && !args.sort.is_empty() {
@@ -1271,6 +1317,10 @@ fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<
         )));
     }
     let mut refs = super::query::refs_sorted(&repository)?;
+    if args.include_root_refs {
+        refs.extend(root_refs(&repository));
+        refs.sort();
+    }
     if let Some(marker) = &args.start_after {
         refs.retain(|(name, _)| name.as_str() > marker.as_str());
     }
@@ -1409,6 +1459,10 @@ fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<
             || !contains.is_empty()
             || !no_contains.is_empty();
         if wants_commit {
+            // git's commit filters drop the root refs outright.
+            if !name.starts_with("refs/") {
+                continue;
+            }
             // Annotated tags are looked through; anything that is not a commit is left out.
             let tip = repository
                 .refs()

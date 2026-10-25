@@ -1048,6 +1048,14 @@ pub struct ForEachRefArgs {
     #[arg(long = "stdin")]
     pub stdin: bool,
 
+    /// Also list `HEAD` and the other root refs (`ORIG_HEAD`, `CHERRY_PICK_HEAD`, …).
+    #[arg(long = "include-root-refs", overrides_with = "no_include_root_refs")]
+    pub include_root_refs: bool,
+
+    /// Undo `--include-root-refs`.
+    #[arg(long = "no-include-root-refs", overrides_with = "include_root_refs")]
+    pub no_include_root_refs: bool,
+
     /// Start listing after this refname (default order only).
     #[arg(long = "start-after", value_name = "MARKER", overrides_with_all = ["start_after", "no_start_after"])]
     pub start_after: Option<String>,
