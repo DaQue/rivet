@@ -3,7 +3,7 @@
 //! # What is implemented
 //!
 //! `format-patch [-N] [<since> | <a>..<b>] [-o <dir>] [--stdout] [--root] [-n]
-//! [--start-number <n>] [--subject-prefix <p>] [--no-signature | --signature <s>]`. One file per
+//! [--start-number <n>] [--subject-prefix <p>] [-k] [--no-signature | --signature <s>]`. One file per
 //! commit, `NNNN-<subject>.patch`, with the stat, the summary and a rename-aware diff. Merge
 //! commits are skipped.
 //!
@@ -12,7 +12,7 @@
 //! * **The signature line carries Rivet's version**, where Git's carries its own; scripts that
 //!   compare patches byte for byte should pass `--no-signature`.
 //! * Non-ASCII author names and subjects (which need RFC 2047 encoding), cover letters, threading,
-//!   attachments and `-k` are not implemented and are refused.
+//!   attachments and `-k` with a multi-line subject are not implemented and are refused.
 
 use std::path::PathBuf;
 
@@ -59,12 +59,8 @@ pub struct FormatPatchArgs {
     pub start_number: usize,
 
     /// Use this instead of `PATCH` in the subject.
-    #[arg(
-        long = "subject-prefix",
-        value_name = "PREFIX",
-        default_value = "PATCH"
-    )]
-    pub subject_prefix: String,
+    #[arg(long = "subject-prefix", value_name = "PREFIX")]
+    pub subject_prefix: Option<String>,
 
     /// Do not add a signature.
     #[arg(long = "no-signature")]
@@ -78,7 +74,17 @@ pub struct FormatPatchArgs {
     #[arg(last = true, value_name = "PATH")]
     pub paths: Vec<String>,
 
-    /// Keep the subject as it is. Not implemented.
+    /// Git has no such option; it is parsed only to fail with git's own message.
+    #[arg(
+        long = "directory",
+        hide = true,
+        num_args = 0..=1,
+        require_equals = true,
+        value_name = "DIR"
+    )]
+    pub directory: Option<Option<String>>,
+
+    /// Keep the subject as it is: no `[PATCH]` tag.
     #[arg(short = 'k', long = "keep-subject")]
     pub keep_subject: bool,
 
@@ -89,9 +95,12 @@ pub struct FormatPatchArgs {
 
 /// The `Subject:` header, folded at 78 columns with a one-space continuation indent. The
 /// `[PATCH]` tag is not wrapped: when even the first word of the subject does not fit, the tag's
-/// trailing space stays at the end of its line.
-fn fold_subject(tag: &str, subject: &str) -> String {
-    let mut out = format!("Subject: [{tag}] ");
+/// trailing space stays at the end of its line. `None` (`-k`) writes the subject with no tag.
+fn fold_subject(tag: Option<&str>, subject: &str) -> String {
+    let mut out = match tag {
+        Some(tag) => format!("Subject: [{tag}] "),
+        None => "Subject: ".to_string(),
+    };
     let mut line_len = out.len();
     for (index, word) in subject.split(' ').filter(|w| !w.is_empty()).enumerate() {
         if index == 0 {
@@ -152,9 +161,24 @@ fn slug(subject: &str) -> String {
 ///
 /// `0`; `128` for an unknown revision or an unsupported header.
 pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i32> {
-    if args.keep_subject || args.cover_letter || !args.paths.is_empty() {
-        anyhow::bail!("format-patch: -k, --cover-letter and path limiting are not implemented");
+    if let Some(value) = &args.directory {
+        match value {
+            Some(value) => anyhow::bail!("unrecognized argument: --directory={value}"),
+            None => anyhow::bail!("unrecognized argument: --directory"),
+        }
     }
+    if args.cover_letter || !args.paths.is_empty() {
+        anyhow::bail!("format-patch: --cover-letter and path limiting are not implemented");
+    }
+    if args.keep_subject {
+        if args.subject_prefix.is_some() {
+            anyhow::bail!("options '--subject-prefix/--rfc' and '-k' cannot be used together");
+        }
+        if args.numbered {
+            anyhow::bail!("options '-n' and '-k' cannot be used together");
+        }
+    }
+    let subject_prefix = args.subject_prefix.as_deref().unwrap_or("PATCH");
     let repository = super::open(global)?;
     let odb = repository.odb();
 
@@ -214,7 +238,7 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         selected = Vec::new();
         for oid in commits {
             let parents = repository.commit_parents(oid)?;
-            if parents.len() > 1 || (parents.is_empty() && !args.root) {
+            if parents.len() > 1 || (parents.is_empty() && !args.root && args.max_count.is_none()) {
                 continue;
             }
             selected.push(oid);
@@ -262,15 +286,25 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
             );
         }
 
-        let tag = if numbered {
-            format!(
-                "{} {number:0digits$}/{}",
-                args.subject_prefix,
+        let tag = if args.keep_subject {
+            None
+        } else if numbered {
+            Some(format!(
+                "{subject_prefix} {number:0digits$}/{}",
                 args.start_number + total - 1
-            )
+            ))
         } else {
-            args.subject_prefix.clone()
+            Some(subject_prefix.to_string())
         };
+        if args.keep_subject
+            && (subject_raw.trim_end().contains(&b'\n')
+                || subject.contains("  ")
+                || subject.contains('\t'))
+        {
+            anyhow::bail!(
+                "format-patch: -k with a multi-line subject or runs of blanks (RFC 2047 encoding) is not implemented"
+            );
+        }
         let mut out: Vec<u8> = Vec::new();
         out.extend_from_slice(format!("From {oid} Mon Sep 17 00:00:00 2001\n").as_bytes());
         out.extend_from_slice(
@@ -284,7 +318,7 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         )
         .unwrap_or_default();
         out.extend_from_slice(format!("Date: {date}\n").as_bytes());
-        out.extend_from_slice(fold_subject(&tag, &subject).as_bytes());
+        out.extend_from_slice(fold_subject(tag.as_deref(), &subject).as_bytes());
         out.push(b'\n');
         let body = body_raw.trim_end();
         if !body.is_empty() {

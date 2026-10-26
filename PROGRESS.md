@@ -1592,3 +1592,14 @@ Scenario `s_blame_ignore_whitespace` fails on `cc646f6` (`error: unexpected argu
 Left undone: the indent heuristic in `compact_edits` sees the squeezed lines under `-w`, so a slide choice that depends on indentation could differ from git (no scenario hits it); items 10-11 of the queue.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
 `scenarios.sh` 295 PASS / `failures: 0`.
+
+## format-patch -k (2026-10-26)
+Took `.claude/PRIORITIES.md` item 10. `format-patch -k` / `--keep-subject` writes the subject verbatim with no `[PATCH]` tag or number (a subject that already says `[PATCH]` is not doubled);
+`-k` with `--subject-prefix` or `-n` fails with git's `fatal: options ... cannot be used together` (128). `--subject-prefix` is now an `Option` so an explicit value can be detected.
+`--directory=<dir>` is **not a git option** (checked with `/usr/bin/git` 2.56.0: `fatal: unrecognized argument: --directory=out`, 128), so the queue text was wrong and git wins: rivet now fails with the same text instead of clap's exit 2.
+Also fixed, found by the scenario: `-N` that reaches the root commit includes it as git does (rivet skipped it without `--root`).
+A multi-line subject or a run of blanks under `-k` needs RFC 2047 encoding (git encodes); refused by name, Rust test `keep_subject_refuses_a_multi_line_subject`, noted in `GAPS.md`.
+Scenario `s_format_patch_options` fails on `3a8608b` (`-k` refused), passes now; expected values come from `/usr/bin/git`.
+Left undone: item 11 of the queue; `-k` with a multi-line subject.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
+`scenarios.sh` 296 PASS / `failures: 0`.

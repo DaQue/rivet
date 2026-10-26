@@ -4117,6 +4117,28 @@ s_format_patch_wrap() {
     v format-patch --stdout --no-signature -1 | grep -a -A2 '^Subject'
 }
 
+s_format_patch_options() {
+    v init -q repo; cd repo
+    echo 0 >f; v add f; v commit -q -m "[PATCH] fix: already tagged
+
+body"
+    tick; echo 1 >>f
+    v commit -q -a -m "$(printf 'k%.0s' $(seq 1 40)) $(printf 'z%.0s' $(seq 1 50)) tail"
+    tick; echo 2 >>f; v commit -q -a -m "plain subject"
+    v format-patch --stdout --no-signature -3
+    v format-patch --stdout --no-signature -k -3
+    v format-patch --stdout --no-signature --keep-subject --start-number 5 -2
+    v format-patch --stdout --no-signature -k -1 HEAD~2
+    v format-patch --no-signature -k -o kout -3
+    ls kout >>"$TRANSCRIPT"
+    cat kout/* >>"$TRANSCRIPT"
+    v format-patch --stdout -k --subject-prefix=RFC -1
+    v format-patch --stdout -k -n -1
+    v format-patch --stdout --directory=out -1
+    v format-patch --directory=out -1
+    ls >>"$TRANSCRIPT"
+}
+
 s_am() {
     v init -q repo; cd repo
     seq 1 10 >a; echo x >b; v add .; v commit -q -m base
