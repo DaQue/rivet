@@ -8741,6 +8741,28 @@ s_stash_errors() {
     v stash list
 }
 
+# `grep --threads=<n>` only changes how many workers git uses, so the output is the same; a negative count
+# dies with git's `invalid number of threads`, a non-integer fails option parsing (129), `--no-threads` resets.
+s_grep_threads() {
+    v init -q repo; cd repo
+    printf 'foo\nbar\n' >a.txt
+    v add .; v commit -q -m one
+    local args
+    for args in '--threads=2' '--threads=0' '--threads=1k' '--no-threads' '--threads=3 --no-threads' \
+        '--threads=-1' '--threads=x' '--threads=' '--threads=2 -c' '--threads=-2 --no-threads'; do
+        v grep $args foo
+        echo "rc=$?"
+    done
+    v grep --threads 2 foo
+    echo "rc=$?"
+    v grep --threads -3 foo
+    echo "rc=$?"
+    v grep --threads
+    echo "rc=$?"
+    v grep --threads=-1
+    echo "rc=$?"
+}
+
 # `grep -o` prints each match on a line of its own (leftmost across patterns, the longest on a tie, an
 # empty match ends the line, `-v` switches it off, context lines are silent but still draw `--`);
 # `--heading` names the file once above its lines, `-h` does not hide it, the last of

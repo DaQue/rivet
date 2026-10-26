@@ -1,8 +1,8 @@
 //! `grep`: search tracked files in the work tree, the index (`--cached`) or a tree.
 //!
 //! Patterns are POSIX basic regular expressions by default, `-E` extended ones, `-F` fixed
-//! strings. `-P` (Perl), `--and`/`--not` boolean patterns and `--threads` are not
-//! implemented and are refused at the command line.
+//! strings. `-P` (Perl), `--and`/`--not` boolean patterns are not
+//! implemented and are refused at the command line. `--threads` is validated and ignored.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -145,6 +145,33 @@ pub struct GrepArgs {
     /// Lines of context around a match.
     #[arg(short = 'C', long = "context", value_name = "N")]
     pub context: Option<usize>,
+
+    /// Worker threads: validated like git's, but the search is always sequential.
+    #[arg(
+        long = "threads",
+        value_name = "N",
+        allow_hyphen_values = true,
+        num_args = 0..=1,
+        default_missing_value = "\u{0}missing",
+        overrides_with = "no_threads"
+    )]
+    pub threads: Option<String>,
+
+    /// Forget an earlier `--threads`.
+    #[arg(long = "no-threads", overrides_with = "threads")]
+    pub no_threads: bool,
+}
+
+/// Parse an integer the way git's option parser does: an optional sign, digits and an optional
+/// `k`/`m`/`g` suffix.
+fn parse_git_int(text: &str) -> Option<i64> {
+    let (digits, factor) = match text.chars().last()? {
+        'k' | 'K' => (&text[..text.len() - 1], 1i64 << 10),
+        'm' | 'M' => (&text[..text.len() - 1], 1 << 20),
+        'g' | 'G' => (&text[..text.len() - 1], 1 << 30),
+        _ => (text, 1),
+    };
+    digits.parse::<i64>().ok()?.checked_mul(factor)
 }
 
 struct Source {
@@ -159,6 +186,24 @@ struct Source {
 ///
 /// `0` when something matched, `1` when nothing did, `128` for a bad pattern or revision.
 pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
+    let threads = match args.threads.as_deref().map(|t| (t, parse_git_int(t))) {
+        Some(("\u{0}missing", _)) => {
+            eprintln!("error: option `threads' requires a value");
+            return Ok(129);
+        }
+        Some(("", _)) => {
+            eprintln!("error: option `threads' expects a numerical value");
+            return Ok(129);
+        }
+        Some((_, None)) => {
+            eprintln!(
+                "error: option `threads' expects an integer value with an optional k/m/g suffix"
+            );
+            return Ok(129);
+        }
+        Some((_, Some(n))) => Some(n),
+        None => None,
+    };
     let mut repository = super::open(global)?;
     // `-v` and `-q` are the grammar's global flags; here they mean invert and quiet.
     let invert = args.invert || global.verbose;
@@ -176,6 +221,10 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
             return Ok(128);
         }
         patterns.push(positional.remove(0));
+    }
+    if let Some(n) = threads.filter(|n| *n < 0) {
+        eprintln!("fatal: invalid number of threads specified ({n})");
+        return Ok(128);
     }
     if args.untracked && args.cached {
         eprintln!("fatal: options '--untracked' and '--cached' cannot be used together");

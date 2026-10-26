@@ -1678,3 +1678,13 @@ Scenario `s_status_outside_pathspec` fails on b621da5 (`FAIL`, `failures: 1`) an
 Left undone: nothing from this item; the other `GAPS.md` entries are unchanged.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 306 PASS / `failures: 0`.
+
+## grep: `--threads=<n>` / `--no-threads` (2026-10-26)
+`.claude/PRIORITIES.md` is still stale (all 11 items landed), so this came from `GAPS.md` section 2. `grep --threads` was
+rejected by the argument parser. It now validates like git (`k`/`m`/`g` suffixes, negative count -> `fatal: invalid number of
+threads specified (-1)` exit 128, non-integer / empty / missing value -> git's `error: option ...` lines, exit 129) and
+otherwise ignores the count; `--no-threads` resets. Fixed in `cmd/grep.rs`; expected texts taken from `/usr/bin/git`.
+Scenario `s_grep_threads` fails on 8f3ba5b (`FAIL`, `failures: 1`) and passes after.
+Left undone: `-P`, `--and`/`--or`/`--not`, `--no-index` (in `GAPS.md`).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 307 PASS / `failures: 0`.
