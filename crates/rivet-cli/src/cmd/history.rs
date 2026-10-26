@@ -556,7 +556,7 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 &diff_options,
                 &args.paths_as_specs(&repository)?,
             )?;
-            if !diff.is_empty() && commit.parents.len() < 2 {
+            if !diff.is_empty() && (commit.parents.len() < 2 || args.first_parent) {
                 let mut chunk = Vec::new();
                 if layout.blank_before_diff() {
                     chunk.push(b'\n');
@@ -1557,9 +1557,12 @@ fn render_commit(
         palette: look.palette,
     };
     let mut out = pretty::render(layout, &entry, &style);
+    // An empty `tformat:` prints nothing at all, not even the terminator.
     if let pretty::Layout::Format {
-        terminator: true, ..
+        template,
+        terminator: true,
     } = layout
+        && !template.is_empty()
     {
         out.push(b'\n');
     }

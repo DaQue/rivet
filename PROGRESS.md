@@ -1610,3 +1610,10 @@ Scenario `s_rev_list_ancestry_path_skew` fails on `c32c7f2`, passes now; expecte
 Left undone: nothing from the queue; every item is landed. `GAPS.md` `rev-list` line updated.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
 `scenarios.sh` 297 PASS / `failures: 0`.
+
+## log --first-parent merge diffs, empty --format= (2026-10-26)
+The queue in `.claude/PRIORITIES.md` was empty, so this took the `log` line of `GAPS.md` section 2. `log --first-parent` now shows the stat, patch and name lists of a merge against its first parent (it printed nothing). An empty `--format=` / `--pretty=` is an empty `tformat:` as in git: no header, no terminator, no blank line before the diff (`show --format=` was rejected with `invalid --pretty format`).
+Scenario `s_log_first_parent_merge_diff` fails on `2c20598`, passes now; expected values come from `/usr/bin/git`.
+Left undone (in `GAPS.md`): `--format= --oneline` lets the format win where git lets the later option win.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
+`scenarios.sh` 298 PASS / `failures: 0`.

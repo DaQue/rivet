@@ -9543,6 +9543,29 @@ s_blame_ignore_whitespace() {
     v blame -w HEAD~1 -- f
 }
 
+# `log --first-parent` diffs a merge against its first parent (stat, patch, name lists); an empty
+# `--format=` / `--pretty=` prints no header, no terminator and no blank line before the diff.
+s_log_first_parent_merge_diff() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m base
+    g checkout -q -b side
+    echo b >b; v add b; tick; v commit -q -m side
+    g checkout -q master 2>/dev/null || g checkout -q main
+    echo c >c; v add c; tick; v commit -q -m main2
+    tick; g merge -q --no-ff side -m merge
+    v log --first-parent --stat --format=%s
+    v log --first-parent -p --format=%s
+    v log --first-parent --name-only --format=%s
+    v log --first-parent --name-status --format=%s
+    v log --first-parent --stat
+    v log --stat --format=%s
+    v show --format= --stat HEAD
+    v show --format= HEAD~1
+    v show --pretty= HEAD~1
+    v log --format= -p
+    v log --pretty= --stat
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

@@ -41,7 +41,7 @@ impl Layout {
                         template: rest.to_string(),
                         terminator: true,
                     }
-                } else if spec.contains('%') {
+                } else if spec.is_empty() || spec.contains('%') {
                     Layout::Format {
                         template: spec.to_string(),
                         terminator: true,
@@ -63,7 +63,11 @@ impl Layout {
 
     /// Whether a diff following the entry is preceded by a blank line (everything but oneline).
     pub fn blank_before_diff(&self) -> bool {
-        !matches!(self, Layout::Oneline)
+        match self {
+            Layout::Oneline => false,
+            Layout::Format { template, .. } => !template.is_empty(),
+            _ => true,
+        }
     }
 }
 
