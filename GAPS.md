@@ -119,8 +119,7 @@ The command works for the common case; the listed options or edge cases are miss
   `--include-root-refs` / `--no-include-root-refs` work (`s_for_each_ref_root_refs`: `HEAD` and `[A-Z_]*_HEAD` files of the git
   directory, not `FETCH_HEAD`/`MERGE_HEAD`, git's "ignoring broken ref" warning, `%(symref)`, commit filters drop them); only the
   work tree's own git directory is scanned, so a linked work tree is not compared. `--sort=version:<key>`/`v:<key>` follows git's `versioncmp` (`s_for_each_ref_version_sort`); `versionsort.suffix` is not read. Pattern and `--exclude` globs follow `wildmatch` with `WM_PATHNAME` (`s_for_each_ref_patterns`).
-* **`blame`** — `-M`/`-C` refuse while the file has uncommitted changes; no `--incremental`,
-  `-w`, `--since`, `-S`, regex `-L`.
+* **`blame`** — `-M`/`-C` refuse while the file has uncommitted changes; no `-w`, `--since`, `-S`, regex `-L`.
 * **`grep`** — no `-P`, `--and`/`--or`/`--not`, `-z`, `--break`, `--threads`,
   `--untracked`, `--no-index`.
 * **`apply`** — `GIT binary patch` (from `diff --binary`) is not decoded; no fuzz, symlink

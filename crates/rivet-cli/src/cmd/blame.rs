@@ -9,7 +9,7 @@
 //! scoring run of lines that the diff aligns (`find_copy_in_blob`), with git's thresholds
 //! (20 and 40 alphanumeric characters by default).
 //!
-//! Not implemented: `--incremental`, `-w`, `--since`, `-S`, `--contents`, `--reverse`,
+//! Not implemented: `-w`, `--since`, `-S`, `--contents`, `--reverse`,
 //! regular-expression `-L` ranges, `-M`/`-C` while the work tree differs from the commit.
 
 use std::cmp::Reverse;
@@ -58,6 +58,10 @@ pub struct BlameArgs {
     /// Like `--porcelain`, with the commit details repeated for every line.
     #[arg(long = "line-porcelain")]
     pub line_porcelain: bool,
+
+    /// Report each group of lines as soon as its commit is found, without the lines themselves.
+    #[arg(long = "incremental")]
+    pub incremental: bool,
 
     /// `-M`: detect lines moved within a file (`-M<score>` sets the threshold).
     #[arg(long = "detect-moves", hide = true)]
@@ -158,6 +162,8 @@ struct Blamer<'r> {
     tip: ObjectId,
     tip_tree: ObjectId,
     final_entries: Vec<Entry>,
+    /// The entries in the order their suspects were settled (before `coalesce`).
+    guilty: Vec<Entry>,
     options: Options,
 }
 
@@ -639,6 +645,7 @@ impl<'r> Blamer<'r> {
     fn assign_blame(&mut self, first: usize) -> Result<()> {
         self.pass_blame(first)?;
         let entries = std::mem::take(&mut self.origins[first].suspects);
+        self.guilty.extend(entries.iter().cloned());
         self.final_entries.extend(entries);
         while let Some((_, _, commit)) = self.queue.pop() {
             self.in_queue.remove(&commit);
@@ -653,6 +660,7 @@ impl<'r> Blamer<'r> {
                 }
                 self.pass_blame(origin)?;
                 let entries = std::mem::take(&mut self.origins[origin].suspects);
+                self.guilty.extend(entries.iter().cloned());
                 self.final_entries.extend(entries);
             }
         }
@@ -799,6 +807,7 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
         tip,
         tip_tree,
         final_entries: Vec::new(),
+        guilty: Vec::new(),
         options,
     };
     let first = if top_is_worktree {
@@ -896,7 +905,9 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
     }
 
     let mut out: Vec<u8> = Vec::new();
-    if args.porcelain || args.line_porcelain {
+    if args.incremental {
+        render_incremental(&blamer, &people, &mut out);
+    } else if args.porcelain || args.line_porcelain {
         render_porcelain(
             &blamer,
             &lines,
@@ -1000,6 +1011,53 @@ fn tz_text(minutes: i32) -> String {
     let sign = if minutes < 0 { '-' } else { '+' };
     let abs = minutes.abs();
     format!("{sign}{:02}{:02}", abs / 60, abs % 60)
+}
+
+/// `--incremental`: per settled group a header, the commit's details the first time it appears,
+/// then `previous` and `filename`; the lines themselves are not shown.
+fn render_incremental(
+    blamer: &Blamer,
+    people: &HashMap<Option<ObjectId>, Person>,
+    out: &mut Vec<u8>,
+) {
+    let mut shown: HashSet<Option<ObjectId>> = HashSet::new();
+    for e in &blamer.guilty {
+        let origin = &blamer.origins[e.suspect];
+        let hex = match origin.commit {
+            Some(oid) => oid.to_string(),
+            None => "0".repeat(blamer.repo.format().hex_len()),
+        };
+        out.extend_from_slice(
+            format!("{hex} {} {} {}\n", e.s_lno + 1, e.lno + 1, e.num).as_bytes(),
+        );
+        if shown.insert(origin.commit) {
+            let person = &people[&origin.commit];
+            for (key, value) in [
+                ("author", person.name.clone()),
+                ("author-mail", person.email.clone()),
+                ("author-time", person.when.to_string()),
+                ("author-tz", tz_text(person.tz)),
+                ("committer", person.committer.clone()),
+                ("committer-mail", person.committer_email.clone()),
+                ("committer-time", person.committer_when.to_string()),
+                ("committer-tz", tz_text(person.committer_tz)),
+                ("summary", person.summary.clone()),
+            ] {
+                out.extend_from_slice(format!("{key} {value}\n").as_bytes());
+            }
+            if origin.boundary {
+                out.extend_from_slice(b"boundary\n");
+            }
+        }
+        if let Some((parent, path)) = &origin.previous {
+            out.extend_from_slice(format!("previous {parent} ").as_bytes());
+            out.extend_from_slice(path);
+            out.push(b'\n');
+        }
+        out.extend_from_slice(b"filename ");
+        out.extend_from_slice(&origin.path);
+        out.push(b'\n');
+    }
 }
 
 /// `--porcelain` / `--line-porcelain`: a header per group of lines, the commit's details the

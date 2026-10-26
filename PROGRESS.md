@@ -1575,3 +1575,12 @@ Left undone (in `GAPS.md`): `log --first-parent --stat` prints no stat for a mer
 the scenario and left out of it; items 8-11 of the queue.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
 `scenarios.sh` 293 PASS / `failures: 0`.
+
+## blame --incremental (2026-10-26)
+Took `.claude/PRIORITIES.md` item 8. `blame --incremental` prints one group per settled entry in the order the work queue settles them (before `coalesce`):
+`<sha> <sourceline> <resultline> <numlines>`, the author/committer/summary (and `boundary`) block only the first time a commit appears, then `previous` and
+`filename` for every group (checked with `/usr/bin/git`: `filename` is not limited to path changes), and no source lines. Works with `-L` and a revision.
+Scenario `s_blame_incremental` fails on `d88b230` (unknown option), passes now; expected values come from `/usr/bin/git`.
+Left undone: `--incremental` with uncommitted work-tree changes has no scenario (the fake commit carries the current time); items 9-11 of the queue.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
+`scenarios.sh` 294 PASS / `failures: 0`.

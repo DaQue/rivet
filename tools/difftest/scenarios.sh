@@ -9425,6 +9425,25 @@ s_log_stat_color() {
     v log --color=always --stat -1
 }
 
+# `blame --incremental`: groups in the order their commits settle, details once per commit, `previous`
+# and `filename` for every group, no source lines.
+s_blame_incremental() {
+    v init -q repo; cd repo
+    printf 'a\nb\nc\nd\n' >f
+    v add f; tick; v commit -q -m one
+    printf 'a\nB\nc\nd\ne\n' >f
+    GIT_AUTHOR_NAME="Bob" GIT_AUTHOR_EMAIL=bob@x v commit -q -a -m two
+    tick; git mv f g; printf 'a\nB\nC\nd\ne\n' >g
+    v commit -q -a -m three
+    v blame --incremental g
+    v blame --incremental -L2,3 g
+    v blame --incremental -L5 g
+    v blame --incremental HEAD~1 -- f
+    v blame --incremental HEAD~2 f
+    v blame --incremental nosuch
+    echo "rc=$?"
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
