@@ -5080,6 +5080,28 @@ s_for_each_ref_patterns() {
     v for-each-ref "$fmt" --exclude='refs/heads/?' --exclude='refs/tags/v[0-9]' refs/heads refs/tags
 }
 
+s_for_each_ref_version_sort() {
+    fer_repo
+    local fmt='--format=%(refname:short)' oid s
+    oid=$(g rev-parse HEAD)
+    for t in v1.9 v1.10 v1.2 v1.10-rc1 v1.10.1 v2 a1 a10 a2 a01 a001 V1.5 x-1 x-01 x1.0 x1.00 b007 b7; do
+        g update-ref "refs/tags/z/$t" "$oid"
+    done
+    for s in version:refname v:refname -version:refname -v:refname version:refname:short v:refname:rstrip=1 \
+        version:authordate version:objectname; do
+        v for-each-ref "$fmt" --sort="$s" refs/tags/z
+    done
+    v for-each-ref "$fmt" --sort=refname --sort=version:refname refs/tags/z
+    v for-each-ref "$fmt" --sort=version:refname --sort=-refname refs/tags/z
+    v for-each-ref "$fmt" --sort=-v:refname --sort=objectname refs/tags/z
+    v for-each-ref "$fmt" --sort=version:refname --ignore-case refs/tags/z
+    v for-each-ref "$fmt" --sort=version:refname --count=3 refs/tags/z
+    v for-each-ref "$fmt" --sort=version:
+    v for-each-ref "$fmt" --sort=v:
+    v for-each-ref "$fmt" --sort=version:nosuchatom
+    v for-each-ref "$fmt" --sort=version:version:refname
+}
+
 s_for_each_ref_upstream() {
     fer_repo
     v for-each-ref --format='%(refname:short) up=%(upstream) short=%(upstream:short) track=%(upstream:track) ts=%(upstream:trackshort) nb=%(upstream:track,nobracket) rn=%(upstream:remotename) rr=%(upstream:remoteref)' refs/heads

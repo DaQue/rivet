@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 289 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 290 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-26, gate: 261 tests / 0 failed, 289 scenarios / 0 failures, `fmt`,
@@ -116,7 +116,7 @@ The command works for the common case; the listed options or edge cases are miss
   `--stdin` and `--start-after` / `--no-start-after` work (`s_for_each_ref_stdin_start`);
   `--include-root-refs` / `--no-include-root-refs` work (`s_for_each_ref_root_refs`: `HEAD` and `[A-Z_]*_HEAD` files of the git
   directory, not `FETCH_HEAD`/`MERGE_HEAD`, git's "ignoring broken ref" warning, `%(symref)`, commit filters drop them); only the
-  work tree's own git directory is scanned, so a linked work tree is not compared. No `version:`/`v:` sort. Pattern and `--exclude` globs follow `wildmatch` with `WM_PATHNAME` (`s_for_each_ref_patterns`).
+  work tree's own git directory is scanned, so a linked work tree is not compared. `--sort=version:<key>`/`v:<key>` follows git's `versioncmp` (`s_for_each_ref_version_sort`); `versionsort.suffix` is not read. Pattern and `--exclude` globs follow `wildmatch` with `WM_PATHNAME` (`s_for_each_ref_patterns`).
 * **`blame`** — `-M`/`-C` refuse while the file has uncommitted changes; no `--incremental`,
   `-w`, `--since`, `-S`, regex `-L`.
 * **`grep`** — no `-P`, `--and`/`--or`/`--not`, `-z`, `--break`, `--threads`,

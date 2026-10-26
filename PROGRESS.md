@@ -1535,3 +1535,13 @@ checked against `/usr/bin/git`. `GAPS.md`: the "globs cross `/`" sentence is rem
 Left undone: `version:` sort (item 4), the rest of the queue.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
 `scenarios.sh` 289 PASS / `failures: 0`.
+
+## for-each-ref --sort=version:<key> (2026-10-26)
+Took `.claude/PRIORITIES.md` item 4. A `--sort` key may now carry `version:` or `v:` (after an optional leading `-`): the atom's text is compared
+with git's `versioncmp` (glibc `strverscmp` state machine, ported literally), so `v1.9` sorts before `v1.10`, `a2` before `a10`, `a001` before `a01`
+before `a1`. Version keys ignore `--ignore-case`, work on any atom (`version:authordate`, `version:refname:short`), later `--sort` keys stay primary.
+An empty key prints `fatal: malformed field name: `, `version:version:refname` prints `fatal: unknown field name: version:refname`.
+Scenario `s_for_each_ref_version_sort` fails on `4d3aee9` (version sort was not recognised), passes now; expected values checked against `/usr/bin/git`.
+Left undone (in `GAPS.md`): `versionsort.suffix` / `versionsort.prereleaseSuffix` are not read; items 5-11 of the queue.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
+`scenarios.sh` 290 PASS / `failures: 0`.

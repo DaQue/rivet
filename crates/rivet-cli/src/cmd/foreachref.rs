@@ -1217,6 +1217,56 @@ pub(super) fn sort_value(key: &str, item: &RefItem, context: &Context) -> Eval<S
     })
 }
 
+/// git's `versioncmp` (glibc `strverscmp`) with no `versionsort.suffix` configured.
+fn versioncmp(left: &str, right: &str) -> Ordering {
+    const CMP: i8 = 2;
+    const LEN: i8 = 3;
+    const NEXT_STATE: [usize; 12] = [0, 3, 9, 0, 3, 3, 0, 6, 6, 0, 6, 9];
+    const RESULT: [i8; 36] = [
+        CMP, CMP, CMP, CMP, LEN, CMP, CMP, CMP, CMP, //
+        CMP, -1, -1, 1, LEN, LEN, 1, LEN, LEN, //
+        CMP, CMP, CMP, CMP, CMP, CMP, CMP, CMP, CMP, //
+        CMP, 1, 1, -1, CMP, CMP, -1, CMP, CMP,
+    ];
+    let (a, b) = (left.as_bytes(), right.as_bytes());
+    let at = |s: &[u8], i: usize| s.get(i).copied().unwrap_or(0);
+    let class = |c: u8| usize::from(c == b'0') + usize::from(c.is_ascii_digit());
+    let mut i = 0;
+    let (mut c1, mut c2) = (at(a, 0), at(b, 0));
+    let mut state = class(c1);
+    while c1 == c2 {
+        if c1 == 0 {
+            return Ordering::Equal;
+        }
+        state = NEXT_STATE[state];
+        i += 1;
+        c1 = at(a, i);
+        c2 = at(b, i);
+        state += class(c1);
+    }
+    let diff = i32::from(c1) - i32::from(c2);
+    let by_diff = diff.cmp(&0);
+    match RESULT[state * 3 + class(c2)] {
+        CMP => by_diff,
+        LEN => {
+            let (mut p1, mut p2) = (i + 1, i + 1);
+            while at(a, p1).is_ascii_digit() {
+                p1 += 1;
+                if !at(b, p2).is_ascii_digit() {
+                    return Ordering::Greater;
+                }
+                p2 += 1;
+            }
+            if at(b, p2).is_ascii_digit() {
+                Ordering::Less
+            } else {
+                by_diff
+            }
+        }
+        r => r.cmp(&0),
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The command
 // ---------------------------------------------------------------------------------------------
@@ -1520,6 +1570,7 @@ fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<
     struct Key {
         atom: String,
         descending: bool,
+        version: bool,
     }
     let mut keys: Vec<Key> = Vec::new();
     for spec in args.sort.iter().rev() {
@@ -1527,16 +1578,35 @@ fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<
             Some(rest) => (true, rest),
             None => (false, spec.as_str()),
         };
+        let (version, atom) = match atom
+            .strip_prefix("version:")
+            .or_else(|| atom.strip_prefix("v:"))
+        {
+            Some(rest) => (true, rest),
+            None => (false, atom),
+        };
+        if version && atom.is_empty() {
+            return Ok(fatal("malformed field name: "));
+        }
+        if version && (atom.starts_with("version:") || atom.starts_with("v:")) {
+            return Ok(fatal(format!("unknown field name: {atom}")));
+        }
         keys.push(Key {
             atom: atom.to_string(),
             descending,
+            version,
         });
     }
     let mut keyed: Vec<(Vec<SortValue>, RefItem)> = Vec::new();
     for item in items {
         let mut values = Vec::new();
         for key in &keys {
-            match sort_value(&key.atom, &item, &context) {
+            let value = if key.version {
+                atom_value(&key.atom, &item, &context).map(|v| SortValue::Text(v.text()))
+            } else {
+                sort_value(&key.atom, &item, &context)
+            };
+            match value {
                 Ok(value) => values.push(value),
                 Err(fatal) => return Ok(Err(fatal)),
             }
@@ -1553,6 +1623,7 @@ fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<
     keyed.sort_by(|(left_values, left), (right_values, right)| {
         for (index, key) in keys.iter().enumerate() {
             let ordering = match (&left_values[index], &right_values[index]) {
+                (SortValue::Text(a), SortValue::Text(b)) if key.version => versioncmp(a, b),
                 (SortValue::Number(a), SortValue::Number(b)) => a.cmp(b),
                 (SortValue::Text(a), SortValue::Text(b)) => fold(a).cmp(&fold(b)),
                 _ => Ordering::Equal,
