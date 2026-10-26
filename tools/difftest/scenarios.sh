@@ -8597,6 +8597,54 @@ s_stash_errors() {
     v stash list
 }
 
+# `grep -o` prints each match on a line of its own (leftmost across patterns, the longest on a tie, an
+# empty match ends the line, `-v` switches it off, context lines are silent but still draw `--`);
+# `--heading` names the file once above its lines, `-h` does not hide it, the last of
+# `--heading` / `--no-heading` wins.
+s_grep_output_modes() {
+    v init -q repo; cd repo
+    printf 'foo bar foo\nnone\nxfoo\n' >a.txt
+    printf 'foo\nbaz foo foo\n' >b.txt
+    printf 'q\nfoo\nq\nq\nq\nfoo\n' >d.txt
+    printf 'a\0foo\n' >bin.dat
+    printf 'Foo FOO foobar\nfoo-bar_foo\n' >e.txt
+    v add .; v commit -q -m one
+    v grep -o foo
+    v grep -on foo
+    v grep -oh foo
+    v grep -o -w foo
+    v grep -o -i foo e.txt
+    v grep -o -c foo
+    v grep -o -v foo a.txt
+    v grep -o -e foo -e bar a.txt
+    v grep -o -e 'fo*' -e 'foo bar' a.txt
+    v grep -oE 'o*' a.txt
+    v grep -oE '^foo|foo$' a.txt
+    v grep -o '^foo' a.txt
+    v grep -o -l foo
+    v grep -o -a foo bin.dat
+    v grep -o --cached foo b.txt
+    v grep -o foo HEAD -- b.txt
+    v grep -o --no-only-matching foo a.txt
+    v grep -o -A1 foo a.txt d.txt
+    v grep -o -B1 foo d.txt
+    v grep -o -C1 -n foo d.txt a.txt
+    v grep -o -v -A1 foo d.txt
+    v grep --heading foo
+    v grep --heading -n foo
+    v grep --heading -h foo a.txt
+    v grep --heading -A1 foo a.txt d.txt
+    v grep --heading -B1 foo d.txt
+    v grep --heading -o -B1 foo d.txt a.txt
+    v grep --heading -c foo
+    v grep --heading -l foo
+    v grep --heading --no-heading foo a.txt
+    v grep --no-heading --heading foo a.txt
+    v grep --heading foo HEAD -- b.txt
+    v grep --heading nonexistent
+    echo "rc=$?"
+}
+
 # `label` / `reset` todo lines: a label is a ref under refs/rewritten that lives until the rebase ends
 # (finished or aborted), `reset` moves HEAD and the work tree there (reflog `rebase (reset): '<arg>'`, none
 # when HEAD does not move), a name that does not resolve reschedules the line. `merge` and `update-ref`

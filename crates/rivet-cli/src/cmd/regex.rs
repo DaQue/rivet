@@ -524,6 +524,34 @@ impl Regex {
         ends
     }
 
+    /// The leftmost-longest match starting at or after `from`, as `(start, end)`.
+    ///
+    /// Empty matches are reported (`start == end`) unless `whole_words` is set, in which case
+    /// only non-empty matches bounded by non-word characters count, as in `is_match`.
+    pub fn find_from(&self, line: &[u8], from: usize, whole_words: bool) -> Option<(usize, usize)> {
+        for start in from..=line.len() {
+            let ends = self.ends_at(line, start);
+            if !whole_words {
+                if let Some(&end) = ends.iter().max() {
+                    return Some((start, end));
+                }
+                continue;
+            }
+            if start.checked_sub(1).is_some_and(|i| is_word(line[i])) {
+                continue;
+            }
+            let best = ends
+                .iter()
+                .copied()
+                .filter(|&end| end > start && !line.get(end).copied().is_some_and(is_word))
+                .max();
+            if let Some(end) = best {
+                return Some((start, end));
+            }
+        }
+        None
+    }
+
     /// Whether any match starts in `line`; with `whole_words` only matches bounded by
     /// non-word characters count.
     pub fn is_match(&self, line: &[u8], whole_words: bool) -> bool {
@@ -595,5 +623,22 @@ mod tests {
         assert!(re.is_match(b"a FOO b", true));
         assert!(Regex::new(b"(", true, false).is_err());
         assert!(Regex::new(b"[a", false, false).is_err());
+    }
+
+    #[test]
+    fn find_from_is_leftmost_longest() {
+        let re = Regex::new(b"fo*", true, false).expect("compiles");
+        assert_eq!(re.find_from(b"a foo fooo", 0, false), Some((2, 5)));
+        assert_eq!(re.find_from(b"a foo fooo", 5, false), Some((6, 10)));
+        assert_eq!(re.find_from(b"a foo", 5, false), None);
+        let anchored = Regex::new(b"^foo", true, false).expect("compiles");
+        assert_eq!(anchored.find_from(b"foo foo", 0, false), Some((0, 3)));
+        assert_eq!(anchored.find_from(b"foo foo", 3, false), None);
+        let word = Regex::new(b"foo", true, false).expect("compiles");
+        assert_eq!(word.find_from(b"xfoo foo foox", 0, true), Some((5, 8)));
+        let empty = Regex::new(b"o*", true, false).expect("compiles");
+        assert_eq!(empty.find_from(b"foo", 0, false), Some((0, 0)));
+        assert_eq!(empty.find_from(b"foo", 0, true), None);
+        assert_eq!(empty.find_from(b"a oo", 0, true), Some((2, 4)));
     }
 }

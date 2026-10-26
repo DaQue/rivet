@@ -1512,3 +1512,16 @@ against `/usr/bin/git` 2.56.0. The matching lines in `GAPS.md` are removed.
 Left undone (in `GAPS.md`): `-p`/`-S`/`--staged` for every stash form.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
 `scenarios.sh` 287 PASS / `failures: 0`.
+
+## grep -o / --heading (2026-10-26)
+Took `.claude/PRIORITIES.md` item 2. `grep` gains `-o`/`--only-matching` (+ `--no-only-matching`) and `--heading`/`--no-heading` (last one wins).
+`-o` prints each non-empty match on its own line with the usual `name:`/`lineno:` prefix: at each step the leftmost match of any pattern,
+the longest on a tie, `-w` applied per match, an empty match ends the line; `-v` switches `-o` off (whole lines, as git does). Context lines
+under `-o` print nothing but still draw `--` (git's `last_shown` is only advanced by real hits, so a gap or a first hit after `-B` context
+yields extra `--` lines — copied from git's output, not inferred). `--heading` prints the file name once above its lines and drops the
+prefix; `-h` does not suppress it; `-c`/`-l`/binary-file lines are unchanged. New `Regex::find_from` (leftmost-longest from an offset).
+Scenario `s_grep_output_modes` fails on `75626dd` (unknown option), passes now; expected values checked against `/usr/bin/git`. Rust test
+`find_from_is_leftmost_longest`. `GAPS.md`: `-o` and `--heading` removed from the `grep` line, `--break` added (not implemented).
+Left undone (in `GAPS.md`): `-P`, `--and`/`--or`/`--not`, `-z`, `--break`, `--threads`, `--untracked`, `--no-index`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
+`scenarios.sh` 288 PASS / `failures: 0`.

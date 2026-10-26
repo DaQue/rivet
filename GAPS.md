@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 287 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 288 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-25, gate: 260 tests / 0 failed, 287 scenarios / 0 failures, `fmt`,
@@ -121,7 +121,7 @@ The command works for the common case; the listed options or edge cases are miss
   `refs/ROOTISH_HEAD`, `refs/heads*` lists nothing); `[...]` is taken literally. Not compared.
 * **`blame`** — `-M`/`-C` refuse while the file has uncommitted changes; no `--incremental`,
   `-w`, `--since`, `-S`, regex `-L`.
-* **`grep`** — no `-P`, `-o`, `--and`/`--or`/`--not`, `--heading`, `-z`, `--threads`,
+* **`grep`** — no `-P`, `--and`/`--or`/`--not`, `-z`, `--break`, `--threads`,
   `--untracked`, `--no-index`.
 * **`apply`** — `GIT binary patch` (from `diff --binary`) is not decoded; no fuzz, symlink
   patches, whitespace options or `--reject` together with `--3way`.

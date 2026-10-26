@@ -1,7 +1,7 @@
 //! `grep`: search tracked files in the work tree, the index (`--cached`) or a tree.
 //!
 //! Patterns are POSIX basic regular expressions by default, `-E` extended ones, `-F` fixed
-//! strings. `-P` (Perl), `-o`, `--and`/`--not` boolean patterns and `--threads` are not
+//! strings. `-P` (Perl), `--and`/`--not` boolean patterns and `--threads` are not
 //! implemented and are refused at the command line.
 
 use std::io::Write as _;
@@ -92,6 +92,26 @@ pub struct GrepArgs {
     /// Skip binary files.
     #[arg(short = 'I')]
     pub skip_binary: bool,
+
+    /// Print only the matching parts of a line, one per output line.
+    #[arg(
+        short = 'o',
+        long = "only-matching",
+        overrides_with = "no_only_matching"
+    )]
+    pub only_matching: bool,
+
+    /// Print whole lines again after `-o`.
+    #[arg(long = "no-only-matching", overrides_with = "only_matching")]
+    pub no_only_matching: bool,
+
+    /// Print the file name once above its matches instead of on every line.
+    #[arg(long = "heading", overrides_with = "no_heading")]
+    pub heading: bool,
+
+    /// Print the file name on every line (the default).
+    #[arg(long = "no-heading", overrides_with = "heading")]
+    pub no_heading: bool,
 
     /// Lines of context after a match.
     #[arg(short = 'A', long = "after-context", value_name = "N")]
@@ -241,7 +261,8 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
     let show_name = !args.no_filename;
     let mut out: Vec<u8> = Vec::new();
     let mut any = false;
-    let mut printed_group = false;
+    let mut hunk_mark = false;
+    let only_matching = args.only_matching && !invert;
     for source in &sources {
         let binary = !args.text && source.data[..source.data.len().min(8000)].contains(&0);
         if binary && args.skip_binary {
@@ -305,27 +326,55 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
                 }
             }
         }
-        let mut previous: Option<usize> = None;
+        let mut last_shown = 0usize;
         for (i, line) in lines.iter().enumerate() {
             if !keep[i] {
                 continue;
             }
-            if (before > 0 || after > 0) && printed_group && previous.is_none_or(|p| p + 1 != i) {
-                out.extend_from_slice(b"--\n");
+            let lno = i + 1;
+            // The hunk mark and the `--` between non-adjacent lines come from every kept line,
+            // context lines that `-o` leaves unprinted included.
+            if before > 0 || after > 0 {
+                if last_shown == 0 {
+                    if hunk_mark {
+                        out.extend_from_slice(b"--\n");
+                    } else {
+                        hunk_mark = true;
+                    }
+                } else if lno > last_shown + 1 {
+                    out.extend_from_slice(b"--\n");
+                }
             }
-            let sep = if hits[i] { b':' } else { b'-' };
-            if show_name {
+            if only_matching && !hits[i] {
+                continue;
+            }
+            if args.heading && last_shown == 0 {
                 out.extend_from_slice(&source.shown);
-                out.push(sep);
+                out.push(b'\n');
             }
-            if args.line_number {
-                out.extend_from_slice(format!("{}", i + 1).as_bytes());
-                out.push(sep);
+            last_shown = lno;
+            let sep = if hits[i] { b':' } else { b'-' };
+            let prefix = |out: &mut Vec<u8>| {
+                if show_name && !args.heading {
+                    out.extend_from_slice(&source.shown);
+                    out.push(sep);
+                }
+                if args.line_number {
+                    out.extend_from_slice(format!("{lno}").as_bytes());
+                    out.push(sep);
+                }
+            };
+            if only_matching {
+                for (start, end) in only_matches(&regexes, line, args.word) {
+                    prefix(&mut out);
+                    out.extend_from_slice(&line[start..end]);
+                    out.push(b'\n');
+                }
+            } else {
+                prefix(&mut out);
+                out.extend_from_slice(line);
+                out.push(b'\n');
             }
-            out.extend_from_slice(line);
-            out.push(b'\n');
-            previous = Some(i);
-            printed_group = true;
         }
     }
     if !quiet {
@@ -341,6 +390,31 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
         any
     };
     Ok(if success { 0 } else { 1 })
+}
+
+/// The non-empty matches of `-o`: at each step the leftmost match of any pattern, the longest
+/// one on a tie. An empty match ends the scan of the line, as in git.
+fn only_matches(regexes: &[Regex], line: &[u8], word: bool) -> Vec<(usize, usize)> {
+    let mut found = Vec::new();
+    let mut pos = 0;
+    while pos <= line.len() {
+        let mut best: Option<(usize, usize)> = None;
+        for regex in regexes {
+            if let Some((start, end)) = regex.find_from(line, pos, word)
+                && best.is_none_or(|(s, e)| start < s || (start == s && end > e))
+            {
+                best = Some((start, end));
+            }
+        }
+        match best {
+            Some((start, end)) if end > start => {
+                found.push((start, end));
+                pos = end;
+            }
+            _ => break,
+        }
+    }
+    found
 }
 
 fn read_blob(repository: &Repository, oid: &ObjectId) -> Result<Vec<u8>> {
