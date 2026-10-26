@@ -1759,3 +1759,15 @@ deprecated key, a plain `refname` sort unaffected) fails on e2438b1 and passes a
 config is not consulted for the suffixes.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 313 PASS / `failures: 0`.
+
+### blame: `-L /regex/`
+
+`.claude/PRIORITIES.md` is stale (all 11 items landed); `GAPS.md` section 1 holds only large subsystems, so this came from
+section 2. `blame -L` now accepts `/re/` (search from the line after the previous `-L`, line 1 for the first), `^/re/` (from line 1),
+`<start>,/re/` and `,/re/` (end search from the line after the start), mixed with numeric ends (`/re/,+N`, `/re/,-N`, `/re/,N`) and
+repeated `-L`. "No match", `-L invalid empty range`, `file F has only N lines`, unterminated regex / trailing junk (usage, exit 129) and a
+bad regex (`Unmatched ( or \(`) follow git. Change in `cmd/blame.rs` (`parse_regex_range`); `-L :<funcname>` still refuses by name.
+Scenario `s_blame_regex_range` fails on the base (regex ranges were refused) and passes after; expected output compared with `/usr/bin/git`.
+Left undone: `-L :<funcname>`; glibc's text for a few malformed patterns (`[`) differs from rivet's matcher (in `GAPS.md`).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 314 PASS / `failures: 0`.

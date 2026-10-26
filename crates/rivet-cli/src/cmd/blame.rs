@@ -10,7 +10,7 @@
 //! (20 and 40 alphanumeric characters by default).
 //!
 //! Not implemented: `--since`, `-S`, `--contents`, `--reverse`,
-//! regular-expression `-L` ranges, `-M`/`-C` while the work tree differs from the commit.
+//! function-name `-L` ranges, `-M`/`-C` while the work tree differs from the commit.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
@@ -111,6 +111,114 @@ fn parse_range(text: &str, total: usize, file: &str) -> Result<(usize, usize)> {
     };
     if start == 0 || start > total {
         anyhow::bail!("file {file} has only {total} lines");
+    }
+    Ok((start, end.min(total)))
+}
+
+/// Why a `-L` argument was rejected: git dies with a message, or prints its usage.
+enum RangeError {
+    Fatal(String),
+    Usage,
+}
+
+/// Index just past the `/` that closes the regular expression opening at `text[0] == '/'`;
+/// a backslash escapes the next byte, as in git's `parse_loc`.
+fn regex_end(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut i = 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'/' => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// The first line at or after `from` (1-based) matching the regular expression `pattern`.
+fn search_line(pattern: &str, lines: &[&[u8]], from: usize) -> Result<usize, RangeError> {
+    let fatal = |why: &str| {
+        RangeError::Fatal(format!(
+            "-L parameter '{pattern}' starting at line {from}: {why}"
+        ))
+    };
+    let regex = super::regex::Regex::new(pattern.as_bytes(), false, false)
+        .map_err(|error| fatal(&error.to_string()))?;
+    lines
+        .iter()
+        .skip(from - 1)
+        .position(|line| regex.is_match(line, false))
+        .map(|found| from + found)
+        .ok_or_else(|| fatal("No match"))
+}
+
+/// `-L` ranges that involve a regular expression (`/re/`, `^/re/`, `<start>,/re/`, `/re/,<end>`);
+/// `anchor` is the line after the previous range, where an unanchored start search begins.
+fn parse_regex_range(
+    text: &str,
+    lines: &[&[u8]],
+    anchor: usize,
+    file: &str,
+) -> Result<(usize, usize), RangeError> {
+    let total = lines.len();
+    let (start, rest) = if text.starts_with("^/") || text.starts_with('/') {
+        let (body, from) = match text.strip_prefix('^') {
+            Some(body) => (body, 1),
+            None => (text, anchor.clamp(1, total + 1)),
+        };
+        let end = regex_end(body).ok_or(RangeError::Usage)?;
+        (search_line(&body[1..end - 1], lines, from)?, &body[end..])
+    } else {
+        let (first, _) = text.split_once(',').ok_or(RangeError::Usage)?;
+        // An empty start is line 0 here: the end search begins at line 1 and the range at line 1.
+        let start = match first.trim() {
+            "" => 0,
+            number => number.parse::<usize>().map_err(|_| RangeError::Usage)?,
+        };
+        if start == 0 && !first.trim().is_empty() {
+            return Err(RangeError::Fatal("-L invalid line number: 0".to_string()));
+        }
+        (start, &text[first.len()..])
+    };
+    let spec = match rest {
+        "" => "",
+        _ => rest.strip_prefix(',').ok_or(RangeError::Usage)?,
+    };
+    let too_short = || RangeError::Fatal(format!("file {file} has only {total} lines"));
+    let number = |s: &str| s.parse::<usize>().map_err(|_| RangeError::Usage);
+    let end = if spec.is_empty() {
+        total
+    } else if spec.starts_with('/') {
+        if regex_end(spec) != Some(spec.len()) {
+            return Err(RangeError::Usage);
+        }
+        if start > total {
+            return Err(too_short());
+        }
+        search_line(&spec[1..spec.len() - 1], lines, start + 1)?
+    } else if let Some(count) = spec.strip_prefix('+') {
+        match number(count)? {
+            0 => return Err(RangeError::Fatal("-L invalid empty range".to_string())),
+            count => start + count - 1,
+        }
+    } else if let Some(count) = spec.strip_prefix('-') {
+        let count = number(count)?;
+        if start > total {
+            return Err(too_short());
+        }
+        return Ok((start.saturating_sub(count.saturating_sub(1)).max(1), start));
+    } else {
+        number(spec)?
+    };
+    let (start, end) = if start > end {
+        (end, start)
+    } else {
+        (start, end)
+    };
+    let start = start.max(1);
+    if start > total {
+        return Err(too_short());
     }
     Ok((start, end.min(total)))
 }
@@ -791,19 +899,34 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
     if args.ranges.is_empty() {
         wanted.fill(true);
     }
+    let text_lines: Vec<&[u8]> = lines
+        .iter()
+        .map(|line| line.content.strip_suffix(b"\n").unwrap_or(line.content))
+        .collect();
+    let mut anchor = 1;
     for range in &args.ranges {
-        if range.starts_with('/') || range.contains(":/") {
-            anyhow::bail!("blame: regular-expression -L ranges are not implemented");
+        if range.starts_with(':') || range.starts_with("^:") || range.contains(":/") {
+            anyhow::bail!("blame: function-name -L ranges are not implemented");
         }
-        match parse_range(range, total, &file) {
+        let parsed = if range.contains('/') {
+            parse_regex_range(range, &text_lines, anchor, &file)
+        } else {
+            parse_range(range, total, &file).map_err(|error| RangeError::Fatal(error.to_string()))
+        };
+        match parsed {
             Ok((start, end)) => {
                 for flag in &mut wanted[start - 1..end] {
                     *flag = true;
                 }
+                anchor = end + 1;
             }
-            Err(error) => {
-                eprintln!("fatal: {error}");
+            Err(RangeError::Fatal(message)) => {
+                eprintln!("fatal: {message}");
                 return Ok(128);
+            }
+            Err(RangeError::Usage) => {
+                eprintln!("usage: git blame [<options>] [<rev-opts>] [<rev>] [--] <file>");
+                return Ok(129);
             }
         }
     }

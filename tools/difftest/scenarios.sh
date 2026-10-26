@@ -9967,6 +9967,34 @@ s_blame_ignore_whitespace() {
     v blame -w HEAD~1 -- f
 }
 
+# `blame -L /re/`: a start regex searches from line 1 (or from the line after the previous `-L`),
+# `^/re/` from line 1, an end regex from the line after the start; no match, bad regex, unterminated
+# regex and `+0` die or print usage as git does.
+s_blame_regex_range() {
+    v init -q repo; cd repo
+    printf 'alpha\nbeta\ngamma\nbeta2\ndelta\nepsilon\n' >f
+    v add f; tick; v commit -q -m one
+    printf 'a\nb\nb\nb\nz\n' >g
+    v add g; tick; v commit -q -m two
+    local r
+    for r in '/beta/' '/beta/,/delta/' '2,/beta/' '3,/beta/' '/beta/,+2' '/beta/,-1' '^/beta/' '^/beta/,/delta/' \
+        '/beta/,3' '/beta/,1' '/beta/,' ',/gamma/' '/^g/' '/b.t[a]/' '/BETA/' '//' '/beta/,//' '/b\/x/' \
+        '/zzz/' '2,/zzz/' '/beta/,/alpha/' '5,/beta/' '6,/beta/' '7,/beta/' '/(/' '1,/\(/' '/beta/,+0' \
+        '/beta' '/beta/x' '/beta/,x' '2,/beta/x' '3,^/beta/' '0,/beta/'; do
+        echo "-L $r"
+        v blame -L "$r" f
+        echo "rc=$?"
+    done
+    v blame -L /b/ -L /b/ g
+    echo "rc=$?"
+    v blame -L /b/,+1 -L /b/,+1 g
+    echo "rc=$?"
+    v blame -L 2,2 -L /b/ g
+    echo "rc=$?"
+    v blame -L '^/b/' -L '^/z/' g
+    echo "rc=$?"
+}
+
 # `log --first-parent` diffs a merge against its first parent (stat, patch, name lists); an empty
 # `--format=` / `--pretty=` prints no header, no terminator and no blank line before the diff.
 s_log_first_parent_merge_diff() {
