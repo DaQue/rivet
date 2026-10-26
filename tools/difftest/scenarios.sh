@@ -8479,6 +8479,28 @@ s_rebase_keep_base() {
     v status
 }
 
+# Too many positionals: git prints its whole usage text on stderr and exits 129 whether or not
+# `--root` is given, before it touches anything (no pre-rebase hook, no state, no reflog entry).
+s_rebase_positional_usage() {
+    rebase_repo
+    mkdir -p .git/hooks
+    printf '#!/bin/sh\necho "pre-rebase $@" >&2\n' >.git/hooks/pre-rebase
+    chmod +x .git/hooks/pre-rebase
+    v rebase --root main topic
+    echo "rc=$?"
+    v rebase --root main topic extra
+    echo "rc=$?"
+    v rebase main topic extra
+    echo "rc=$?"
+    v rebase -i main topic extra more
+    echo "rc=$?"
+    v rebase --onto main main topic extra
+    echo "rc=$?"
+    v status --short --branch
+    v reflog -3
+    ls .git | grep -c rebase
+}
+
 # `rebase --root`: without `--onto` the commits are replayed onto a virtual empty commit (and
 # reused as fast-forwards); with `--onto` the range is everything not reachable from the new base,
 # so a root commit already below it is stepped over; an unrelated root conflicts like any pick.

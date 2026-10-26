@@ -38,6 +38,9 @@ use crate::cli::GlobalArgs;
 
 mod interactive;
 
+/// git's usage text for `rebase`, printed on stderr when the positionals do not fit.
+const REBASE_USAGE: &str = include_str!("rebase_usage.txt");
+
 /// Arguments of `rebase`.
 #[derive(Debug, Default, clap::Args)]
 pub struct RebaseArgs {
@@ -48,6 +51,10 @@ pub struct RebaseArgs {
     /// The branch to rebase (default: the current one); it is switched to first.
     #[arg(value_name = "BRANCH")]
     pub branch: Option<String>,
+
+    /// Positionals beyond the second; git answers them with its usage text.
+    #[arg(value_name = "EXTRA", hide = true)]
+    pub extra: Vec<String>,
 
     /// Start the new history at this commit instead of at the upstream.
     #[arg(long = "onto", value_name = "NEWBASE")]
@@ -259,6 +266,10 @@ fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<Commit> {
 /// * `1` — stopped on a conflict, or refused because of local changes.
 /// * `128` — fatal: unknown revision, a rebase already in progress, nothing to continue.
 pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
+    if !args.extra.is_empty() {
+        eprint!("{REBASE_USAGE}");
+        return Ok(129);
+    }
     let mut repository = super::open(global)?;
     let dir = rebase_dir(&repository);
     if args.keep_base {
@@ -489,9 +500,11 @@ fn start(
     // With `--root` there is no upstream, so the one positional argument names the branch.
     let branch_arg = match (args.root, &args.upstream) {
         (true, Some(_)) if args.branch.is_some() => {
-            eprintln!(
-                "usage: git rebase [-i] [options] [--exec <cmd>] [--onto <newbase>] --root [<branch>]"
-            );
+            // git has already written the empty commit by the time it checks the positionals.
+            if args.onto.is_none() {
+                write_virtual_onto(repository)?;
+            }
+            eprint!("{REBASE_USAGE}");
             return Ok(129);
         }
         (true, upstream) => args.branch.clone().or_else(|| upstream.clone()),
@@ -566,16 +579,7 @@ fn start(
     };
     let mut squash_onto = None;
     if args.root && onto.is_none() {
-        // Without `--onto` the commits are replayed onto an empty commit, which git writes without
-        // its (empty) tree.
-        let tree = super::empty_tree(repository)?;
-        let mut builder = rivet_core::CommitBuilder::new();
-        builder.tree(tree);
-        builder.author(repository.author_signature()?);
-        builder.committer(repository.committer_signature()?);
-        builder.message(BStr::new(b""));
-        let body = builder.build(repository.format())?;
-        let virtual_onto = repository.odb().write_raw(ObjectKind::Commit, &body)?;
+        let virtual_onto = write_virtual_onto(repository)?;
         onto_name = virtual_onto.to_string();
         onto = Some(virtual_onto);
         squash_onto = onto;
@@ -1399,6 +1403,19 @@ fn delete_labels(repository: &Repository, dir: &Path) {
     for entry in read_state(dir, "refs-to-delete").lines() {
         let _ = std::fs::remove_file(repository.git_dir().join(entry));
     }
+}
+
+/// Write the empty commit `rebase --root` replays onto when there is no `--onto`; git writes it
+/// without a message and with the empty tree.
+fn write_virtual_onto(repository: &Repository) -> Result<ObjectId> {
+    let tree = super::empty_tree(repository)?;
+    let mut builder = rivet_core::CommitBuilder::new();
+    builder.tree(tree);
+    builder.author(repository.author_signature()?);
+    builder.committer(repository.committer_signature()?);
+    builder.message(BStr::new(b""));
+    let body = builder.build(repository.format())?;
+    Ok(repository.odb().write_raw(ObjectKind::Commit, &body)?)
 }
 
 /// Whether `oid` is the empty commit `rebase --root` starts from: no parent, the empty tree and

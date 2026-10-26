@@ -1638,3 +1638,10 @@ Scenario `s_ls_remote_version_sort` fails on `ccbc572` (the keys were refused by
 Left undone (in `GAPS.md`): `*` (ignore case), `refname:short`/`:dir`/`:base` and the object-data keys of `ls-remote --sort`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 262 passed / 0 failed / 0 ignored,
 `scenarios.sh` 301 PASS / `failures: 0`.
+
+## rebase: too many positionals (2026-10-26)
+`.claude/PRIORITIES.md` is stale (all 11 items already landed, each with a passing scenario), so this took the `rebase --root` leftover in section 1 of `GAPS.md`. `rebase` with more positionals than `[<upstream> [<branch>]]` now prints git's whole 62-line usage text on stderr and exits 129 (clap used to exit 2; with `--root` rivet printed one usage line). With `--root` and no `--onto`, two positionals also make git write the empty virtual-root commit before it complains; rivet writes the same object now (`fsck` shows the same dangling commit).
+Scenario `s_rebase_positional_usage` fails on `79c7709` (exit 2 and a clap error for three positionals, a one-line usage for `--root a b`), passes now; expected values come from `/usr/bin/git`.
+Left undone: `rebase -h` is still clap's text; rivet's `fsck` has no `--no-progress` (the harness's state capture uses it through `g`, so it is unseen there).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 262 passed / 0 failed / 0 ignored,
+`scenarios.sh` 302 PASS / `failures: 0`.
