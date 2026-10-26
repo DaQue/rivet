@@ -1749,3 +1749,13 @@ Left undone: the blank line after generated `update-ref` lines in `git-rebase-to
 file; still in `GAPS.md`).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 312 PASS / `failures: 0`.
+
+### ls-remote: `versionsort.suffix`
+
+`ls-remote --sort=version:<key>` / `v:<key>` now reads `versionsort.suffix` (else the deprecated `prereleasesuffix`) from the
+repository it runs in and passes it to `versioncmp`; outside a repository the list is empty. Change in `cmd/lsremote.rs`
+(`SortKey::compare` takes the suffix list). Scenario `s_ls_remote_version_suffix` (one suffix, two, three in config order, the
+deprecated key, a plain `refname` sort unaffected) fails on e2438b1 and passes after. `GAPS.md` updated. Left undone: global
+config is not consulted for the suffixes.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 313 PASS / `failures: 0`.

@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 312 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 313 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-26, gate: 268 tests / 0 failed, 312 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-26, gate: 268 tests / 0 failed, 313 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -117,7 +117,7 @@ The command works for the common case; the listed options or edge cases are miss
   `--stdin` and `--start-after` / `--no-start-after` work (`s_for_each_ref_stdin_start`);
   `--include-root-refs` / `--no-include-root-refs` work (`s_for_each_ref_root_refs`: `HEAD` and `[A-Z_]*_HEAD` files of the git
   directory, not `FETCH_HEAD`/`MERGE_HEAD`, git's "ignoring broken ref" warning, `%(symref)`, commit filters drop them); only the
-  work tree's own git directory is scanned, so a linked work tree is not compared. `--sort=version:<key>`/`v:<key>` follows git's `versioncmp` (`s_for_each_ref_version_sort`); `versionsort.suffix` (and the deprecated `prereleasesuffix`) is honoured (`s_for_each_ref_version_suffix`, fuzzed against git); `ls-remote --sort=version:` still ignores it. Pattern and `--exclude` globs follow `wildmatch` with `WM_PATHNAME` (`s_for_each_ref_patterns`).
+  work tree's own git directory is scanned, so a linked work tree is not compared. `--sort=version:<key>`/`v:<key>` follows git's `versioncmp` (`s_for_each_ref_version_sort`); `versionsort.suffix` (and the deprecated `prereleasesuffix`) is honoured (`s_for_each_ref_version_suffix`, fuzzed against git); `ls-remote --sort=version:` honours it too (`s_ls_remote_version_suffix`; the repository's own config only, not global). Pattern and `--exclude` globs follow `wildmatch` with `WM_PATHNAME` (`s_for_each_ref_patterns`).
 * **`blame`** — `-M`/`-C` refuse while the file has uncommitted changes; no `--since`, `-S`, regex `-L`.
 * **`grep`** — `-o`, `--heading`, `-z`/`--null`, `--break` and `--untracked` work (`s_grep_output_modes`, `s_grep_null_break`, `s_grep_untracked`; `--untracked` searches the non-ignored untracked files merged in path order, refuses `--cached`, and reads a revision as a path);
   `--break` over a binary file that matches is refused by name (git drops or keeps the notice depending on

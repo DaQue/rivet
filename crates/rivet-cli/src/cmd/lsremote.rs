@@ -196,12 +196,16 @@ pub fn run_ls_remote(global: &GlobalArgs, args: &LsRemoteArgs) -> Result<i32> {
         }
     }
     if !sort_keys.is_empty() {
+        let suffixes = repository
+            .as_ref()
+            .map(super::foreachref::version_suffixes)
+            .unwrap_or_default();
         entries.sort_by(|a, b| {
             // The last `--sort` is the most significant; ties fall back to the plain name.
             sort_keys
                 .iter()
                 .rev()
-                .map(|key| key.compare(&a.0, &b.0))
+                .map(|key| key.compare(&a.0, &b.0, &suffixes))
                 .find(|ordering| ordering.is_ne())
                 .unwrap_or_else(|| a.0.cmp(&b.0))
         });
@@ -323,13 +327,13 @@ impl SortKey {
         })
     }
 
-    fn compare(&self, a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    fn compare(&self, a: &[u8], b: &[u8], suffixes: &[String]) -> std::cmp::Ordering {
         let (left, right) = (self.value(a), self.value(b));
         let ordering = if self.version {
             super::foreachref::versioncmp(
                 &String::from_utf8_lossy(&left),
                 &String::from_utf8_lossy(&right),
-                &[],
+                suffixes,
             )
         } else {
             left.cmp(&right)

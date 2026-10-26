@@ -9802,6 +9802,30 @@ s_ls_remote_version_sort() {
     v ls-remote --tags --sort=-v:refname ../src 'v1*'
 }
 
+# `ls-remote --sort=version:` honours `versionsort.suffix` and the deprecated `prereleasesuffix`.
+s_ls_remote_version_suffix() {
+    g init -q src; cd src
+    tick; echo a >f; g add .; g commit -q -m c1
+    for t in v1.0 v1.0-rc1 v1.0-rc2 v1.0-rc10 v1.0-beta1 v1.0-foo v1.0.1 v1.1-beta v1.1 v0.9 v1.0-pre-rc1; do
+        g tag "$t"
+    done
+    v ls-remote --tags --sort=version:refname ../src
+    g config --add versionsort.suffix -rc
+    v ls-remote --tags --sort=version:refname ../src
+    v ls-remote --tags --sort=-v:refname ../src
+    g config --add versionsort.suffix -beta
+    v ls-remote --tags --sort=v:refname ../src
+    g config --unset-all versionsort.suffix
+    g config --add versionsort.suffix -beta
+    g config --add versionsort.suffix -pre
+    g config --add versionsort.suffix -rc
+    v ls-remote --tags --sort=version:refname ../src
+    g config --unset-all versionsort.suffix
+    g config --add versionsort.prereleasesuffix -rc
+    v ls-remote --tags --sort=version:refname ../src
+    v ls-remote --tags --sort=refname ../src
+}
+
 # `sparse-checkout set` over a skip-worktree path whose file reappeared with other content.
 s_sparse_reappeared() {
     v init -q repo; cd repo
@@ -10037,6 +10061,7 @@ for s in "$@"; do
         s_ls_remote_patterns) run_scenario "$s" none ;;
         s_ls_remote_sort) run_scenario "$s" none ;;
         s_ls_remote_version_sort) run_scenario "$s" none ;;
+        s_ls_remote_version_suffix) run_scenario "$s" none ;;
         s_clone_filter) run_scenario "$s" local viafile bare.git limit ;;
         s_clone_bundle_uri) run_scenario "$s" seeded viafile bare.git missing remote ;;
         s_bundle_clone) run_scenario "$s" all named all.git onside upstream nohead dotted odd.git ;;
