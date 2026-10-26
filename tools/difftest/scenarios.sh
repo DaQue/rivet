@@ -8767,6 +8767,48 @@ s_grep_output_modes() {
     echo "rc=$?"
 }
 
+# `grep -z` turns every separator after a name or line number (and the newline after `-l`/`-L` names)
+# into NUL; `--break` puts an empty line before each file's output after the first, in place of the
+# `--` that context prints between files. A binary match under `--break` is refused by name (git's
+# output for it depends on its worker threads; Rust test `grep_break_refuses_binary`).
+s_grep_null_break() {
+    v init -q repo; cd repo
+    printf 'foo\nq\nfoo\n' >a.txt
+    printf 'x\nfoo\n' >b.txt
+    printf 'q\nfoo\nq\nq\nq\nfoo\n' >d.txt
+    printf 'a\0foo\n' >bin.dat
+    v add .; v commit -q -m one
+    v grep -z foo
+    v grep -z -n foo
+    v grep -z -c foo
+    v grep -z -h -c foo
+    v grep -z -l foo
+    v grep -z -L foo b.txt a.txt
+    v grep -z -L nomatch b.txt
+    v grep -z -A1 foo d.txt
+    v grep -z -n -C1 foo d.txt
+    v grep -z --heading -n foo a.txt
+    v grep -z foo bin.dat
+    v grep -z --no-null -l foo a.txt
+    v grep --break foo a.txt b.txt d.txt
+    v grep --break -n -A1 foo a.txt d.txt b.txt
+    v grep --break -C1 foo a.txt d.txt
+    v grep --break --heading -A1 foo a.txt d.txt
+    v grep --break -a foo bin.dat d.txt
+    v grep --break -I foo bin.dat d.txt
+    v grep --break -c foo bin.dat d.txt
+    v grep --break -c foo
+    v grep --break -l foo
+    v grep --break -o -A1 foo d.txt a.txt
+    v grep --break -o -B1 foo d.txt a.txt
+    v grep --break --no-break foo a.txt b.txt bin.dat d.txt
+    v grep --no-break --break foo a.txt b.txt d.txt
+    v grep -z --break -n foo a.txt b.txt d.txt
+    v grep --break foo HEAD -- a.txt b.txt
+    v grep --break nonexistent
+    echo "rc=$?"
+}
+
 # `label` / `reset` todo lines: a label is a ref under refs/rewritten that lives until the rebase ends
 # (finished or aborted), `reset` moves HEAD and the work tree there (reflog `rebase (reset): '<arg>'`, none
 # when HEAD does not move), a name that does not resolve reschedules the line. `merge` and `update-ref`

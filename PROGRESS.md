@@ -1624,3 +1624,10 @@ Scenario `s_log_layout_order` fails on `90132e6` (the format won over a later `-
 Left undone: `show` has no `--oneline`; `--abbrev-commit` is not accepted by `log`; an option value that merely looks like `--oneline` (for example `-S --oneline`) is read as the option.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
 `scenarios.sh` 299 PASS / `failures: 0`.
+
+## grep -z / --break (2026-10-26)
+The queue in `.claude/PRIORITIES.md` is fully landed, so this took the `grep` line of `GAPS.md` section 2. `grep` gains `-z`/`--null` (+ `--no-null`): NUL replaces the `:`/`-` after a file name and a line number, the `:` before a `-c` count, and the newline after `-l`/`-L` names. `--break` (+ `--no-break`) prints an empty line before each file's text output after the first, in place of the `--` that context prints between files.
+Scenario `s_grep_null_break` fails on `99005d3` (unknown option `-z`), passes now; expected values come from `/usr/bin/git`.
+Left undone (in `GAPS.md`): `--break` over a binary file that matches is refused by name, because git 2.56 drops or keeps the notice depending on its worker threads and on whether a revision is searched (Rust test `grep_break_refuses_binary`). Still missing: `-P`, `--and`/`--or`/`--not`, `--threads`, `--untracked`, `--no-index`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 262 passed / 0 failed / 0 ignored,
+`scenarios.sh` 300 PASS / `failures: 0`.

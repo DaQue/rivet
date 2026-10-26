@@ -113,6 +113,23 @@ pub struct GrepArgs {
     #[arg(long = "no-heading", overrides_with = "heading")]
     pub no_heading: bool,
 
+    /// Print NUL instead of the `:`/`-` after a file name and a line number, and instead of the
+    /// newline after the names of `-l`/`-L`.
+    #[arg(short = 'z', long = "null", overrides_with = "no_null")]
+    pub null: bool,
+
+    /// Print the usual separators again after `-z`.
+    #[arg(long = "no-null", overrides_with = "null")]
+    pub no_null: bool,
+
+    /// Print an empty line between the output of different files.
+    #[arg(long = "break", overrides_with = "no_break")]
+    pub file_break: bool,
+
+    /// Print no empty line between files (the default).
+    #[arg(long = "no-break", overrides_with = "file_break")]
+    pub no_break: bool,
+
     /// Lines of context after a match.
     #[arg(short = 'A', long = "after-context", value_name = "N")]
     pub after: Option<usize>,
@@ -263,6 +280,8 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
     let mut any = false;
     let mut hunk_mark = false;
     let only_matching = args.only_matching && !invert;
+    let mut printed_any = false;
+    let name_end = if args.null { 0 } else { b'\n' };
     for source in &sources {
         let binary = !args.text && source.data[..source.data.len().min(8000)].contains(&0);
         if binary && args.skip_binary {
@@ -289,7 +308,7 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
         if args.files_without_match {
             if count == 0 {
                 out.extend_from_slice(&source.shown);
-                out.push(b'\n');
+                out.push(name_end);
             }
             continue;
         }
@@ -298,18 +317,25 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
         }
         if args.files_with_matches {
             out.extend_from_slice(&source.shown);
-            out.push(b'\n');
+            out.push(name_end);
             continue;
         }
         if args.count {
             if show_name {
                 out.extend_from_slice(&source.shown);
-                out.push(b':');
+                out.push(if args.null { 0 } else { b':' });
             }
             out.extend_from_slice(format!("{count}\n").as_bytes());
             continue;
         }
         if binary {
+            if args.file_break {
+                // git drops or keeps the notice depending on its worker threads and which
+                // revision is searched; there is no single output to match.
+                anyhow::bail!(
+                    "grep: --break with a binary file that matches is not implemented (use -a, -I, -c or -l)"
+                );
+            }
             out.extend_from_slice(b"Binary file ");
             out.extend_from_slice(&source.shown);
             out.extend_from_slice(b" matches\n");
@@ -334,7 +360,11 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
             let lno = i + 1;
             // The hunk mark and the `--` between non-adjacent lines come from every kept line,
             // context lines that `-o` leaves unprinted included.
-            if before > 0 || after > 0 {
+            if last_shown == 0 && args.file_break {
+                if printed_any {
+                    out.push(b'\n');
+                }
+            } else if before > 0 || after > 0 {
                 if last_shown == 0 {
                     if hunk_mark {
                         out.extend_from_slice(b"--\n");
@@ -353,7 +383,13 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
                 out.push(b'\n');
             }
             last_shown = lno;
-            let sep = if hits[i] { b':' } else { b'-' };
+            let sep = if args.null {
+                0
+            } else if hits[i] {
+                b':'
+            } else {
+                b'-'
+            };
             let prefix = |out: &mut Vec<u8>| {
                 if show_name && !args.heading {
                     out.extend_from_slice(&source.shown);
@@ -364,6 +400,7 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
                     out.push(sep);
                 }
             };
+            printed_any = true;
             if only_matching {
                 for (start, end) in only_matches(&regexes, line, args.word) {
                     prefix(&mut out);
