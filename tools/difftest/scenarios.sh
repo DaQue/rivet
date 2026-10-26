@@ -5061,6 +5061,25 @@ s_for_each_ref_root_refs() {
     v for-each-ref --include-root-refs "$fmt"
 }
 
+s_for_each_ref_patterns() {
+    fer_repo
+    local fmt='--format=%(refname)' oid p
+    oid=$(g rev-parse HEAD)
+    for r in refs/heads/a refs/heads/b1 refs/heads/ab/c refs/heads/x/y/z refs/tags/v1 refs/tags/v10 refs/top; do
+        g update-ref "$r" "$oid"
+    done
+    for p in 'refs/*' 'refs/heads*' 'refs/heads/*' 'refs/heads/?' 'refs/heads/[a-b]*' 'refs/heads/[!a]*' \
+        'refs/heads/[^a]*' 'refs/*/a' 'refs/heads/**' 'refs/**/z' 'refs/**' '**/c' 'refs/heads/a*/c' \
+        'refs/tags/v[0-9]' 'refs/tags/v?0' 'refs/tags/v[[:digit:]]*' 'refs/heads/a\*' 'refs/heads/[' \
+        'refs/heads/a**' 'refs/heads/*/*' 'refs/*/*/*' 'refs/heads/x/**/z' 'refs/heads/x/*/z'; do
+        v for-each-ref "$fmt" "$p"
+    done
+    v for-each-ref "$fmt" --exclude='refs/heads/*'
+    v for-each-ref "$fmt" --exclude='refs/heads/[ab]*' refs/heads/
+    v for-each-ref "$fmt" --exclude='refs/*' 'refs/**'
+    v for-each-ref "$fmt" --exclude='refs/heads/?' --exclude='refs/tags/v[0-9]' refs/heads refs/tags
+}
+
 s_for_each_ref_upstream() {
     fer_repo
     v for-each-ref --format='%(refname:short) up=%(upstream) short=%(upstream:short) track=%(upstream:track) ts=%(upstream:trackshort) nb=%(upstream:track,nobracket) rn=%(upstream:remotename) rr=%(upstream:remoteref)' refs/heads

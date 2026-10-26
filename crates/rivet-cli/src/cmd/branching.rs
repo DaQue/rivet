@@ -2679,7 +2679,7 @@ pub fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
 /// Match `byte` against the bracket expression that follows an opening `[`. Returns whether it
 /// matched and the pattern after the closing `]`, or `None` for an unterminated or malformed one
 /// (which matches nothing, as in `wildmatch`).
-fn match_bracket(pattern: &[u8], byte: u8) -> Option<(bool, &[u8])> {
+pub(super) fn match_bracket(pattern: &[u8], byte: u8) -> Option<(bool, &[u8])> {
     let mut i = 0;
     let negated = matches!(pattern.first(), Some(b'!' | b'^'));
     if negated {

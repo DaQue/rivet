@@ -1525,3 +1525,13 @@ Scenario `s_grep_output_modes` fails on `75626dd` (unknown option), passes now; 
 Left undone (in `GAPS.md`): `-P`, `--and`/`--or`/`--not`, `-z`, `--break`, `--threads`, `--untracked`, `--no-index`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
 `scenarios.sh` 288 PASS / `failures: 0`.
+
+## for-each-ref pattern globs (2026-10-26)
+Took `.claude/PRIORITIES.md` item 3. Patterns and `--exclude` now use git's `wildmatch` with `WM_PATHNAME`: `*`, `?` and `[...]` never match `/`,
+a `**` standing alone between slashes (or at either end of the pattern) crosses them and `**/` also matches zero directories, `[...]` is a real
+class (ranges, `!`/`^` negation, `[:class:]`, `\` escapes; reuses `branching::match_bracket`, now `pub(super)`). Patterns without a wildcard keep
+the prefix rule. Scenario `s_for_each_ref_patterns` fails on `4a7a329` (`*` crossed `/`, `[` taken literally), passes now; expected values
+checked against `/usr/bin/git`. `GAPS.md`: the "globs cross `/`" sentence is removed.
+Left undone: `version:` sort (item 4), the rest of the queue.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
+`scenarios.sh` 289 PASS / `failures: 0`.

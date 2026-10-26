@@ -1143,15 +1143,63 @@ pub(super) fn shorten(name: &str, all: &HashSet<&str>) -> String {
     name.to_string()
 }
 
+/// Git's `wildmatch` with `WM_PATHNAME`, which is what `for-each-ref` patterns use: `*`, `?` and
+/// `[...]` never match `/`, and a `**` standing alone between slashes (or at either end) matches
+/// across them.
 fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
-    match (pattern.first(), text.first()) {
-        (None, None) => true,
-        (Some(b'*'), _) => {
-            glob_match(&pattern[1..], text) || (!text.is_empty() && glob_match(pattern, &text[1..]))
+    path_glob(pattern, text, None)
+}
+
+fn path_glob(pattern: &[u8], text: &[u8], prev: Option<u8>) -> bool {
+    let Some(&first) = pattern.first() else {
+        return text.is_empty();
+    };
+    match first {
+        b'*' => {
+            let stars = pattern.iter().take_while(|b| **b == b'*').count();
+            let rest = &pattern[stars..];
+            let whole_component = stars >= 2
+                && prev.is_none_or(|b| b == b'/')
+                && rest.first().is_none_or(|b| *b == b'/');
+            if whole_component {
+                if rest.is_empty() {
+                    return true;
+                }
+                // `**/` also matches zero directories.
+                return path_glob(&rest[1..], text, Some(b'/'))
+                    || text.iter().enumerate().any(|(i, b)| {
+                        *b == b'/' && path_glob(&rest[1..], &text[i + 1..], Some(b'/'))
+                    });
+            }
+            for i in 0..=text.len() {
+                if path_glob(rest, &text[i..], Some(b'*')) {
+                    return true;
+                }
+                if text.get(i) == Some(&b'/') {
+                    break;
+                }
+            }
+            false
         }
-        (Some(b'?'), Some(_)) => glob_match(&pattern[1..], &text[1..]),
-        (Some(p), Some(t)) if p == t => glob_match(&pattern[1..], &text[1..]),
-        _ => false,
+        b'?' => match text.first() {
+            Some(t) if *t != b'/' => path_glob(&pattern[1..], &text[1..], Some(b'?')),
+            _ => false,
+        },
+        b'[' => match text.first() {
+            Some(t) if *t != b'/' => match super::branching::match_bracket(&pattern[1..], *t) {
+                Some((true, rest)) => path_glob(rest, &text[1..], Some(b']')),
+                _ => false,
+            },
+            _ => false,
+        },
+        b'\\' if pattern.len() > 1 => match text.first() {
+            Some(t) if *t == pattern[1] => path_glob(&pattern[2..], &text[1..], Some(*t)),
+            _ => false,
+        },
+        _ => match text.first() {
+            Some(t) if *t == first => path_glob(&pattern[1..], &text[1..], Some(first)),
+            _ => false,
+        },
     }
 }
 
