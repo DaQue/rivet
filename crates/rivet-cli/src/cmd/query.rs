@@ -496,8 +496,18 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
         };
         path_roots.push(root);
     }
-    // With `=<commit>` the bottoms are those commits, and their ancestors stay as well.
-    let path_ancestors = commit_ancestors(&repository, path_roots.iter().copied());
+    // With `=<commit>` the bottoms are those commits, and their ancestors stay as well. Git flags
+    // them in a single pass in walk order: a listed commit that is a bottom or already flagged
+    // flags its parents, so a parent walked before its child (a skewed date) never passes the
+    // flag on, and a bottom the walk never lists flags nothing.
+    let mut path_ancestors: HashSet<ObjectId> = HashSet::new();
+    for oid in &walked.commits {
+        if path_roots.contains(oid) || path_ancestors.contains(oid) {
+            path_ancestors.extend(walked.parents[oid].iter().copied());
+        }
+    }
+    path_ancestors.extend(path_roots.iter().copied());
+    path_ancestors.retain(|oid| walked.parents.contains_key(oid));
     let bottoms = if path_roots.is_empty() {
         &excluded_tips
     } else {

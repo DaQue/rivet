@@ -1603,3 +1603,10 @@ Scenario `s_format_patch_options` fails on `3a8608b` (`-k` refused), passes now;
 Left undone: item 11 of the queue; `-k` with a multi-line subject.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
 `scenarios.sh` 296 PASS / `failures: 0`.
+
+## rev-list --ancestry-path=<commit>, skewed dates (2026-10-26)
+Took `.claude/PRIORITIES.md` item 11. Git keeps the ancestors of an `--ancestry-path=<commit>` bottom by flagging them in a single pass in walk order: a listed commit that is a bottom or already flagged flags its parents. A parent walked before its child (skewed date) therefore never passes the flag on, and a bottom the walk never lists keeps nothing. rivet used the full ancestor closure; it now flags in walk order. Found by fuzzing random DAGs with random dates against `/usr/bin/git` (the old rule matched except in the skewed cases and when the bottom is not reachable from the tip, where git prints nothing).
+Scenario `s_rev_list_ancestry_path_skew` fails on `c32c7f2`, passes now; expected values come from `/usr/bin/git`.
+Left undone: nothing from the queue; every item is landed. `GAPS.md` `rev-list` line updated.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
+`scenarios.sh` 297 PASS / `failures: 0`.

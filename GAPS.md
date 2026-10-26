@@ -112,8 +112,8 @@ The command works for the common case; the listed options or edge cases are miss
   do not exist). `--children` works (`s_rev_list_children`). `--left-right`, `--left-only`
   and `--right-only` work (`s_rev_list_left_right`), and so does `--ancestry-path` without a
   commit argument (`s_rev_list_ancestry_path`); `--ancestry-path=<commit>` keeps the commit, its
-  descendants and its ancestors (`s_rev_list_ancestry_path_commit`), but when the commit's date is skewed
-  (older than its parents) git drops most of the ancestors and rivet keeps them all.
+  descendants and its ancestors (`s_rev_list_ancestry_path_commit`), flagging the ancestors in walk order
+  as git does so skewed dates drop the same ones (`s_rev_list_ancestry_path_skew`).
 * **`for-each-ref`** — `--shell`/`--perl`/`--python`/`--tcl` (and `-s`/`-p`, `--no-…`) work (`s_for_each_ref_quote`);
   `--stdin` and `--start-after` / `--no-start-after` work (`s_for_each_ref_stdin_start`);
   `--include-root-refs` / `--no-include-root-refs` work (`s_for_each_ref_root_refs`: `HEAD` and `[A-Z_]*_HEAD` files of the git

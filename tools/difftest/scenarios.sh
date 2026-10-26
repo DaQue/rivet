@@ -4796,6 +4796,65 @@ s_rev_list_ancestry_path_commit() {
     v rev-list --ancestry-path=v1 --ancestry-path main
 }
 
+s_rev_list_ancestry_path_skew() {
+    v init -q repo; cd repo
+    sk() { # name date [parent...]: an empty commit at base+date on the first parent, tagged name
+        local n=$1 d=$((1700000000 + $2)); shift 2
+        if [ $# -eq 0 ]; then v switch -q --orphan "o-$n"; else v switch -q --detach "$1"; fi
+        GIT_AUTHOR_NAME=A GIT_AUTHOR_EMAIL=a@e GIT_AUTHOR_DATE="$d +0000" \
+            GIT_COMMITTER_NAME=C GIT_COMMITTER_EMAIL=c@e GIT_COMMITTER_DATE="$d +0000" \
+            v commit -q --allow-empty -m "$n"
+        if [ $# -gt 1 ]; then
+            GIT_AUTHOR_NAME=A GIT_AUTHOR_EMAIL=a@e GIT_AUTHOR_DATE="$d +0000" \
+                GIT_COMMITTER_NAME=C GIT_COMMITTER_EMAIL=c@e GIT_COMMITTER_DATE="$d +0000" \
+                v merge -q --no-ff -m "$n" "$2"
+        fi
+        v tag "$n"
+    }
+    # X=s5 is reached through s3 and s1; s1 (500) is walked before its child s3 (300), so the
+    # flag that keeps X's ancestors stops there and the root s0 (1000) is dropped
+    sk s0 1000
+    sk s1 500 s0
+    sk s2 900 s1
+    sk s3 300 s1
+    sk s4 400 s2
+    sk s5 300 s3
+    sk s6 500 s5 s4
+    v rev-list --ancestry-path=s5 s6
+    v rev-list --ancestry-path=s5 --parents s6
+    v rev-list --ancestry-path=s5 --count s6
+    v rev-list --ancestry-path=s5 --reverse s6
+    v rev-list --ancestry-path=s3 s6
+    v rev-list --ancestry-path=s1 s6
+    v rev-list --ancestry-path=s2 s6
+    v rev-list --ancestry-path=s4 s6
+    v rev-list --ancestry-path=s5 s4
+    v rev-list --ancestry-path=s5 s5
+    v rev-list --ancestry-path=s5 s1..s6
+    v rev-list --ancestry-path=s5 s2..s6
+    # a bottom that the walk never reaches lists nothing, not even its ancestors
+    v rev-list --ancestry-path=s4 s5
+    v rev-list --ancestry-path=s2 s3
+    # the root is dated before the others: it is dropped all the same
+    sk t0 100
+    sk t1 500 t0
+    sk t2 900 t1
+    sk t3 300 t1
+    sk t4 400 t2
+    sk t5 300 t3
+    sk t6 500 t5 t4
+    v rev-list --ancestry-path=t5 t6
+    v rev-list --ancestry-path=t3 t6
+    # a merge older than both parents
+    sk u0 400
+    sk u1 900 u0
+    sk u2 600 u1
+    sk ua 700 u1
+    sk u7 200 u2 ua
+    v rev-list --ancestry-path=u2 u7
+    v rev-list --ancestry-path=u2 --boundary u7
+}
+
 s_rev_list_cherry() {
     v init -q repo; cd repo
     tick; echo 0 >f; v add f; v commit -q -m base
