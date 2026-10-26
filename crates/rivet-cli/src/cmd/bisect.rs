@@ -10,8 +10,9 @@
 //! reaches, the first one that splits the range in half is taken, and otherwise the one closest
 //! to half. Skipped commits move the pick to a pseudo-random other commit, with Git's generator.
 //!
-//! Not implemented, and refused by name: `visualize`/`view`, `--first-parent`,
-//! `--reset-when-found`, and path arguments to `start` (which need history simplification).
+//! Not implemented, and refused by name: `--first-parent`, `--reset-when-found`, path arguments
+//! to `start` (which need history simplification), and the `gitk` / external-command forms of
+//! `visualize`/`view`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -246,7 +247,7 @@ pub fn run_bisect(global: &GlobalArgs, args: &BisectArgs) -> Result<i32> {
         "terms" => bisect_terms(&repository, &terms, rest),
         "replay" => bisect_replay(global, rest),
         "run" => bisect_run(global, rest),
-        "visualize" | "view" => anyhow::bail!("bisect: {sub} is not implemented"),
+        "visualize" | "view" => bisect_visualize(&repository, &terms, rest),
         "skip" => bisect_state(global, "skip", rest),
         word => {
             let has_terms =
@@ -268,6 +269,58 @@ pub fn run_bisect(global: &GlobalArgs, args: &BisectArgs) -> Result<i32> {
             Ok(129)
         }
     }
+}
+
+/// `bisect visualize` / `view`: `git log` over the commits still under suspicion (git's
+/// `--bisect`: the bad commit and `^` each good one), followed by the caller's options.
+///
+/// Silent with status 1 until both a bad and a good commit are known, as git's check is.
+/// Without arguments git starts `gitk` when a display is available; that, and an argument
+/// that is not an option (git runs it as a command), are refused by name.
+fn bisect_visualize(repository: &Repository, terms: &Terms, args: &[String]) -> Result<i32> {
+    if args.is_empty() && wants_gitk() {
+        anyhow::bail!("bisect: visualize with gitk is not implemented");
+    }
+    if let Some(word) = args.first().filter(|a| !a.starts_with('-')) {
+        anyhow::bail!("bisect: visualize running '{word}' as a command is not implemented");
+    }
+    if !started(repository) {
+        return Ok(FAILED);
+    }
+    let known = read_refs(repository, terms)?;
+    let Some(bad) = known.bad else {
+        return Ok(FAILED);
+    };
+    if known.good.is_empty() {
+        return Ok(FAILED);
+    }
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command.arg("log");
+    // Git appends `--bisect` to the caller's words, so after a `--` it is just one more
+    // pathspec and the walk starts from `HEAD`.
+    if args.iter().any(|a| a == "--") {
+        command.args(args).arg("--bisect");
+    } else {
+        command.arg(bad.to_string());
+        for good in &known.good {
+            command.arg(format!("^{good}"));
+        }
+        command.args(args);
+    }
+    let status = command.status()?;
+    Ok(status.code().unwrap_or(128))
+}
+
+/// Git starts `gitk` instead of `git log` when a display is set and `gitk` is on `PATH`.
+fn wants_gitk() -> bool {
+    let display = ["DISPLAY", "SESSIONNAME", "MSYSTEM", "SECURITYSESSIONID"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some());
+    display
+        && std::env::var_os("PATH")
+            .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("gitk").is_file()))
 }
 
 fn bisect_terms(repository: &Repository, terms: &Terms, args: &[String]) -> Result<i32> {

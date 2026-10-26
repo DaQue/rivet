@@ -1771,3 +1771,17 @@ Scenario `s_blame_regex_range` fails on the base (regex ranges were refused) and
 Left undone: `-L :<funcname>`; glibc's text for a few malformed patterns (`[`) differs from rivet's matcher (in `GAPS.md`).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 314 PASS / `failures: 0`.
+
+### bisect: `visualize` / `view`
+
+`PRIORITIES.md` is still stale (all items landed), so this came from `GAPS.md` section 2, where `bisect visualize` was
+described as merely "not covered by a scenario" but was in fact refused outright. `bisect visualize|view [<log options>]` now runs
+`log` over the bad commit and `^` each good one, silent with exit 1 until both are known (as git's check is), honours custom terms,
+and reproduces git's quirk that `--bisect` is appended after the caller's words (after a `--` it becomes a pathspec and the walk
+starts from `HEAD`). Change in `cmd/bisect.rs` (`bisect_visualize`, re-runs the current binary's `log`). Scenario `s_bisect_visualize`
+fails on the base (`fatal: bisect: visualize is not implemented`, exit 128) and passes after; expected output compared with `/usr/bin/git`.
+Rust test `bisect_visualize_refusals.rs` covers the by-name refusals: the `gitk` form (display set and `gitk` on `PATH`) and a first
+argument that is not an option (git runs it as a command). `GAPS.md` updated.
+Left undone: an unknown option gets rivet `log`'s clap error rather than git's `fatal: unrecognized argument` (in `GAPS.md`).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 269 passed / 0 failed / 0 ignored,
+`scenarios.sh` 315 PASS / `failures: 0`.

@@ -6488,6 +6488,31 @@ s_bisect_run() {
     v bisect reset
 }
 
+s_bisect_visualize() {
+    bisect_repo
+    unset DISPLAY SESSIONNAME MSYSTEM SECURITYSESSIONID
+    v bisect visualize
+    v bisect start
+    v bisect visualize
+    v bisect bad main
+    v bisect view --oneline
+    v bisect good main~11
+    v bisect visualize --oneline
+    v bisect view --oneline --reverse
+    v bisect view -n2 --format=%s
+    v bisect view --oneline -- f
+    bisect_snap
+    v bisect good
+    v bisect view --oneline
+    v bisect skip
+    v bisect view --oneline
+    v bisect reset
+    v bisect view --oneline
+    v bisect start --term-old=fast --term-new=slow main main~5
+    v bisect view --oneline
+    v bisect reset
+}
+
 s_cherry() {
     v init -q repo; cd repo
     tick; printf 'a\nb\nc\nd\ne\nf\n' >f; v add f; v commit -q -m base
