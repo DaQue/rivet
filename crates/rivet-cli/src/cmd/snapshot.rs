@@ -1007,8 +1007,17 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     options.refresh = !args.no_refresh;
     // Several pathspecs report the union of what each one matches.
     let mut specs: Vec<BString> = Vec::new();
-    for path in &args.paths {
-        specs.push(super::worktree_path(&repository, path, "status")?);
+    let words: Vec<String> = args
+        .paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    // Pathspec magic and wildcards: status the whole tree, then filter what it reports.
+    let magic = words.iter().any(|w| super::pathspec::needs_parser(w));
+    if !magic {
+        for path in &args.paths {
+            specs.push(super::worktree_path(&repository, path, "status")?);
+        }
     }
     if specs.is_empty() {
         specs.push(BString::default());
@@ -1016,6 +1025,68 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
 
     options.pathspec = specs[0].clone();
     let mut status = repository.status(&options)?;
+    let mut magic_filter = None;
+    if magic {
+        let Some(root) = repository
+            .worktree()?
+            .root()
+            .map(std::path::Path::to_path_buf)
+        else {
+            anyhow::bail!("status: this operation must be run in a work tree");
+        };
+        let here = std::env::current_dir()?;
+        let prefix = super::path_arg(here.strip_prefix(&root).unwrap_or(std::path::Path::new("")))?;
+        let root = root.to_string_lossy();
+        let pathspecs = match super::pathspec::Pathspecs::parse(&words, &prefix, &root) {
+            Ok(p) => p,
+            Err(message) => {
+                eprintln!("fatal: {message}");
+                return Ok(128);
+            }
+        };
+        // A collapsed directory stays collapsed only if the whole directory matches; otherwise
+        // its files are listed one by one, which needs the fully expanded walk.
+        let expanded = if options.untracked_files == UntrackedMode::Normal {
+            options.untracked_files = UntrackedMode::All;
+            let all = repository.status(&options)?;
+            options.untracked_files = UntrackedMode::Normal;
+            Some(all)
+        } else {
+            None
+        };
+        let select = |names: Vec<BString>, deep: Option<&Vec<BString>>| -> Vec<BString> {
+            let mut out = Vec::new();
+            for name in names {
+                match name.strip_suffix(b"/") {
+                    Some(dir) if pathspecs.matches_dir(dir) => out.push(name.clone()),
+                    Some(_) => out.extend(
+                        deep.into_iter()
+                            .flatten()
+                            .filter(|f| f.starts_with(&name) && pathspecs.matches_file(f))
+                            .cloned(),
+                    ),
+                    None if pathspecs.matches_file(&name) => out.push(name),
+                    None => {}
+                }
+            }
+            out
+        };
+        status.untracked = select(
+            std::mem::take(&mut status.untracked),
+            expanded.as_ref().map(|e| &e.untracked),
+        );
+        status.ignored = select(
+            std::mem::take(&mut status.ignored),
+            expanded.as_ref().map(|e| &e.ignored),
+        );
+        status.staged.retain(|e| pathspecs.matches_file(&e.path));
+        status.unstaged.retain(|e| pathspecs.matches_file(&e.path));
+        status.untracked.sort();
+        status.untracked.dedup();
+        status.ignored.sort();
+        status.ignored.dedup();
+        magic_filter = Some(pathspecs);
+    }
     for spec in &specs[1..] {
         options.pathspec = spec.clone();
         let part = repository.status(&options)?;
@@ -1084,6 +1155,9 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         .iter()
         .flat_map(|spec| moved_submodules(&repository, spec))
         .collect();
+    if let Some(filter) = &magic_filter {
+        moved_submodules.retain(|s| filter.matches_file(&s.path));
+    }
     moved_submodules.sort_by(|a, b| a.path.cmp(&b.path));
     moved_submodules.dedup_by(|a, b| a.path == b.path);
     for sub in &moved_submodules {

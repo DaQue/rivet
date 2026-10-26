@@ -1645,3 +1645,10 @@ Scenario `s_rebase_positional_usage` fails on `79c7709` (exit 2 and a clap error
 Left undone: `rebase -h` is still clap's text; rivet's `fsck` has no `--no-progress` (the harness's state capture uses it through `g`, so it is unseen there).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 262 passed / 0 failed / 0 ignored,
 `scenarios.sh` 302 PASS / `failures: 0`.
+
+## status: pathspec magic and wildcards (2026-10-26)
+`.claude/PRIORITIES.md` is stale (all 11 items already landed), so this took the `status` pathspec line in section 1 of `GAPS.md`. `status` now parses `:(exclude)`/`:!`/`:^`, `:(top)`/`:/`, `:(glob)`, `:(literal)`, `:(icase)` and bare wildcards (`*` crosses `/` unless `:(glob)`), resolves `..` in patterns against the current directory, treats an exclude-only list as "everything else", and prints git's `fatal:` text for an invalid, unclosed, unimplemented or incompatible magic. It runs the status of the whole tree and filters it; a collapsed untracked directory stays collapsed only if the whole directory matches, otherwise its files are listed. New `cmd/pathspec.rs` (6 unit tests); `:(attr:...)` is refused by name.
+Scenario `s_status_pathspec_magic` fails on `9c45bfa` (`i/o error` or an empty result for every magic form), passes now; expected values come from `/usr/bin/git`.
+Left undone (in `GAPS.md`): a plain literal pathspec naming a wholly untracked directory lists its files where git prints `?? dir/`; a plain `../../x` outside the tree gets rivet's error text, not git's `outside repository at`. Other commands do not parse pathspec magic.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 303 PASS / `failures: 0`.

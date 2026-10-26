@@ -1156,7 +1156,7 @@ pub(super) fn shorten(name: &str, all: &HashSet<&str>) -> String {
 /// Git's `wildmatch` with `WM_PATHNAME`, which is what `for-each-ref` patterns use: `*`, `?` and
 /// `[...]` never match `/`, and a `**` standing alone between slashes (or at either end) matches
 /// across them.
-fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
+pub(super) fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
     path_glob(pattern, text, None)
 }
 

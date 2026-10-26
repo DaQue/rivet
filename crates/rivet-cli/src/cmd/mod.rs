@@ -53,6 +53,7 @@ pub mod mv;
 pub mod notes;
 pub mod packrefs;
 pub mod patch;
+mod pathspec;
 pub mod plumbing;
 pub mod pretty;
 pub mod query;

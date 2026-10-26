@@ -9431,6 +9431,30 @@ s_status_multi_pathspec() {
     cd a; v status -s x ../b; v status . ../c; v status -- ../b/y new
 }
 
+# `status` with pathspec magic and wildcards: `:(exclude)`/`:!`/`:^`, `:(top)`/`:/`, `:(glob)`,
+# `:(literal)`, `:(icase)`, a bare `*` that crosses `/`, untracked directories that collapse only
+# when the whole directory matches, exclude-only lists, `..` in patterns and git's errors.
+s_status_pathspec_magic() {
+    g init -q repo; cd repo
+    tick; mkdir -p d/e u; echo 1 >a.txt; echo 1 >d/b.c; echo 1 >d/e/c.c; echo 1 >d/e/x.txt
+    g add .; g commit -q -m c1
+    echo 2 >>a.txt; echo 2 >>d/b.c; echo 2 >>d/e/c.c; echo 2 >>d/e/x.txt; g add d/b.c
+    echo n >new.c; echo n >d/new.c; echo n >u/a.c; echo n >u/b.txt; echo n >u/c.c
+    for s in ':(exclude)d' ':!d/e' ':^d' '*.c' '*.txt' ':(glob)**/*.c' ':(glob)*.c' ':(glob)u/*.c' \
+        ':(top)a.txt' ':/d' ':(icase)A.TXT' ':(literal)*.c' ':!*.txt' ':(exclude)u/b.txt' 'u/*' \
+        ':!u' ':(top)u' 'd/*.c' 'd/e' ':(foo)x' ':(top' ':(glob,literal)x' ':#x' ':(exclude,icase)D'; do
+        v status -s -- "$s"; v status -- "$s"
+    done
+    v status -s '*.c' ':!d'; v status -s ':!d' ':!u'; v status -s -uall ':!*.txt'; v status -s -uno '*.c'
+    v status --porcelain ':(glob)u/*'
+    cd d
+    for s in ':(top)a.txt' ':/a.txt' ':(exclude)e' ':!new.c' ':(top)d/new.c' '../*.c' ':(icase)NEW.C' \
+        '*.c' ':(glob)*.c' '../../*.c'; do
+        v status -s -- "$s"; v status -- "$s"
+    done
+    v status -s ':(top)a.txt' '*.c'; v status -s ':!e' ':!new.c'
+}
+
 s_ls_remote_patterns() {
     g init -q src; cd src
     tick; echo a >f; g add .; g commit -q -m c1

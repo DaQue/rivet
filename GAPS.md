@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 302 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 303 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-26, gate: 262 tests / 0 failed, 302 scenarios / 0 failures, `fmt`,
@@ -92,7 +92,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   (` M path`, `modified:   path (new commits, modified content, untracked content)`, short ` m` / ` ?`, git's
   "commit or discard" hint; `s_status_moved_submodule`, `s_status_dirty_submodule`). A dirty nested submodule inside a
   submodule, and `status.submoduleSummary` / `diff.ignoreSubmodules` / `--ignore-submodules`, are not compared. `diff`/`commit -a`/`add -u`
-  still skip gitlinks. `status` takes several literal pathspecs and reports their union (`s_status_multi_pathspec`); pathspec magic (`:(exclude)`, `:!`, glob patterns such as `*/x`) is not parsed there, so such a pathspec is read as a literal path (an `i/o error` or an empty match instead of git's result).
+  still skip gitlinks. `status` takes several literal pathspecs and reports their union (`s_status_multi_pathspec`); pathspec magic works there too (`:(exclude)`/`:!`/`:^`, `:(top)`/`:/`, `:(glob)`, `:(literal)`, `:(icase)`, bare wildcards, `..` in patterns, git's errors; `s_status_pathspec_magic`); `:(attr:...)` is refused by name. A plain literal pathspec naming a wholly untracked directory lists its files where git prints `?? dir/`, and a plain `../../x` outside the tree gets rivet's `status: ... outside the work tree` text instead of git's `outside repository at` (the magic forms match).
 
 ## 2. Implemented, but partial
 
