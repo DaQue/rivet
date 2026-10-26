@@ -1722,3 +1722,17 @@ after. The `amend!` case was removed from the refusal test in `tests/rebase_inte
 Left undone: a `fixup!` naming another fixup commit by id (unchanged, in `GAPS.md`).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 310 PASS / `failures: 0`.
+
+## rebase: `--update-refs` / `--no-update-refs` / `rebase.updateRefs` (2026-10-26)
+`.claude/PRIORITIES.md` is still stale (all 11 items landed), so this came from `GAPS.md` section 1. `--update-refs` was rejected by
+the argument parser. It now adds an `update-ref refs/heads/<b>` line after every commit of the todo list that a local branch
+(other than the rebased one) points at: reverse name order within one commit, tags and the base ignored, a branch checked out in
+another work tree written as `# Ref <b> checked out at '<path>'` and left alone. The lines are generated before `--autosquash`
+reorders, so a moved fixup commit's lines stay behind; `--exec` lines land before them. The flag alone (no `-i`) runs the list
+unedited but still takes git's "up to date" / fast-forward shortcuts. Also fixed while there: the `update-refs` state file and the
+"Updated the following refs" list are sorted by name, as git's are (a hand-written `update-ref zz` / `update-ref aa` pair printed in
+todo order before). Change in `cmd/rebase.rs` and `cmd/rebase/interactive.rs`; expected output compared with `/usr/bin/git`.
+Scenario `s_rebase_update_refs` fails on b080eea (`FAIL`, `failures: 1`) and passes after. `GAPS.md` text and counts updated.
+Left undone: the blank line git keeps after each generated `update-ref` line in `git-rebase-todo` (in `GAPS.md`).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 311 PASS / `failures: 0`.

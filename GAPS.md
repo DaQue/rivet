@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 310 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 311 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-26, gate: 268 tests / 0 failed, 310 scenarios / 0 failures, `fmt`,
@@ -57,7 +57,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   `rebase.autoSquash`), and the todo command `merge` (`label` and `reset` work,
   `s_rebase_label_reset`; `reset` takes a label, a ref or a commit id, and the `-C` form is not parsed;
   `update-ref <ref>` works, `s_rebase_update_ref`, but a ref that moved since the rebase started, or that is
-  checked out in another work tree, is not compared, and `--update-refs` / `rebase.updateRefs` do not generate the lines). A rebase stopped inside a `fixup -C`/`-c` chain and resumed by the other implementation
+  checked out in another work tree, is not compared, and `--update-refs` / `rebase.updateRefs` generate the lines (`s_rebase_update_refs`: reverse name order within a commit, a branch checked out in another work tree as a comment, generated before `--autosquash` reorders); the state file `git-rebase-todo` has no blank line after each generated `update-ref` line, which git's keeps; a refs-only unedited list still resumes the same). A rebase stopped inside a `fixup -C`/`-c` chain and resumed by the other implementation
   is not compared (git leaves no `message-fixup` there; rivet writes one). An empty message from the editor aborts the whole rebase back to the
   original tip (git stops with the commit pending). The editor sees the message plus git's `#` footer, not
   the `git status` template. `post-rewrite` lines for a squash chain are not compared with git.

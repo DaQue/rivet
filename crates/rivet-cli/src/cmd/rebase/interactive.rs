@@ -531,6 +531,8 @@ pub(super) struct Plan<'a> {
     pub autostash: Option<ObjectId>,
     /// Reorder `fixup!` / `squash!` commits next to their targets (`--autosquash`).
     pub autosquash: bool,
+    /// Add an `update-ref` line after every commit a local branch points at (`--update-refs`).
+    pub update_refs: bool,
     /// Open the sequence editor on the todo list (`-i`); `--exec` alone runs it unedited.
     pub edit: bool,
     /// The `--exec` commands, run after every commit (after the whole chain for `squash`/`fixup`).
@@ -613,6 +615,69 @@ fn autosquash_order(
     Ok(order)
 }
 
+/// A branch an `update-ref` line is generated for, and the other work tree that has it checked out.
+type BranchLine = (String, Option<std::path::PathBuf>);
+
+/// The local branches (other than the one being rebased) that point at each commit of the todo
+/// list, in git's decoration order (reverse name order), with the path of the other work tree
+/// that has the branch checked out, if any.
+fn branches_by_commit(repository: &Repository, plan: &Plan<'_>) -> Result<Vec<Vec<BranchLine>>> {
+    let mut found = vec![Vec::new(); plan.commits.len()];
+    let mut heads = repository.refs().list(b"refs/heads/")?;
+    heads.reverse();
+    for (name, _) in heads {
+        let text = String::from_utf8_lossy(name.as_bytes()).into_owned();
+        if text == plan.head_name {
+            continue;
+        }
+        let Ok(oid) = repository.refs().resolve_oid(&name) else {
+            continue;
+        };
+        let Some(index) = plan.commits.iter().position(|(c, _)| *c == oid) else {
+            continue;
+        };
+        let busy = crate::cmd::worktree::branch_in_use(repository, &text, None)?;
+        found[index].push((text, busy));
+    }
+    Ok(found)
+}
+
+/// Git adds its `update-ref` lines to the todo list *before* `--autosquash` reorders it, and the
+/// reorder moves only commit lines. So the lines of a commit that was moved stay where its
+/// predecessor's lines end: walk the commits in their original order, emit each unmoved commit
+/// with its chain, then every ref line of the commit.
+fn with_update_refs(
+    order: Vec<(&'static str, usize)>,
+    found: Vec<Vec<BranchLine>>,
+    lines: &mut Vec<BranchLine>,
+) -> Vec<(&'static str, usize)> {
+    let mut groups: std::collections::HashMap<usize, Vec<(&'static str, usize)>> =
+        std::collections::HashMap::new();
+    let mut current = 0;
+    for (command, index) in order {
+        if command == "pick" {
+            current = index;
+        }
+        groups.entry(current).or_default().push((command, index));
+    }
+    let mut out = Vec::new();
+    for (index, refs) in found.into_iter().enumerate() {
+        out.extend(groups.remove(&index).unwrap_or_default());
+        for line in refs {
+            out.push((
+                if line.1.is_some() {
+                    "comment"
+                } else {
+                    "update-ref"
+                },
+                lines.len(),
+            ));
+            lines.push(line);
+        }
+    }
+    out
+}
+
 /// The hint Git prints after a bad todo list.
 const FIX_HINT: &str = "You can fix this with 'git rebase --edit-todo' and then run 'git rebase --continue'.\nOr you can abort the rebase with 'git rebase --abort'.";
 
@@ -638,6 +703,13 @@ pub(super) fn begin(
     } else {
         (0..plan.commits.len()).map(|i| ("pick", i)).collect()
     };
+    let mut ref_lines = Vec::new();
+    let order = if plan.update_refs && !plan.commits.is_empty() {
+        let found = branches_by_commit(repository, plan)?;
+        with_update_refs(order, found, &mut ref_lines)
+    } else {
+        order
+    };
     std::fs::create_dir_all(dir)?;
     write_state(dir, "head-name", &format!("{}\n", plan.head_name))?;
     write_state(dir, "onto", &format!("{}\n", plan.onto))?;
@@ -659,6 +731,20 @@ pub(super) fn begin(
     }
     let mut commands = 0;
     for (n, (command, index)) in order.iter().enumerate() {
+        if *command == "update-ref" {
+            text.push_str(&format!("update-ref {}\n\n", ref_lines[*index].0));
+            commands += 1;
+            continue;
+        }
+        if *command == "comment" {
+            let (name, path) = &ref_lines[*index];
+            let path = path.as_deref().unwrap_or(Path::new(""));
+            text.push_str(&format!(
+                "{comment} Ref {name} checked out at '{}'\n\n",
+                path.display()
+            ));
+            continue;
+        }
         let (oid, subject) = &plan.commits[*index];
         text.push_str(&format!("{command} {} # {subject}\n", abbrev(oid)));
         commands += 1;

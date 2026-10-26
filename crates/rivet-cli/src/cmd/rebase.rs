@@ -124,6 +124,16 @@ pub struct RebaseArgs {
     #[arg(long = "no-autosquash", overrides_with = "autosquash")]
     pub no_autosquash: bool,
 
+    /// Add an `update-ref` line after every commit a local branch points at, and move those
+    /// branches when the rebase ends.
+    #[arg(long = "update-refs", overrides_with = "no_update_refs")]
+    pub update_refs: bool,
+
+    /// Do not update the branches that point into the rebased commits (overrides
+    /// `rebase.updateRefs`).
+    #[arg(long = "no-update-refs", overrides_with = "update_refs")]
+    pub no_update_refs: bool,
+
     /// Edit the remaining todo list of an interactive rebase.
     #[arg(long = "edit-todo")]
     pub edit_todo: bool,
@@ -409,6 +419,19 @@ fn autosquash_wanted(repository: &Repository, on: bool, off: bool) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `--update-refs` is in effect: the flag, else `rebase.updateRefs`.
+fn update_refs_wanted(repository: &Repository, on: bool, off: bool) -> bool {
+    if off {
+        return false;
+    }
+    on || repository
+        .config_value(BStr::new(b"rebase.updaterefs"))
+        .ok()
+        .flatten()
+        .and_then(|v| rivet_core::parse_bool(BStr::new(&v[..])).ok())
+        .unwrap_or(false)
+}
+
 /// Stash the tracked local changes the way `git rebase --autostash` does: create the stash
 /// commit, reset to `HEAD` and say so. `None` when there was nothing to stash.
 pub(super) fn create_autostash(repository: &mut Repository) -> Result<Option<ObjectId>> {
@@ -614,11 +637,15 @@ fn start(
     // `--exec` and an explicit `--autosquash` run the interactive machinery on an unedited todo
     // list, as git does; `rebase.autoSquash` alone only matters with `-i`.
     let plain_autosquash = args.autosquash && !args.no_autosquash;
-    let interactive_backend = args.interactive || !args.exec.is_empty() || plain_autosquash;
+    let update_refs = update_refs_wanted(repository, args.update_refs, args.no_update_refs);
+    let scripted = args.interactive || !args.exec.is_empty() || plain_autosquash;
+    // `--update-refs` alone still takes git's shortcuts (up to date, fast-forward); it only decides
+    // which backend does the replay.
+    let interactive_backend = scripted || update_refs;
     // Already based on the target with a linear history: nothing to do.
     let odb = repository.odb();
     let bases = rivet_core::merge_bases(odb, onto, orig_head).unwrap_or_default();
-    if !interactive_backend && !args.root && onto == upstream && bases.first() == Some(&onto) {
+    if !scripted && !args.root && onto == upstream && bases.first() == Some(&onto) {
         let mut options = WalkOptions::new();
         options.exclude(onto);
         let between = rivet_core::revwalk::walk_oids(odb, &[orig_head], &options)?;
@@ -748,6 +775,7 @@ fn start(
             } else {
                 plain_autosquash
             },
+            update_refs,
             edit: args.interactive,
             exec: &args.exec,
             root: args.root,
@@ -1350,6 +1378,9 @@ fn write_update_refs(
             continue;
         }
         seen.push(name);
+    }
+    seen.sort_unstable();
+    for name in seen {
         let before = RefName::from_bytes(name.as_bytes())
             .ok()
             .and_then(|r| repository.refs().resolve_oid(&r).ok())

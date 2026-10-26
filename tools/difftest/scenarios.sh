@@ -9069,6 +9069,97 @@ s_rebase_update_ref() {
     done
 }
 
+# `--update-refs` / `rebase.updateRefs`: git writes an `update-ref` line after every commit a local branch points
+# at (reverse name order within one commit, a branch checked out elsewhere as a comment, the rebased branch,
+# tags and the base ignored), before `--autosquash` reorders, and moves the branches when the rebase ends.
+s_rebase_update_refs() {
+    rebase_repo
+    g tag orig topic
+    rebase_i_helpers
+    ur_reset() {
+        [ -d .git/rebase-merge ] && v rebase --abort
+        v switch -q topic
+        v reset -q --hard orig
+        for b in bD bE aE bG bBase; do g branch -D "$b" >/dev/null 2>&1; done
+        g branch bD orig~2; g branch bE orig~1; g branch aE orig~1; g branch bG orig; g branch bBase main
+        g tag -f tg orig~1 >/dev/null
+    }
+    ur_reset
+    # Already on top of the base: git says so before it looks at the branches.
+    v rebase --update-refs topic
+    echo "rc=$?"
+    v for-each-ref
+    # The todo list the editor sees, the refs afterwards, the reflogs.
+    GIT_SEQUENCE_EDITOR=cat v rebase -i --update-refs main
+    echo "rc=$?"
+    v for-each-ref
+    v reflog bE
+    v reflog
+    # No -i: the flag alone runs the todo list unedited.
+    ur_reset
+    v rebase --update-refs main
+    echo "rc=$?"
+    v for-each-ref
+    # The config key, and --no-update-refs beating it (and --update-refs beating a false key).
+    ur_reset
+    g config rebase.updateRefs true
+    v rebase main
+    v for-each-ref
+    ur_reset
+    v rebase --no-update-refs main
+    v for-each-ref
+    ur_reset
+    g config rebase.updateRefs false
+    v rebase --update-refs main
+    v for-each-ref
+    g config --unset rebase.updateRefs
+    # Stopped half way: nothing moved yet, the state file lists the refs by name, --continue applies them.
+    ur_reset
+    SEQ='2a break' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase -i --update-refs main
+    echo "rc=$?"
+    v for-each-ref
+    cat .git/rebase-merge/update-refs
+    v rebase --continue
+    echo "rc=$?"
+    v for-each-ref
+    # A fixup commit with a branch on it: the update-ref line stays where the fixup was, --autosquash
+    # moves only the commit line, and --exec lands before the update-ref lines.
+    ur_reset
+    tick; echo x >>d; v commit -q -a -m 'fixup! D'
+    g branch onFix
+    tick; echo y >g; v commit -q -a -m H
+    g tag -f orig topic
+    GIT_SEQUENCE_EDITOR=cat v rebase -i --update-refs --autosquash --exec true main
+    echo "rc=$?"
+    v for-each-ref
+    v log --oneline --all
+    # A branch checked out in another work tree is only a comment, and is left alone.
+    ur_reset
+    g tag -f orig topic
+    g branch wtB orig~1
+    v worktree add -q ../wtB wtB
+    GIT_SEQUENCE_EDITOR=cat v rebase -i --update-refs main
+    echo "rc=$?"
+    v for-each-ref
+    # Behind the base: git fast-forwards, whatever the flag.
+    v worktree remove --force ../wtB
+    g branch -D wtB >/dev/null
+    ur_reset
+    v switch -q -c behind main~1
+    v rebase --update-refs main
+    echo "rc=$?"
+    v for-each-ref
+    v reflog
+    v switch -q topic
+    g branch -D behind >/dev/null
+    # Detached HEAD: no branch is excluded.
+    ur_reset
+    v switch -q --detach topic
+    GIT_SEQUENCE_EDITOR=cat v rebase -i --update-refs main
+    echo "rc=$?"
+    v for-each-ref
+}
+
 s_sparse_clean() {
     v init -q repo; cd repo
     mkdir -p a b/deep b/other c/y c/z d/e; echo 1 >a/f; echo 2 >b/f; echo 3 >b/deep/g; echo 4 >b/other/f
