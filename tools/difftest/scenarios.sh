@@ -8831,6 +8831,37 @@ s_grep_null_break() {
     echo "rc=$?"
 }
 
+# `grep --untracked`: untracked files that are not ignored are searched too, merged with the tracked
+# ones in path order; it cannot be combined with `--cached`; a revision is read as a path.
+s_grep_untracked() {
+    v init -q repo; cd repo
+    printf 'needle\n' >b.txt
+    mkdir d
+    printf 'needle\n' >d/z.txt
+    printf 'needle\n' >d/a.txt
+    v add .; v commit -q -m one
+    printf 'needle\n' >a_new.txt
+    printf 'needle\n' >d/new2.txt
+    mkdir e
+    printf 'needle\n' >e/q.txt
+    printf 'ign*\n' >.gitignore
+    printf 'needle\n' >ignored.txt
+    printf 'needle\n' >zz
+    v grep needle
+    v grep --untracked needle
+    v grep --untracked -l needle
+    v grep --untracked -c needle
+    v grep --untracked -n needle d
+    v grep --untracked nomatch
+    echo "rc=$?"
+    v grep --cached --untracked needle
+    echo "rc=$?"
+    v grep --untracked needle HEAD
+    echo "rc=$?"
+    cd d
+    v grep --untracked needle
+}
+
 # `label` / `reset` todo lines: a label is a ref under refs/rewritten that lives until the rebase ends
 # (finished or aborted), `reset` moves HEAD and the work tree there (reflog `rebase (reset): '<arg>'`, none
 # when HEAD does not move), a name that does not resolve reschedules the line. `merge` and `update-ref`

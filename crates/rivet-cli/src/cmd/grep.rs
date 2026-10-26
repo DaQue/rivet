@@ -33,6 +33,10 @@ pub struct GrepArgs {
     #[arg(long = "cached")]
     pub cached: bool,
 
+    /// Also search the untracked files that are not ignored.
+    #[arg(long = "untracked")]
+    pub untracked: bool,
+
     /// Ignore case differences.
     #[arg(short = 'i', long = "ignore-case")]
     pub ignore_case: bool,
@@ -155,7 +159,7 @@ struct Source {
 ///
 /// `0` when something matched, `1` when nothing did, `128` for a bad pattern or revision.
 pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
-    let repository = super::open(global)?;
+    let mut repository = super::open(global)?;
     // `-v` and `-q` are the grammar's global flags; here they mean invert and quiet.
     let invert = args.invert || global.verbose;
     let quiet = global.quiet;
@@ -173,11 +177,27 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
         }
         patterns.push(positional.remove(0));
     }
+    if args.untracked && args.cached {
+        eprintln!("fatal: options '--untracked' and '--cached' cannot be used together");
+        return Ok(128);
+    }
     // `rev... -- paths`: everything before `--` that names a revision is one; the rest are paths.
     let mut revs: Vec<String> = Vec::new();
     let mut path_args: Vec<PathBuf> = Vec::new();
     for arg in positional {
+        if args.untracked
+            && !arg.starts_with(':')
+            && !arg.contains(['*', '?', '['])
+            && std::fs::symlink_metadata(&arg).is_err()
+        {
+            eprintln!("fatal: {arg}: no such path in the working tree.");
+            eprintln!(
+                "Use 'git <command> -- <path>...' to specify paths that do not exist locally."
+            );
+            return Ok(128);
+        }
         if path_args.is_empty()
+            && !args.untracked
             && !std::path::Path::new(&arg).exists()
             && super::resolve_rev(&repository, &arg).is_ok()
         {
@@ -270,6 +290,23 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
                 }
             };
             sources.push(Source { shown, data });
+        }
+        if args.untracked {
+            let mut options = rivet_core::worktree::StatusOptions::new();
+            options.untracked(rivet_core::worktree::UntrackedMode::All);
+            for path in &repository.status(&options)?.untracked {
+                if !selected(path) {
+                    continue;
+                }
+                if let Ok(data) = repository.worktree()?.read_file(BStr::new(&path[..])) {
+                    sources.push(Source {
+                        shown: relative_to(&cwd_prefix, path),
+                        data,
+                    });
+                }
+            }
+            // Git walks the directory, so tracked and untracked files interleave by path.
+            sources.sort_by(|a, b| a.shown.cmp(&b.shown));
         }
     }
 

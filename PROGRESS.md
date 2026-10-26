@@ -1652,3 +1652,10 @@ Scenario `s_status_pathspec_magic` fails on `9c45bfa` (`i/o error` or an empty r
 Left undone (in `GAPS.md`): a plain literal pathspec naming a wholly untracked directory lists its files where git prints `?? dir/`; a plain `../../x` outside the tree gets rivet's error text, not git's `outside repository at`. Other commands do not parse pathspec magic.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 303 PASS / `failures: 0`.
+
+## grep --untracked (2026-10-26)
+`.claude/PRIORITIES.md` is stale (all 11 items already landed), so this took the `grep` line in section 2 of `GAPS.md`. `grep --untracked` now also searches the untracked files that are not ignored, merged with the tracked ones in path order as git's directory walk does. `--untracked --cached` exits 128 with git's `options ... cannot be used together`; a revision is read as a path, so `grep --untracked needle HEAD` prints git's `no such path in the working tree` error and exits 128.
+Scenario `s_grep_untracked` fails on `e58e339` (clap rejected the option), passes now; expected values come from `/usr/bin/git`.
+Left undone (in `GAPS.md`): `-P`, `--and`/`--or`/`--not`, `--threads`, `--no-index`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 304 PASS / `failures: 0`.
