@@ -713,6 +713,19 @@ pub fn untracked_paths(
         }
     }
 
+    // The walk starts below a directory pathspec, so the directory itself never shows up as an
+    // entry. When it is wholly untracked git reports it as one `dir/`, not the files inside it.
+    if only_file.is_none() && options.untracked_files != UntrackedMode::No {
+        let spec: &[u8] = options.pathspec.as_ref();
+        let spec = spec.strip_suffix(b"/").unwrap_or(spec);
+        if !spec.is_empty() && spec != b"." {
+            let dir = BString::from(spec);
+            if !tracked_dirs.contains(&dir) && !tracked.contains(&dir) {
+                untracked_dirs.insert(dir);
+            }
+        }
+    }
+
     // Whatever lies inside a tracked gitlink belongs to the submodule's own repository (a nested
     // submodule included), never to this one.
     let gitlinks: Vec<BString> = index

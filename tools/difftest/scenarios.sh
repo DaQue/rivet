@@ -9462,6 +9462,18 @@ s_status_multi_pathspec() {
     cd a; v status -s x ../b; v status . ../c; v status -- ../b/y new
 }
 
+# `status -- <dir>` where the directory is wholly untracked: git reports `?? dir/`, not the files
+# inside; a tracked parent, a trailing slash, `-uall`, a second pathspec and a nested untracked
+# directory under a tracked one all follow the same rule.
+s_status_untracked_dir_pathspec() {
+    g init -q repo; cd repo
+    tick; echo a >f; mkdir t; echo b >t/g; g add .; g commit -q -m c1
+    mkdir -p d/e t/u; echo 1 >d/a; echo 2 >d/e/b; echo 3 >t/u/k; echo 4 >t/new; echo n >x
+    v status -s -- d; v status -s -- d/; v status -s -- d/e; v status -s -- t/u; v status -s -- t
+    v status -s -uall -- d; v status -s -- d x; v status -s -- .; v status -- d; v status --porcelain d/e
+    mkdir empty; v status -s -- empty
+}
+
 # `status` with pathspec magic and wildcards: `:(exclude)`/`:!`/`:^`, `:(top)`/`:/`, `:(glob)`,
 # `:(literal)`, `:(icase)`, a bare `*` that crosses `/`, untracked directories that collapse only
 # when the whole directory matches, exclude-only lists, `..` in patterns and git's errors.

@@ -1659,3 +1659,13 @@ Scenario `s_grep_untracked` fails on `e58e339` (clap rejected the option), passe
 Left undone (in `GAPS.md`): `-P`, `--and`/`--or`/`--not`, `--threads`, `--no-index`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 304 PASS / `failures: 0`.
+
+## status: wholly untracked directory named by a pathspec (2026-10-26)
+`.claude/PRIORITIES.md` queue was already fully landed (all 11 scenarios exist in `scenarios.sh`), so this unit came from
+`GAPS.md` section 1. `status -- <dir>` (also `dir/`, `d/e` under a tracked parent) listed the files inside a wholly
+untracked directory; git prints `?? dir/`. Fix in `untracked_paths` (`worktree/status.rs`): the walk starts below the
+pathspec, so the directory itself is now recorded as an untracked dir when no tracked path lives in it.
+Scenario `s_status_untracked_dir_pathspec` fails on 6df084f (`FAIL`, `failures: 1`) and passes after.
+Left undone: `status` of a plain `../../x` outside the tree still prints rivet's own text (in `GAPS.md`).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 305 PASS / `failures: 0`.
