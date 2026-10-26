@@ -5183,6 +5183,32 @@ s_for_each_ref_version_sort() {
     v for-each-ref "$fmt" --sort=version:version:refname
 }
 
+s_for_each_ref_version_suffix() {
+    fer_repo
+    local fmt='--format=%(refname:short)' oid
+    oid=$(g rev-parse HEAD)
+    for t in v1.0 v1.0-rc1 v1.0-rc2 v1.0-rc10 v1.0-beta1 v1.0-rcx v1.0-foo v1.0.1 v1.1-beta v1.1 v0.9 v1.0-pre-rc1 v1.0-pre v1.0-rc1-pre; do
+        g update-ref "refs/tags/z/$t" "$oid"
+    done
+    v for-each-ref "$fmt" --sort=version:refname refs/tags/z
+    g config --add versionsort.suffix -rc
+    v for-each-ref "$fmt" --sort=version:refname refs/tags/z
+    v for-each-ref "$fmt" --sort=-version:refname refs/tags/z
+    g config --add versionsort.suffix -beta
+    v for-each-ref "$fmt" --sort=v:refname refs/tags/z
+    g config --unset-all versionsort.suffix
+    g config --add versionsort.suffix -beta
+    g config --add versionsort.suffix -pre
+    g config --add versionsort.suffix -rc
+    v for-each-ref "$fmt" --sort=version:refname refs/tags/z
+    # The deprecated key is read when the new one is absent.
+    g config --unset-all versionsort.suffix
+    g config --add versionsort.prereleasesuffix -rc
+    v for-each-ref "$fmt" --sort=version:refname refs/tags/z
+    # A plain refname sort ignores the setting.
+    v for-each-ref "$fmt" --sort=refname refs/tags/z
+}
+
 s_for_each_ref_upstream() {
     fer_repo
     v for-each-ref --format='%(refname:short) up=%(upstream) short=%(upstream:short) track=%(upstream:track) ts=%(upstream:trackshort) nb=%(upstream:track,nobracket) rn=%(upstream:remotename) rr=%(upstream:remoteref)' refs/heads

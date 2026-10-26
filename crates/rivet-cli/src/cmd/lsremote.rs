@@ -329,6 +329,7 @@ impl SortKey {
             super::foreachref::versioncmp(
                 &String::from_utf8_lossy(&left),
                 &String::from_utf8_lossy(&right),
+                &[],
             )
         } else {
             left.cmp(&right)

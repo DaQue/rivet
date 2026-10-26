@@ -1736,3 +1736,16 @@ Scenario `s_rebase_update_refs` fails on b080eea (`FAIL`, `failures: 1`) and pas
 Left undone: the blank line git keeps after each generated `update-ref` line in `git-rebase-todo` (in `GAPS.md`).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 311 PASS / `failures: 0`.
+
+### for-each-ref: `versionsort.suffix`
+
+`.claude/PRIORITIES.md` is stale (all 11 items landed). `GAPS.md` section 1 holds only large subsystems, so this came from
+section 2. `--sort=version:<key>` ignored `versionsort.suffix`; it now follows git's `swap_prereleases` (first differing offset,
+suffix around it sorts first, two suffixes in configuration order, longest/earliest match) and falls back to the deprecated
+`versionsort.prereleasesuffix`. Change in `cmd/foreachref.rs` (`versioncmp` takes the suffix list) and `cmd/lsremote.rs` (passes
+none; `ls-remote` still ignores the setting, noted in `GAPS.md`). Checked against `/usr/bin/git` with a 300-round random fuzz of
+tag names and suffix lists (0 mismatches) and the scenario `s_for_each_ref_version_suffix`, which fails on b922f1a and passes after.
+Left undone: the blank line after generated `update-ref` lines in `git-rebase-todo` (touches every consumer of the todo state
+file; still in `GAPS.md`).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 312 PASS / `failures: 0`.

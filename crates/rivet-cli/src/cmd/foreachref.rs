@@ -1217,8 +1217,76 @@ pub(super) fn sort_value(key: &str, item: &RefItem, context: &Context) -> Eval<S
     })
 }
 
-/// git's `versioncmp` (glibc `strverscmp`) with no `versionsort.suffix` configured.
-pub(super) fn versioncmp(left: &str, right: &str) -> Ordering {
+/// The prerelease suffixes git sorts first: `versionsort.suffix`, else the deprecated
+/// `versionsort.prereleasesuffix`.
+pub(super) fn version_suffixes(repository: &Repository) -> Vec<String> {
+    let read = |key: &str| -> Vec<String> {
+        repository
+            .config()
+            .get_all(bstr::BStr::new(key.as_bytes()))
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|v| String::from_utf8_lossy(v).into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let current = read("versionsort.suffix");
+    if current.is_empty() {
+        read("versionsort.prereleasesuffix")
+    } else {
+        current
+    }
+}
+
+/// git's `swap_prereleases`: with `off` the first differing offset, a string holding a configured
+/// suffix around it sorts first; two different suffixes sort in configuration order.
+fn swap_prereleases(
+    left: &[u8],
+    right: &[u8],
+    off: usize,
+    suffixes: &[String],
+) -> Option<Ordering> {
+    // (conf_pos, start, len) as in git's `struct suffix_match`.
+    let mut matches = [(None::<usize>, off, None::<usize>); 2];
+    for (conf_pos, suffix) in suffixes.iter().enumerate() {
+        let suffix = suffix.as_bytes();
+        let from = if suffix.len() < off {
+            off - suffix.len()
+        } else {
+            0
+        };
+        for (found, text) in matches.iter_mut().zip([left, right]) {
+            let end = if found.2.is_none_or(|len| len < suffix.len()) {
+                found.1 as isize
+            } else {
+                found.1 as isize - 1
+            };
+            let mut i = from as isize;
+            while i <= end {
+                if text
+                    .get(i as usize..)
+                    .is_some_and(|t| t.starts_with(suffix))
+                {
+                    *found = (Some(conf_pos), i as usize, Some(suffix.len()));
+                    break;
+                }
+                i += 1;
+            }
+        }
+    }
+    match (matches[0].0, matches[1].0) {
+        (None, None) => None,
+        (a, b) if a == b => None,
+        (Some(a), Some(b)) => Some(a.cmp(&b)),
+        (Some(_), None) => Some(Ordering::Less),
+        (None, Some(_)) => Some(Ordering::Greater),
+    }
+}
+
+/// git's `versioncmp` (glibc `strverscmp`), with `versionsort.suffix` prereleases in `suffixes`.
+pub(super) fn versioncmp(left: &str, right: &str, suffixes: &[String]) -> Ordering {
     const CMP: i8 = 2;
     const LEN: i8 = 3;
     const NEXT_STATE: [usize; 12] = [0, 3, 9, 0, 3, 3, 0, 6, 6, 0, 6, 9];
@@ -1243,6 +1311,11 @@ pub(super) fn versioncmp(left: &str, right: &str) -> Ordering {
         c1 = at(a, i);
         c2 = at(b, i);
         state += class(c1);
+    }
+    if !suffixes.is_empty()
+        && let Some(order) = swap_prereleases(a, b, i, suffixes)
+    {
+        return order;
     }
     let diff = i32::from(c1) - i32::from(c2);
     let by_diff = diff.cmp(&0);
@@ -1613,6 +1686,11 @@ fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<
         }
         keyed.push((values, item));
     }
+    let suffixes = if keys.iter().any(|k| k.version) {
+        version_suffixes(context.repository)
+    } else {
+        Vec::new()
+    };
     let fold = |text: &str| -> String {
         if args.ignore_case {
             text.to_lowercase()
@@ -1623,7 +1701,9 @@ fn run_inner(global: &GlobalArgs, args: &ForEachRefArgs) -> anyhow::Result<Eval<
     keyed.sort_by(|(left_values, left), (right_values, right)| {
         for (index, key) in keys.iter().enumerate() {
             let ordering = match (&left_values[index], &right_values[index]) {
-                (SortValue::Text(a), SortValue::Text(b)) if key.version => versioncmp(a, b),
+                (SortValue::Text(a), SortValue::Text(b)) if key.version => {
+                    versioncmp(a, b, &suffixes)
+                }
                 (SortValue::Number(a), SortValue::Number(b)) => a.cmp(b),
                 (SortValue::Text(a), SortValue::Text(b)) => fold(a).cmp(&fold(b)),
                 _ => Ordering::Equal,
