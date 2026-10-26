@@ -1711,3 +1711,14 @@ and header counts updated.
 Left undone: `--autosquash` over an `amend!` commit and a `fixup!` naming another fixup by id (unchanged, in `GAPS.md`).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 309 PASS / `failures: 0`.
+
+## rebase: `--autosquash` over an `amend!` commit (2026-10-26)
+`.claude/PRIORITIES.md` is still stale (all 11 items landed), so this came from `GAPS.md` section 1. An `amend!` commit with a
+target was refused by name. It now becomes `fixup -C <id> # amend! …` in the reordered todo, and the replacement message is the
+amend commit's body with its `amend! …` subject line dropped (an `amend!` with no body gives an empty message, as in git). A
+`rebase (fixup):` reflog entry with an empty subject has no trailing space. Change in `cmd/rebase/interactive.rs`; expected
+output compared with `/usr/bin/git`. Scenario `s_rebase_autosquash_amend` fails on 86eaee6 (`FAIL`, `failures: 1`) and passes
+after. The `amend!` case was removed from the refusal test in `tests/rebase_interactive.rs`; `GAPS.md` text and counts updated.
+Left undone: a `fixup!` naming another fixup commit by id (unchanged, in `GAPS.md`).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 310 PASS / `failures: 0`.

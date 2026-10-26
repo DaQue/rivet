@@ -131,10 +131,7 @@ fn an_empty_message_puts_the_branch_back_where_it_was() {
 
 #[test]
 fn autosquash_cases_that_need_fixup_c_or_nested_chains_are_refused_before_anything_moves() {
-    for (subjects, expect) in [
-        (&["amend! one"][..], "needs 'fixup -C'"),
-        (&["fixup! one", "fixup! fixup! one", "squash! two"][..], ""),
-    ] {
+    for (subjects, expect) in [(&["fixup! one", "fixup! fixup! one", "squash! two"][..], "")] {
         let dir = repo();
         let p = dir.path();
         for (n, subject) in subjects.iter().enumerate() {

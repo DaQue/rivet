@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 309 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 310 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-26, gate: 268 tests / 0 failed, 309 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-26, gate: 268 tests / 0 failed, 310 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -52,9 +52,8 @@ The command or subsystem is absent; it either fails at the argument parser or re
   `--continue`/`--skip`/`--abort` work (`s_rebase_i`, `s_rebase_i_stops`, `s_rebase_i_conflict`).
   `--root` works, plain (`s_rebase_root`) and with `-i` (`s_rebase_root_i`; the virtual empty base is recorded in `squash-onto`, and the first commit made on it is a root commit again); too many positionals, with or without `--root`, get git's full usage text and exit 129 (`s_rebase_positional_usage`). Refused by name, before anything is touched: `--rebase-merges`, (`--exec`/`-x` works with `-i` and without it, which runs an unedited todo list, `s_rebase_exec`, `s_rebase_exec_plain`; `--autosquash` works without `-i` as well, `s_rebase_autosquash_plain`; so does an `exec` todo line; `break` works too, `s_rebase_break`; so do `fixup -C`/`-c`, `s_rebase_fixup_c`); `--keep-base` works (`s_rebase_keep_base`),
   signing, `--edit-todo` outside an interactive rebase (rivet's plain rebase has no todo to edit),
-  `--autosquash` over an `amend!` commit that has a target (git turns it into `fixup -C` and strips the
-  `amend!` line from the message, which is not reproduced) or a `fixup!` that names
-  another fixup commit by id (`s_rebase_autosquash` covers the rest, plus `--no-autosquash` and
+  `--autosquash` over a `fixup!` that names
+  another fixup commit by id (`s_rebase_autosquash` covers the rest, and `s_rebase_autosquash_amend` the `amend!` → `fixup -C` form, plus `--no-autosquash` and
   `rebase.autoSquash`), and the todo command `merge` (`label` and `reset` work,
   `s_rebase_label_reset`; `reset` takes a label, a ref or a commit id, and the `-C` form is not parsed;
   `update-ref <ref>` works, `s_rebase_update_ref`, but a ref that moved since the rebase started, or that is

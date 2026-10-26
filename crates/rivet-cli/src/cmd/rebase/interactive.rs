@@ -599,12 +599,8 @@ fn autosquash_order(
                 commits[j].1
             ));
         }
-        if kind == "amend" {
-            return Err(format!(
-                "'{subject}' needs 'fixup -C', which is not implemented"
-            ));
-        }
         attached[i] = true;
+        let kind = if kind == "amend" { "fixup -C" } else { kind };
         chains[j].push((kind, i));
     }
     let mut order = Vec::with_capacity(commits.len());
@@ -668,7 +664,7 @@ pub(super) fn begin(
         commands += 1;
         let chained = order
             .get(n + 1)
-            .is_some_and(|(next, _)| matches!(*next, "fixup" | "squash"));
+            .is_some_and(|(next, _)| matches!(*next, "fixup" | "fixup -C" | "squash"));
         if !chained {
             for command in plan.exec {
                 text.push_str(&format!("exec {command}\n"));
@@ -860,7 +856,11 @@ pub(super) fn commit_amend(
     let body = builder.build(repository.format())?;
     let oid = repository.odb().write_raw(ObjectKind::Commit, &body)?;
     let subject = message.lines().next().unwrap_or_default();
-    let reason = format!("{action}: {}", String::from_utf8_lossy(subject));
+    let reason = if subject.is_empty() {
+        format!("{action}:")
+    } else {
+        format!("{action}: {}", String::from_utf8_lossy(subject))
+    };
     repository.move_head(oid, BStr::new(reason.as_bytes()))?;
     crate::cmd::snapshot::commit_hook(repository, "post-commit", &[], super::hook_action());
     if let Some(false) = summary {
@@ -1026,7 +1026,20 @@ pub(super) fn chain_add(
     text = format!("{c} This is a combination of {count} commits.\n{rest}");
     let message = trimmed(&read_commit(repository, &oid)?.message);
     if replaces {
-        write_state(dir, "message-fixup", &format!("{message}\n"))?;
+        // An `amend!` commit carries the new message after its `amend! …` subject line.
+        let kept = if message.starts_with("amend!") {
+            message
+                .split_once('\n')
+                .map_or("", |(_, rest)| rest.trim_start_matches('\n'))
+        } else {
+            message.as_str()
+        };
+        let kept = if kept.is_empty() {
+            String::new()
+        } else {
+            format!("{kept}\n")
+        };
+        write_state(dir, "message-fixup", &kept)?;
     }
     if cmd == Cmd::Fixup && !replaces && flag == Flag::None {
         let commented: String = message

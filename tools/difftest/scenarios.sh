@@ -8389,6 +8389,42 @@ s_rebase_exec_plain() {
     v reflog
 }
 
+# `amend!` commits autosquash to `fixup -C`: the target's message is replaced by the amend commit's
+# body (its `amend! …` subject line is dropped), fixups after it keep that message, a squash after
+# it opens the editor on the combination with the `amend!` subject commented out.
+s_rebase_autosquash_amend() {
+    v init -q repo; cd repo
+    echo base >base; v add base; v commit -q -m base
+    v branch work
+    tick; echo main >main.txt; v add main.txt; v commit -q -m "main moves"
+    v switch -q work
+    for n in A B C; do tick; echo $n >$n; v add $n; v commit -q -m "feat $n" -m "body $n"; done
+    tick; echo 1 >f1; v add f1; v commit -q -m "amend! feat A" -m "new subject A" -m "new body A"
+    tick; echo 2 >f2; v add f2; v commit -q -m "fixup! feat A"
+    tick; echo 3 >f3; v add f3; v commit -q -m "amend! feat C"
+    tick; echo 4 >f4; v add f4; v commit -q -m "squash! feat B"
+    g branch orig
+    rebase_i_helpers
+    export GIT_EDITOR=true
+    local mode
+    for mode in "-i" ""; do
+        v switch -q work; v reset -q --hard orig
+        echo "== autosquash $mode"
+        GIT_SEQUENCE_EDITOR=cat v rebase $mode --autosquash main
+        echo "rc=$?"
+        v log --format='%H%n%B' main..work
+        v reflog
+        v status
+    done
+    # The amend commit is the last link: squash after it keeps both messages.
+    v switch -q work; v reset -q --hard orig
+    tick; echo 5 >f5; v add f5; v commit -q -m "squash! feat A"
+    echo "== amend then squash"
+    GIT_SEQUENCE_EDITOR=cat v rebase -i --autosquash main
+    echo "rc=$?"
+    v log --format='%H%n%B' main..work
+}
+
 # `rebase --autosquash` without -i runs the interactive machinery on an unedited, reordered todo
 # list; `rebase.autoSquash` alone does not (it only applies with -i), `--no-autosquash` cancels it.
 s_rebase_autosquash_plain() {
