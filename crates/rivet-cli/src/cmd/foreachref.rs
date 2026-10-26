@@ -1218,7 +1218,7 @@ pub(super) fn sort_value(key: &str, item: &RefItem, context: &Context) -> Eval<S
 }
 
 /// git's `versioncmp` (glibc `strverscmp`) with no `versionsort.suffix` configured.
-fn versioncmp(left: &str, right: &str) -> Ordering {
+pub(super) fn versioncmp(left: &str, right: &str) -> Ordering {
     const CMP: i8 = 2;
     const LEN: i8 = 3;
     const NEXT_STATE: [usize; 12] = [0, 3, 9, 0, 3, 3, 0, 6, 6, 0, 6, 9];

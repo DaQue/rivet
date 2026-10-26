@@ -9444,6 +9444,23 @@ s_ls_remote_sort() {
     v ls-remote --sort=-refname ../src
 }
 
+# `ls-remote --sort=version:<key>` / `v:<key>` use git's versioncmp, reversed by a leading `-`.
+s_ls_remote_version_sort() {
+    g init -q src; cd src
+    tick; echo a >f; g add .; g commit -q -m c1
+    g branch v1.100
+    for t in v1.9 v1.10 v1.2 v1.09 a1 a01 v2; do g tag "$t"; done
+    tick; g tag -a -m ann v3
+    for k in version:refname -version:refname v:refname -v:refname v:refname:lstrip=2 \
+        version:refname:strip=-1 v:refname:rstrip=1 version: v: version:foo version v:refname:foo \
+        v:refname:lstrip=x -version:; do
+        v ls-remote --sort="$k" ../src
+    done
+    v ls-remote --sort=v:refname --sort=-refname:strip=2 ../src
+    v ls-remote --sort=refname --sort=-v:refname ../src
+    v ls-remote --tags --sort=-v:refname ../src 'v1*'
+}
+
 # `sparse-checkout set` over a skip-worktree path whose file reappeared with other content.
 s_sparse_reappeared() {
     v init -q repo; cd repo
@@ -9678,6 +9695,7 @@ for s in "$@"; do
         s_ls_remote) run_scenario "$s" none ;;
         s_ls_remote_patterns) run_scenario "$s" none ;;
         s_ls_remote_sort) run_scenario "$s" none ;;
+        s_ls_remote_version_sort) run_scenario "$s" none ;;
         s_clone_filter) run_scenario "$s" local viafile bare.git limit ;;
         s_clone_bundle_uri) run_scenario "$s" seeded viafile bare.git missing remote ;;
         s_bundle_clone) run_scenario "$s" all named all.git onside upstream nohead dotted odd.git ;;

@@ -1631,3 +1631,10 @@ Scenario `s_grep_null_break` fails on `99005d3` (unknown option `-z`), passes no
 Left undone (in `GAPS.md`): `--break` over a binary file that matches is refused by name, because git 2.56 drops or keeps the notice depending on its worker threads and on whether a revision is searched (Rust test `grep_break_refuses_binary`). Still missing: `-P`, `--and`/`--or`/`--not`, `--threads`, `--untracked`, `--no-index`.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 262 passed / 0 failed / 0 ignored,
 `scenarios.sh` 300 PASS / `failures: 0`.
+
+## ls-remote --sort=version:<key> (2026-10-26)
+The queue in `.claude/PRIORITIES.md` is fully landed, so this took the `ls-remote --sort` limitation in section 1 of `GAPS.md`. `ls-remote --sort=version:refname` / `v:refname` (with the `lstrip`/`rstrip`/`strip` modifiers and a leading `-`) now compare with git's `versioncmp`, shared with `for-each-ref`. The empty-key `malformed field name` error is checked after the prefix is stripped, as in git. The Rust refusal test now uses `v:*refname` and `-version:refname:short`.
+Scenario `s_ls_remote_version_sort` fails on `ccbc572` (the keys were refused by name), passes now; expected values come from `/usr/bin/git`.
+Left undone (in `GAPS.md`): `*` (ignore case), `refname:short`/`:dir`/`:base` and the object-data keys of `ls-remote --sort`.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 262 passed / 0 failed / 0 ignored,
+`scenarios.sh` 301 PASS / `failures: 0`.

@@ -24,8 +24,8 @@ fn unsupported_options_are_refused_by_name() {
 fn sort_keys_beyond_refname_are_refused_by_name() {
     let rivet = env!("CARGO_BIN_EXE_rivet");
     for key in [
-        "version:refname",
-        "-v:refname",
+        "v:*refname",
+        "-version:refname:short",
         "*refname",
         "refname:short",
         "refname:dirname",

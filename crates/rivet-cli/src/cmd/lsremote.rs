@@ -243,6 +243,8 @@ pub fn run_ls_remote(global: &GlobalArgs, args: &LsRemoteArgs) -> Result<i32> {
 /// One `--sort` key: `refname` with an optional component strip, reversed by a leading `-`.
 struct SortKey {
     reverse: bool,
+    /// `version:` / `v:` prefix: compare with git's `versioncmp` instead of bytewise.
+    version: bool,
     strip: Option<Strip>,
 }
 
@@ -260,18 +262,23 @@ enum SortError {
 
 impl SortKey {
     /// Parse a key the way git's `ref-filter` does, with its error texts. Keys that need object
-    /// data, `version:` sorting, `*` (ignore case) and `:short` are refused by name.
+    /// data, `*` (ignore case) and `:short` are refused by name.
     fn parse(key: &str) -> Result<SortKey, SortError> {
         let (reverse, atom) = match key.strip_prefix('-') {
             Some(rest) => (true, rest),
             None => (false, key),
         };
+        let (version, atom) = match atom
+            .strip_prefix("version:")
+            .or_else(|| atom.strip_prefix("v:"))
+        {
+            Some(rest) => (true, rest),
+            None => (false, atom),
+        };
         if atom.is_empty() {
             return Err(SortError::Fatal("malformed field name: ".to_string()));
         }
         if atom.starts_with('*')
-            || atom.starts_with("version:")
-            || atom.starts_with("v:")
             || atom.starts_with("refname:short")
             || atom.starts_with("refname:dir")
             || atom.starts_with("refname:base")
@@ -309,11 +316,23 @@ impl SortKey {
             })?;
             strip = Some(build(count));
         }
-        Ok(SortKey { reverse, strip })
+        Ok(SortKey {
+            reverse,
+            version,
+            strip,
+        })
     }
 
     fn compare(&self, a: &[u8], b: &[u8]) -> std::cmp::Ordering {
-        let ordering = self.value(a).cmp(&self.value(b));
+        let (left, right) = (self.value(a), self.value(b));
+        let ordering = if self.version {
+            super::foreachref::versioncmp(
+                &String::from_utf8_lossy(&left),
+                &String::from_utf8_lossy(&right),
+            )
+        } else {
+            left.cmp(&right)
+        };
         if self.reverse {
             ordering.reverse()
         } else {
