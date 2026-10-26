@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 290 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 291 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-26, gate: 261 tests / 0 failed, 289 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-26, gate: 261 tests / 0 failed, 291 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -92,7 +92,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   (` M path`, `modified:   path (new commits, modified content, untracked content)`, short ` m` / ` ?`, git's
   "commit or discard" hint; `s_status_moved_submodule`, `s_status_dirty_submodule`). A dirty nested submodule inside a
   submodule, and `status.submoduleSummary` / `diff.ignoreSubmodules` / `--ignore-submodules`, are not compared. `diff`/`commit -a`/`add -u`
-  still skip gitlinks. `status` takes one pathspec only (git takes several).
+  still skip gitlinks. `status` takes several literal pathspecs and reports their union (`s_status_multi_pathspec`); pathspec magic (`:(exclude)`, `:!`, glob patterns such as `*/x`) is not parsed there, so such a pathspec is read as a literal path (an `i/o error` or an empty match instead of git's result).
 
 ## 2. Implemented, but partial
 

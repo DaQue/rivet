@@ -9272,6 +9272,20 @@ s_status_file_pathspec() {
     rm d/g; v status -s -- d; v status -s -- d/g; v status -s -- .; v status -- d
 }
 
+# `status` with several pathspecs: the union of the matches, the hints for that union, `--` and
+# options mixed in, and `--porcelain` not swallowing the first pathspec as its version.
+s_status_multi_pathspec() {
+    g init -q repo; cd repo
+    tick; mkdir a b c; echo 1 >a/x; echo 1 >b/y; echo 1 >c/z; echo 1 >top; g add .; g commit -q -m c1
+    echo 2 >>a/x; echo 2 >>b/y; echo 2 >>c/z; echo n >a/new; echo n >c/new; g add b/y
+    v status a b; v status a c/z; v status -- a b; v status a/new top; v status nomatch a
+    v status b a/x; v status a a/x; v status . a
+    v status --short a c; v status -s -- b c; v status -b -s a/x c; v status -uno a c
+    v status --porcelain a c; v status --porcelain=v1 a c; v status --porcelain -- b c
+    v status -s a nomatch; v status -s nomatch other
+    cd a; v status -s x ../b; v status . ../c; v status -- ../b/y new
+}
+
 s_ls_remote_patterns() {
     g init -q src; cd src
     tick; echo a >f; g add .; g commit -q -m c1

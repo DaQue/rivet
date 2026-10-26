@@ -1545,3 +1545,13 @@ Scenario `s_for_each_ref_version_sort` fails on `4d3aee9` (version sort was not 
 Left undone (in `GAPS.md`): `versionsort.suffix` / `versionsort.prereleaseSuffix` are not read; items 5-11 of the queue.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
 `scenarios.sh` 290 PASS / `failures: 0`.
+
+## status with several pathspecs (2026-10-26)
+Took `.claude/PRIORITIES.md` item 5. `status` no longer refuses more than one pathspec: it runs the report once per pathspec and reports the
+union (sorted by path, de-duplicated), so the long format, `-s`, `-b`, `-uno`, `--porcelain` and the `(use "git add …")` hints follow the union;
+moved submodules are collected per pathspec too. `--porcelain` now requires `=` for its version (`require_equals`), as git does, so
+`status --porcelain a c` no longer swallows `a` as the version. Scenario `s_status_multi_pathspec` fails on `fcc2e7f` (`fatal: status: only one
+path filter is supported`), passes now; expected values come from comparing against `/usr/bin/git`.
+Left undone (in `GAPS.md`): pathspec magic and globs (`:(exclude)`, `*/x`) are read as literal paths in `status`; items 6-11 of the queue.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
+`scenarios.sh` 291 PASS / `failures: 0`.

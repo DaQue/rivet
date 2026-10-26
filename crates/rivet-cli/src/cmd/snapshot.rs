@@ -224,7 +224,7 @@ pub struct StatusArgs {
     pub paths: Vec<PathBuf>,
 
     /// A stable, script-readable format. Takes precedence over every display flag below.
-    #[arg(long = "porcelain", value_name = "VERSION")]
+    #[arg(long = "porcelain", value_name = "VERSION", require_equals = true)]
     pub porcelain: Option<Option<String>>,
 
     /// A terser human format that fits one line per path.
@@ -993,10 +993,6 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     if args.no_lock_index {
         anyhow::bail!("status: --no-lock-index is not implemented");
     }
-    if args.paths.len() > 1 {
-        anyhow::bail!("status: only one path filter is supported");
-    }
-
     let mut repository = super::open(global)?;
 
     let mut options = StatusOptions::new();
@@ -1009,11 +1005,35 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     // `refresh: true` re-hashes the work tree, which is what Git does on every status run unless
     // asked not to; `--no-refresh` is therefore the only thing that turns it off.
     options.refresh = !args.no_refresh;
-    if let Some(path) = args.paths.first() {
-        options.pathspec = super::worktree_path(&repository, path, "status")?;
+    // Several pathspecs report the union of what each one matches.
+    let mut specs: Vec<BString> = Vec::new();
+    for path in &args.paths {
+        specs.push(super::worktree_path(&repository, path, "status")?);
+    }
+    if specs.is_empty() {
+        specs.push(BString::default());
     }
 
+    options.pathspec = specs[0].clone();
     let mut status = repository.status(&options)?;
+    for spec in &specs[1..] {
+        options.pathspec = spec.clone();
+        let part = repository.status(&options)?;
+        status.staged.extend(part.staged);
+        status.unstaged.extend(part.unstaged);
+        status.untracked.extend(part.untracked);
+        status.ignored.extend(part.ignored);
+    }
+    if specs.len() > 1 {
+        status.staged.sort_by(|a, b| a.path.cmp(&b.path));
+        status.staged.dedup_by(|a, b| a.path == b.path);
+        status.unstaged.sort_by(|a, b| a.path.cmp(&b.path));
+        status.unstaged.dedup_by(|a, b| a.path == b.path);
+        status.untracked.sort();
+        status.untracked.dedup();
+        status.ignored.sort();
+        status.ignored.dedup();
+    }
     // Git shows paths relative to the directory it was run from, except in porcelain output.
     let cwd_prefix = match repository.worktree()?.root() {
         Some(root) if args.porcelain.is_none() => {
@@ -1060,7 +1080,12 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     status.unstaged.retain(|e| e.kind != ChangeKind::Unmerged);
     // `unstaged_changes` skips gitlinks; a submodule checked out at another commit or with a dirty
     // tree is ` M` (` m` / ` ?` when only its content differs).
-    let moved_submodules = moved_submodules(&repository, &options.pathspec);
+    let mut moved_submodules: Vec<_> = specs
+        .iter()
+        .flat_map(|spec| moved_submodules(&repository, spec))
+        .collect();
+    moved_submodules.sort_by(|a, b| a.path.cmp(&b.path));
+    moved_submodules.dedup_by(|a, b| a.path == b.path);
     for sub in &moved_submodules {
         status.unstaged.push(rivet_core::worktree::StatusEntry {
             path: sub.path.clone(),
