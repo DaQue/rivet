@@ -479,12 +479,8 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     let palette = match log_color(&repository, args)? {
         Ok(false) => None,
         Ok(true) => {
-            match diff_mode {
-                Some(DiffMode::Stat) => {
-                    anyhow::bail!("log: coloured diff output is not implemented")
-                }
-                Some(DiffMode::Patch) => check_default_diff_colors(&repository)?,
-                _ => {}
+            if let Some(DiffMode::Stat | DiffMode::Patch) = diff_mode {
+                check_default_diff_colors(&repository)?;
             }
             Some(log_palette(&repository)?)
         }
@@ -492,6 +488,7 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     };
     let diff_mode = match diff_mode {
         Some(DiffMode::Patch) if palette.is_some() => Some(DiffMode::ColorPatch),
+        Some(DiffMode::Stat) if palette.is_some() => Some(DiffMode::ColorStat),
         other => other,
     };
     let shifts = if args.graph {
@@ -683,9 +680,6 @@ pub fn run_show(global: &GlobalArgs, args: &ShowArgs) -> Result<i32> {
     let palette = match resolve_color(&repository, args.no_color, args.color.as_ref())? {
         Ok(false) => None,
         Ok(true) => {
-            if args.stat {
-                anyhow::bail!("show: coloured --stat is not implemented");
-            }
             check_default_diff_colors(&repository)?;
             Some(log_palette(&repository)?)
         }
@@ -754,9 +748,6 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
     };
     if color {
         check_default_diff_colors(&repository)?;
-        if args.stat {
-            anyhow::bail!("diff: coloured --stat is not implemented");
-        }
     }
 
     let mut options = rivet_core::DiffOptions::new();
@@ -890,6 +881,9 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
             rivet_core::format_name_status(&diff, &mut out)?;
         } else if args.stat {
             rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
+            if color {
+                out = colorize_stat(&out, &diff);
+            }
         } else {
             rivet_core::format_unified(&diff, format, &mut out)?;
             if color {
@@ -1065,6 +1059,8 @@ enum DiffMode {
     /// [`DiffMode::Patch`] painted with git's default diff colours.
     ColorPatch,
     Stat,
+    /// [`DiffMode::Stat`] painted with git's default diff colours.
+    ColorStat,
     NameOnly,
     NameStatus,
 }
@@ -1097,6 +1093,61 @@ fn check_default_diff_colors(repository: &Repository) -> Result<()> {
 /// default palette: bold file headers, cyan hunk headers, red removals, green additions, and a
 /// red background on trailing whitespace of an added line. A space before a tab in the indent of
 /// an added line is highlighted by git as well; that is refused rather than guessed.
+fn colorize_stat(plain: &[u8], diff: &rivet_core::TreeDiff) -> Vec<u8> {
+    const RESET: &[u8] = b"\x1b[m";
+    const OLD: &[u8] = b"\x1b[31m";
+    const NEW: &[u8] = b"\x1b[32m";
+    let paint = |out: &mut Vec<u8>, colour: &[u8], text: &[u8]| {
+        if !text.is_empty() {
+            out.extend_from_slice(colour);
+            out.extend_from_slice(text);
+            out.extend_from_slice(RESET);
+        }
+    };
+    let mut out = Vec::with_capacity(plain.len() * 2);
+    // One line per file in `diff.stats` order, then the summary, which git leaves unpainted.
+    for (index, line) in plain.split_inclusive(|&b| b == b'\n').enumerate() {
+        let Some(stat) = diff.stats.get(index) else {
+            out.extend_from_slice(line);
+            continue;
+        };
+        let text = line.strip_suffix(b"\n").unwrap_or(line);
+        if stat.is_binary {
+            // ` name | Bin <old> -> <new> bytes`
+            let body = text.strip_suffix(b" bytes");
+            let arrow = body.and_then(|b| b.windows(4).rposition(|w| w == b" -> "));
+            if let (Some(body), Some(arrow)) = (body, arrow) {
+                let old_at = body[..arrow]
+                    .iter()
+                    .rposition(|&b| !b.is_ascii_digit())
+                    .map_or(0, |at| at + 1);
+                out.extend_from_slice(&body[..old_at]);
+                paint(&mut out, OLD, &body[old_at..arrow]);
+                out.extend_from_slice(b" -> ");
+                paint(&mut out, NEW, &body[arrow + 4..]);
+                out.extend_from_slice(b" bytes");
+            } else {
+                out.extend_from_slice(text);
+            }
+        } else {
+            let marks = text
+                .iter()
+                .rev()
+                .take_while(|&&b| b == b'+' || b == b'-')
+                .count();
+            let split = text.len() - marks;
+            let plus = text[split..].iter().take_while(|&&b| b == b'+').count();
+            out.extend_from_slice(&text[..split]);
+            paint(&mut out, NEW, &text[split..split + plus]);
+            paint(&mut out, OLD, &text[split + plus..]);
+        }
+        if line.ends_with(b"\n") {
+            out.push(b'\n');
+        }
+    }
+    out
+}
+
 fn colorize_patch(plain: &[u8]) -> Result<Vec<u8>> {
     const RESET: &[u8] = b"\x1b[m";
     const BOLD: &[u8] = b"\x1b[1m";
@@ -1197,6 +1248,11 @@ fn write_diff(
         }
         DiffMode::NameStatus => rivet_core::format_name_status(diff, out)?,
         DiffMode::Stat => rivet_core::format_stat_sized(diff, Some(repository.odb()), out)?,
+        DiffMode::ColorStat => {
+            let mut plain = Vec::new();
+            rivet_core::format_stat_sized(diff, Some(repository.odb()), &mut plain)?;
+            out.extend_from_slice(&colorize_stat(&plain, diff));
+        }
         DiffMode::Patch => rivet_core::format_unified(diff, repository.format(), out)?,
         DiffMode::ColorPatch => {
             let mut plain = Vec::new();
@@ -1303,7 +1359,9 @@ fn unmerged_chunk(
             out.extend_from_slice(&quoted);
             out.push(b'\n');
         }
-        DiffMode::Stat => unreachable!("--stat of conflicted paths is refused earlier"),
+        DiffMode::Stat | DiffMode::ColorStat => {
+            unreachable!("--stat of conflicted paths is refused earlier")
+        }
         DiffMode::ColorPatch => unreachable!("coloured conflicted paths are refused earlier"),
     }
     if let (false, Some(ours)) = (cached, &ours) {
@@ -1713,7 +1771,11 @@ fn show_object(
             } else if args.name_status {
                 Some(DiffMode::NameStatus)
             } else if args.stat {
-                Some(DiffMode::Stat)
+                Some(if palette.is_some() {
+                    DiffMode::ColorStat
+                } else {
+                    DiffMode::Stat
+                })
             } else if palette.is_some() {
                 Some(DiffMode::ColorPatch)
             } else {
@@ -1722,7 +1784,8 @@ fn show_object(
             // A merge shows no patch (the combined diff is not implemented), but its diffstat is
             // against the first parent, as in Git.
             if let Some(mode) = diff_mode
-                && (commit.parents.len() < 2 || matches!(mode, DiffMode::Stat))
+                && (commit.parents.len() < 2
+                    || matches!(mode, DiffMode::Stat | DiffMode::ColorStat))
             {
                 let mut options = rivet_core::DiffOptions::new();
                 if let Some(n) = args.context {

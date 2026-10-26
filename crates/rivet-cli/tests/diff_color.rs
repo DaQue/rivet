@@ -86,25 +86,3 @@ fn a_configured_diff_palette_is_refused() {
     assert!(out.status.success());
     let _ = std::fs::remove_dir_all(&dir);
 }
-
-#[test]
-fn a_coloured_stat_is_refused() {
-    let dir = repo("diff-color-stat");
-    std::fs::write(dir.join("f"), "b\n").unwrap();
-    refused(
-        &dir,
-        &["diff", "--color=always", "--stat"],
-        "coloured --stat",
-    );
-    refused(
-        &dir,
-        &["log", "--color=always", "--stat"],
-        "coloured diff output",
-    );
-    refused(
-        &dir,
-        &["show", "--color=always", "--stat"],
-        "coloured --stat",
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}

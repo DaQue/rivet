@@ -9377,6 +9377,54 @@ s_show_color() {
     v show --color=always -s
 }
 
+# `--stat` under colour: `log`, `show` and `diff` paint the graph (`+` green, `-` red) and the binary
+# sizes (old red, new green); the summary line stays plain.
+s_log_stat_color() {
+    v init -q repo; cd repo
+    seq 1 30 >f
+    echo gone >g
+    printf 'a\0b\n' >bin
+    printf 'x\n' >mode
+    g add .; tick; g commit -q -m one
+    seq 1 5 >f
+    rm g
+    echo n >n
+    printf 'a\0cc\n' >bin
+    echo 'bb b' >'sp ace'
+    chmod +x mode
+    g add -A; tick; g commit -q -m two
+    printf '%s\n' "$(seq 1 200)" >long
+    echo more >>f
+    g add -A; tick; g commit -q -m three
+    g checkout -q -b side HEAD~1
+    echo s >side; g add side; tick; g commit -q -m side
+    g checkout -q master 2>/dev/null || g checkout -q main
+    tick; g merge -q --no-edit side
+    v log --color=always --stat
+    v log --color=always --stat -2 --oneline
+    v log --color=always --stat --format=%s
+    v log --color=never --stat -1
+    v log --stat --color=always --no-color -1
+    v log --color=always --stat -- f
+    v show --color=always --stat
+    v show --color=always --stat HEAD~1
+    v show --color=always --stat HEAD~2
+    v show --color=always --stat --format=%h
+    v show --no-color --stat
+    v diff --color=always --stat HEAD~3 HEAD~2
+    v diff --color=always --stat HEAD~3 HEAD
+    v diff --color=always --stat HEAD HEAD
+    echo more >>f; echo nn >n
+    v diff --color=always --stat
+    g add -A
+    v diff --color=always --stat --cached
+    g config color.ui always
+    v diff --stat
+    v log --stat -1
+    g config color.ui false
+    v log --color=always --stat -1
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

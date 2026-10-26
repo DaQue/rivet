@@ -1565,3 +1565,13 @@ Scenario `s_show_color` fails on `25f838a` (`show` rejected `--color`), passes n
 Left undone (in `GAPS.md`): coloured `show --stat`; `show --oneline` does not exist (found while writing the scenario); items 7-11 of the queue.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
 `scenarios.sh` 292 PASS / `failures: 0`.
+
+## log/show/diff --stat under colour (2026-10-26)
+Took `.claude/PRIORITIES.md` item 7. `log`, `show` and `diff` paint `--stat` with `--color`/`color.ui`: in each file line the `+` run is green and the `-` run red,
+and a binary line paints the old size red and the new size green. The summary line is **not** bold — real git leaves it plain (checked with `/usr/bin/git`), so
+the queue text ("graph in cyan, summary bold") was wrong and git wins. The three coloured-`--stat` refusals and their Rust test `a_coloured_stat_is_refused` are gone.
+Scenario `s_log_stat_color` fails on `13d4e23` (`fatal: log: coloured diff output is not implemented`), passes now; expected values come from `/usr/bin/git`.
+Left undone (in `GAPS.md`): `log --first-parent --stat` prints no stat for a merge, and `show --format=` (empty format) is rejected — both found while writing
+the scenario and left out of it; items 8-11 of the queue.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
+`scenarios.sh` 293 PASS / `failures: 0`.
