@@ -1016,7 +1016,22 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     let magic = words.iter().any(|w| super::pathspec::needs_parser(w));
     if !magic {
         for path in &args.paths {
-            specs.push(super::worktree_path(&repository, path, "status")?);
+            match super::worktree_path(&repository, path, "status") {
+                Ok(spec) => specs.push(spec),
+                Err(e) if e.to_string().contains("' is outside the work tree '") => {
+                    let root = repository
+                        .worktree()?
+                        .root()
+                        .map(|r| r.display().to_string());
+                    let typed = path.display();
+                    eprintln!(
+                        "fatal: {typed}: '{typed}' is outside repository at '{}'",
+                        root.unwrap_or_default()
+                    );
+                    return Ok(128);
+                }
+                Err(e) => return Err(e),
+            }
         }
     }
     if specs.is_empty() {

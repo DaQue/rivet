@@ -1669,3 +1669,12 @@ Scenario `s_status_untracked_dir_pathspec` fails on 6df084f (`FAIL`, `failures: 
 Left undone: `status` of a plain `../../x` outside the tree still prints rivet's own text (in `GAPS.md`).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 305 PASS / `failures: 0`.
+
+## status: a pathspec outside the tree gets git's error (2026-10-26)
+`.claude/PRIORITIES.md` is still stale (all 11 items landed), so this closed the last `status` line in `GAPS.md` section 1.
+`status -- ../../x` (and `../x`, `d/../../x`, from the root or a subdirectory) printed rivet's `status: ... outside the work tree`
+text; git prints `fatal: <arg>: '<arg>' is outside repository at '<root>'` and exits 128. Fixed in `cmd/snapshot.rs`.
+Scenario `s_status_outside_pathspec` fails on b621da5 (`FAIL`, `failures: 1`) and passes after; expected text taken from `/usr/bin/git`.
+Left undone: nothing from this item; the other `GAPS.md` entries are unchanged.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 306 PASS / `failures: 0`.

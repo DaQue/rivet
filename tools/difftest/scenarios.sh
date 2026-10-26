@@ -9498,6 +9498,15 @@ s_status_pathspec_magic() {
     v status -s ':(top)a.txt' '*.c'; v status -s ':!e' ':!new.c'
 }
 
+# A plain pathspec that climbs out of the work tree gets git's `outside repository at` error.
+s_status_outside_pathspec() {
+    g init -q repo; cd repo
+    tick; mkdir d; echo 1 >d/f; g add .; g commit -q -m c1
+    v status -- ../x; v status -s ../../x a ../y; v status -- d/../../x
+    cd d
+    v status -- ../../x; v status -s ../f '../../y'
+}
+
 s_ls_remote_patterns() {
     g init -q src; cd src
     tick; echo a >f; g add .; g commit -q -m c1
