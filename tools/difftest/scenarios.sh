@@ -8323,7 +8323,7 @@ s_rebase_autosquash() {
 
 # `exec` todo lines and `rebase -i --exec`: the generated todo list (one exec per -x, after a whole
 # squash/fixup chain), stdout/stderr of the command, a failing command that stops the rebase, and
-# `--continue` afterwards. `--exec` without -i is still refused by name (GAPS.md).
+# `--continue` afterwards.
 s_rebase_exec() {
     rebase_repo
     g branch orig topic
@@ -8356,6 +8356,36 @@ s_rebase_exec() {
     v rebase --abort
     rebase_i_run '1a exec'
     v rebase --abort
+    v reflog
+}
+
+# `rebase --exec` without -i runs the interactive machinery on an unedited todo list: same progress
+# output, a failing command stops with the interactive state, and a branch already on the target is
+# still replayed so the command runs.
+s_rebase_exec_plain() {
+    rebase_repo
+    g branch orig topic
+    v rebase -x 'echo A' main topic
+    echo "rc=$?"
+    v log --format='%H %s' main..topic
+    v reflog
+    v switch -q topic
+    v reset -q --hard orig
+    v rebase -x 'echo A' -x 'echo B' main
+    echo "rc=$?"
+    v switch -q topic
+    v reset -q --hard orig
+    v rebase --exec 'false' main
+    echo "rc=$?"
+    v status
+    v rebase --continue
+    echo "rc=$?"
+    v rebase --abort
+    echo "rc=$?"
+    v switch -q topic
+    v reset -q --hard orig
+    v rebase -x 'echo up' topic
+    echo "rc=$?"
     v reflog
 }
 

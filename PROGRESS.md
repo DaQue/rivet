@@ -1688,3 +1688,14 @@ Scenario `s_grep_threads` fails on 8f3ba5b (`FAIL`, `failures: 1`) and passes af
 Left undone: `-P`, `--and`/`--or`/`--not`, `--no-index` (in `GAPS.md`).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 307 PASS / `failures: 0`.
+
+## rebase: `--exec` / `-x` without `-i` (2026-10-26)
+`.claude/PRIORITIES.md` is still stale (all 11 items landed), so this came from `GAPS.md` section 1. `rebase -x <cmd>` without
+`-i` was refused by name. It now runs the interactive machinery on an unedited todo list, as git does: same `Rebasing (n/m)` /
+`Executing:` progress, a failing command stops with the interactive state, and a branch already on the target is still replayed
+so the command runs. `rebase.autosquash` is only honoured with `-i`. Change in `cmd/rebase.rs` and `cmd/rebase/interactive.rs`
+(`Plan::edit`); expected output compared with `/usr/bin/git`. Scenario `s_rebase_exec_plain` fails on 3a37e9c (`FAIL`,
+`failures: 1`) and passes after. The two refusal entries in `tests/rebase_interactive.rs` and the `GAPS.md` text were updated.
+Left undone: `--autosquash` without `-i` (still refused; git's fast-forward shortcut differs there).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 308 PASS / `failures: 0`.

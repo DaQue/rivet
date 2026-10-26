@@ -531,6 +531,8 @@ pub(super) struct Plan<'a> {
     pub autostash: Option<ObjectId>,
     /// Reorder `fixup!` / `squash!` commits next to their targets (`--autosquash`).
     pub autosquash: bool,
+    /// Open the sequence editor on the todo list (`-i`); `--exec` alone runs it unedited.
+    pub edit: bool,
     /// The `--exec` commands, run after every commit (after the whole chain for `squash`/`fixup`).
     pub exec: &'a [String],
     /// `--root`: the todo list starts at the root commit, so its footer names the tip only.
@@ -699,7 +701,7 @@ pub(super) fn begin(
             None => Ok(1),
         }
     };
-    if !run_editor(repository, true, &todo_path)? {
+    if plan.edit && !run_editor(repository, true, &todo_path)? {
         return give_up(
             repository,
             Some("There was a problem with the editor".into()),

@@ -70,11 +70,6 @@ fn options_that_are_not_implemented_are_refused_by_name() {
     let head = git(p, &["rev-parse", "HEAD"]);
     for (args, name) in [
         (
-            vec!["rebase", "--exec", "true", "main"],
-            "--exec without -i",
-        ),
-        (vec!["rebase", "-x", "true", "main"], "--exec without -i"),
-        (
             vec!["rebase", "-i", "--rebase-merges", "main"],
             "--rebase-merges",
         ),

@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 307 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 308 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-26, gate: 268 tests / 0 failed, 307 scenarios / 0 failures, `fmt`,
@@ -50,7 +50,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   non-cone mode, are not compared.
 * **`rebase --interactive`** — `pick`/`reword`/`edit`/`squash`/`fixup`/`drop`/`noop`, the editable todo list,
   `--continue`/`--skip`/`--abort` work (`s_rebase_i`, `s_rebase_i_stops`, `s_rebase_i_conflict`).
-  `--root` works, plain (`s_rebase_root`) and with `-i` (`s_rebase_root_i`; the virtual empty base is recorded in `squash-onto`, and the first commit made on it is a root commit again); too many positionals, with or without `--root`, get git's full usage text and exit 129 (`s_rebase_positional_usage`). Refused by name, before anything is touched: `--rebase-merges`, `--exec`/`-x` without `-i` (with `-i` it works, as does an `exec` todo line, `s_rebase_exec`; `break` works too, `s_rebase_break`; so do `fixup -C`/`-c`, `s_rebase_fixup_c`); `--keep-base` works (`s_rebase_keep_base`),
+  `--root` works, plain (`s_rebase_root`) and with `-i` (`s_rebase_root_i`; the virtual empty base is recorded in `squash-onto`, and the first commit made on it is a root commit again); too many positionals, with or without `--root`, get git's full usage text and exit 129 (`s_rebase_positional_usage`). Refused by name, before anything is touched: `--rebase-merges`, (`--exec`/`-x` works with `-i` and without it, which runs an unedited todo list, `s_rebase_exec`, `s_rebase_exec_plain`; so does an `exec` todo line; `break` works too, `s_rebase_break`; so do `fixup -C`/`-c`, `s_rebase_fixup_c`); `--keep-base` works (`s_rebase_keep_base`),
   signing, `--edit-todo` outside an interactive rebase (rivet's plain rebase has no todo to edit),
   `--autosquash` without `-i` (git runs it as an unedited interactive rebase),
   `--autosquash` over an `amend!` commit that has a target (git turns it into `fixup -C` and strips the
