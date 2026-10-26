@@ -341,6 +341,8 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
                     name_only: false,
                     name_status: false,
                     date: None,
+                    color: None,
+                    no_color: false,
                 },
             );
         }

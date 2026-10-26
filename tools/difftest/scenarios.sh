@@ -9337,6 +9337,46 @@ s_sparse_reappeared() {
     v ls-files -t; v status -s
 }
 
+# `show --color[=<when>]` / `--no-color`: commit and tag headings, the patch, and the refusals.
+s_show_color() {
+    v init -q repo; cd repo
+    printf 'a\nb  \n' >f
+    echo gone >g
+    g add .; tick; g commit -q -m one
+    printf 'a\nc  \n' >f
+    rm g
+    printf 'new\n' >n
+    chmod +x n
+    g add -A; tick; g commit -q -m two
+    tick; g tag -a -m tagmsg v1
+    g tag light
+    v show --color=always
+    v show --color
+    v show --color=never
+    v show --no-color
+    v show --color=always --no-color
+    v show --no-color --color=always
+    v show --color=bogus
+    echo "rc=$?"
+    v show --color=always -s
+    v show --color=always --pretty=oneline
+    v show --color=always --format='%h %d %s'
+    v show --color=always --name-only
+    v show --color=always --name-status
+    v show --color=always -U1 -- f
+    v show --color=always HEAD~1
+    v show --color=always v1
+    v show --color=always light
+    v show --color=always 'HEAD^{tree}'
+    v show --color=always HEAD:f
+    g config color.ui always
+    v show
+    v show --no-color
+    v show --color=never
+    g config color.ui false
+    v show --color=always -s
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

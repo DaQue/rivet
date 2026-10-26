@@ -101,5 +101,10 @@ fn a_coloured_stat_is_refused() {
         &["log", "--color=always", "--stat"],
         "coloured diff output",
     );
+    refused(
+        &dir,
+        &["show", "--color=always", "--stat"],
+        "coloured --stat",
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1160,6 +1160,8 @@ fn show_diff_tree(global: &GlobalArgs, repository: &Repository, commit: ObjectId
             name_only: false,
             name_status: false,
             date: None,
+            color: None,
+            no_color: false,
         },
     )?;
     let parents = repository.commit_parents(commit)?;

@@ -102,7 +102,8 @@ The command works for the common case; the listed options or edge cases are miss
   `diff --color` the patch with git's default palette (`s_diff_color`), `--name-*` are plain as in git.
   Refused by name (Rust tests in `tests/diff_color.rs`): `--stat` under colour, any `color.diff` /
   `color.diff.<slot>` setting, a space before a tab in an added line (git highlights it), colour
-  for the conflicted-path output of `diff`, and `show --color` (no such option yet);
+  for the conflicted-path output of `diff`, and `show --color --stat`; `show` has no `--oneline`
+  (`--pretty=oneline` works);
   `--graph` over several root commits exits 128 by design; `--graph` with `--date-order` or
   `--first-parent` orders differently from git, and `--graph --format=format:%s` draws an
   extra row.

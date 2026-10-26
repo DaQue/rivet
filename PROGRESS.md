@@ -1555,3 +1555,13 @@ path filter is supported`), passes now; expected values come from comparing agai
 Left undone (in `GAPS.md`): pathspec magic and globs (`:(exclude)`, `*/x`) are read as literal paths in `status`; items 6-11 of the queue.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
 `scenarios.sh` 291 PASS / `failures: 0`.
+
+## show --color (2026-10-26)
+Took `.claude/PRIORITIES.md` item 6. `show` accepts `--color[=<when>]` / `--no-color` (and honours `color.ui`): the `commit` line and decorations use the log
+palette, an annotated tag's `tag <name>` and a tree's `tree <spec>` headings are in the commit colour, and the patch uses `colorize_patch` (the same default
+palette as `log -p --color`). `--color=always --stat` is refused by name (`show: coloured --stat is not implemented`, Rust test in `tests/diff_color.rs`).
+`rebase --show-current-patch` and `bisect` build `ShowArgs` with no colour option, so they follow `color.ui`/tty like git's `show`.
+Scenario `s_show_color` fails on `25f838a` (`show` rejected `--color`), passes now; expected values come from `/usr/bin/git`.
+Left undone (in `GAPS.md`): coloured `show --stat`; `show --oneline` does not exist (found while writing the scenario); items 7-11 of the queue.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
+`scenarios.sh` 292 PASS / `failures: 0`.

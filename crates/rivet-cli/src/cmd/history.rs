@@ -212,6 +212,14 @@ pub struct ShowArgs {
     /// Date style: `default`, `iso`, `iso-strict`, `relative`, `short`, `raw`, `unix`, `rfc2822`.
     #[arg(long = "date", value_name = "STYLE")]
     pub date: Option<String>,
+
+    /// Paint the output: `always`, `never` or `auto` (a bare `--color` means `always`).
+    #[arg(long = "color", value_name = "WHEN", require_equals = true, num_args = 0..=1, overrides_with = "no_color")]
+    pub color: Option<Option<String>>,
+
+    /// Do not paint the output.
+    #[arg(long = "no-color", overrides_with = "color")]
+    pub no_color: bool,
 }
 
 /// Arguments to `rivet diff`.
@@ -672,8 +680,19 @@ pub fn run_show(global: &GlobalArgs, args: &ShowArgs) -> Result<i32> {
         ),
     })?;
 
+    let palette = match resolve_color(&repository, args.no_color, args.color.as_ref())? {
+        Ok(false) => None,
+        Ok(true) => {
+            if args.stat {
+                anyhow::bail!("show: coloured --stat is not implemented");
+            }
+            check_default_diff_colors(&repository)?;
+            Some(log_palette(&repository)?)
+        }
+        Err(code) => return Ok(code),
+    };
     let mut out = Vec::new();
-    show_object(&mut repository, &oid, args, &mut out)?;
+    show_object(&mut repository, &oid, args, palette.as_ref(), &mut out)?;
     write_stdout(&out)?;
     Ok(0)
 }
@@ -1610,13 +1629,27 @@ fn show_object(
     repository: &mut Repository,
     oid: &ObjectId,
     args: &ShowArgs,
+    palette: Option<&pretty::Palette>,
     out: &mut Vec<u8>,
 ) -> Result<()> {
+    // A `tag` or `tree` heading is in the commit colour, like a `commit` line.
+    let heading = |out: &mut Vec<u8>, text: String| match palette {
+        Some(palette) => {
+            out.extend_from_slice(palette.commit.as_bytes());
+            out.extend_from_slice(text.as_bytes());
+            out.extend_from_slice(b"\x1b[m\n");
+        }
+        None => {
+            out.extend_from_slice(text.as_bytes());
+            out.push(b'\n');
+        }
+    };
     let object = repository.odb().read(oid)?;
     match object.kind() {
         rivet_core::ObjectKind::Blob => out.extend_from_slice(object.data()),
         rivet_core::ObjectKind::Tree => {
-            out.extend_from_slice(format!("tree {}\n\n", args.object).as_bytes());
+            heading(out, format!("tree {}", args.object));
+            out.push(b'\n');
             let tree = rivet_core::Tree::parse(repository.format(), object.data())?;
             for entry in &tree.entries {
                 out.extend_from_slice(&entry.name);
@@ -1628,7 +1661,7 @@ fn show_object(
         }
         rivet_core::ObjectKind::Tag => {
             let tag = rivet_core::Tag::parse(repository.format(), object.data())?;
-            out.extend_from_slice(format!("tag {}\n", tag.name).as_bytes());
+            heading(out, format!("tag {}", tag.name));
             out.extend_from_slice(
                 format!("Tagger: {} <{}>\n", tag.tagger.name, tag.tagger.email).as_bytes(),
             );
@@ -1645,7 +1678,7 @@ fn show_object(
             }
             out.push(b'\n');
             let target = tag.object;
-            show_object(repository, &target, args, out)?;
+            show_object(repository, &target, args, palette, out)?;
         }
         rivet_core::ObjectKind::Commit => {
             let commit = read_commit(repository, oid)?;
@@ -1670,7 +1703,7 @@ fn show_object(
                     date,
                     full_ids,
                     decorations: &decorations,
-                    palette: None,
+                    palette,
                 },
             ));
             let diff_mode = if args.no_patch {
@@ -1681,6 +1714,8 @@ fn show_object(
                 Some(DiffMode::NameStatus)
             } else if args.stat {
                 Some(DiffMode::Stat)
+            } else if palette.is_some() {
+                Some(DiffMode::ColorPatch)
             } else {
                 Some(DiffMode::Patch)
             };
