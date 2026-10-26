@@ -52,6 +52,7 @@ pub enum StashCommand {
     /// Record a commit made by `stash create` as the newest stash.
     Store(StoreArgs),
     /// Deprecated alias of `push`: the message is the remaining words.
+    #[command(disable_help_flag = true)]
     Save(SaveArgs),
 }
 
@@ -83,32 +84,165 @@ pub struct StoreArgs {
     pub words: Vec<String>,
 }
 
-/// Arguments of `stash save`.
+/// Arguments of `stash save`: every word is handed to [`parse_save`], which follows git's option
+/// parser (clap would eat the `--` and print its own usage errors).
 #[derive(Debug, clap::Args)]
+#[command(disable_help_flag = true)]
 pub struct SaveArgs {
-    /// Use this text as the stash message (words given after the options win).
-    #[arg(short = 'm', long = "message", value_name = "MESSAGE")]
-    pub message: Option<String>,
-
-    /// Also stash untracked files.
-    #[arg(short = 'u', long = "include-untracked")]
-    pub include_untracked: bool,
-
-    /// Also stash ignored files.
-    #[arg(short = 'a', long = "all")]
-    pub all: bool,
-
-    /// Leave the index as it is.
-    #[arg(short = 'k', long = "keep-index")]
-    pub keep_index: bool,
-
-    /// Be quiet.
-    #[arg(short = 'q', long = "quiet")]
-    pub quiet: bool,
-
-    /// The stash message, words joined by spaces.
-    #[arg(value_name = "MESSAGE")]
+    /// Options and message words, as given.
+    #[arg(
+        value_name = "ARGS",
+        num_args = 0..,
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
     pub words: Vec<String>,
+}
+
+/// The parsed form of `stash save`'s command line.
+#[derive(Debug, Default)]
+struct SaveOptions {
+    message: Option<String>,
+    include_untracked: bool,
+    all: bool,
+    keep_index: bool,
+    quiet: bool,
+    words: Vec<String>,
+}
+
+/// What `stash save`'s option parser decided.
+enum SaveParse {
+    Run(SaveOptions),
+    /// `-h`: usage on stdout.
+    Help,
+    /// A parse error: git's `error:` line, then the usage on stderr, exit 129.
+    Usage(String),
+    /// A missing option value: git's `error:` line alone, exit 129.
+    MissingValue(String),
+    /// An option git has that rivet does not.
+    Unsupported(String),
+}
+
+const SAVE_USAGE: &str =
+    "usage: git stash save [-p | --patch] [-S | --staged] [-k | --[no-]keep-index] [-q | --quiet]
+                 [-u | --include-untracked] [-a | --all] [<message>]
+
+    -k, --[no-]keep-index keep index
+    -S, --[no-]staged     stash staged changes only
+    -p, --[no-]patch      stash in patch mode
+    --[no-]auto-advance   auto advance to the next file when selecting hunks interactively
+    -U, --unified <n>     generate diffs with <n> lines context
+    --inter-hunk-context <n>
+                          show context between diff hunks up to the specified number of lines
+    -q, --[no-]quiet      quiet mode
+    -u, --[no-]include-untracked
+                          include untracked files in stash
+    -a, --[no-]all        include ignore files
+    -m, --[no-]message <message>
+                          stash message
+
+";
+
+/// The long options of `stash save`, for git's unambiguous-prefix matching.
+const SAVE_LONG: [&str; 10] = [
+    "keep-index",
+    "quiet",
+    "include-untracked",
+    "all",
+    "message",
+    "patch",
+    "staged",
+    "auto-advance",
+    "unified",
+    "inter-hunk-context",
+];
+
+/// Parse `stash save`'s words the way git's `parse_options` does: options may follow words, a lone
+/// `--` ends option parsing and is itself kept as part of the message.
+fn parse_save(args: &[String]) -> SaveParse {
+    let mut out = SaveOptions::default();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            out.words.push(arg.clone());
+            out.words.extend(iter.by_ref().cloned());
+            break;
+        }
+        if let Some(long) = arg.strip_prefix("--") {
+            let (name, value) = match long.split_once('=') {
+                Some((n, v)) => (n, Some(v.to_string())),
+                None => (long, None),
+            };
+            let (negated, base) = match name.strip_prefix("no-") {
+                Some(rest) => (true, rest),
+                None => (false, name),
+            };
+            let matches: Vec<&str> = SAVE_LONG
+                .iter()
+                .copied()
+                .filter(|l| l.starts_with(base))
+                .collect();
+            let resolved = if SAVE_LONG.contains(&base) {
+                Some(base)
+            } else if let [only] = matches.as_slice() {
+                Some(*only)
+            } else {
+                None
+            };
+            let Some(opt) = resolved.filter(|_| !base.is_empty()) else {
+                return SaveParse::Usage(format!("error: unknown option `{long}'\n"));
+            };
+            match opt {
+                "keep-index" => out.keep_index = !negated,
+                "quiet" => out.quiet = !negated,
+                "include-untracked" => out.include_untracked = !negated,
+                "all" => out.all = !negated,
+                "message" => {
+                    if negated {
+                        out.message = None;
+                    } else if let Some(v) = value.or_else(|| iter.next().cloned()) {
+                        out.message = Some(v);
+                    } else {
+                        return SaveParse::MissingValue(
+                            "error: option `message' requires a value\n".into(),
+                        );
+                    }
+                }
+                other => return SaveParse::Unsupported(format!("--{other}")),
+            }
+        } else if arg.len() > 1 && arg.starts_with('-') {
+            let cluster: Vec<char> = arg[1..].chars().collect();
+            let mut i = 0;
+            while i < cluster.len() {
+                match cluster[i] {
+                    'k' => out.keep_index = true,
+                    'q' => out.quiet = true,
+                    'u' => out.include_untracked = true,
+                    'a' => out.all = true,
+                    'h' => return SaveParse::Help,
+                    'm' => {
+                        let rest: String = cluster[i + 1..].iter().collect();
+                        if !rest.is_empty() {
+                            out.message = Some(rest);
+                        } else if let Some(v) = iter.next() {
+                            out.message = Some(v.clone());
+                        } else {
+                            return SaveParse::MissingValue(
+                                "error: switch `m' requires a value\n".into(),
+                            );
+                        }
+                        break;
+                    }
+                    c @ ('p' | 'S' | 'U') => return SaveParse::Unsupported(format!("-{c}")),
+                    c => return SaveParse::Usage(format!("error: unknown switch `{c}'\n")),
+                }
+                i += 1;
+            }
+        } else {
+            out.words.push(arg.clone());
+        }
+    }
+    SaveParse::Run(out)
 }
 
 /// Arguments of `stash branch`: the new branch's name and, optionally, which stash.
@@ -224,6 +358,38 @@ pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
         }
         Some(StashCommand::Store(s)) => store(&repository, s),
         Some(StashCommand::Save(s)) => {
+            // clap drops a `--`, so re-read the words from the process arguments when possible.
+            let raw: Vec<String> = std::env::args().collect();
+            let from_env = raw
+                .iter()
+                .position(|a| a == "stash")
+                .and_then(|i| {
+                    raw[i + 1..]
+                        .iter()
+                        .position(|a| a == "save")
+                        .map(|j| i + 2 + j)
+                })
+                .map(|start| raw[start..].to_vec());
+            let words = from_env.unwrap_or_else(|| s.words.clone());
+            let s = match parse_save(&words) {
+                SaveParse::Run(s) => s,
+                SaveParse::Help => {
+                    print!("{SAVE_USAGE}");
+                    return Ok(0);
+                }
+                SaveParse::Usage(error) => {
+                    eprint!("{error}{SAVE_USAGE}");
+                    return Ok(129);
+                }
+                SaveParse::MissingValue(error) => {
+                    eprint!("{error}");
+                    return Ok(129);
+                }
+                SaveParse::Unsupported(option) => {
+                    eprintln!("fatal: `stash save {option}` is not supported by rivet");
+                    return Ok(128);
+                }
+            };
             let message = if s.words.is_empty() {
                 s.message.clone()
             } else {
@@ -257,6 +423,11 @@ fn store(repository: &Repository, args: &StoreArgs) -> Result<i32> {
         return Ok(128);
     };
     // A stash is a commit with the base as first parent and the index commit as second.
+    if let Ok((kind, _)) = repository.odb().read_header(&oid)
+        && kind != rivet_core::ObjectKind::Commit
+    {
+        eprintln!("error: object {oid} is a {kind}, not a commit");
+    }
     if repository
         .commit_parents(oid)
         .map_or(true, |parents| parents.len() < 2)

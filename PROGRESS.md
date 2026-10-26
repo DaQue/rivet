@@ -1500,3 +1500,15 @@ literally, unlike git; the scenario avoids globs that would hit `refs/ROOTISH_HE
 Left undone (in `GAPS.md`): `version:`/`v:` sort, linked work tree root refs.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
 `scenarios.sh` 286 PASS / `failures: 0`.
+
+## stash save / store error parity (2026-10-26)
+Took `.claude/PRIORITIES.md` item 1. `stash save` now parses its words by hand like git's `parse_options`: options may follow words,
+`-k`/`-q`/`-u`/`-a`/`-m` (bundled, glued, `--message=`), unambiguous long-option prefixes and `--no-` forms; a lone `--` ends option parsing
+and is kept in the message; an unknown option prints `error: unknown option|switch …` plus git's usage on stderr and exits 129; a missing
+value prints the `error:` line alone (129); `-h` prints the usage on stdout. `-p`/`-S`/`-U` and the other interactive options are refused by
+name (exit 128). `stash store` of a non-commit adds `error: object <id> is a tree, not a commit` before the `fatal:` line.
+Scenario `s_stash_errors` fails on `5d692c6` (clap's text, exit 2, dropped `--`, missing `error:` line), passes now; expected values checked
+against `/usr/bin/git` 2.56.0. The matching lines in `GAPS.md` are removed.
+Left undone (in `GAPS.md`): `-p`/`-S`/`--staged` for every stash form.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
+`scenarios.sh` 287 PASS / `failures: 0`.

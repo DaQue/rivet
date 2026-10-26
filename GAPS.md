@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 286 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 287 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-25, gate: 260 tests / 0 failed, 286 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-25, gate: 260 tests / 0 failed, 287 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -128,10 +128,8 @@ The command works for the common case; the listed options or edge cases are miss
 * **`format-patch` / `am`** — no cover letters, threading, `-k`, RFC 2047 headers,
   `--directory`, scissors, `am --3way`.
 * **`stash`** — `create`, `store` and `save` exist (`s_stash_stack`), as does `branch`
-  (`s_stash_branch`). Not matched: `save` with an unknown option exits 2 with clap's text (git prints its
-  usage and exits 129), `save -- <words>` drops the `--` (git keeps it in the message), `store` of a
-  non-commit object prints only the `fatal:` line (git adds `error: object <id> is a tree, not a
-  commit`), and `-p`/`-S`/`--staged` are not implemented for any stash form.
+  (`s_stash_branch`), and `save`/`store` error text matches (`s_stash_errors`). Not matched: `-p`/`-S`/`--staged`
+  are not implemented for any stash form (`save` refuses them by name).
 * **`gc` / `repack`** — no `--cruft`, `--geometric`, `--window`/`--depth`,
   `--max-pack-size`, `--max-cruft-size`, `--expire-to`, `--keep-largest-pack`,
   `gc.bigPackThreshold`; `repack -k` over several packs lists unreachable objects in a

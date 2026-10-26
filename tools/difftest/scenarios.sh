@@ -8556,6 +8556,47 @@ s_stash_branch() {
     v stash list
 }
 
+# `stash save` parses its words like git's parse_options (options anywhere, a lone `--` ends them and is kept
+# in the message, unknown options print the usage and exit 129); `stash store` of a non-commit adds the
+# `error: object <id> is a tree, not a commit` line.
+s_stash_errors() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    v stash save --bogus
+    echo "rc=$?"
+    v stash save -z
+    echo "rc=$?"
+    v stash save -m
+    echo "rc=$?"
+    v stash save --message
+    echo "rc=$?"
+    v stash save -h
+    echo "rc=$?"
+    local i=0 args
+    for args in '-- foo bar' 'foo -k bar' '-m msg word' '-m msg' '--message=foo' '-mfoo' '--keep -q x' \
+        '--no-keep-index x' '-- -k' 'x -- y' '-q' '-ku z'; do
+        i=$((i + 1))
+        echo "mod$i" >>a
+        v stash save $args
+        echo "rc=$?"
+        v stash list
+        v status --short
+        v reset -q --hard
+    done
+    echo mod >>a
+    v stash save -u -- x y
+    echo "rc=$?"
+    v stash list
+    v stash clear
+    v stash store 'HEAD^{tree}'
+    echo "rc=$?"
+    v stash store HEAD
+    echo "rc=$?"
+    v stash store nonexistent
+    echo "rc=$?"
+    v stash list
+}
+
 # `label` / `reset` todo lines: a label is a ref under refs/rewritten that lives until the rebase ends
 # (finished or aborted), `reset` moves HEAD and the work tree there (reflog `rebase (reset): '<arg>'`, none
 # when HEAD does not move), a name that does not resolve reschedules the line. `merge` and `update-ref`
