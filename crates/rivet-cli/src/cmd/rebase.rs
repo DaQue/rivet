@@ -13,7 +13,7 @@
 //!
 //! # What is refused
 //!
-//! `--rebase-merges`, `--autosquash` without `-i`, `--edit-todo` and signing
+//! `--rebase-merges`, `--edit-todo` and signing
 //! are accepted by the grammar only to be refused by name; the other options Git has are not in the
 //! grammar, so they fail at the command line instead of being ignored. What `--interactive` refuses
 //! is listed in [`interactive`].
@@ -283,10 +283,6 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
     for (given, what) in [
         (args.rebase_merges.is_some(), "--rebase-merges"),
         (args.gpg_sign.is_some(), "--gpg-sign"),
-        (
-            args.autosquash && !args.interactive,
-            "--autosquash without -i",
-        ),
     ] {
         if given {
             anyhow::bail!("rebase {what} is not implemented");
@@ -615,8 +611,10 @@ fn start(
         return Ok(1);
     }
 
-    // `--exec` runs the interactive machinery on an unedited todo list, as git does.
-    let interactive_backend = args.interactive || !args.exec.is_empty();
+    // `--exec` and an explicit `--autosquash` run the interactive machinery on an unedited todo
+    // list, as git does; `rebase.autoSquash` alone only matters with `-i`.
+    let plain_autosquash = args.autosquash && !args.no_autosquash;
+    let interactive_backend = args.interactive || !args.exec.is_empty() || plain_autosquash;
     // Already based on the target with a linear history: nothing to do.
     let odb = repository.odb();
     let bases = rivet_core::merge_bases(odb, onto, orig_head).unwrap_or_default();
@@ -745,8 +743,11 @@ fn start(
             onto_name: &onto_name,
             commits: &todo,
             autostash,
-            autosquash: args.interactive
-                && autosquash_wanted(repository, args.autosquash, args.no_autosquash),
+            autosquash: if args.interactive {
+                autosquash_wanted(repository, args.autosquash, args.no_autosquash)
+            } else {
+                plain_autosquash
+            },
             edit: args.interactive,
             exec: &args.exec,
             root: args.root,

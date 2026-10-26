@@ -1699,3 +1699,15 @@ so the command runs. `rebase.autosquash` is only honoured with `-i`. Change in `
 Left undone: `--autosquash` without `-i` (still refused; git's fast-forward shortcut differs there).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
 `scenarios.sh` 308 PASS / `failures: 0`.
+
+## rebase: `--autosquash` without `-i` (2026-10-26)
+`.claude/PRIORITIES.md` is still stale (all 11 items landed), so this came from `GAPS.md` section 1. `rebase --autosquash` without
+`-i` was refused by name. It now runs the interactive machinery on an unedited, reordered todo list, as git does (same
+`Rebasing (n/m)` progress, squash/fixup folding, reflog). `rebase.autoSquash` is still only honoured with `-i`, and
+`--no-autosquash` cancels an earlier `--autosquash`. A branch already on the target is replayed, like `--exec`. Change in
+`cmd/rebase.rs` only; expected output compared with `/usr/bin/git`. Scenario `s_rebase_autosquash_plain` fails on 50ce21b
+(`FAIL`, `failures: 1`) and passes after. The refusal entry in `tests/rebase_interactive.rs` was removed and the `GAPS.md` text
+and header counts updated.
+Left undone: `--autosquash` over an `amend!` commit and a `fixup!` naming another fixup by id (unchanged, in `GAPS.md`).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 268 passed / 0 failed / 0 ignored,
+`scenarios.sh` 309 PASS / `failures: 0`.

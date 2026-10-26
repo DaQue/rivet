@@ -8389,6 +8389,44 @@ s_rebase_exec_plain() {
     v reflog
 }
 
+# `rebase --autosquash` without -i runs the interactive machinery on an unedited, reordered todo
+# list; `rebase.autoSquash` alone does not (it only applies with -i), `--no-autosquash` cancels it.
+s_rebase_autosquash_plain() {
+    v init -q repo; cd repo
+    echo base >base; v add base; v commit -q -m base
+    v branch work
+    tick; echo main >main.txt; v add main.txt; v commit -q -m "main moves"
+    v switch -q work
+    for n in A B C; do tick; echo $n >$n; v add $n; v commit -q -m "feat $n"; done
+    tick; echo 1 >f1; v add f1; v commit -q -m "fixup! feat A"
+    tick; echo 2 >f2; v add f2; v commit -q -m "squash! feat B"
+    g branch orig
+    export GIT_EDITOR=true
+    local flags
+    for flags in "--autosquash" "--autosquash --no-autosquash" "--no-autosquash --autosquash" "--no-autosquash"; do
+        v switch -q work; v reset -q --hard orig
+        echo "== $flags"
+        v rebase $flags main
+        echo "rc=$?"
+        v log --format='%H %s' main..work
+        v reflog
+        v status
+    done
+    v switch -q work; v reset -q --hard orig
+    v config rebase.autoSquash true
+    echo "== config true, no -i"
+    v rebase main
+    echo "rc=$?"
+    v log --format='%H %s' main..work
+    v config --unset rebase.autoSquash
+    # Already on the target: the branch is still replayed, as with --exec.
+    v switch -q work; v reset -q --hard orig
+    echo "== up to date"
+    v rebase --autosquash work
+    echo "rc=$?"
+    v reflog
+}
+
 s_rebase_break() {
     rebase_repo
     g branch orig topic

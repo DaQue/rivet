@@ -73,10 +73,6 @@ fn options_that_are_not_implemented_are_refused_by_name() {
             vec!["rebase", "-i", "--rebase-merges", "main"],
             "--rebase-merges",
         ),
-        (
-            vec!["rebase", "--autosquash", "main"],
-            "--autosquash without -i",
-        ),
         (vec!["rebase", "-i", "-S", "main"], "--gpg-sign"),
     ] {
         let out = rivet(p, &args, &[]);
