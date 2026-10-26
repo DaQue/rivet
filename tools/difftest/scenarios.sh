@@ -9566,6 +9566,27 @@ s_log_first_parent_merge_diff() {
     v log --pretty= --stat
 }
 
+# The last of `--oneline`, `--pretty=` and `--format=` wins; `--oneline` abbreviates the `commit` line
+# of whatever layout follows it, `--pretty=oneline` alone does not.
+s_log_layout_order() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    echo b >b; v add b; tick; v commit -q -m two
+    v log --format= --oneline
+    v log --oneline --format=
+    v log --oneline --format=%s
+    v log --format=%s --oneline
+    v log --pretty=short --oneline
+    v log --oneline --pretty=full
+    v log --pretty=oneline --oneline
+    v log --oneline --pretty=oneline
+    v log --format=%s --pretty=full
+    v log --pretty=full --format=%s
+    v log --format=%s --pretty=oneline
+    v log --pretty=oneline --format=%s
+    v log --oneline --pretty=medium -- a
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

@@ -1617,3 +1617,10 @@ Scenario `s_log_first_parent_merge_diff` fails on `2c20598`, passes now; expecte
 Left undone (in `GAPS.md`): `--format= --oneline` lets the format win where git lets the later option win.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
 `scenarios.sh` 298 PASS / `failures: 0`.
+
+## log layout order: --oneline / --pretty / --format (2026-10-26)
+The queue in `.claude/PRIORITIES.md` is fully landed, so this took the `--format= --oneline` leftover on the `log` line of `GAPS.md`. `log` now reads the last of `--oneline`, `--pretty[=]<f>` and `--format[=]<f>` from the raw command line (before any `--`), so the later option wins as in git. `--oneline` also abbreviates the `commit` line of a layout that follows it (`--oneline --pretty=full` prints `commit 67b3361`); `--pretty=oneline` alone still prints full ids. New `Style::abbrev_commit` / `Look::abbrev_commit`; `show` and the reflog paths pass `false`.
+Scenario `s_log_layout_order` fails on `90132e6` (the format won over a later `--oneline`; the `commit` line stayed full), passes now; expected values come from `/usr/bin/git`.
+Left undone: `show` has no `--oneline`; `--abbrev-commit` is not accepted by `log`; an option value that merely looks like `--oneline` (for example `-S --oneline`) is read as the option.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 261 passed / 0 failed / 0 ignored,
+`scenarios.sh` 299 PASS / `failures: 0`.

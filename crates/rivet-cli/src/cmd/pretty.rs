@@ -240,6 +240,8 @@ pub struct Style<'a> {
     pub abbrev: &'a dyn Fn(&ObjectId) -> String,
     /// Print full ids in `commit`, `Merge:` and `--oneline` lines.
     pub full_ids: bool,
+    /// Abbreviate the id on the `commit` line of the block layouts (`--oneline` leaves this on).
+    pub abbrev_commit: bool,
     /// Paint the `commit` line (or the oneline id) and its decorations; `None` prints plain text.
     pub palette: Option<&'a Palette>,
 }
@@ -331,7 +333,12 @@ pub fn render(layout: &Layout, e: &Entry<'_>, style: &Style<'_>) -> Vec<u8> {
         }
         Layout::Format { template, .. } => expand(template, e, style, &mut out),
         _ => {
-            push_commit_id(&mut out, format!("commit {}", e.oid).as_bytes(), style);
+            let head = if style.abbrev_commit && !style.full_ids {
+                (style.abbrev)(&e.oid)
+            } else {
+                e.oid.to_string()
+            };
+            push_commit_id(&mut out, format!("commit {head}").as_bytes(), style);
             push_decorations(&mut out, e.decorations, style);
             out.push(b'\n');
             if e.parents.len() > 1 {

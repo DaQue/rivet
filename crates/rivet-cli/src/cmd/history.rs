@@ -440,12 +440,17 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
 
     let oids = rivet_core::revwalk::walk_oids(repository.odb(), &starts, &options)?;
     let diff_options = rivet_core::DiffOptions::new();
-    let layout = match (&args.format, &args.pretty) {
-        (Some(spec), _) | (None, Some(spec)) => pretty::Layout::parse(spec)?,
-        _ if args.oneline => pretty::Layout::Oneline,
-        _ => pretty::Layout::Medium,
+    // The last of `--oneline`, `--pretty` and `--format` on the command line wins, as in git.
+    let layout = match last_layout_option(&std::env::args().collect::<Vec<_>>()) {
+        Some(Some(spec)) => pretty::Layout::parse(&spec)?,
+        Some(None) => pretty::Layout::Oneline,
+        None => match (&args.format, &args.pretty) {
+            (Some(spec), _) | (None, Some(spec)) => pretty::Layout::parse(spec)?,
+            _ if args.oneline => pretty::Layout::Oneline,
+            _ => pretty::Layout::Medium,
+        },
     };
-    // `--oneline` abbreviates ids; `--pretty=oneline` prints them in full.
+    // `--oneline` abbreviates ids whatever layout follows it; `--pretty=oneline` prints them in full.
     let full_ids = if layout == pretty::Layout::Oneline && !args.oneline {
         true
     } else {
@@ -528,6 +533,7 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
             &Look {
                 date,
                 full_ids,
+                abbrev_commit: args.oneline && !args.no_abbrev_commit,
                 decorations: &decorations,
                 palette: palette.as_ref(),
             },
@@ -597,6 +603,7 @@ pub(super) fn squash_message(
             &Look {
                 date: "default",
                 full_ids: false,
+                abbrev_commit: false,
                 decorations: &Default::default(),
                 palette: None,
             },
@@ -1023,6 +1030,31 @@ fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<LogCommit> {
         committer: commit.committer.clone(),
         message: commit.message.to_vec(),
     })
+}
+
+/// Which of `--oneline`, `--pretty=<f>` and `--format=<f>` comes last before any `--`: `Some(None)`
+/// for `--oneline`, `Some(Some(f))` for a format, `None` when the command line has none of them.
+fn last_layout_option(argv: &[String]) -> Option<Option<String>> {
+    let mut last = None;
+    let mut words = argv.iter().skip(1);
+    while let Some(word) = words.next() {
+        if word == "--" {
+            break;
+        }
+        if word == "--oneline" {
+            last = Some(None);
+        } else if let Some(spec) = word
+            .strip_prefix("--pretty=")
+            .or_else(|| word.strip_prefix("--format="))
+        {
+            last = Some(Some(spec.to_string()));
+        } else if (word == "--pretty" || word == "--format")
+            && let Some(spec) = words.next()
+        {
+            last = Some(Some(spec.clone()));
+        }
+    }
+    last
 }
 
 pub(super) fn abbrev(repository: &Repository, oid: &ObjectId, full: bool) -> String {
@@ -1528,6 +1560,7 @@ fn log_palette(repository: &Repository) -> Result<pretty::Palette> {
 struct Look<'a> {
     date: &'a str,
     full_ids: bool,
+    abbrev_commit: bool,
     decorations: &'a std::collections::HashMap<ObjectId, Vec<pretty::Decoration>>,
     palette: Option<&'a pretty::Palette>,
 }
@@ -1554,6 +1587,7 @@ fn render_commit(
         now: pretty::now(),
         abbrev: &abbreviate,
         full_ids: look.full_ids,
+        abbrev_commit: look.abbrev_commit,
         palette: look.palette,
     };
     let mut out = pretty::render(layout, &entry, &style);
@@ -1763,6 +1797,7 @@ fn show_object(
                 &Look {
                     date,
                     full_ids,
+                    abbrev_commit: false,
                     decorations: &decorations,
                     palette,
                 },
