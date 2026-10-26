@@ -726,13 +726,17 @@ pub(super) fn begin(
 
     let abbrev = |oid: &ObjectId| crate::cmd::history::abbrev(repository, oid, false);
     let mut text = String::new();
+    // What git keeps as `git-rebase-todo.backup`: the list as the editor is given it, with full ids.
+    let mut backup = String::new();
     if plan.commits.is_empty() {
         text.push_str("noop\n");
+        backup.push_str("noop\n");
     }
     let mut commands = 0;
     for (n, (command, index)) in order.iter().enumerate() {
         if *command == "update-ref" {
             text.push_str(&format!("update-ref {}\n\n", ref_lines[*index].0));
+            backup.push_str(&format!("update-ref {}\n\n", ref_lines[*index].0));
             commands += 1;
             continue;
         }
@@ -743,10 +747,15 @@ pub(super) fn begin(
                 "{comment} Ref {name} checked out at '{}'\n\n",
                 path.display()
             ));
+            backup.push_str(&format!(
+                "{comment} Ref {name} checked out at '{}'\n\n",
+                path.display()
+            ));
             continue;
         }
         let (oid, subject) = &plan.commits[*index];
         text.push_str(&format!("{command} {} # {subject}\n", abbrev(oid)));
+        backup.push_str(&format!("{command} {oid} # {subject}\n"));
         commands += 1;
         let chained = order
             .get(n + 1)
@@ -754,6 +763,7 @@ pub(super) fn begin(
         if !chained {
             for command in plan.exec {
                 text.push_str(&format!("exec {command}\n"));
+                backup.push_str(&format!("exec {command}\n"));
                 commands += 1;
             }
         }
@@ -763,14 +773,16 @@ pub(super) fn begin(
     } else {
         format!("{}..{}", abbrev(&plan.upstream), abbrev(&plan.orig_head))
     };
-    text.push_str(&todo_footer(
+    let footer = todo_footer(
         comment,
         &range,
         &abbrev(&plan.onto),
         if plan.commits.is_empty() { 0 } else { commands },
-    ));
+    );
+    text.push_str(&footer);
+    backup.push_str(&footer);
     let todo_path = dir.join("git-rebase-todo");
-    std::fs::write(&todo_path, text)?;
+    std::fs::write(&todo_path, &text)?;
 
     // Anything that goes wrong before the head moves leaves the repository as it was.
     let give_up = |repository: &mut Repository, message: Option<String>| -> Result<i32> {
@@ -874,14 +886,49 @@ pub(super) fn begin(
         return Ok(1);
     }
     let all = todo_lines(repository, &items)?;
-    let (done, rest): (Vec<&str>, Vec<&str>) = {
-        let lines: Vec<&str> = all.lines().collect();
-        (lines[..skipped].to_vec(), lines[skipped..].to_vec())
-    };
+    let item_lines: Vec<&str> = all.lines().collect();
+    // git keeps the blank lines of the edited list (comments and trailing blanks are stripped, runs
+    // collapse): the one after each generated `update-ref` line survives into the state files.
+    let mut lines: Vec<&str> = Vec::new();
+    let mut skipped_at = 0;
+    let mut next = 0;
+    let wanted = edited
+        .lines()
+        .filter(|l| {
+            let l = l.trim_start_matches([' ', '\t']);
+            !l.is_empty() && !l.starts_with(comment)
+        })
+        .count();
+    if wanted == item_lines.len() {
+        for raw in edited.lines() {
+            let line = raw.trim_start_matches([' ', '\t']);
+            if line.starts_with(comment) {
+                continue;
+            }
+            if line.is_empty() {
+                if next > 0 && lines.last().is_some_and(|l| !l.is_empty()) {
+                    lines.push("");
+                }
+                continue;
+            }
+            lines.push(item_lines[next]);
+            next += 1;
+            if next == skipped {
+                skipped_at = lines.len();
+            }
+        }
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+    } else {
+        lines = item_lines.clone();
+        skipped_at = skipped;
+    }
+    let (done, rest) = lines.split_at(skipped_at.min(lines.len()));
     let join = |lines: &[&str]| lines.iter().map(|l| format!("{l}\n")).collect::<String>();
-    write_state(dir, "done", &join(&done))?;
-    write_state(dir, "git-rebase-todo", &join(&rest))?;
-    write_state(dir, "git-rebase-todo.backup", &all)?;
+    write_state(dir, "done", &join(done))?;
+    write_state(dir, "git-rebase-todo", &join(rest))?;
+    write_state(dir, "git-rebase-todo.backup", &backup)?;
     let count = items.iter().filter(|i| i.cmd != Cmd::Noop).count();
     write_state(dir, "end", &format!("{count}\n"))?;
     write_state(dir, "msgnum", &format!("{skipped}\n"))?;
@@ -1159,7 +1206,7 @@ pub(super) fn chain_add(
 pub(super) fn next_is_fixup(dir: &Path) -> bool {
     read_state(dir, "git-rebase-todo")
         .lines()
-        .next()
+        .find(|l| !l.trim().is_empty())
         .and_then(|l| l.split_whitespace().next())
         .and_then(Cmd::parse)
         .is_some_and(Cmd::is_fixup)

@@ -9166,10 +9166,24 @@ s_rebase_update_refs() {
     g config --unset rebase.updateRefs
     # Stopped half way: nothing moved yet, the state file lists the refs by name, --continue applies them.
     ur_reset
-    SEQ='2a break' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase -i --update-refs main
+    SEQ=$'2a break\n5a break' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" v rebase -i --update-refs main
     echo "rc=$?"
     v for-each-ref
     cat .git/rebase-merge/update-refs
+    # The state files: git keeps the blank line after each generated update-ref, and the backup is the
+    # list as the editor was given it, footer included.
+    for f in git-rebase-todo done git-rebase-todo.backup end msgnum; do
+        echo "-- $f" >>"$TRANSCRIPT"
+        cat -A .git/rebase-merge/$f >>"$TRANSCRIPT"
+    done
+    v status
+    v rebase --continue
+    echo "rc=$?"
+    for f in git-rebase-todo done; do
+        echo "-- $f" >>"$TRANSCRIPT"
+        cat -A .git/rebase-merge/$f >>"$TRANSCRIPT"
+    done
+    v status
     v rebase --continue
     echo "rc=$?"
     v for-each-ref

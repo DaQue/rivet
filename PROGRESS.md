@@ -1785,3 +1785,16 @@ argument that is not an option (git runs it as a command). `GAPS.md` updated.
 Left undone: an unknown option gets rivet `log`'s clap error rather than git's `fatal: unrecognized argument` (in `GAPS.md`).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 269 passed / 0 failed / 0 ignored,
 `scenarios.sh` 315 PASS / `failures: 0`.
+
+### rebase: state files keep git's blank lines and backup
+
+`PRIORITIES.md` is still stale (all items landed); this came from `GAPS.md` section 1 (`rebase --interactive`, the missing blank line
+after each generated `update-ref`). Compared with `/usr/bin/git` after an `edit`/`break` stop: git keeps the blank line after each
+`update-ref` in `git-rebase-todo` and `done` (and `run_todo` moves blank lines over to `done` without counting them), and writes
+`git-rebase-todo.backup` as the list the editor was given, full ids and footer included (rivet wrote the edited list). Changes in
+`cmd/rebase/interactive.rs` (`begin`: blank-aware state files, `backup` text) and `cmd/rebase.rs` (`run_todo`). `s_rebase_update_refs`
+now dumps `git-rebase-todo`, `done`, `git-rebase-todo.backup`, `end`, `msgnum` and `status` at two stops; it fails on the base
+(`git-rebase-todo.backup` and the blank lines differ) and passes after. `GAPS.md` updated.
+Left undone: blank lines a user adds in the editor are not carried into the state files (only those after `update-ref`).
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 269 passed / 0 failed / 0 ignored,
+`scenarios.sh` 315 PASS / `failures: 0`.

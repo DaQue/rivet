@@ -1100,6 +1100,16 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
         }
         let line = lines.remove(0).to_string();
         let word = line.split_whitespace().next().unwrap_or_default();
+        if word.is_empty() {
+            // A blank line of the list (git keeps the one after each `update-ref`): it only moves
+            // over to `done`.
+            let mut done = std::fs::read_to_string(dir.join("done")).unwrap_or_default();
+            done.push('\n');
+            write_state(dir, "done", &done)?;
+            let rest: String = lines.iter().map(|l| format!("{l}\n")).collect();
+            write_state(dir, "git-rebase-todo", &rest)?;
+            continue;
+        }
         let Some(cmd) = interactive::Cmd::parse(word) else {
             eprintln!("error: invalid command '{word}'");
             eprintln!("error: invalid line 1: {line}");
@@ -1107,8 +1117,8 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             return Ok(1);
         };
         let rest: String = lines.iter().map(|l| format!("{l}\n")).collect();
-        let mut done = read_state(dir, "done");
-        if !done.is_empty() {
+        let mut done = std::fs::read_to_string(dir.join("done")).unwrap_or_default();
+        if !done.is_empty() && !done.ends_with('\n') {
             done.push('\n');
         }
         done.push_str(&line);
