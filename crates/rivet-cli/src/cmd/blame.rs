@@ -9,7 +9,7 @@
 //! scoring run of lines that the diff aligns (`find_copy_in_blob`), with git's thresholds
 //! (20 and 40 alphanumeric characters by default).
 //!
-//! Not implemented: `-w`, `--since`, `-S`, `--contents`, `--reverse`,
+//! Not implemented: `--since`, `-S`, `--contents`, `--reverse`,
 //! regular-expression `-L` ranges, `-M`/`-C` while the work tree differs from the commit.
 
 use std::cmp::Reverse;
@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 use anyhow::Result;
 use bstr::{BStr, BString};
-use rivet_core::diff::myers::{compact_edits, git_diff, split_lines};
+use rivet_core::diff::myers::{Edit, compact_edits, git_diff, split_lines};
 use rivet_core::object::EntryMode;
 use rivet_core::{ObjectId, ObjectKind, Repository};
 
@@ -62,6 +62,10 @@ pub struct BlameArgs {
     /// Report each group of lines as soon as its commit is found, without the lines themselves.
     #[arg(long = "incremental")]
     pub incremental: bool,
+
+    /// Ignore whitespace when comparing a commit with its parent.
+    #[arg(short = 'w')]
+    pub ignore_whitespace: bool,
 
     /// `-M`: detect lines moved within a file (`-M<score>` sets the threshold).
     #[arg(long = "detect-moves", hide = true)]
@@ -139,12 +143,38 @@ struct Origin {
 }
 
 struct Options {
+    ignore_ws: bool,
     mov: bool,
     copy: bool,
     harder: bool,
     hardest: bool,
     move_score: usize,
     copy_score: usize,
+}
+
+/// The line diff blame runs between two versions, compacted like git's. With `ignore_ws` every
+/// whitespace byte (`xdl_isspace`) is dropped from each line first, which is what `-w` compares.
+fn line_edits(old: &[u8], new: &[u8], ignore_ws: bool) -> Vec<Edit> {
+    fn squeeze(data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(data.len());
+        for line in data.split_inclusive(|&b| b == b'\n') {
+            out.extend(
+                line.iter()
+                    .filter(|b| !matches!(b, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')),
+            );
+            out.push(b'\n');
+        }
+        out
+    }
+    let (old, new) = if ignore_ws {
+        (squeeze(old), squeeze(new))
+    } else {
+        (old.to_vec(), new.to_vec())
+    };
+    let old_lines = split_lines(&old);
+    let new_lines = split_lines(&new);
+    let edits = git_diff(&old_lines, &new_lines);
+    compact_edits(&old_lines, &new_lines, &edits)
 }
 
 struct Blamer<'r> {
@@ -332,10 +362,7 @@ impl<'r> Blamer<'r> {
     fn pass_blame_to_parent(&mut self, target: usize, parent: usize) -> Result<()> {
         let parent_data = self.origins[parent].data.clone();
         let target_data = self.origins[target].data.clone();
-        let old_lines = split_lines(&parent_data);
-        let new_lines = split_lines(&target_data);
-        let edits = git_diff(&old_lines, &new_lines);
-        let edits = compact_edits(&old_lines, &new_lines, &edits);
+        let edits = line_edits(&parent_data, &target_data, self.options.ignore_ws);
         // Unchanged runs: (start in the target, start in the parent, length).
         let runs: Vec<(usize, usize, usize)> = edits
             .iter()
@@ -388,10 +415,7 @@ impl<'r> Blamer<'r> {
     /// out of the entry.
     fn find_copy_in_blob(&self, ent: &Entry, parent_data: &[u8], parent: usize) -> Split {
         let text = &self.final_data[self.line_starts[ent.lno]..self.line_starts[ent.lno + ent.num]];
-        let old_lines = split_lines(parent_data);
-        let new_lines = split_lines(text);
-        let edits = git_diff(&old_lines, &new_lines);
-        let edits = compact_edits(&old_lines, &new_lines, &edits);
+        let edits = line_edits(parent_data, text, self.options.ignore_ws);
         let mut best: Split = [None, None, None];
         for edit in edits.iter().filter(|e| !e.is_change() && e.new_len > 0) {
             let tlno = ent.s_lno + edit.new_index;
@@ -751,6 +775,7 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
     let total = lines.len();
 
     let options = Options {
+        ignore_ws: args.ignore_whitespace,
         mov: args.detect_moves || args.detect_copies > 0,
         copy: args.detect_copies > 0,
         harder: args.detect_copies > 1,

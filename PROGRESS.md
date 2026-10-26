@@ -1584,3 +1584,11 @@ Scenario `s_blame_incremental` fails on `d88b230` (unknown option), passes now; 
 Left undone: `--incremental` with uncommitted work-tree changes has no scenario (the fake commit carries the current time); items 9-11 of the queue.
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
 `scenarios.sh` 294 PASS / `failures: 0`.
+
+## blame -w (2026-10-26)
+Took `.claude/PRIORITIES.md` item 9. `blame -w` compares each commit with its parent ignoring every whitespace byte (space, `\t`, `\n`, `\v`, `\f`, `\r`), so a line that was only reindented
+or re-spaced stays with the earlier commit. The squeeze is applied to both diffs blame runs (`pass_blame_to_parent` and `find_copy_in_blob`) through one helper, `line_edits`; the `-M`/`-C` refusal for uncommitted changes is untouched.
+Scenario `s_blame_ignore_whitespace` fails on `cc646f6` (`error: unexpected argument '-w' found`), passes now; expected values come from `/usr/bin/git` (plain, `-L`, `--porcelain`, `--incremental`, a revision).
+Left undone: the indent heuristic in `compact_edits` sees the squeezed lines under `-w`, so a slide choice that depends on indentation could differ from git (no scenario hits it); items 10-11 of the queue.
+Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 260 passed / 0 failed / 0 ignored,
+`scenarios.sh` 295 PASS / `failures: 0`.

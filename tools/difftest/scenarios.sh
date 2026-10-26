@@ -9444,6 +9444,24 @@ s_blame_incremental() {
     echo "rc=$?"
 }
 
+# `blame -w`: lines that differ only in whitespace stay with the earlier commit; without `-w` they
+# move to the reindenting commit.
+s_blame_ignore_whitespace() {
+    v init -q repo; cd repo
+    printf 'int main() {\nfoo(1);\nbar(2);\n\nreturn 0;\n}\n' >f
+    v add f; tick; v commit -q -m one
+    printf 'int main() {\n    foo(1);\n\tbar(2);\n\n    return 0;\n}\n' >f
+    GIT_AUTHOR_NAME="Bob" GIT_AUTHOR_EMAIL=bob@x v commit -q -a -m reindent
+    tick; printf 'int main() {\n    foo( 1 );\n\tbar(2);\n    baz();\n\n    return 0;\n}\n' >f
+    v commit -q -a -m three
+    v blame f
+    v blame -w f
+    v blame -w -L2,3 f
+    v blame -w --porcelain f
+    v blame -w --incremental f
+    v blame -w HEAD~1 -- f
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
