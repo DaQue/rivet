@@ -223,7 +223,8 @@ pub fn merge_bases(odb: &Odb, ours: ObjectId, theirs: ObjectId) -> Result<Vec<Ob
 /// The parents a commit records.
 fn parents_of(odb: &Odb, oid: ObjectId) -> Result<Vec<ObjectId>> {
     let object = odb.read_typed(&oid, ObjectKind::Commit)?;
-    Ok(crate::object::Commit::parse(odb.format(), object.data())?.parents)
+    let commit = crate::object::Commit::parse(odb.format(), object.data())?;
+    Ok(odb.visible_parents(&oid, &commit))
 }
 
 /// Every commit reachable from `start`, itself included.

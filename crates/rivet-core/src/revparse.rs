@@ -557,7 +557,12 @@ fn read_parents(
     if object.kind() != crate::object::ObjectKind::Commit {
         return Err(invalid(spec, "does not name a commit"));
     }
-    Ok(Commit::parse(format, object.data())?.parents.clone())
+    let commit = Commit::parse(format, object.data())?;
+    Ok(if odb.is_shallow(&object.id(format)?) {
+        Vec::new()
+    } else {
+        commit.parents.clone()
+    })
 }
 
 /// Whether a spec is entirely hexadecimal, and so worth trying as an id.

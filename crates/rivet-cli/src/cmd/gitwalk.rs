@@ -72,7 +72,7 @@ impl Walk<'_> {
         self.nodes.insert(
             oid,
             Node {
-                parents: commit.parents.clone(),
+                parents: self.repository.odb().visible_parents(&oid, &commit),
                 date: commit.committer.when,
                 author_date: commit.author.when,
             },

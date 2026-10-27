@@ -151,6 +151,8 @@ pub struct Odb {
     abbrev_len: Cell<Option<usize>>,
     /// Object databases named by `objects/info/alternates`, searched after the local stores.
     alternates: Vec<Odb>,
+    /// Commits listed in `<git-dir>/shallow`: their parents are treated as absent.
+    shallow: std::collections::HashSet<ObjectId>,
 }
 
 /// Git's `MAX_ALTERNATE_DEPTH`: alternates of alternates are followed this many levels.
@@ -183,7 +185,36 @@ impl Odb {
     /// [`crate::error::Error::CorruptPackIndex`] or
     /// [`crate::error::Error::UnsupportedPackIndexVersion`] for an index that does not parse.
     pub fn open(git_dir: &Path, format: ObjectFormat) -> Result<Self> {
-        Self::open_objects_dir(&git_dir.join("objects"), format)
+        let mut odb = Self::open_objects_dir(&git_dir.join("objects"), format)?;
+        // A shallow clone lists its boundary commits; a missing or unreadable file means none.
+        if let Ok(list) = fs::read(git_dir.join("shallow")) {
+            for line in list.split(|b| *b == b'\n') {
+                if let Ok(id) = ObjectId::from_hex(format, bstr::BStr::new(line.trim_ascii())) {
+                    odb.shallow.insert(id);
+                }
+            }
+        }
+        Ok(odb)
+    }
+
+    /// Whether `oid` is a shallow boundary: listed in `.git/shallow`, so its parents are absent
+    /// by design and every walker must treat it as a root.
+    pub fn is_shallow(&self, oid: &ObjectId) -> bool {
+        self.shallow.contains(oid)
+    }
+
+    /// The parents of `commit` (whose id is `oid`) as history sees them: none at a shallow
+    /// boundary, whatever the commit object records.
+    pub fn visible_parents(
+        &self,
+        oid: &ObjectId,
+        commit: &crate::object::Commit<'_>,
+    ) -> Vec<ObjectId> {
+        if self.is_shallow(oid) {
+            Vec::new()
+        } else {
+            commit.parents.clone()
+        }
     }
 
     /// Phase 10 — open a database directly over an `objects` directory.
@@ -253,6 +284,7 @@ impl Odb {
             delta_cache: RefCell::new(DeltaBaseCache::new(DELTA_CACHE_CAPACITY)),
             abbrev_len: Cell::new(None),
             alternates,
+            shallow: std::collections::HashSet::new(),
         })
     }
 

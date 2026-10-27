@@ -10274,6 +10274,33 @@ s_alternates() {
     v cat-file -t "$short"
 }
 
+# A clone made by real git with `--depth` lists its boundary commits in `.git/shallow`; the parents of
+# those commits are absent by design, so every walker must stop there instead of failing.
+s_shallow() {
+    g init -q src; cd src
+    for i in 1 2 3 4 5; do echo $i >f$i; g add .; tick; g commit -qm "c$i"; done
+    cd ..
+    g clone -q --depth=2 "file://$PWD/src" cl
+    cd cl
+    v log --oneline
+    v log --graph --oneline
+    v log --format='%h %P'
+    v show -s --format=%P HEAD~1
+    v rev-list HEAD
+    v rev-list --count HEAD
+    v rev-list --parents HEAD
+    v rev-list HEAD~1..HEAD
+    v merge-base HEAD HEAD~1
+    v rev-parse 'HEAD~1^'
+    v blame f5
+    v describe --always
+    v status
+    v fsck
+    echo 6 >f6; g add f6; tick; g commit -qm c6
+    v log --oneline
+    v fsck
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
@@ -10336,6 +10363,7 @@ for s in "$@"; do
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         s_alternates) run_scenario "$s" repo cl cl2 rel/r ;;
+        s_shallow) run_scenario "$s" src cl ;;
         *) run_scenario "$s" ;;
     esac
 done

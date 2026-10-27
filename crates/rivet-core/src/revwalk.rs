@@ -330,6 +330,9 @@ impl Revision {
         let obj = odb.read(&self.commit)?;
         let data = obj.data();
         let mut parents = Vec::new();
+        if odb.is_shallow(&self.commit) {
+            return Ok(parents);
+        }
         let mut i = 0;
         while i + 40 <= data.len() {
             let line = &data[i..i + 40];
@@ -805,7 +808,7 @@ pub fn walk_oids(odb: &Odb, starts: &[ObjectId], options: &WalkOptions) -> Resul
         let object = odb.read_typed(oid, crate::object::ObjectKind::Commit)?;
         let commit = Commit::parse(format, object.data())?;
         Ok(Info {
-            parents: commit.parents.clone(),
+            parents: odb.visible_parents(oid, &commit),
             tree: commit.tree,
             committer_time: commit.committer.when,
             author_time: commit.author.when,

@@ -146,7 +146,9 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
         match object.parse() {
             Ok(AnyObject::Commit(commit)) => {
                 out.push((ObjectKind::Tree, commit.tree));
-                out.extend(commit.parents.iter().map(|p| (ObjectKind::Commit, *p)));
+                if !odb.is_shallow(&oid) {
+                    out.extend(commit.parents.iter().map(|p| (ObjectKind::Commit, *p)));
+                }
             }
             Ok(AnyObject::Tree(tree)) => {
                 if !options.connectivity_only {

@@ -51,7 +51,7 @@ fn commit_facts(repository: &Repository, oid: &ObjectId) -> Result<CommitFacts> 
     let object = repository.odb().read_typed(oid, ObjectKind::Commit)?;
     let commit = Commit::parse(repository.format(), object.data())?;
     Ok(CommitFacts {
-        parents: commit.parents.clone(),
+        parents: repository.odb().visible_parents(oid, &commit),
         tree: commit.tree,
     })
 }
@@ -1211,7 +1211,7 @@ fn commit_parents(repository: &Repository, oid: ObjectId) -> Vec<ObjectId> {
         return Vec::new();
     }
     Commit::parse(repository.format(), object.data())
-        .map(|c| c.parents)
+        .map(|c| repository.odb().visible_parents(&oid, &c))
         .unwrap_or_default()
 }
 
@@ -1692,7 +1692,8 @@ fn contains_name(
     };
     let parents_of = |oid: &ObjectId| -> Result<Vec<ObjectId>> {
         let object = repository.odb().read_typed(oid, ObjectKind::Commit)?;
-        Ok(Commit::parse(repository.format(), object.data())?.parents)
+        let commit = Commit::parse(repository.format(), object.data())?;
+        Ok(repository.odb().visible_parents(oid, &commit))
     };
     for tip in &tips {
         let tip_name = if tip.deref {

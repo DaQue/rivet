@@ -1024,7 +1024,7 @@ fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<LogCommit> {
         .read_typed(oid, rivet_core::ObjectKind::Commit)?;
     let commit = rivet_core::Commit::parse(repository.format(), object.data())?;
     Ok(LogCommit {
-        parents: commit.parents.clone(),
+        parents: repository.odb().visible_parents(oid, &commit),
         tree: commit.tree,
         author: commit.author.clone(),
         committer: commit.committer.clone(),

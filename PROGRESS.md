@@ -1915,3 +1915,14 @@ another repository's objects. The `GAPS.md` A10 line is deleted.
 Left undone: A6 (`.git/shallow`) — the item stays open in the queue; git's warning for a missing alternate directory is not printed;
 `Odb::abbreviate` lengths ignore alternates.
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 274 passed / 0 failed; `scenarios.sh` 321 PASS, `failures: 0`.
+
+### Block 12 — A6 (shallow clones)
+
+Scenario `s_shallow` (new, real-git fixture): `git clone --depth=2` of a five-commit history, then `log` (plain, `--graph`, `%P`), `show -s %P`,
+`rev-list` (plain, `--count`, `--parents`, range), `merge-base`, `rev-parse HEAD~1^`, `blame`, `describe`, `status`, `fsck`, a new commit, `log`, `fsck`.
+Fails on `389a816` (`log`/`rev-list`/`fsck`: object not found / `missing commit` for the parent of the boundary commit); passes after.
+Fix: `Odb::open` reads `<git-dir>/shallow`; new `Odb::is_shallow` / `Odb::visible_parents`. Applied where parents are read for history:
+`revwalk.rs` (`Revision::parents`, the rev-list loader), `merge/base.rs`, `revparse.rs` (`^`/`~`), `fsck.rs` (does not follow a boundary's parents),
+`gitwalk.rs`, and the CLI loaders in `history.rs` and `query.rs`. The `GAPS.md` A6 line is deleted.
+Left undone: writing `.git/shallow` (`clone --depth`/`fetch --depth` still refuse by name); `rebase`/`sequencer`/`stash`/`bundle` still read `commit.parents` directly.
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 274 passed / 0 failed; `scenarios.sh` 322 PASS, `failures: 0`.
