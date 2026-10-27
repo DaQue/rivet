@@ -1798,3 +1798,16 @@ now dumps `git-rebase-todo`, `done`, `git-rebase-todo.backup`, `end`, `msgnum` a
 Left undone: blank lines a user adds in the editor are not carried into the state files (only those after `update-ref`).
 Gate: fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` 269 passed / 0 failed / 0 ignored,
 `scenarios.sh` 315 PASS / `failures: 0`.
+
+### Block 12 — session stopped at the gate (no A-item started)
+
+Base `414a3a0`, working tree clean, nothing changed in code. Gate run before any edit:
+fmt clean, clippy `-D warnings` clean, doc clean, `cargo test --workspace` red only in
+`rivet-cli --test difftest` (2 passed / 1 failed; every other suite passed), `scenarios.sh` 314 PASS / `failures: 1`.
+The failure is `s_sparse_clean`, reproduced on its own run: `sparse-checkout clean -nv` lists the same four paths in a
+different order. git (2.56.0) prints `b/other/x.log, b/other/sub/u, d/top.txt, d/e/new/n`; rivet prints
+`b/other/sub/u, b/other/x.log, d/e/new/n, d/top.txt` (sorted). The git order looks like raw `readdir` order, and `/tmp`
+here is tmpfs, so this is probably the fixture filesystem rather than a regression from block 12; I did not confirm that
+(e.g. by rerunning with `TMPDIR` on ext4/btrfs). Per the brief's stop rule I did not commit a fix on top of a red suite.
+Left undone: all of A1–A15, including the `## Known defects` section in `GAPS.md`. Next session should first decide whether
+`s_sparse_clean` should compare order-insensitively for `-v`, or be run on a non-tmpfs `TMPDIR`.
