@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 318 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 319 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-27, gate: 272 tests / 0 failed, 318 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-27, gate: 273 tests / 0 failed, 319 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -230,9 +230,8 @@ deleted in the commit that fixes it. A15 is not in the queue yet.
 * **A11** — no post-fetch connectivity check.
 * **A12** — `gc` deletes old packs without fsyncing the new pack and idx first.
 * **A13** — `inflate_at` / `apply_delta` size allocations from untrusted declared sizes; temp pack names are not unique.
-* **A14** — `rev-parse --short HEAD` parses `HEAD` as the length; `history::abbrev` always prints 7 chars and scans the odb.
 * **A1 (remainder)** — in-memory `RefStore` packed snapshot is not refreshed after `delete`/`rename` (the on-disk file is now correct).
-* **A4 (remainder)** — short ids are matched by scanning `Odb::oids()` (no fanout use); `Odb::resolve_prefix` still reads a trailing `00` byte as fill (used by `revwalk.rs` `RevSpec::Abbrev`); hint abbreviations are a fixed 7 digits (A14).
+* **A4 (remainder)** — short ids are matched by scanning `Odb::oids()` (no fanout use); `Odb::resolve_prefix` still reads a trailing `00` byte as fill (used by `revwalk.rs` `RevSpec::Abbrev`).
 
 ## Reporting a gap
 

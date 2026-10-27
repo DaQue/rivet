@@ -10151,6 +10151,49 @@ s_deep_delta_chain() {
     v verify-pack -v .git/objects/pack/pack-*.idx
 }
 
+# `rev-parse --short` and the abbreviation rule: git raises the length until no other object shares
+# the digits, honours core.abbrev, and takes --short's number only with `=`. 2400 packed blobs plus
+# 300 loose ones make several four-digit prefixes ambiguous (verified against git: the scenario
+# prints at least one 5-digit result), so the neighbour search over the pack index and the loose
+# bucket both matter.
+s_abbrev() {
+    g init -q repo; cd repo
+    {
+        printf 'commit refs/heads/main\ncommitter A <a@b> 1700000000 +0000\ndata 4\nabbr\n'
+        for i in $(seq 1 2400); do printf 'M 100644 inline f%d\ndata <<E\nblob %d\nE\n' "$i" "$i"; done
+        printf '\n'
+    } | g fast-import --quiet
+    g reset -q --hard
+    for i in $(seq 1 300); do printf 'loose %d\n' "$i" | g hash-object -w --stdin >/dev/null; done
+    v rev-parse --short HEAD
+    v rev-parse --short=12 HEAD
+    v rev-parse --short=0 HEAD
+    v rev-parse --short=3 HEAD
+    v rev-parse --short=99 HEAD
+    v rev-parse --short HEAD~0 HEAD
+    v rev-parse --short 5 HEAD
+    v log --oneline
+    g config core.abbrev 10
+    v rev-parse --short HEAD
+    v log --oneline
+    v rev-list --abbrev-commit HEAD
+    g config core.abbrev no
+    v rev-parse --short HEAD
+    v log --oneline
+    g config core.abbrev 4
+    v rev-parse --short HEAD
+    g config core.abbrev auto
+    v rev-parse --short HEAD
+    g config --unset core.abbrev
+    local oid n=0 longer=0
+    for oid in $(g cat-file --batch-all-objects --batch-check='%(objectname)' | sort | head -700); do
+        v rev-parse --short=4 "$oid"
+        if [ "$(g rev-parse --short=4 "$oid" | wc -c)" -gt 5 ]; then longer=$((longer + 1)); fi
+        n=$((n + 1))
+    done
+    [ "$longer" -gt 0 ] || { echo "fixture has no ambiguous 4-digit prefix"; return 1; }
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

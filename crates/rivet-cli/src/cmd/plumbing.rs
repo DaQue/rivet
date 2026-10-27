@@ -419,7 +419,7 @@ pub struct RevParseArgs {
     pub symbolic_full_name: bool,
 
     /// Print the abbreviated id rather than the full one.
-    #[arg(long = "short", value_name = "N")]
+    #[arg(long = "short", value_name = "N", num_args = 0..=1, require_equals = true)]
     pub short: Option<Option<usize>>,
 
     /// Print every branch whose tip is this commit.
@@ -1254,6 +1254,15 @@ pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
 
     let status = 0;
 
+    // `--short[=<n>]` implies `--verify`: exactly one revision, and a terse failure.
+    let verify = args.verify || args.short.is_some();
+    if verify && args.args.len() != 1 {
+        if !args.quiet {
+            eprintln!("fatal: Needed a single revision");
+        }
+        return Ok(128);
+    }
+
     for spec in &args.args {
         let spec_bytes = bstr::BStr::new(spec);
         let resolved = rivet_core::revparse::resolve_path(
@@ -1267,10 +1276,17 @@ pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
                 if args.symbolic_full_name {
                     println!("{}", symbolic_name(&repository, spec, oid));
                 } else if let Some(short) = args.short {
-                    let length = short.unwrap_or(7);
-                    let hex = oid.to_hex();
-                    let text = String::from_utf8_lossy(&hex);
-                    println!("{}", &text[..length.min(text.len())]);
+                    // `--short=<n>` is an explicit length even when it is 0 (git raises it to 4);
+                    // bare `--short` is the automatic one.
+                    let minimum = match short {
+                        Some(n) => n.clamp(4, format.hex_len()),
+                        None => super::history::abbrev_minimum(&repository, None),
+                    };
+                    let text = repository
+                        .odb()
+                        .abbreviate(&oid, minimum)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    println!("{text}");
                 } else {
                     println!("{}", oid.to_hex());
                 }
@@ -1282,7 +1298,7 @@ pub fn run_rev_parse(global: &GlobalArgs, args: &RevParseArgs) -> Result<i32> {
                     eprintln!("fatal: {message}");
                     return Ok(128);
                 }
-                if args.verify {
+                if verify {
                     // `--verify` wants exactly one resolvable revision and says so tersely.
                     if !args.quiet {
                         eprintln!("fatal: Needed a single revision");

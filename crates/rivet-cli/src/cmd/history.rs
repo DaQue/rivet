@@ -1062,26 +1062,48 @@ pub(super) fn abbrev(repository: &Repository, oid: &ObjectId, full: bool) -> Str
     if full {
         return hex;
     }
-    // Seven digits unless that is ambiguous; extend until the prefix is unique.
-    let mut length = 7;
-    while length < hex.len() {
-        let prefix = &hex[..length];
-        let unique = repository
-            .odb()
-            .oids()
-            .map(|all| {
-                all.iter()
-                    .filter(|o| o.to_string().starts_with(prefix))
-                    .count()
-                    <= 1
-            })
-            .unwrap_or(true);
-        if unique {
-            break;
-        }
-        length += 1;
+    repository
+        .odb()
+        .abbreviate(oid, abbrev_minimum(repository, None))
+        .unwrap_or(hex)
+}
+
+/// The shortest length an abbreviation may have: `requested` (`--abbrev=<n>`, `--short=<n>`) when
+/// positive, else `core.abbrev`, else the automatic length for the repository's size.
+/// `core.abbrev` is `auto`, a false boolean for "full ids", or a number; a value git rejects is
+/// treated as `auto` here.
+pub(super) fn abbrev_minimum(repository: &Repository, requested: Option<usize>) -> usize {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    thread_local! {
+        static CONFIGURED: RefCell<HashMap<PathBuf, Option<usize>>> = RefCell::new(HashMap::new());
     }
-    hex[..length].to_string()
+    let hex_len = repository.format().hex_len();
+    if let Some(n) = requested.filter(|n| *n > 0) {
+        return n.clamp(4, hex_len);
+    }
+    let configured = CONFIGURED.with(|cache| {
+        *cache
+            .borrow_mut()
+            .entry(repository.git_dir().to_path_buf())
+            .or_insert_with(|| {
+                let value = repository
+                    .config_value(BStr::new(b"core.abbrev"))
+                    .ok()
+                    .flatten()?;
+                let text = String::from_utf8_lossy(&value).trim().to_ascii_lowercase();
+                match text.as_str() {
+                    "auto" | "" => None,
+                    "no" | "false" | "off" | "0" => Some(hex_len),
+                    other => other
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|n| (4..=hex_len).contains(n)),
+                }
+            })
+    });
+    configured.unwrap_or_else(|| repository.odb().default_abbrev_len())
 }
 
 /// How a commit's diff is printed after its header.

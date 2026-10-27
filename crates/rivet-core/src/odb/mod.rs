@@ -48,7 +48,7 @@
 //! `index-pack` is what turns one into the other. Keeping a half-indexed pack out of the database
 //! is what makes "not found" mean "not in this repository".
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -59,6 +59,7 @@ use crate::pack::BaseProvider;
 
 const DELTA_CACHE_CAPACITY: usize = 1024;
 
+pub mod abbrev;
 pub mod loose;
 pub mod packed;
 
@@ -145,6 +146,8 @@ pub struct Odb {
     /// entry in it. Behind a `RefCell` because reads take `&self` — the cache is a pure
     /// optimisation and must not be visible in the type.
     delta_cache: RefCell<DeltaBaseCache>,
+    /// [`Odb::default_abbrev_len`], computed on first use.
+    abbrev_len: Cell<Option<usize>>,
 }
 
 impl Odb {
@@ -219,6 +222,7 @@ impl Odb {
             loose,
             packs,
             delta_cache: RefCell::new(DeltaBaseCache::new(DELTA_CACHE_CAPACITY)),
+            abbrev_len: Cell::new(None),
         })
     }
 
@@ -700,6 +704,55 @@ mod tests {
         store
             .write_raw(ObjectKind::Blob, data)
             .expect("writing a loose blob failed")
+    }
+
+    /// Brute-force reference: one more digit than the longest prefix shared with any other id.
+    fn brute_force_len(all: &[String], hex: &str, minimum: usize) -> usize {
+        let longest = all
+            .iter()
+            .filter(|other| other.as_str() != hex)
+            .map(|other| common_hex_prefix_len(other, hex))
+            .max()
+            .unwrap_or(0);
+        minimum.max(longest + 1).min(hex.len())
+    }
+
+    #[test]
+    fn unique_abbrev_len_matches_a_scan_of_every_id() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let odb = Odb::open_objects_dir(tmp.path(), ObjectFormat::Sha1).expect("open");
+        let mut ids = Vec::new();
+        for i in 0..3000 {
+            ids.push(write_loose_blob(
+                odb.loose(),
+                format!("blob {i}").as_bytes(),
+            ));
+        }
+        let all: Vec<String> = ids.iter().map(|id| id.to_hex().to_string()).collect();
+        let mut longer = 0;
+        for (id, hex) in ids.iter().zip(&all) {
+            for minimum in [4, 7] {
+                let got = odb.unique_abbrev_len(id, minimum);
+                assert_eq!(
+                    got,
+                    brute_force_len(&all, hex, minimum),
+                    "{hex} at {minimum}"
+                );
+                if minimum == 4 && got > 4 {
+                    longer += 1;
+                }
+            }
+        }
+        assert!(
+            longer > 0,
+            "the fixture must contain ambiguous 4-digit prefixes"
+        );
+        assert_eq!(
+            odb.abbreviate(&ids[0], 4).expect("abbreviate"),
+            all[0][..odb.unique_abbrev_len(&ids[0], 4)]
+        );
+        // Fewer than 16k objects: git's automatic length is the seven-digit floor.
+        assert_eq!(odb.default_abbrev_len(), 7);
     }
 
     #[test]

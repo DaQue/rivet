@@ -620,15 +620,15 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     let boundary: HashSet<ObjectId> = boundary.into_iter().collect();
 
     let abbreviate = args.abbrev_commit && !args.no_abbrev_commit;
-    let abbreviator = if abbreviate {
-        Some(Abbreviator::new(&repository, args.abbrev)?)
-    } else {
-        None
-    };
+    let minimum = super::history::abbrev_minimum(&repository, args.abbrev);
     let name = |oid: &ObjectId| -> String {
-        match &abbreviator {
-            Some(abbreviator) => abbreviator.abbreviate(oid),
-            None => oid.to_string(),
+        if abbreviate {
+            repository
+                .odb()
+                .abbreviate(oid, minimum)
+                .unwrap_or_else(|_| oid.to_string())
+        } else {
+            oid.to_string()
         }
     };
     let mut out = Vec::new();
@@ -831,60 +831,6 @@ impl CommitMatcher {
             passed = passed && !self.is_empty();
         }
         Ok(passed)
-    }
-}
-
-/// Git's shortest-unique object name abbreviation over every object in the database.
-struct Abbreviator {
-    sorted: Vec<String>,
-    minimum: usize,
-}
-
-impl Abbreviator {
-    fn new(repository: &Repository, requested: Option<usize>) -> Result<Self> {
-        let mut sorted: Vec<String> = repository
-            .odb()
-            .oids()?
-            .iter()
-            .map(|oid| oid.to_string())
-            .collect();
-        sorted.sort();
-        sorted.dedup();
-        let hex_len = repository.format().hex_len();
-        let minimum = match requested {
-            Some(n) if n > 0 => n.clamp(4, hex_len),
-            _ => {
-                // `find_unique_abbrev`'s default: enough digits for about 2^(bits/2) objects.
-                let count = sorted.len().max(1);
-                let bits = (usize::BITS - count.leading_zeros()) as usize;
-                bits.div_ceil(2).clamp(7, hex_len)
-            }
-        };
-        Ok(Abbreviator { sorted, minimum })
-    }
-
-    fn abbreviate(&self, oid: &ObjectId) -> String {
-        let hex = oid.to_string();
-        let at = self.sorted.binary_search(&hex).unwrap_or_else(|at| at);
-        let shared = |other: &String| {
-            hex.bytes()
-                .zip(other.bytes())
-                .take_while(|(a, b)| a == b)
-                .count()
-        };
-        let mut need = self.minimum;
-        if at > 0 {
-            need = need.max(shared(&self.sorted[at - 1]) + 1);
-        }
-        let after = if self.sorted.get(at) == Some(&hex) {
-            at + 1
-        } else {
-            at
-        };
-        if let Some(next) = self.sorted.get(after) {
-            need = need.max(shared(next) + 1);
-        }
-        hex[..need.min(hex.len())].to_string()
     }
 }
 

@@ -1860,3 +1860,20 @@ Fix: `MAX_DELTA_DEPTH` 50 -> 4095 (git's `pack.depth` cap; the walk stays iterat
 Left undone: `get_at_offset` called directly still reports a zero id (it does not know the object id).
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 272 passed / 0 failed / 0 ignored;
 `scenarios.sh` 318 PASS, `failures: 0`.
+
+### Block 12 — A14 (abbreviations and `rev-parse --short`)
+
+Scenario `s_abbrev` (new, real-git fixture: 2400 packed + 300 loose blobs): `rev-parse --short`, `--short=12|0|3|99`,
+`--short HEAD~0 HEAD`, `--short 5 HEAD`, `log --oneline` and `rev-list --abbrev-commit` under `core.abbrev` = unset / 10 / no / 4 / auto,
+and `--short=4` on 700 ids (the scenario asserts git itself extends at least one of them). Fails on `2e56aae`; passes after.
+Fix: `Odb::abbreviate` / `unique_abbrev_len` / `default_abbrev_len` (new `odb/abbrev.rs`) look only at each pack index's sorted
+neighbours of the id plus the one loose bucket, and size the automatic length the way git does (pack counts + 256 x `objects/17/`).
+`history::abbrev` now delegates to it and honours `core.abbrev` (`auto`, false-ish = full, 4..=hex length; a value git rejects is read as
+`auto` instead of git's fatal); the old per-call `oids()` scan and `query.rs`'s `Abbreviator` are deleted. `rev-parse --short` takes its
+number only with `=` and, like git, implies `--verify` (exactly one revision, else `fatal: Needed a single revision`).
+Rust test `unique_abbrev_len_matches_a_scan_of_every_id` (3000 loose blobs against a brute-force scan).
+Perf (release build, 2500 commits / 27,500 packed objects, `log --oneline`): before 4.87 s and 5002 output lines differing from git
+(7 digits vs git's 8); after 0.038 s and byte-identical to git.
+Left undone: `log --abbrev=<n>` is still parsed and ignored (`history.rs` `abbrev` arg); a bad `core.abbrev` does not die as git does.
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 273 passed / 0 failed / 0 ignored;
+`scenarios.sh` 319 scenarios, `failures: 0`.
