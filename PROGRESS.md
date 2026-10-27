@@ -1926,3 +1926,16 @@ Fix: `Odb::open` reads `<git-dir>/shallow`; new `Odb::is_shallow` / `Odb::visibl
 `gitwalk.rs`, and the CLI loaders in `history.rs` and `query.rs`. The `GAPS.md` A6 line is deleted.
 Left undone: writing `.git/shallow` (`clone --depth`/`fetch --depth` still refuse by name); `rebase`/`sequencer`/`stash`/`bundle` still read `commit.parents` directly.
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 274 passed / 0 failed; `scenarios.sh` 322 PASS, `failures: 0`.
+
+### Block 12 — A8 (malformed identity lines)
+
+Scenario `s_malformed_ident` (new, real-git fixture built with `hash-object --literally`): author lines `Foo 1234 +0000` (no email), `Foo <foo@x.com>` (no date),
+an overflowing date, `+00000`, then `log` (oneline, formats, dates), `rev-list --count`, `show -s`, `fsck`. Fails on `bb282a3` (`log` aborts with an invalid-header error); passes after.
+Fix: `Commit::parse` reads author/committer through new `Signature::parse_lenient` (git's `split_ident_line`: strict result when valid, otherwise missing `<>` -> empty,
+bad/overflowing date -> 0, tz = leading `±digits` as hhmm). `Signature::parse` stays strict. `fsck` gained `ident_problem`/`commit_ident_problems` mirroring git's `fsck_ident`
+(missingEmail, badTimezone, badDateOverflow, missingSpaceBeforeDate, missingNameBeforeEmail, ...), output identical to git on the fixture.
+Test changed: `malformed_offset_rejected` asserted that a commit with `+9999` fails to parse; real git reads it (`log` prints `+9999`, `fsck` clean), so it became
+`out_of_range_offset_is_strict_for_signature_lenient_for_commit` (strict for `Signature::parse`, lenient for `Commit::parse`). Verified against `/usr/bin/git`.
+Left undone (GAPS.md A8 remainder): absent date still prints epoch for `%ad`/`%at`/`%aI` (git prints empty); a line with no email still prints `Author:` in `log`.
+`blame`/`rebase` over such history were not added to the scenario.
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 276 passed / 0 failed / 0 ignored; `scenarios.sh` 323 PASS, `failures: 0`.

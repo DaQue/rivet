@@ -71,6 +71,85 @@ fn sort_key(name: &[u8], mode: EntryMode) -> Vec<u8> {
 }
 
 /// The `fsck` messages for one tree's entries, in Git's wording.
+/// Mirrors git's `fsck_ident`: the first problem (msg-id, text) of one identity line.
+fn ident_problem(line: &[u8]) -> Option<(&'static str, &'static str)> {
+    let at = |i: usize| line.get(i).copied();
+    let span = |from: usize| {
+        from + line[from.min(line.len())..]
+            .iter()
+            .take_while(|b| !matches!(**b, b'<' | b'>' | b'\n'))
+            .count()
+    };
+    if at(0) == Some(b'<') {
+        return Some(("missingNameBeforeEmail", "missing space before email"));
+    }
+    let mut p = span(0);
+    if at(p) == Some(b'>') {
+        return Some(("badEmail", "bad email"));
+    }
+    if at(p) != Some(b'<') {
+        return Some(("missingEmail", "missing email"));
+    }
+    if p == 0 || line[p - 1] != b' ' {
+        return Some(("missingSpaceBeforeEmail", "missing space before email"));
+    }
+    p = span(p + 1);
+    if at(p) != Some(b'>') {
+        return Some(("badEmail", "bad email"));
+    }
+    p += 1;
+    if at(p) != Some(b' ') {
+        return Some(("missingSpaceBeforeDate", "missing space before date"));
+    }
+    p += 1;
+    if at(p) == Some(b'0') && at(p + 1) != Some(b' ') {
+        return Some(("zeroPaddedDate", "zero-padded date"));
+    }
+    let digits = line[p.min(line.len())..]
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .count();
+    if digits == 0 {
+        return Some(("badDate", "bad date"));
+    }
+    if std::str::from_utf8(&line[p..p + digits])
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .is_none()
+    {
+        return Some(("badDateOverflow", "date causes integer overflow"));
+    }
+    p += digits;
+    if at(p) != Some(b' ') {
+        return Some(("badDate", "bad date"));
+    }
+    p += 1;
+    if !matches!(at(p), Some(b'+' | b'-')) {
+        return Some(("badTimezone", "bad time zone"));
+    }
+    let tz = &line[p + 1..];
+    if tz.len() != 4 || !tz.iter().all(u8::is_ascii_digit) {
+        return Some(("badTimezone", "bad time zone"));
+    }
+    None
+}
+
+/// Identity-line problems of a raw commit: the author line, then the committer line.
+fn commit_ident_problems(data: &[u8]) -> Vec<(&'static str, &'static str)> {
+    let mut found = Vec::new();
+    for line in data.split(|b| *b == b'\n') {
+        if line.is_empty() {
+            break;
+        }
+        for key in [&b"author "[..], &b"committer "[..]] {
+            if let Some(rest) = line.strip_prefix(key) {
+                found.extend(ident_problem(rest));
+            }
+        }
+    }
+    found
+}
+
 fn tree_problems(tree: &crate::object::Tree<'_>) -> Vec<&'static str> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -146,6 +225,14 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
         match object.parse() {
             Ok(AnyObject::Commit(commit)) => {
                 out.push((ObjectKind::Tree, commit.tree));
+                if !options.connectivity_only {
+                    for (id, text) in commit_ident_problems(object.data()) {
+                        report.problems.push(format!(
+                            "error in commit {oid}: {id}: invalid author/committer line - {text}"
+                        ));
+                        report.status |= ERROR_OBJECT;
+                    }
+                }
                 if !odb.is_shallow(&oid) {
                     out.extend(commit.parents.iter().map(|p| (ObjectKind::Commit, *p)));
                 }
@@ -352,6 +439,21 @@ fn git_table_order(ids: &[ObjectId]) -> Vec<ObjectId> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a8_ident_problems_match_git_msg_ids() {
+        let id = |s: &[u8]| super::ident_problem(s).map(|p| p.0);
+        assert_eq!(id(b"A <a@b> 1234 +0000"), None);
+        assert_eq!(id(b"Foo 1234 +0000"), Some("missingEmail"));
+        assert_eq!(id(b"Foo <a@b>"), Some("missingSpaceBeforeDate"));
+        assert_eq!(
+            id(b"Foo <a@b> 99999999999999999999999 +0000"),
+            Some("badDateOverflow")
+        );
+        assert_eq!(id(b"Foo <a@b> 1234 +00000"), Some("badTimezone"));
+        assert_eq!(id(b"<> 1234 +0000"), Some("missingNameBeforeEmail"));
+        assert_eq!(id(b"Foo <a@b> 01234 +0000"), Some("zeroPaddedDate"));
+    }
+
     use super::*;
 
     fn id(first: u8, second: u8) -> ObjectId {

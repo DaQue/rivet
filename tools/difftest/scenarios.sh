@@ -10301,6 +10301,29 @@ s_shallow() {
     v fsck
 }
 
+s_malformed_ident() {
+    g init -q r; cd r
+    local t p="" c a
+    t=$(g hash-object -t tree -w /dev/null)
+    for a in "Foo 1234 +0000" "Foo <foo@x.com>" "Foo <foo@x.com> 99999999999999999999999 +0000" \
+             "Foo <foo@x.com> 1234 +00000" "Foo <foo@x.com> 1234 +0000"; do
+        c=$(printf 'tree %s\n%sauthor %s\ncommitter C <c@x> 1234 +0000\n\nmsg\n' "$t" "$p" "$a" \
+            | g hash-object -t commit -w --stdin --literally)
+        p="parent $c
+"
+    done
+    g update-ref refs/heads/master "$c"
+    g symbolic-ref HEAD refs/heads/master
+    v log --oneline
+    v log --format='%h|%an|%ae|%cn'
+    v log --format='%h|%ad' -3
+    v log --format='%H %aI' -2
+    v rev-list --count HEAD
+    v show -s --format='%an <%ae> %at' HEAD~1
+    v show -s --format='%an <%ae>' HEAD~3
+    v fsck
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

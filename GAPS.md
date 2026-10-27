@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 322 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 323 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-27, gate: 274 tests / 0 failed, 322 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-27, gate: 276 tests / 0 failed, 323 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -222,7 +222,7 @@ deleted in the commit that fixes it. A15 is not in the queue yet.
 
 * **A2 (remainder)** — a merge with more than one merge base is refused by name (`fatal: merge with more than one merge base (...) is not implemented`, exit 128); the recursive virtual base is not built (`branching.rs`).
 * **A3** — `.gitattributes` / `core.autocrlf` give different blobs from git (`worktree/add.rs`, `checkout.rs`).
-* **A8** — malformed-but-real identity lines abort `log` (`object/commit.rs`).
+* **A8 (remainder)** — a commit identity line with no date still prints the epoch for `%ad`/`%at`/`%aI` (git prints nothing), and a line with no `<email>` still prints an `Author:` line in `log` (git omits `Author:`/`Date:`); `Signature` cannot represent "absent" (`object/commit.rs`).
 * **A9** — index v4 refused; split-index `link` extension misread.
 * **A11** — no post-fetch connectivity check.
 * **A12** — `gc` deletes old packs without fsyncing the new pack and idx first.

@@ -77,7 +77,55 @@ pub struct Signature {
 }
 
 impl Signature {
-    /// Phase 1 — parse the portion of an author/committer header after the header name.
+    /// Parses an identity line the way git's `split_ident_line` does: never fails.
+    ///
+    /// A strictly valid line gives exactly what [`Signature::parse`] gives. Otherwise a missing
+    /// `<`/`>` leaves name and email empty, a missing or overflowing date is `0`, and the
+    /// timezone is the leading `±digits` run read as `hhmm` (so `+00000` is UTC), else `0`.
+    pub(crate) fn parse_lenient(data: &BStr) -> Self {
+        if let Ok(sig) = Self::parse(data) {
+            return sig;
+        }
+        let line: &[u8] = data;
+        let empty = Self {
+            name: BString::default(),
+            email: BString::default(),
+            when: 0,
+            tz_offset_minutes: 0,
+        };
+        let Some(open) = line.iter().position(|b| *b == b'<') else {
+            return empty;
+        };
+        let Some(close) = line[open + 1..].iter().position(|b| *b == b'>') else {
+            return empty;
+        };
+        let close = open + 1 + close;
+        let mut name_bytes = &line[..open];
+        while let Some((&b' ', rest)) = name_bytes.split_last() {
+            name_bytes = rest;
+        }
+        let rest = line[close + 1..].trim_start_with(|c| c == ' ');
+        let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+        let when = parse_decimal(&rest[..digits]).unwrap_or(0);
+        let after = rest[digits..].trim_start_with(|c| c == ' ');
+        let tz_offset_minutes = match after.split_first() {
+            Some((&s @ (b'+' | b'-'), d)) => {
+                let n = d.iter().take_while(|b| b.is_ascii_digit()).count();
+                let hhmm = parse_decimal(&d[..n]).unwrap_or(0).min(99_999_999);
+                let m = (hhmm / 100 * 60 + hhmm % 100) as i32;
+                if s == b'-' { -m } else { m }
+            }
+            _ => 0,
+        };
+        Self {
+            name: BString::from(name_bytes),
+            email: BString::from(&line[open + 1..close]),
+            when,
+            tz_offset_minutes,
+        }
+    }
+
+    /// Phase 1— parse the portion of an author/committer header after the header name.
     ///
     /// Input looks like `Rivet <rivet@example.com> 1759708800 +0200`. The trailing `\n` has
     /// already been removed by the caller.
@@ -371,23 +419,12 @@ impl<'a> Commit<'a> {
                     )?);
                 }
                 "author" => {
-                    author = Some(Signature::parse(BStr::new(value_bytes)).map_err(|_| {
-                        Error::InvalidHeader {
-                            kind: ObjectKind::Commit,
-                            header: "author",
-                            reason: "author signature is not a valid signature",
-                        }
-                    })?);
+                    // Read paths are lenient like git's `split_ident_line`; `fsck` reports.
+                    author = Some(Signature::parse_lenient(BStr::new(value_bytes)));
                     required[1] = true;
                 }
                 "committer" => {
-                    committer = Some(Signature::parse(BStr::new(value_bytes)).map_err(|_| {
-                        Error::InvalidHeader {
-                            kind: ObjectKind::Commit,
-                            header: "committer",
-                            reason: "committer signature is not a valid signature",
-                        }
-                    })?);
+                    committer = Some(Signature::parse_lenient(BStr::new(value_bytes)));
                     required[2] = true;
                 }
                 _ => {
@@ -869,6 +906,25 @@ fn format_offset(total_minutes: i32) -> (char, i32, i32) {
 mod tests {
     use super::*;
 
+    /// A8: read paths accept the identity lines git's `split_ident_line` accepts.
+    #[test]
+    fn a8_lenient_identity_lines() {
+        let l = |s: &[u8]| Signature::parse_lenient(BStr::new(s));
+        let sig = l(b"Foo 1234 +0000");
+        assert_eq!((sig.name.len(), sig.email.len(), sig.when), (0, 0, 0));
+        let sig = l(b"Foo <foo@x.com>");
+        assert_eq!(
+            (&sig.name[..], &sig.email[..], sig.when),
+            (&b"Foo"[..], &b"foo@x.com"[..], 0)
+        );
+        let sig = l(b"Foo <foo@x.com> 99999999999999999999999 +0000");
+        assert_eq!(sig.when, 0);
+        let sig = l(b"Foo <foo@x.com> 1234 +00000");
+        assert_eq!((sig.when, sig.tz_offset_minutes), (1234, 0));
+        let sig = l(b"Foo <foo@x.com> 1234 -0130");
+        assert_eq!((sig.when, sig.tz_offset_minutes), (1234, -90));
+    }
+
     /// H2: angle-bracket name — the last '>' wins.
     #[test]
     fn h2_angle_bracket_name() {
@@ -970,21 +1026,20 @@ committer David Queen <david@queen.example> 2000 +0000\n\
         assert!(!c.is_merge());
     }
 
-    /// Malformed offset is rejected.
+    /// Strict `Signature::parse` rejects an out-of-range offset; the commit read path follows
+    /// git (`git log` prints `+9999` and `fsck` is clean) and keeps the commit readable.
     #[test]
-    fn malformed_offset_rejected() {
+    fn out_of_range_offset_is_strict_for_signature_lenient_for_commit() {
+        assert!(Signature::parse(BStr::new(b"D <d@q> 1000 +9999")).is_err());
         let body = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n\
 author David Queen <david@queen.example> 1000 +9999\n\
 committer David Queen <david@queen.example> 2000 +0000\n\
 \nmessage\n";
-        let err = Commit::parse(ObjectFormat::Sha1, body).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::InvalidHeader {
-                header: "author",
-                ..
-            }
-        ));
+        let c = Commit::parse(ObjectFormat::Sha1, body).unwrap();
+        assert_eq!(
+            (c.author.when, c.author.tz_offset_minutes),
+            (1000, 99 * 60 + 99)
+        );
     }
 
     /// A negative `when` is legal.
