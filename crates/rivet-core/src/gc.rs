@@ -1122,6 +1122,14 @@ fn pack_refs(repo: &Repository) -> Result<usize> {
     Ok(count)
 }
 
+/// Whether `extensions.preciousObjects` is on: objects may then be added but never removed.
+fn precious_objects(repo: &Repository) -> Result<bool> {
+    match repo.config_value(bstr::BStr::new(b"extensions.preciousObjects"))? {
+        Some(value) => crate::config::parse_bool(bstr::BStr::new(&value[..])),
+        None => Ok(false),
+    }
+}
+
 /// Run garbage collection on `repo`.
 ///
 /// # Errors
@@ -1144,6 +1152,11 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
     let tips = walk_tips(repo)?;
     if options.pack_refs {
         report.refs_packed = pack_refs(repo)?;
+    }
+    // `extensions.preciousObjects`: git's gc still packs refs and expires reflogs, but neither
+    // repacks nor prunes, so no pack or loose object is ever deleted.
+    if precious_objects(repo)? {
+        return Ok(report);
     }
 
     // Classify packs: `.keep` packs are left alone and their objects are not repacked.
@@ -1513,6 +1526,11 @@ pub struct RepackReport {
 /// Any object that is reachable but unreadable aborts the run before a file is changed; I/O
 /// errors while writing the new pack likewise leave the old objects in place.
 pub fn repack(repo: &Repository, options: &RepackOptions) -> Result<RepackReport> {
+    if options.delete_redundant && precious_objects(repo)? {
+        return Err(Error::Message(
+            "cannot delete packs in a precious-objects repo".to_string(),
+        ));
+    }
     let mut report = RepackReport::default();
     let git_dir = repo.common_dir();
     let format = repo.format();

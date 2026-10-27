@@ -118,6 +118,12 @@ pub enum Error {
         version: u32,
     },
 
+    /// A version-1 repository sets `extensions.*` keys that Rivet does not know.
+    ///
+    /// The names are lower-cased, in config order, repeats included. The message is Git's.
+    #[error("{}", unknown_extensions_text(.0))]
+    UnknownRepositoryExtensions(Vec<BString>),
+
     /// `extensions.objectFormat` holds a value that is not `sha1` or `sha256`.
     #[error("unknown object format {0} (expected \"sha1\" or \"sha256\")")]
     UnknownObjectFormat(BString),
@@ -840,4 +846,18 @@ pub enum Error {
         /// The unimplemented operation.
         what: &'static str,
     },
+}
+
+/// Git's text for [`Error::UnknownRepositoryExtensions`]: a heading, then one tab-indented name per line.
+fn unknown_extensions_text(names: &[BString]) -> String {
+    let mut text = String::from(if names.len() == 1 {
+        "unknown repository extension found:"
+    } else {
+        "unknown repository extensions found:"
+    });
+    for name in names {
+        text.push_str("\n\t");
+        text.push_str(&name.to_string());
+    }
+    text
 }

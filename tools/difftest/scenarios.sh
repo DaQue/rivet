@@ -10194,6 +10194,50 @@ s_abbrev() {
     [ "$longer" -gt 0 ] || { echo "fixture has no ambiguous 4-digit prefix"; return 1; }
 }
 
+# Unknown `extensions.*` in a version-1 repository are refused with git's list (config order, repeats,
+# lower-cased keys, `sub.q` for a subsection); version 0 ignores them. `extensions.preciousObjects`
+# makes `gc` and `repack -d` leave every pack and loose object in place.
+s_repo_extensions() {
+    g init -q repo; cd repo
+    echo a >a; g add a; tick; g commit -qm one
+    local ver body
+    while IFS='|' read -r ver body; do
+        printf '[core]\n\trepositoryformatversion = %s\n\tbare = false\n[extensions]\n%b\n' "$ver" "$body" >.git/config
+        echo "--- v$ver $body"
+        v status --short
+        v log --oneline
+        v rev-parse HEAD
+    done <<'EOF2'
+1|\tfrobnicate = true
+0|\tfrobnicate = true
+1|\tFrobnicate = false
+1|\tzzz = 1\n\tAAA = 2\n\tzzz = 3\n\tnoop = 1
+1|\tpreciousObjects = true\n\tworktreeConfig = true\n\tobjectFormat = sha1\n\trefStorage = files
+1|\tpartialClone = origin\n\tcompatObjectFormat = sha256
+EOF2
+    printf '[core]\n\trepositoryformatversion = 1\n[extensions "sub"]\n\tQ = 1\n' >.git/config
+    v status --short
+    # preciousObjects: nothing is ever deleted
+    printf '[core]\n\trepositoryformatversion = 1\n\tbare = false\n[extensions]\n\tpreciousObjects = true\n' >.git/config
+    echo b >b; g add b; tick; g commit -qm two
+    g reset -q --hard HEAD~1
+    g repack -q
+    g reflog expire --expire=now --all
+    junk=$(echo junk | g hash-object -w --stdin)
+    lost=$(g rev-parse HEAD)
+    v gc --prune=now
+    echo "gc rc=$?"
+    v cat-file -t "$junk"
+    v repack -a -d
+    echo "repack -a -d rc=$?"
+    v repack -d
+    echo "repack -d rc=$?"
+    v cat-file -t "$junk"
+    v count-objects -v
+    v fsck
+    ls .git/objects/pack | sed 's/pack-[0-9a-f]*/pack-X/' | sort | uniq -c
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

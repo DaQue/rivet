@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 319 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 320 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-10-27, gate: 273 tests / 0 failed, 319 scenarios / 0 failures, `fmt`,
@@ -223,7 +223,6 @@ deleted in the commit that fixes it. A15 is not in the queue yet.
 * **A2** — criss-cross merge uses `bases.first()` and commits a tree git conflicts on (`branching.rs`).
 * **A3** — `.gitattributes` / `core.autocrlf` give different blobs from git (`worktree/add.rs`, `checkout.rs`).
 * **A6** — `.git/shallow` is never read; shallow clones fail `log`/`fsck`.
-* **A7** — unknown `extensions.*` not refused; `preciousObjects` ignored by `gc`/`prune`/`repack -d`.
 * **A8** — malformed-but-real identity lines abort `log` (`object/commit.rs`).
 * **A9** — index v4 refused; split-index `link` extension misread.
 * **A10** — `objects/info/alternates` is not read (`odb/mod.rs`).

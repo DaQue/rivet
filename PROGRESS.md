@@ -1877,3 +1877,18 @@ Perf (release build, 2500 commits / 27,500 packed objects, `log --oneline`): bef
 Left undone: `log --abbrev=<n>` is still parsed and ignored (`history.rs` `abbrev` arg); a bad `core.abbrev` does not die as git does.
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 273 passed / 0 failed / 0 ignored;
 `scenarios.sh` 319 scenarios, `failures: 0`.
+
+### Block 12 — A7 (unknown repository extensions, preciousObjects)
+
+Scenario `s_repo_extensions` (new, real-git fixture): `status`/`log`/`rev-parse` over version-1 configs with an unknown extension,
+a differently-cased one, repeats plus `noop`, a subsection key (`sub.q`), the known names (`preciousObjects`, `worktreeConfig`,
+`objectFormat`, `refStorage`, `partialClone`, `compatObjectFormat`) and a version-0 config; then a `preciousObjects` repo with an
+unreachable loose object and a redundant pack: `gc --prune=now`, `repack -a -d`, `repack -d`, `count-objects -v`, `fsck`, pack listing.
+Fails on `4444225`; passes after.
+Fix: `Repository::open_with` refuses unknown `extensions.*` in a version-1 repository with git's text and exit 128
+(new `Error::UnknownRepositoryExtensions`; names lower-cased, config order, repeats kept, subsection keys as `sub.q`; version 0 ignores
+them). `gc` with `extensions.preciousObjects` still packs refs and expires reflogs but skips repack and prune; `repack -d` fails with
+`cannot delete packs in a precious-objects repo`.
+Left undone: rivet has no `prune` command, so git's `cannot prune in a precious-objects repo` is not covered; git's `gc` also writes
+`objects/info/commit-graph`, which rivet does not.
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 273 passed / 0 failed; `scenarios.sh` 320 scenarios, `failures: 0`.

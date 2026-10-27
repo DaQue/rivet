@@ -469,6 +469,42 @@ impl Repository {
         if version > 1 {
             return Err(Error::UnsupportedRepositoryFormatVersion { version });
         }
+        if version == 1 {
+            // Git ignores `extensions.*` in a version-0 repository and refuses unknown ones in
+            // version 1. Names compare case-insensitively and are reported lower-cased.
+            const KNOWN: [&[u8]; 8] = [
+                b"noop",
+                b"preciousobjects",
+                b"partialclone",
+                b"worktreeconfig",
+                b"objectformat",
+                b"compatobjectformat",
+                b"refstorage",
+                b"relativeworktrees",
+            ];
+            let mut unknown: Vec<BString> = Vec::new();
+            for entry in config.entries() {
+                if !entry.section.eq_ignore_ascii_case(b"extensions") {
+                    continue;
+                }
+                // `[extensions "sub"] q` is the flat key `extensions.sub.q`: never known, and git
+                // keeps the subsection's case but lower-cases the key. Repeats are reported repeated.
+                let key = entry.key.to_ascii_lowercase();
+                match &entry.subsection {
+                    None if KNOWN.contains(&key.as_slice()) => {}
+                    None => unknown.push(BString::from(key)),
+                    Some(sub) => {
+                        let mut name = sub.clone();
+                        name.push(b'.');
+                        name.extend_from_slice(&key);
+                        unknown.push(name);
+                    }
+                }
+            }
+            if !unknown.is_empty() {
+                return Err(Error::UnknownRepositoryExtensions(unknown));
+            }
+        }
         let format = match format {
             Some(f) => f,
             None => config.object_format()?,
