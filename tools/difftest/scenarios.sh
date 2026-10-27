@@ -10238,6 +10238,42 @@ EOF2
     ls .git/objects/pack | sed 's/pack-[0-9a-f]*/pack-X/' | sort | uniq -c
 }
 
+# `git clone --shared` leaves `objects/info/alternates` and no objects of its own: every read command
+# must find the history through it, including a relative alternate and a chained one.
+s_alternates() {
+    g init -q repo; cd repo
+    echo a >a; g add a; tick; g commit -qm one
+    echo b >b; g add b; tick; g commit -qm two
+    g tag -a -m rel v1
+    cd ..
+    g clone -q --shared repo cl
+    g clone -q --shared cl cl2
+    mkdir rel; g init -q rel/r; mkdir -p rel/r/.git/objects/info
+    printf '# comment\n\n../../../../repo/.git/objects\n' >rel/r/.git/objects/info/alternates
+    cd cl
+    v log --oneline
+    v status
+    v rev-parse HEAD HEAD~1 'HEAD^{tree}' v1
+    v cat-file -t HEAD
+    v cat-file -s HEAD:b
+    v cat-file -p HEAD:a
+    v show --stat HEAD
+    v count-objects
+    echo c >c; g add c; tick; g commit -qm three
+    v log --oneline
+    v fsck
+    cd ../cl2
+    v log --oneline
+    v status
+    v rev-parse --verify v1
+    v show HEAD~1:a
+    cd ../rel/r
+    v cat-file -t "$(g -C ../../repo rev-parse HEAD)"
+    v cat-file -p "$(g -C ../../repo rev-parse 'HEAD^{tree}')"
+    short=$(g -C ../../repo rev-parse --short=10 HEAD)
+    v cat-file -t "$short"
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
@@ -10299,6 +10335,7 @@ for s in "$@"; do
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
+        s_alternates) run_scenario "$s" repo cl cl2 rel/r ;;
         *) run_scenario "$s" ;;
     esac
 done

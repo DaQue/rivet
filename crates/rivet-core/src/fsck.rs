@@ -117,7 +117,7 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
     // Pass 1: read every object, record its kind and its outgoing edges.
     let mut kinds: HashMap<ObjectId, ObjectKind> = HashMap::new();
     let mut edges: HashMap<ObjectId, Vec<(ObjectKind, ObjectId)>> = HashMap::new();
-    let mut ids = odb.oids()?;
+    let mut ids = odb.oids_with_alternates()?;
     ids.sort();
     for oid in ids {
         report.objects += 1;

@@ -125,10 +125,11 @@ fn read_pack_dir(pack_dir: &Path) -> Result<Vec<fs::DirEntry>> {
 ///   caching would make every command pay for the ones it did not want.
 /// * **Not `Clone`.** The delta cache is behind a `RefCell`, and two clones sharing a cache would
 ///   be surprising given the type looks like a value. Wrap it in an `Rc` if two owners are needed.
-/// * **A repository with `objects/info/alternates` is not supported.** Git's alternate object
-///   databases are how a clone shares objects with the repository it was cloned from; Rivet reads
-///   the file's absence as an empty repository. Reading it is a later phase, and the failure mode
-///   without it is a clean [`crate::error::Error::ObjectNotFound`] rather than a wrong object.
+/// * **Alternates are read-only.** `objects/info/alternates` (what `git clone --shared` writes) is
+///   followed up to git's depth of five, relative paths resolved against the objects directory, and
+///   `read`, `read_header`, `contains` and `resolve_prefix` fall back to them after the local
+///   stores. Writes, [`Odb::oids`], `gc` and abbreviation lengths stay local, as in `git gc`
+///   without `-l`.
 ///
 /// # Panics
 ///
@@ -148,7 +149,12 @@ pub struct Odb {
     delta_cache: RefCell<DeltaBaseCache>,
     /// [`Odb::default_abbrev_len`], computed on first use.
     abbrev_len: Cell<Option<usize>>,
+    /// Object databases named by `objects/info/alternates`, searched after the local stores.
+    alternates: Vec<Odb>,
 }
+
+/// Git's `MAX_ALTERNATE_DEPTH`: alternates of alternates are followed this many levels.
+const MAX_ALTERNATE_DEPTH: usize = 5;
 
 impl Odb {
     /// Phase 10 — open the object database of the repository whose git directory is `git_dir`.
@@ -195,6 +201,10 @@ impl Odb {
     ///
     /// As [`Odb::open`].
     pub fn open_objects_dir(objects_dir: &Path, format: ObjectFormat) -> Result<Self> {
+        Self::open_with_depth(objects_dir, format, 0)
+    }
+
+    fn open_with_depth(objects_dir: &Path, format: ObjectFormat, depth: usize) -> Result<Self> {
         let loose = loose::LooseObjectStore::open(objects_dir, format);
 
         let mut packs = Vec::new();
@@ -217,12 +227,32 @@ impl Odb {
         }
         packs.sort_by_key(|pack| pack.checksum());
 
+        let mut alternates = Vec::new();
+        if depth < MAX_ALTERNATE_DEPTH
+            && let Ok(list) = fs::read(objects_dir.join("info").join("alternates"))
+        {
+            for line in list.split(|b| *b == b'\n') {
+                if line.is_empty() || line[0] == b'#' {
+                    continue;
+                }
+                let Ok(text) = std::str::from_utf8(line) else {
+                    continue;
+                };
+                let path = objects_dir.join(text);
+                // Git warns about and skips an alternate that is not a directory.
+                if path.is_dir() {
+                    alternates.push(Self::open_with_depth(&path, format, depth + 1)?);
+                }
+            }
+        }
+
         Ok(Self {
             format,
             loose,
             packs,
             delta_cache: RefCell::new(DeltaBaseCache::new(DELTA_CACHE_CAPACITY)),
             abbrev_len: Cell::new(None),
+            alternates,
         })
     }
 
@@ -327,7 +357,9 @@ impl Odb {
     ///   read.
     /// * **A `false` is only as fresh as the last refresh.** See [`Odb::refresh`].
     pub fn contains(&self, oid: &ObjectId) -> bool {
-        self.loose.contains(oid) || self.packs.iter().any(|pack| pack.contains(oid))
+        self.loose.contains(oid)
+            || self.packs.iter().any(|pack| pack.contains(oid))
+            || self.alternates.iter().any(|alt| alt.contains(oid))
     }
 
     /// Phase 10 — read one object, hash-verified.
@@ -389,6 +421,13 @@ impl Odb {
                 // A miss in one pack says nothing about its siblings: the id may live in the
                 // pack written after this one. Only ObjectNotFound is a "keep looking"; a
                 // corrupt or delta-broken pack is an error and must not be swallowed.
+                Err(Error::ObjectNotFound { .. }) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        for alt in &self.alternates {
+            match alt.read(oid) {
+                Ok(object) => return Ok(object),
                 Err(Error::ObjectNotFound { .. }) => {}
                 Err(e) => return Err(e),
             }
@@ -456,6 +495,13 @@ impl Odb {
             match pack.read(oid, Some(self)) {
                 Ok(object) => return Ok((object.kind(), object.data().len() as u64)),
                 // Same "keep looking" rule as `read`: only a miss moves on to the next pack.
+                Err(Error::ObjectNotFound { .. }) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        for alt in &self.alternates {
+            match alt.read_header(oid) {
+                Ok(header) => return Ok(header),
                 Err(Error::ObjectNotFound { .. }) => {}
                 Err(e) => return Err(e),
             }
@@ -564,7 +610,7 @@ impl Odb {
         // by id so an object present in both stores is counted once.
         let mut candidates = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for id in self.oids()? {
+        for id in self.oids_with_alternates()? {
             if id.starts_with(prefix) && seen.insert(id) {
                 candidates.push(id);
             }
@@ -609,6 +655,19 @@ impl Odb {
                 }
             }
         }
+        Ok(ids)
+    }
+
+    /// Every object id in the database and in its alternates, as `git fsck` and prefix lookup see
+    /// them. Unlike [`Odb::oids`], which `gc` relies on staying local, this includes objects that
+    /// live in another repository.
+    pub fn oids_with_alternates(&self) -> Result<Vec<ObjectId>> {
+        let mut ids = self.oids()?;
+        for alt in &self.alternates {
+            ids.extend(alt.oids_with_alternates()?);
+        }
+        let mut seen = std::collections::HashSet::new();
+        ids.retain(|id| seen.insert(*id));
         Ok(ids)
     }
 

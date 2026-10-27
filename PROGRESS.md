@@ -1901,3 +1901,17 @@ Fix: `merge` refuses when `merge_bases` returns more than one base: names them, 
 Not a differential scenario because git itself would proceed with a virtual base; the refusal is recorded in `GAPS.md` (A2 remainder).
 Left undone: the recursive virtual merge base (separate commit; not attempted this session).
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 274 passed / 0 failed; `scenarios.sh` 320 PASS, `failures: 0`.
+
+### Block 12 — A10 (alternates), A6 (shallow) not started
+
+Scenario `s_alternates` (new, real-git fixture): `git clone --shared` (and a shared clone of a shared clone, and a hand-written
+relative alternate with a comment and blank line) then `log`, `status`, `rev-parse`, `cat-file -t/-s/-p`, `show --stat`, `count-objects`,
+a new commit, `fsck`, and a 10-digit abbreviation resolved through the alternate. Failed before the fix (`log`: "does not have any commits yet",
+`status`/`cat-file`: object not found, `fsck`: missing commit/blob); passes after.
+Fix: `Odb` reads `objects/info/alternates` (depth 5, relative to the objects dir, `#` and blank lines skipped, non-directories skipped) and
+`read`/`read_header`/`contains`/`resolve_prefix` fall back to it. New `Odb::oids_with_alternates` feeds `fsck` (git's fsck checks alternate
+objects too, verified with `git fsck --verbose`) and short-id lookup in `revparse.rs`; `Odb::oids` stays local so `gc`/`repack` never pack
+another repository's objects. The `GAPS.md` A10 line is deleted.
+Left undone: A6 (`.git/shallow`) — the item stays open in the queue; git's warning for a missing alternate directory is not printed;
+`Odb::abbreviate` lengths ignore alternates.
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 274 passed / 0 failed; `scenarios.sh` 321 PASS, `failures: 0`.

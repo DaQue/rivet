@@ -188,7 +188,7 @@ fn resolve_base(format: ObjectFormat, refs: &RefStore, odb: &Odb, base: &BStr) -
 fn short_candidates(odb: &Odb, base: &BStr) -> Result<Vec<ObjectId>> {
     let wanted = base.to_ascii_lowercase();
     let mut found = Vec::new();
-    for id in odb.oids()? {
+    for id in odb.oids_with_alternates()? {
         if id.to_hex().starts_with(&wanted) {
             found.push(id);
         }

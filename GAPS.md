@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 320 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 321 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-27, gate: 273 tests / 0 failed, 319 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-27, gate: 274 tests / 0 failed, 321 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -82,8 +82,8 @@ The command or subsystem is absent; it either fails at the argument parser or re
   write: refused by name. `--single-branch` / `--no-single-branch` work like `--depth`'s narrowing: the
   fetch refspec names the one cloned branch, and a source with several branches is refused by name (rivet's
   `clone` cannot fetch a single branch only). `--filter` is refused with "not implemented".
-  `--reference` writes the module's `objects/info/alternates` (rivet still copies every object, and does
-  not read alternates); `--dissociate` leaves none. `-j`/`--jobs` is validated and accepted but runs sequentially.
+  `--reference` writes the module's `objects/info/alternates` (rivet still copies every object; it reads
+  alternates since block 12); `--dissociate` leaves none. `-j`/`--jobs` is validated and accepted but runs sequentially.
   `checkout`, `merge` and `rebase` (`--merge`, `--rebase`, `submodule.<name>.update`) work. `update --remote` works
   (branch from `.gitmodules`, remote `HEAD` by default); `submodule.<name>.branch = .` is refused.
 * **`status` of a submodule** — a submodule whose `HEAD` differs from the index, or whose tree is dirty, is reported
@@ -225,7 +225,6 @@ deleted in the commit that fixes it. A15 is not in the queue yet.
 * **A6** — `.git/shallow` is never read; shallow clones fail `log`/`fsck`.
 * **A8** — malformed-but-real identity lines abort `log` (`object/commit.rs`).
 * **A9** — index v4 refused; split-index `link` extension misread.
-* **A10** — `objects/info/alternates` is not read (`odb/mod.rs`).
 * **A11** — no post-fetch connectivity check.
 * **A12** — `gc` deletes old packs without fsyncing the new pack and idx first.
 * **A13** — `inflate_at` / `apply_delta` size allocations from untrusted declared sizes; temp pack names are not unique.
