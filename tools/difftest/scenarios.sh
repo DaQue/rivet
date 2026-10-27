@@ -9251,19 +9251,19 @@ s_sparse_clean() {
     echo u >b/other/sub/u; echo i >b/other/x.log; echo n >d/e/new/n; echo t >d/top.txt
     echo q >zz/q; echo m >a/inner/m; echo u >b/uf
     v sparse-checkout clean -n; echo "rc=$?"
-    v sparse-checkout clean -nv; echo "rc=$?"
+    vs sparse-checkout clean -nv; echo "rc=$?"
     v sparse-checkout clean -n -f; echo "rc=$?"
     v sparse-checkout clean -f; echo "rc=$?"
     mkdir -p d/e/new; echo n >d/e/new/n
     v sparse-checkout set a c; echo mod >c/f
     v sparse-checkout set a
     mkdir -p c/y c/z; echo u >c/y/u; echo u >c/z/u
-    v sparse-checkout clean -nv; echo "rc=$?"
-    v sparse-checkout clean -fv; echo "rc=$?"
+    vs sparse-checkout clean -nv; echo "rc=$?"
+    vs sparse-checkout clean -fv; echo "rc=$?"
     v sparse-checkout clean -f -n; echo "rc=$?"
     v sparse-checkout clean -f -- extra; echo "rc=$?"
     mkdir -p d/e/new; echo n >d/e/new/n
-    (cd d/e/new && v sparse-checkout clean -f -v; echo "rc=$?")
+    (cd d/e/new && vs sparse-checkout clean -f -v; echo "rc=$?")
     (cd a && v sparse-checkout clean -n; echo "rc=$?")
 }
 

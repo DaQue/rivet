@@ -1811,3 +1811,13 @@ here is tmpfs, so this is probably the fixture filesystem rather than a regressi
 (e.g. by rerunning with `TMPDIR` on ext4/btrfs). Per the brief's stop rule I did not commit a fix on top of a red suite.
 Left undone: all of A1–A15, including the `## Known defects` section in `GAPS.md`. Next session should first decide whether
 `s_sparse_clean` should compare order-insensitively for `-v`, or be run on a non-tmpfs `TMPDIR`.
+
+### Block 12 — resolution of the red gate (harness, not code)
+
+The red gate was a harness bug, not a regression. `git sparse-checkout clean -v` prints paths in raw `readdir`
+order, which depends on the fixture filesystem; the scenario asserted that order byte-for-byte. Readdir
+order is not git's contract, so the four `-v` dumps in `s_sparse_clean` now use `vs`
+(sorted comparison, the harness's existing tool for hash-order accidents). Verified: 10 consecutive solo runs
+green, then the full suite 315 PASS / `failures: 0` with fmt/clippy/test green. No production code touched.
+The previous session's stop was correct under the brief and cost one iteration; block 12 restarts from here.
+
