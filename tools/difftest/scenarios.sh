@@ -1593,6 +1593,28 @@ s_packed_refs() {
     v rev-parse t2 'main^{commit}' t2^{}
 }
 
+s_packed_refs_stale() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g branch gone1 && g branch gone2 && g branch gone3 && g branch keep && g push -q origin --all 2>/dev/null)
+    g clone -q origin.git repo 2>/dev/null
+    (cd repo && g pack-refs --all)
+    (cd seed && g push -q origin :gone1 :gone2 :gone3 2>/dev/null)
+    cd repo
+    refs_state() { { echo "## packed"; cat .git/packed-refs; echo "## loose"; find .git/refs -type f | sort; } >>"$TRANSCRIPT"; }
+    refs_state
+    v fetch --prune
+    refs_state
+    v branch -a
+    v for-each-ref
+    v fsck
+    g branch b1 keep; g branch b2 keep; g branch b3 keep
+    (g pack-refs --all)
+    v branch -D b1 b2 b3
+    refs_state
+    v branch -a
+}
+
 s_status_variants() {
     v init -q repo; cd repo
     printf '*.log\nbuild/\n' >.gitignore
@@ -10089,7 +10111,7 @@ if [ $# -eq 0 ]; then
 fi
 for s in "$@"; do
     case $s in
-        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash|s_push_refspec_forms) run_scenario "$s" repo origin.git ;;
+        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_packed_refs_stale|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash|s_push_refspec_forms) run_scenario "$s" repo origin.git ;;
         s_credential) run_scenario "$s" c_ok c5 ;;
         s_credential_post) run_scenario "$s" c_post ;;
         s_credential_keys) run_scenario "$s" c_exp c_quitfull ;;

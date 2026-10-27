@@ -1821,3 +1821,17 @@ order is not git's contract, so the four `-v` dumps in `s_sparse_clean` now use 
 green, then the full suite 315 PASS / `failures: 0` with fmt/clippy/test green. No production code touched.
 The previous session's stop was correct under the brief and cost one iteration; block 12 restarts from here.
 
+
+### Block 12 — A1 (packed refs: delete/rename rewrote a stale snapshot)
+
+Scenario `s_packed_refs_stale` (new): real-git clone, `git pack-refs --all`, three branches deleted upstream, then
+`fetch --prune` and `branch -D b1 b2 b3`. Fails on base `5a1d4f4` (pruned `origin/gone1`/`gone2` reappear in
+`packed-refs`, `branch -a`, `for-each-ref`); passes after.
+Fix: `PackedRefs::remove_locked` (crate-private) re-reads `packed-refs` under `packed-refs.lock`, removes, writes;
+`RefStore::delete` / `rename` use it. `branch -d/-D` now takes any number of names (hidden trailing positional).
+Rust test `remove_locked_rereads_the_file_instead_of_a_stale_snapshot`.
+`GAPS.md`: added `## Known defects (2026-10-27 review)` with A2–A14 plus the A1 remainder; header counts updated.
+Left undone: the in-memory `RefStore.packed` snapshot is not refreshed after `delete`/`rename` (they take `&self`;
+changing that is a public-API change) — recorded as "A1 (remainder)" in `GAPS.md`. A15 is not defined in the queue.
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 270 passed / 0 failed / 0 ignored;
+`scenarios.sh` 316 scenarios, `failures: 0`.

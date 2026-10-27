@@ -1064,9 +1064,7 @@ impl RefStore {
         }
         reflog::delete(git_dir, name)?;
         if packed_present {
-            let mut packed = self.packed.clone();
-            packed.remove(name);
-            packed.write(&self.common_dir, self.format)?;
+            PackedRefs::remove_locked(&self.common_dir, self.format, &[name])?;
         }
         Ok(())
     }
@@ -1113,9 +1111,7 @@ impl RefStore {
             std::fs::rename(&from_log, &to_log).map_err(|e| io_at(&from_log, e))?;
         }
         if self.packed.get(from).is_some() {
-            let mut packed = self.packed.clone();
-            packed.remove(from);
-            packed.write(&self.common_dir, self.format)?;
+            PackedRefs::remove_locked(&self.common_dir, self.format, &[from])?;
         }
         let _ = from_lock.release();
         Ok(())

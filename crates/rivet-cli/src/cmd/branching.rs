@@ -52,6 +52,10 @@ pub struct BranchArgs {
     #[arg(value_name = "START-POINT")]
     pub start_point: Option<String>,
 
+    /// Further branches for `-d` / `-D`, which take any number of names.
+    #[arg(value_name = "BRANCH", hide = true)]
+    pub more_names: Vec<String>,
+
     /// Delete a branch that is fully merged.
     #[arg(short = 'd', long = "delete", requires = "name")]
     pub delete: bool,
@@ -490,7 +494,12 @@ pub fn run_branch(global: &GlobalArgs, args: &BranchArgs) -> Result<i32> {
 
     if args.delete || args.force_delete {
         let force = args.force_delete || args.force;
-        let names: Vec<&String> = args.name.iter().chain(args.start_point.iter()).collect();
+        let names: Vec<&String> = args
+            .name
+            .iter()
+            .chain(args.start_point.iter())
+            .chain(args.more_names.iter())
+            .collect();
         let mut code = 0;
         for name in names {
             code = code.max(delete_branch(

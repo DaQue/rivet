@@ -310,6 +310,28 @@ impl PackedRefs {
         lock.write_and_commit(&self.serialize(format))
     }
 
+    /// Remove `names` from the on-disk `packed-refs`, re-reading the file under `packed-refs.lock`.
+    ///
+    /// Callers hold a snapshot taken at open, which another delete in the same process (or another
+    /// process) may already have made stale; writing that snapshot back would resurrect refs.
+    pub(crate) fn remove_locked(
+        git_dir: &Path,
+        format: ObjectFormat,
+        names: &[&RefName],
+    ) -> Result<()> {
+        let path = packed_refs_path(git_dir);
+        let mut lock = crate::refs::RefLock::acquire_path(&path)?;
+        let mut current = Self::load(git_dir, format)?;
+        let before = current.len();
+        for name in names {
+            current.remove(name);
+        }
+        if current.len() == before {
+            return lock.release();
+        }
+        lock.write_and_commit(&current.serialize(format))
+    }
+
     /// Phase 2 — the target of a ref, if it is packed.
     ///
     /// # Caveats
@@ -615,4 +637,41 @@ pub fn location(loose_present: bool, packed_present: bool) -> RefLocation {
 /// [`PackedRefs::iter`].
 pub fn packed_names(packed: &PackedRefs) -> Vec<RefName> {
     packed.names().cloned().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(byte: u8) -> ObjectId {
+        let hex = format!("{byte:02x}").repeat(20);
+        ObjectId::from_hex(ObjectFormat::Sha1, hex.as_bytes().into()).unwrap()
+    }
+
+    /// Two removals through a snapshot taken before either must both stick.
+    #[test]
+    fn remove_locked_rereads_the_file_instead_of_a_stale_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut packed = PackedRefs::new();
+        for (n, b) in [
+            ("refs/heads/a", 1u8),
+            ("refs/heads/b", 2),
+            ("refs/heads/c", 3),
+        ] {
+            packed.insert(PackedRef {
+                name: RefName::from_bytes(n.as_bytes()).unwrap(),
+                target: id(b),
+                peeled: None,
+            });
+        }
+        packed.write(dir.path(), ObjectFormat::Sha1).unwrap();
+        let a = RefName::from_bytes(b"refs/heads/a").unwrap();
+        let b = RefName::from_bytes(b"refs/heads/b").unwrap();
+        PackedRefs::remove_locked(dir.path(), ObjectFormat::Sha1, &[&a]).unwrap();
+        PackedRefs::remove_locked(dir.path(), ObjectFormat::Sha1, &[&b]).unwrap();
+        let after = PackedRefs::load(dir.path(), ObjectFormat::Sha1).unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after.get(&a).is_none() && after.get(&b).is_none());
+        assert_eq!(after.entries()[0].target, id(3));
+    }
 }
