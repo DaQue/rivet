@@ -141,12 +141,10 @@ pub trait BaseProvider: fmt::Debug {
 ///
 /// # Caveats
 ///
-/// 50 is Git's `pack.depth` default, and matching it is what lets Rivet read anything `git
-/// repack` produced at default settings. A repository configured with a deeper `pack.depth` (Git
-/// caps it at 4095) can therefore contain a chain Rivet refuses — raising this to that cap is
-/// safe, but it must stay bounded: `REF_DELTA` chains can be circular, and the guard is the only
-/// thing standing between a hostile pack and a stack overflow.
-pub const MAX_DELTA_DEPTH: usize = 50;
+/// 4095 is the cap Git puts on `pack.depth` (the default is 50), so Rivet reads any chain Git
+/// can write. It must stay bounded: `REF_DELTA` chains can be circular, and the guard is the only
+/// thing standing between a hostile pack and an endless walk.
+pub const MAX_DELTA_DEPTH: usize = 4095;
 
 /// Phase 10 — what a pack entry's 3-bit type nibble says the entry is.
 ///

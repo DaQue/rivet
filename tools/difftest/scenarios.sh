@@ -10130,6 +10130,27 @@ s_revparse_hexnames() {
     v cat-file -t "$pre"
 }
 
+# Delta chains deeper than git's default 50: real `git fast-import --depth=200` writes a pack whose
+# longest chain is 149 links. Reading it, `fsck` and `log` must match git.
+s_deep_delta_chain() {
+    g init -q repo; cd repo
+    for i in $(seq 1 150); do
+        printf 'commit refs/heads/main\ncommitter A <a@b> %d +0000\ndata 4\nc%02d\n' $((1700000000 + i)) $((i % 100))
+        printf 'M 100644 inline f\ndata <<E\n'
+        seq 1 3000; echo "rev $i"
+        printf 'E\n\n'
+    done | g fast-import --depth=200 --quiet
+    g reset -q --hard
+    v fsck
+    v log --oneline
+    v rev-list --count HEAD
+    v cat-file -s HEAD:f
+    v cat-file -p HEAD~149:f
+    v show -s --format=%s HEAD~100
+    v status
+    v verify-pack -v .git/objects/pack/pack-*.idx
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

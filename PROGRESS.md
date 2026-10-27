@@ -1849,3 +1849,14 @@ Left undone (in `GAPS.md` as "A4 (remainder)"): no fanout (still scans `oids()`)
 (public API), hint abbreviations fixed at 7 digits until A14.
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 271 passed / 0 failed / 0 ignored;
 `scenarios.sh` 317 scenarios, `failures: 0`.
+
+### Block 12 — A5 (delta chains deeper than 50)
+
+Scenario `s_deep_delta_chain` (new, real-git fixture): `git fast-import --depth=200`, 150 revisions of one file (longest chain 149);
+`fsck`, `log`, `rev-list --count`, `cat-file`, `show`, `status`, `verify-pack -v`. Fails on `b035f94` (`fsck` reports hundreds of
+`missing blob`); passes after. Rust test `reads_delta_chains_deeper_than_fifty` (`pack_git_differential.rs`).
+Fix: `MAX_DELTA_DEPTH` 50 -> 4095 (git's `pack.depth` cap; the walk stays iterative and bounded, so circular REF_DELTA chains still error);
+`PackFile::get` fills in the requested id on `DeltaChainTooDeep` / `MissingDeltaBase` instead of the all-zero id.
+Left undone: `get_at_offset` called directly still reports a zero id (it does not know the object id).
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 272 passed / 0 failed / 0 ignored;
+`scenarios.sh` 318 PASS, `failures: 0`.

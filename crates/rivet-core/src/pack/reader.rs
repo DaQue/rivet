@@ -292,7 +292,21 @@ impl<'a> PackFile<'a> {
         let entry = index
             .lookup(oid)
             .ok_or(Error::ObjectNotFound { oid: *oid })?;
-        let (kind, data) = self.get_at_offset(entry.offset, bases)?;
+        let (kind, data) =
+            self.get_at_offset(entry.offset, bases)
+                .map_err(|error| match error {
+                    Error::DeltaChainTooDeep { oid: id, depth }
+                        if id == ObjectId::zero(self.format) =>
+                    {
+                        Error::DeltaChainTooDeep { oid: *oid, depth }
+                    }
+                    Error::MissingDeltaBase { oid: id, base }
+                        if id == ObjectId::zero(self.format) =>
+                    {
+                        Error::MissingDeltaBase { oid: *oid, base }
+                    }
+                    other => other,
+                })?;
         let object = crate::pack::wrap_object(kind, data);
         let actual = object.id(self.format)?;
         if actual != *oid {

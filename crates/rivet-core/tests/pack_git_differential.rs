@@ -184,3 +184,73 @@ fn index_pack_reproduces_gits_index() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// `git fast-import --depth=200` writes chains well past the default `pack.depth` of 50; every
+/// object must still resolve to the bytes git reports.
+#[test]
+fn reads_delta_chains_deeper_than_fifty() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    if !have_git() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    git(root, &["init", "--quiet", "-b", "main"]);
+
+    let mut stream = String::new();
+    for i in 1..=150 {
+        stream.push_str(&format!(
+            "commit refs/heads/main\ncommitter A <a@b> {} +0000\ndata 4\nc{:02}\n",
+            1_700_000_000 + i,
+            i % 100
+        ));
+        stream.push_str("M 100644 inline f\ndata <<E\n");
+        for n in 1..=3000 {
+            stream.push_str(&format!("{n}\n"));
+        }
+        stream.push_str(&format!("rev {i}\nE\n\n"));
+    }
+    let mut child = Command::new("git")
+        .current_dir(root)
+        .args(["fast-import", "--quiet", "--depth=200"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("spawn fast-import");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stream.as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+
+    let pack_path = std::fs::read_dir(root.join(".git/objects/pack"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "pack"))
+        .expect("fast-import writes a pack");
+    let owned = PackFile::open_path(&pack_path, ObjectFormat::Sha1).expect("open pack");
+    let pack = owned.pack().expect("borrow pack");
+    let index = pack.index().expect("index");
+
+    let mut deepest = 0usize;
+    for i in 0..index.len() {
+        let entry = index.entry(i).expect("entry");
+        let (kind, data) = pack
+            .get_at_offset(entry.offset, None)
+            .expect("resolve entry by offset");
+        let hex = entry.oid.to_hex();
+        let hex = std::str::from_utf8(&hex).unwrap();
+        assert_eq!(data, git(root, &["cat-file", kind_name(kind), hex]));
+        let mut depth = 0usize;
+        let mut at = pack.entry_at(entry.offset).unwrap();
+        while let Some(base) = at.base_offset {
+            depth += 1;
+            at = pack.entry_at(base).unwrap();
+        }
+        deepest = deepest.max(depth);
+    }
+    assert!(deepest > 50, "fixture must exceed the old limit: {deepest}");
+}
