@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 323 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 324 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-27, gate: 276 tests / 0 failed, 323 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-27, gate: 278 tests / 0 failed, 324 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -15,6 +15,7 @@ only the first two are defects.
 
 The command or subsystem is absent; it either fails at the argument parser or refuses by name.
 
+* **Split index** — an index carrying the `link` extension (`core.splitIndex=true`, `git update-index --split-index`) is refused by name (`a split index (the `link` extension) is not implemented yet`, exit 128); `sharedindex.*` is never read. Index v4 (`index.version=4`, `feature.manyFiles`) is read, but rivet writes v2/v3 back, so `index.version` is not preserved by a rivet write.
 * **Partial clone** — promisor/partial clones are not implemented: no filtered transfer, no lazy
   fetch of missing objects. `clone --filter=blob:none|tree:<n>|blob:limit=<n>[kmg]` is accepted only
   where git itself ignores the filter (a local path, or a `file://` URL whose repository does not set
@@ -223,7 +224,6 @@ deleted in the commit that fixes it. A15 is not in the queue yet.
 * **A2 (remainder)** — a merge with more than one merge base is refused by name (`fatal: merge with more than one merge base (...) is not implemented`, exit 128); the recursive virtual base is not built (`branching.rs`).
 * **A3** — `.gitattributes` / `core.autocrlf` give different blobs from git (`worktree/add.rs`, `checkout.rs`).
 * **A8 (remainder)** — a commit identity line with no date still prints the epoch for `%ad`/`%at`/`%aI` (git prints nothing), and a line with no `<email>` still prints an `Author:` line in `log` (git omits `Author:`/`Date:`); `Signature` cannot represent "absent" (`object/commit.rs`).
-* **A9** — index v4 refused; split-index `link` extension misread.
 * **A11** — no post-fetch connectivity check.
 * **A12** — `gc` deletes old packs without fsyncing the new pack and idx first.
 * **A13** — `inflate_at` / `apply_delta` size allocations from untrusted declared sizes; temp pack names are not unique.

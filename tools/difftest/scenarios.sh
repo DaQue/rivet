@@ -10324,6 +10324,34 @@ s_malformed_ident() {
     v fsck
 }
 
+# `feature.manyFiles` / `index.version=4` make git write the prefix-compressed v4 index; rivet must read
+# it back path for path (and, with no way to write v4, still leave an index git reads).
+s_index_v4() {
+    g init -q repo; cd repo
+    mkdir -p src/deep/er lib
+    local i
+    for i in 1 2 3; do echo "$i" >"src/deep/er/file$i.txt"; echo "$i" >"src/deep/mod$i.rs"; done
+    echo top >README; echo x >src/a; echo y >lib/z; echo w >lib/zz
+    printf 'x\n' >'src/deep/er/f with space'
+    g add .; tick; g commit -qm one
+    g config index.version 4
+    g update-index --index-version 4
+    echo 4 >src/deep/er/file4.txt; g add src/deep/er/file4.txt
+    v ls-files -s
+    v ls-files
+    v status
+    v diff --stat
+    echo 5 >>src/a
+    v status --short
+    v diff
+    v ls-files -m
+    v write-tree
+    tick; v commit -qam two
+    v log --oneline
+    v ls-files -s
+    v fsck
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

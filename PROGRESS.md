@@ -1939,3 +1939,15 @@ Test changed: `malformed_offset_rejected` asserted that a commit with `+9999` fa
 Left undone (GAPS.md A8 remainder): absent date still prints epoch for `%ad`/`%at`/`%aI` (git prints empty); a line with no email still prints `Author:` in `log`.
 `blame`/`rebase` over such history were not added to the scenario.
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 276 passed / 0 failed / 0 ignored; `scenarios.sh` 323 PASS, `failures: 0`.
+
+### Block 12 — A9 (index v4, split index)
+
+Scenario `s_index_v4` (new, real-git fixture: `update-index --index-version 4` over nested paths with shared prefixes and a space): `ls-files [-s]`, `status`, `diff`, `write-tree`,
+`commit -a`, `log`, `fsck` before and after a rivet write. Fails on the previous binary (`fatal: unsupported index version 4 (rivet reads v2 and v3)`, exit 128); passes after.
+Fix: `IndexEntry::parse_after` decodes a v4 path as git's offset varint (bytes dropped from the previous path) plus a NUL-terminated suffix, no padding, extended flags allowed;
+`Index::load`/`Index::parse` pass the previous entry's path. `IndexEntry::parse` is unchanged for callers. The `link` extension is refused by name (`a split index (the `link`
+extension) is not implemented yet`, exit 128) next to the existing `sdir` refusal. Verified by hand against a `git update-index --split-index` repo: `ls-files` and `status` both refuse.
+Rust tests: `load_reads_v4_prefix_compressed_paths` (hand-built v4 file, two-byte varint, over-long strip is `CorruptIndex`), `parse_refuses_a_split_index_by_name` (parse and load).
+Left undone: split index has no differential scenario (git succeeds, rivet refuses, so `v` cannot compare them; covered by the Rust test); rivet writes v2/v3 back so `index.version=4`
+is not preserved after a rivet write (recorded in GAPS.md section 1); the unsupported-version error text still says "reads v2 and v3" for unknown versions. Doc comments for the index version were corrected.
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed / 0 failed / 0 ignored; `scenarios.sh` 324 PASS, `failures: 0`.

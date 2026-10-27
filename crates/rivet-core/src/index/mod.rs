@@ -73,10 +73,10 @@
 //!   [`crate::error::Error::BadIndexChecksum`] and the index must then be treated as unusable
 //!   rather than partially trusted — a concurrent `git add` mid-write is the common cause, and
 //!   reading through it produces a mix of two states.
-//! * **v4 is refused, not misread.** v4 prefix-compresses paths (removing the common prefix with
-//!   the previous entry) and drops the padding; a v2 reader fed a v4 file produces paths that look
-//!   like fragments. Plan §1 puts v4 and the split index out of scope, so
-//!   [`crate::error::Error::UnsupportedIndexVersion`] is the response.
+//! * **v4 is read, never written.** v4 prefix-compresses paths (removing the common prefix with
+//!   the previous entry) and drops the padding, so [`Index::load`] decodes each path against the
+//!   one before it. Rivet writes v2 or v3 back, which Git reads. The split index (`link`) and the
+//!   sparse index (`sdir`) are refused by name with [`crate::error::Error::NotImplemented`].
 //! * **The stat data is a cache, not truth.** An entry's cached mtime and size are a *hint* that
 //!   the work tree file has not changed. Git's racy-git rule exists because the hint is unsound on
 //!   its own: if a file's mtime is not strictly older than the index's own mtime, the file may have
@@ -116,6 +116,30 @@ fn entry_mode_from_u32(mode: u32) -> Option<EntryMode> {
     }
 }
 
+/// Decode git's offset varint (`decode_varint`) that opens a v4 path: seven bits per byte, high bit
+/// set on all but the last, with one added per continuation so no value has two encodings. Returns
+/// the value and the bytes used.
+fn read_v4_varint(data: &[u8]) -> Result<(usize, usize)> {
+    let truncated = || Error::CorruptIndex {
+        offset: data.len(),
+        reason: "truncated v4 path prefix",
+    };
+    let mut used = 0;
+    let mut byte = *data.first().ok_or_else(truncated)?;
+    used += 1;
+    let mut value = usize::from(byte & 0x7f);
+    while byte & 0x80 != 0 {
+        byte = *data.get(used).ok_or_else(truncated)?;
+        used += 1;
+        value = value
+            .checked_add(1)
+            .and_then(|v| v.checked_mul(128))
+            .map(|v| v + usize::from(byte & 0x7f))
+            .ok_or_else(truncated)?;
+    }
+    Ok((value, used))
+}
+
 /// Refuse the `sdir` extension, which marks a sparse index.
 ///
 /// Optional by its lowercase signature, but dropping it is not safe: the file then holds directory
@@ -125,6 +149,13 @@ fn refuse_sparse_index(signature: [u8; 4]) -> Result<()> {
     if signature == *b"sdir" {
         return Err(Error::NotImplemented {
             what: "a sparse index (the `sdir` extension)",
+        });
+    }
+    // A split index keeps most entries in `sharedindex.<hash>` and lists only the changes here;
+    // reading this file alone yields a handful of entries with empty names.
+    if signature == *b"link" {
+        return Err(Error::NotImplemented {
+            what: "a split index (the `link` extension)",
         });
     }
     Ok(())
@@ -147,11 +178,9 @@ pub const DIRC_MAGIC: &[u8; 4] = b"DIRC";
 /// # Caveats
 ///
 /// Three. v2 is what every Git writes by default and what Rivet writes; v3 exists only to carry the
-/// extended flags word, and a repository with it is readable. **v4 is deliberately excluded**: it
-/// prefix-compresses paths and removes entry padding, so a v2-shaped reader produces plausible
-/// rubbish rather than an error. The plan puts v4 and the split index out of scope (§1), and
-/// [`IndexVersion::from_u32`] refuses them so that the refusal happens at the header instead of
-/// halfway through the entry list.
+/// extended flags word, and a repository with it is readable. **v4 is read but never written**: it
+/// prefix-compresses paths and removes entry padding, which [`Index::load`] decodes entry by entry.
+/// The split index is refused by name when its `link` extension is met.
 pub const MAX_INDEX_VERSION: u32 = 3;
 
 /// Phase 3 — which DIRC revision an index file is.
@@ -162,9 +191,8 @@ pub const MAX_INDEX_VERSION: u32 = 3;
 ///   is the extended flags word, and writing v2 with those bits dropped would silently lose
 ///   `skip-worktree` — so a v3 index containing any extended entry must be written back as v3. The
 ///   writer's choice is therefore a function of its contents, not of a preference.
-/// * **v4 is representable here only so it can be reported.** Constructing it is legal; parsing an
-///   entry list as v4 is not implemented, and [`IndexVersion::from_u32`] is what a reader uses to
-///   reject it before anything is misread.
+/// * **v4 is read, not written.** [`Index::load`] and [`Index::parse`] decode a v4 entry list;
+///   the writer emits v2 or v3.
 /// * The version is big-endian on disk like every other integer in the file, but the field is
 ///   *not* a byte-order mark: each stat field is separately big-endian and they are not packed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -173,7 +201,7 @@ pub enum IndexVersion {
     V2,
     /// Version 3 — v2 plus a second flags word carrying `skip-worktree` and extended mode bits.
     V3,
-    /// Version 4 — prefix-compressed paths, no entry padding. Read by Git, not by Rivet.
+    /// Version 4 — prefix-compressed paths, no entry padding. Rivet reads it and writes v2 or v3.
     V4,
 }
 
@@ -183,8 +211,7 @@ impl IndexVersion {
     /// # Errors
     ///
     /// [`crate::error::Error::UnsupportedIndexVersion`] for anything other than 2, 3 or 4 — the
-    /// value is reported in the error so a user can see what the file claims. Note that v4 parses
-    /// here and is refused later, by whatever knows whether it can handle it.
+    /// value is reported in the error so a user can see what the file claims.
     pub fn from_u32(version: u32) -> Result<Self> {
         match version {
             2 => Ok(Self::V2),
@@ -615,6 +642,18 @@ impl IndexEntry {
         version: IndexVersion,
         data: &[u8],
     ) -> Result<(Self, usize)> {
+        Self::parse_after(format, version, data, b"")
+    }
+
+    /// [`IndexEntry::parse`] for an entry that follows `previous` in the file. Only v4 uses it: a v4
+    /// path is stored as a count of bytes to drop from the previous entry's path plus the new
+    /// suffix, and v4 entries are not padded.
+    fn parse_after(
+        format: ObjectFormat,
+        version: IndexVersion,
+        data: &[u8],
+        previous: &[u8],
+    ) -> Result<(Self, usize)> {
         const FIXED: usize = 10 * 4;
         let id_len = format.len();
         if data.len() < FIXED {
@@ -653,7 +692,7 @@ impl IndexEntry {
         let flags =
             IndexEntryFlags::from_bits(u16::from_be_bytes([data[id_end], data[id_end + 1]]));
         let extended_flags = if flags.is_extended() {
-            if !version.has_extended_flags() {
+            if !version.has_extended_flags() && version != IndexVersion::V4 {
                 return Err(Error::CorruptIndex {
                     offset: id_end + 2,
                     reason: "extended flags word in a version that does not carry one",
@@ -672,31 +711,62 @@ impl IndexEntry {
 
         let _stage = flags.stage()?;
 
-        // The stored name length is a hint only: it is the byte count before the NUL, saturated at
-        // 4095. Locate the NUL by scanning; the hint must match when it is below the saturation
-        // point.
         let path_start = id_end + if flags.is_extended() { 4 } else { 2 };
-        let hint = flags.name_length();
-        let nul = data[path_start..].iter().position(|&b| b == 0);
-        let Some(rel) = nul else {
-            return Err(Error::CorruptIndex {
-                offset: data.len(),
-                reason: "path not NUL-terminated",
-            });
+        let (path, path_bytes) = if version == IndexVersion::V4 {
+            let (strip, used) = read_v4_varint(&data[path_start..])?;
+            let suffix_start = path_start + used;
+            let Some(rel) = data[suffix_start..].iter().position(|&b| b == 0) else {
+                return Err(Error::CorruptIndex {
+                    offset: data.len(),
+                    reason: "path not NUL-terminated",
+                });
+            };
+            if strip > previous.len() {
+                return Err(Error::CorruptIndex {
+                    offset: path_start,
+                    reason: "v4 path strips more than the previous path holds",
+                });
+            }
+            let keep = previous.len() - strip;
+            if keep + rel > INDEX_PATH_MAX {
+                return Err(Error::IndexEntryTooLong {
+                    path: BString::from(
+                        [&previous[..keep], &data[suffix_start..suffix_start + rel]].concat(),
+                    ),
+                });
+            }
+            let mut full = previous[..keep].to_vec();
+            full.extend_from_slice(&data[suffix_start..suffix_start + rel]);
+            (BString::from(full), used + rel)
+        } else {
+            // The stored name length is a hint only: it is the byte count before the NUL,
+            // saturated at 4095. Locate the NUL by scanning; the hint must match when it is below
+            // the saturation point.
+            let hint = flags.name_length();
+            let nul = data[path_start..].iter().position(|&b| b == 0);
+            let Some(rel) = nul else {
+                return Err(Error::CorruptIndex {
+                    offset: data.len(),
+                    reason: "path not NUL-terminated",
+                });
+            };
+            let len = rel as u16;
+            if hint < IndexEntryFlags::NAME_LENGTH_MAX && hint != len {
+                return Err(Error::CorruptIndex {
+                    offset: path_start + len as usize,
+                    reason: "stored name length disagrees with the path",
+                });
+            }
+            if rel > INDEX_PATH_MAX {
+                return Err(Error::IndexEntryTooLong {
+                    path: BString::from(data[path_start..path_start + rel].to_vec()),
+                });
+            }
+            (
+                BString::from(data[path_start..path_start + rel].to_vec()),
+                rel,
+            )
         };
-        let len = rel as u16;
-        if hint < IndexEntryFlags::NAME_LENGTH_MAX && hint != len {
-            return Err(Error::CorruptIndex {
-                offset: path_start + len as usize,
-                reason: "stored name length disagrees with the path",
-            });
-        }
-        if rel > INDEX_PATH_MAX {
-            return Err(Error::IndexEntryTooLong {
-                path: BString::from(data[path_start..path_start + rel].to_vec()),
-            });
-        }
-        let path = BString::from(data[path_start..path_start + rel].to_vec());
 
         let mode = match entry_mode_from_u32(mode) {
             Some(m) => m,
@@ -709,8 +779,12 @@ impl IndexEntry {
         };
 
         let fixed = FIXED + id_len + 2 + if flags.is_extended() { 2 } else { 0 };
-        let total = fixed + len as usize + 1;
-        let consumed = total.div_ceil(8) * 8;
+        let total = fixed + path_bytes + 1;
+        let consumed = if version == IndexVersion::V4 {
+            total
+        } else {
+            total.div_ceil(8) * 8
+        };
         if data.len() < consumed {
             return Err(Error::CorruptIndex {
                 offset: consumed,
@@ -1054,7 +1128,7 @@ impl Index {
     ///
     /// [`crate::error::Error::IoAtPath`] if the file exists but cannot be read;
     /// [`crate::error::Error::BadIndexSignature`] for a file that does not start with `DIRC`;
-    /// [`crate::error::Error::UnsupportedIndexVersion`] for v4 or an unknown version;
+    /// [`crate::error::Error::UnsupportedIndexVersion`] for an unknown version;
     /// [`crate::error::Error::BadIndexChecksum`] if the trailer does not match;
     /// [`crate::error::Error::CorruptIndex`] for a truncated or malformed body.
     pub fn load(path: &Path, format: ObjectFormat) -> Result<Self> {
@@ -1081,11 +1155,6 @@ impl Index {
         }
         let version_u32 = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
         let version = IndexVersion::from_u32(version_u32)?;
-        if version == IndexVersion::V4 {
-            return Err(Error::UnsupportedIndexVersion {
-                version: version_u32,
-            });
-        }
         let entry_count = u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
         // The trailer checksum is not extension data: every scan for entries and extensions must
         // stop at `body_end`, or the parser reads the checksum's first bytes as an extension header
@@ -1101,7 +1170,11 @@ impl Index {
         let mut offset = 12usize;
         let mut entries = Vec::with_capacity(entry_count);
         for _ in 0..entry_count {
-            let (entry, consumed) = IndexEntry::parse(format, version, &data[offset..body_end])?;
+            let previous = entries
+                .last()
+                .map_or(&b""[..], |e: &IndexEntry| e.path.as_slice());
+            let (entry, consumed) =
+                IndexEntry::parse_after(format, version, &data[offset..body_end], previous)?;
             offset += consumed;
             entries.push(entry);
         }
@@ -1188,7 +1261,11 @@ impl Index {
         let mut offset: usize = 12;
         let mut entries = Vec::with_capacity(entry_count as usize);
         for _ in 0..entry_count {
-            let (entry, consumed) = IndexEntry::parse(format, version, &data[offset..])?;
+            let previous = entries
+                .last()
+                .map_or(&b""[..], |e: &IndexEntry| e.path.as_slice());
+            let (entry, consumed) =
+                IndexEntry::parse_after(format, version, &data[offset..], previous)?;
             offset += consumed;
             entries.push(entry);
         }
@@ -2050,6 +2127,95 @@ mod tests {
         };
         let bytes = plain.to_bytes(ObjectFormat::Sha1);
         assert!(Index::parse(ObjectFormat::Sha1, &bytes).is_ok());
+    }
+
+    #[test]
+    fn parse_refuses_a_split_index_by_name() {
+        let index = Index {
+            version: IndexVersion::V2,
+            entries: vec![blob_entry("abcd")],
+            extensions: vec![IndexExtension::new(*b"link", vec![0; 20])],
+        };
+        let bytes = index.to_bytes(ObjectFormat::Sha1);
+        let err = Index::parse(ObjectFormat::Sha1, &bytes).unwrap_err();
+        assert!(matches!(err, Error::NotImplemented { what } if what.contains("split index")));
+
+        let dir = std::env::temp_dir().join(format!("rivet-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("index");
+        std::fs::write(&path, &bytes).unwrap();
+        let err = Index::load(&path, ObjectFormat::Sha1).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(matches!(err, Error::NotImplemented { what } if what.contains("split index")));
+    }
+
+    /// A v4 file as git writes it: each path is the number of bytes to drop from the previous path
+    /// (an offset varint) and a NUL-terminated suffix, with no padding between entries.
+    #[test]
+    fn load_reads_v4_prefix_compressed_paths() {
+        let long_dir = "d".repeat(200);
+        let first = format!("{long_dir}/shared/one");
+        let second = format!("{long_dir}/shared/two");
+        let third = format!("{}/other", &long_dir[..70]);
+        let fourth = "zzz".to_string();
+        // (path, bytes dropped from the previous path, varint bytes, suffix)
+        let plan: [(&str, usize, &[u8], &str); 4] = [
+            (&first, 0, &[0x00], &first),
+            (&second, 3, &[0x03], "two"),
+            // 211 bytes before, 70 kept: 141 dropped, a two-byte varint (0x80 0x0d).
+            (&third, 141, &[0x80, 0x0d], "/other"),
+            (&fourth, 76, &[0x4c], "zzz"),
+        ];
+        let mut data = b"DIRC".to_vec();
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend_from_slice(&(plan.len() as u32).to_be_bytes());
+        let mut previous = String::new();
+        for (path, strip, varint, suffix) in plan {
+            assert_eq!(
+                path.len() - suffix.len(),
+                previous.len().saturating_sub(strip)
+            );
+            let v2 = blob_entry(path)
+                .to_bytes(ObjectFormat::Sha1, IndexVersion::V2)
+                .unwrap();
+            // 40 stat bytes + 20 id bytes + 2 flag bytes, then the v2 path: replace it.
+            data.extend_from_slice(&v2[..62]);
+            data.extend_from_slice(varint);
+            data.extend_from_slice(suffix.as_bytes());
+            data.push(0);
+            previous = path.to_string();
+        }
+        let mut hasher = ObjectFormat::Sha1.hasher();
+        hasher.update(&data);
+        let sum = hasher.finish().unwrap();
+        data.extend_from_slice(sum.as_bytes());
+
+        let dir = std::env::temp_dir().join(format!("rivet-v4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("index");
+        std::fs::write(&file, &data).unwrap();
+        let loaded = Index::load(&file, ObjectFormat::Sha1);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let index = loaded.unwrap();
+        let paths: Vec<String> = index.entries.iter().map(|e| e.path.to_string()).collect();
+        assert_eq!(paths, vec![first, second, third, fourth]);
+
+        // A strip count larger than the previous path is corrupt, never a panic.
+        let mut bad = b"DIRC".to_vec();
+        bad.extend_from_slice(&4u32.to_be_bytes());
+        bad.extend_from_slice(&1u32.to_be_bytes());
+        let v2 = blob_entry("a")
+            .to_bytes(ObjectFormat::Sha1, IndexVersion::V2)
+            .unwrap();
+        bad.extend_from_slice(&v2[..62]);
+        bad.extend_from_slice(&[0x05, b'a', 0]);
+        let mut hasher = ObjectFormat::Sha1.hasher();
+        hasher.update(&bad);
+        bad.extend_from_slice(hasher.finish().unwrap().as_bytes());
+        assert!(matches!(
+            Index::parse(ObjectFormat::Sha1, &bad),
+            Err(Error::CorruptIndex { .. })
+        ));
     }
 
     #[test]
