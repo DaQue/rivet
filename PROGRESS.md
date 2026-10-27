@@ -1951,3 +1951,11 @@ Rust tests: `load_reads_v4_prefix_compressed_paths` (hand-built v4 file, two-byt
 Left undone: split index has no differential scenario (git succeeds, rivet refuses, so `v` cannot compare them; covered by the Rust test); rivet writes v2/v3 back so `index.version=4`
 is not preserved after a rivet write (recorded in GAPS.md section 1); the unsupported-version error text still says "reads v2 and v3" for unknown versions. Doc comments for the index version were corrected.
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed / 0 failed / 0 ignored; `scenarios.sh` 324 PASS, `failures: 0`.
+
+## Block 12 — item 10 (A12, A13; A11 not landed)
+* `pack/delta.rs`: `apply_delta` rejects a declared target longer than the delta stream can produce (one opcode byte yields at most 0x10000 bytes) and allocates with `try_reserve_exact`.
+* `pack/mod.rs`: new `inflate_bounded`; `inflate_at` delegates with no limit. `PackFile::get_at_offset` bounds inflation by the entry's declared size.
+* `pack/writer.rs`: `finish_to_path` writes pack and idx with `write_all` + `sync_all` before the renames (gc uses it), and temp names carry pid + a counter.
+* Tests: `pack::bounds_tests::{inflate_bounded_refuses_output_past_declared_size, apply_delta_refuses_huge_declared_target_without_allocating}` (Rust unit tests; no differential scenario, git cannot express these).
+* Not landed: A11 post-fetch connectivity check (no way to make a fetch return a short pack, so it could not be proven); `index_pack` still uses unbounded `inflate_at`. Both recorded in `GAPS.md`.
+* Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 280 passed / 0 failed; `scenarios.sh` 324 PASS / `failures: 0`.

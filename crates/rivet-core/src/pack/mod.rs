@@ -666,6 +666,13 @@ pub(crate) fn wrap_object(kind: ObjectKind, data: Vec<u8>) -> Object {
 /// [`crate::error::Error::CorruptPack`] if `at` is past the end, the stream is truncated, or the
 /// zlib framing is invalid.
 pub(crate) fn inflate_at(data: &[u8], at: usize) -> Result<(Vec<u8>, usize)> {
+    inflate_bounded(data, at, usize::MAX)
+}
+
+/// [`inflate_at`] that gives up with [`Error::CorruptPack`] as soon as the output would exceed
+/// `max_out` bytes, so a header that declares a small size cannot be followed by a decompression
+/// bomb.
+pub(crate) fn inflate_bounded(data: &[u8], at: usize, max_out: usize) -> Result<(Vec<u8>, usize)> {
     use flate2::{Decompress, FlushDecompress, Status};
 
     if at >= data.len() {
@@ -687,6 +694,11 @@ pub(crate) fn inflate_at(data: &[u8], at: usize) -> Result<(Vec<u8>, usize)> {
                 reason: format!("bad zlib stream: {e}"),
             })?;
         let produced = decoder.total_out() as usize - produced_before;
+        if out.len() + produced > max_out {
+            return Err(Error::CorruptPack {
+                reason: "zlib stream inflates past the size its header declares".into(),
+            });
+        }
         out.extend_from_slice(&chunk[..produced]);
         match status {
             Status::StreamEnd => break,
@@ -758,4 +770,34 @@ pub(crate) fn crc32(data: &[u8]) -> u32 {
         }
     }
     !state
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::{deflate, delta::apply_delta, inflate_at, inflate_bounded};
+    use crate::error::Error;
+
+    #[test]
+    fn inflate_bounded_refuses_output_past_declared_size() {
+        let payload = vec![7u8; 100_000];
+        let z = deflate(&payload).unwrap();
+        assert!(matches!(
+            inflate_bounded(&z, 0, 99_999),
+            Err(Error::CorruptPack { .. })
+        ));
+        let (out, used) = inflate_bounded(&z, 0, 100_000).unwrap();
+        assert_eq!(out, payload);
+        assert_eq!(used, z.len());
+        assert_eq!(inflate_at(&z, 0).unwrap().0.len(), 100_000);
+    }
+
+    #[test]
+    fn apply_delta_refuses_huge_declared_target_without_allocating() {
+        // base_len 0, target_len 2^40 (varint), then no instructions.
+        let delta = [0x00, 0x80, 0x80, 0x80, 0x80, 0x80, 0x20];
+        assert!(matches!(
+            apply_delta(&[], &delta),
+            Err(Error::CorruptDelta { .. })
+        ));
+    }
 }

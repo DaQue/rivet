@@ -168,7 +168,18 @@ pub fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
         });
     }
     let target = target_len as usize;
-    let mut out = Vec::with_capacity(target);
+    // One opcode byte yields at most 0x10000 bytes (a copy with no size bytes), so a target longer
+    // than that cannot be produced by this stream: refuse it before allocating anything.
+    if target as u64 > (delta.len() as u64).saturating_mul(0x10000) {
+        return Err(Error::CorruptDelta {
+            reason: "target length exceeds what the delta stream can produce".to_string(),
+        });
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(target)
+        .map_err(|_| Error::CorruptDelta {
+            reason: "target length too large to allocate".to_string(),
+        })?;
 
     while out.len() < target {
         let op = *delta.get(pos).ok_or_else(|| Error::CorruptDelta {

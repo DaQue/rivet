@@ -348,7 +348,7 @@ impl<'a> PackFile<'a> {
         offset: u64,
         bases: Option<&dyn BaseProvider>,
     ) -> Result<(ObjectKind, Vec<u8>)> {
-        use crate::pack::{MAX_DELTA_DEPTH, apply_delta, inflate_at};
+        use crate::pack::{MAX_DELTA_DEPTH, apply_delta, inflate_bounded};
 
         // Chain links are collected top-down, then applied bottom-up: recursion over the pack
         // format would make the depth limit a stack-depth question, which is exactly what the
@@ -359,7 +359,9 @@ impl<'a> PackFile<'a> {
 
         loop {
             let entry = self.entry_at(current)?;
-            let (payload, _consumed) = inflate_at(self.data, entry.data_offset as usize)?;
+            let max_out = usize::try_from(entry.size).unwrap_or(usize::MAX);
+            let (payload, _consumed) =
+                inflate_bounded(self.data, entry.data_offset as usize, max_out)?;
             if payload.len() as u64 != entry.size {
                 return Err(Error::CorruptPack {
                     reason: "entry payload length disagrees with its header".into(),

@@ -390,16 +390,28 @@ impl PackWriter {
         let stem = summary.checksum.to_hex();
         let pack_path = dir.join(format!("pack-{}.pack", stem));
         let idx_path = dir.join(format!("pack-{}.idx", stem));
-        let pack_tmp = dir.join(format!("pack-{}.pack.tmp", stem));
-        let idx_tmp = dir.join(format!("pack-{}.idx.tmp", stem));
-        std::fs::write(&pack_tmp, &pack_bytes).map_err(|e| Error::IoAtPath {
-            path: pack_tmp.to_string_lossy().into_owned().into(),
-            source: e,
-        })?;
-        std::fs::write(&idx_tmp, &summary.index).map_err(|e| Error::IoAtPath {
-            path: idx_tmp.to_string_lossy().into_owned().into(),
-            source: e,
-        })?;
+        // Unique per process and per call, so two writers of the same pack never share a temp file.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let uniq = format!(
+            "{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let pack_tmp = dir.join(format!("pack-{}.pack.{}.tmp", stem, uniq));
+        let idx_tmp = dir.join(format!("pack-{}.idx.{}.tmp", stem, uniq));
+        // Flushed to disk before the rename, so a crash cannot leave a renamed, empty pack.
+        let write_synced = |path: &Path, bytes: &[u8]| -> Result<()> {
+            use std::io::Write;
+            let io = |e| Error::IoAtPath {
+                path: path.to_string_lossy().into_owned().into(),
+                source: e,
+            };
+            let mut f = std::fs::File::create(path).map_err(io)?;
+            f.write_all(bytes).map_err(io)?;
+            f.sync_all().map_err(io)
+        };
+        write_synced(&pack_tmp, &pack_bytes)?;
+        write_synced(&idx_tmp, &summary.index)?;
         std::fs::rename(&pack_tmp, &pack_path).map_err(|e| Error::IoAtPath {
             path: pack_path.to_string_lossy().into_owned().into(),
             source: e,

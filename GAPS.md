@@ -5,7 +5,7 @@ against the real `git` binary by the differential suite in `tools/difftest/scena
 (currently 324 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-27, gate: 278 tests / 0 failed, 324 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-27, gate: 280 tests / 0 failed, 324 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -224,9 +224,8 @@ deleted in the commit that fixes it. A15 is not in the queue yet.
 * **A2 (remainder)** — a merge with more than one merge base is refused by name (`fatal: merge with more than one merge base (...) is not implemented`, exit 128); the recursive virtual base is not built (`branching.rs`).
 * **A3** — `.gitattributes` / `core.autocrlf` give different blobs from git (`worktree/add.rs`, `checkout.rs`).
 * **A8 (remainder)** — a commit identity line with no date still prints the epoch for `%ad`/`%at`/`%aI` (git prints nothing), and a line with no `<email>` still prints an `Author:` line in `log` (git omits `Author:`/`Date:`); `Signature` cannot represent "absent" (`object/commit.rs`).
-* **A11** — no post-fetch connectivity check.
-* **A12** — `gc` deletes old packs without fsyncing the new pack and idx first.
-* **A13** — `inflate_at` / `apply_delta` size allocations from untrusted declared sizes; temp pack names are not unique.
+* **A11** — no post-fetch connectivity check (git: `<url> did not send all necessary objects`, abort before writing refs). Not landed: rivet's own transports already fail on a corrupt remote, so no scenario can make a fetch return a short pack, and an unproven check was not committed.
+* **A13 (remainder)** — `index_pack` still inflates entries with the unbounded `inflate_at`; only `PackFile::get_at_offset` bounds output by the entry's declared size.
 * **A1 (remainder)** — in-memory `RefStore` packed snapshot is not refreshed after `delete`/`rename` (the on-disk file is now correct).
 * **A4 (remainder)** — short ids are matched by scanning `Odb::oids()` (no fanout use); `Odb::resolve_prefix` still reads a trailing `00` byte as fill (used by `revwalk.rs` `RevSpec::Abbrev`).
 
