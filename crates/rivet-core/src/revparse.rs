@@ -162,42 +162,116 @@ fn resolve_base(format: ObjectFormat, refs: &RefStore, odb: &Odb, base: &BStr) -
         };
         return resolve_base(format, refs, odb, BStr::new(&branch));
     }
-    if is_hex(base) {
-        let hex_len = format.hex_len();
-        if base.len() == hex_len {
-            return ObjectId::from_hex(format, base);
-        }
-        if base.len() >= 4 && base.len() % 2 == 1 {
-            // An `ObjectId` prefix holds whole bytes only, so the odd last nibble is matched
-            // against the hex text of every id instead (`git log 2461a6d` is the common case).
-            let wanted = base.to_ascii_lowercase();
-            let mut found = Vec::new();
-            for id in odb.oids()? {
-                if id.to_hex().starts_with(&wanted) && !found.contains(&id) {
-                    found.push(id);
-                }
-            }
-            return match found.len() {
-                1 => Ok(found[0]),
-                0 => Err(Error::ObjectNotFound {
-                    oid: ObjectId::from_hex_prefix(format, BStr::new(&base[..base.len() - 1]))?,
-                }),
-                n => Err(Error::AmbiguousPrefix {
-                    prefix: base.to_owned(),
-                    candidates: n,
-                }),
-            };
-        }
-        if base.len() >= 4 {
-            let prefix = ObjectId::from_hex_prefix(format, base)?;
-            return odb.resolve_prefix(&prefix);
-        }
+    let hex = is_hex(base);
+    if hex && base.len() == format.hex_len() {
+        return ObjectId::from_hex(format, base);
     }
-
+    // Git tries ref names before abbreviated ids, so a branch called `cafe` or `facade` wins over
+    // an object whose id happens to start with those digits.
+    let abbreviation = hex && base.len() >= 4;
     if let Some(name) = dwim_ref(refs, base) {
+        if abbreviation && short_candidates(odb, base)?.len() == 1 {
+            eprintln!("warning: refname '{base}' is ambiguous.");
+        }
         return refs.resolve_oid(&name);
     }
+    if abbreviation {
+        return resolve_short(format, odb, base);
+    }
     Err(invalid(base, "does not name an object"))
+}
+
+/// Objects whose id starts with the hex text `base`, matched nibble by nibble.
+///
+/// An `ObjectId` prefix holds whole bytes zero-filled, so `ab00` would read as `ab` and an odd
+/// length could not be expressed at all; the hex text of every id is compared instead.
+fn short_candidates(odb: &Odb, base: &BStr) -> Result<Vec<ObjectId>> {
+    let wanted = base.to_ascii_lowercase();
+    let mut found = Vec::new();
+    for id in odb.oids()? {
+        if id.to_hex().starts_with(&wanted) {
+            found.push(id);
+        }
+    }
+    Ok(found)
+}
+
+/// Resolves an abbreviated id of at least four hex digits, or reports why it names no single object.
+fn resolve_short(format: ObjectFormat, odb: &Odb, base: &BStr) -> Result<ObjectId> {
+    let mut found = short_candidates(odb, base)?;
+    match found.len() {
+        1 => Ok(found[0]),
+        0 => {
+            // The error carries an `ObjectId` prefix, which has whole bytes only.
+            let even = base.len() - base.len() % 2;
+            Err(Error::ObjectNotFound {
+                oid: ObjectId::from_hex_prefix(format, BStr::new(&base[..even]))?,
+            })
+        }
+        n => {
+            report_ambiguous(odb, base, &mut found);
+            Err(Error::AmbiguousPrefix {
+                prefix: base.to_ascii_lowercase().into(),
+                candidates: n,
+            })
+        }
+    }
+}
+
+/// Prints what git prints before it gives up on an ambiguous short id: the error, then each
+/// candidate as `<abbrev> <type>` with a date and subject for commits and tags, tags first.
+fn report_ambiguous(odb: &Odb, base: &BStr, found: &mut [ObjectId]) {
+    let rank = |id: &ObjectId| match odb.read_header(id).map(|(kind, _)| kind) {
+        Ok(crate::object::ObjectKind::Tag) => 0,
+        Ok(crate::object::ObjectKind::Commit) => 1,
+        Ok(crate::object::ObjectKind::Tree) => 2,
+        _ => 3,
+    };
+    found.sort_by_key(|id| (rank(id), *id));
+    eprintln!("error: short object ID {base} is ambiguous");
+    eprintln!("hint: The candidates are:");
+    for id in found.iter() {
+        let hex = id.to_hex();
+        let short = hex[..7.max(base.len()).min(hex.len())].as_bstr();
+        eprintln!("hint:   {short} {}", describe_candidate(odb, id));
+    }
+}
+
+/// `commit 2026-10-27 - subject`, `tag 2001-09-09 - name`, `tree` or `blob`.
+fn describe_candidate(odb: &Odb, id: &ObjectId) -> String {
+    let Ok(object) = odb.read(id) else {
+        return String::from("unknown");
+    };
+    match object.kind() {
+        crate::object::ObjectKind::Commit => match Commit::parse(id.format(), object.data()) {
+            Ok(commit) => format!(
+                "commit {} - {}",
+                short_date(commit.committer.when),
+                commit.summary()
+            ),
+            Err(_) => String::from("commit"),
+        },
+        crate::object::ObjectKind::Tag => match Tag::parse(id.format(), object.data()) {
+            Ok(tag) => format!("tag {} - {}", short_date(tag.tagger.when), tag.name),
+            Err(_) => String::from("tag"),
+        },
+        crate::object::ObjectKind::Tree => String::from("tree"),
+        crate::object::ObjectKind::Blob => String::from("blob"),
+    }
+}
+
+/// `YYYY-MM-DD` of a Unix timestamp in UTC, as git's `DATE_SHORT` with a zero offset.
+fn short_date(secs: i64) -> String {
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
 }
 
 /// Finds the ref a short name abbreviates, in Git's order: the literal name first, then the
@@ -496,5 +570,18 @@ fn invalid(spec: &BStr, reason: &'static str) -> Error {
     Error::InvalidRevision {
         spec: BString::from(spec),
         reason,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_date;
+
+    #[test]
+    fn short_date_is_utc_calendar_date() {
+        assert_eq!(short_date(0), "1970-01-01");
+        assert_eq!(short_date(1_000_000_000), "2001-09-09");
+        assert_eq!(short_date(951_782_400), "2000-02-29");
+        assert_eq!(short_date(-86_400), "1969-12-31");
     }
 }

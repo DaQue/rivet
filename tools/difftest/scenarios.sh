@@ -10100,6 +10100,36 @@ s_log_layout_order() {
     v log --oneline --pretty=medium -- a
 }
 
+# Hex-looking names: git tries refs before short object ids, and an abbreviation is matched nibble by
+# nibble (`xx00` is not `xx`). Fixture is built by real git; the ambiguous pair is found by hashing.
+s_revparse_hexnames() {
+    g init -q repo; cd repo
+    echo a >a; g add a; tick; g commit -qm one
+    echo b >b; g add b; tick; g commit -qm two
+    g branch cafe HEAD~1; g branch facade HEAD
+    first=$(g rev-parse HEAD | cut -c1-4)
+    g branch "$first" HEAD~1
+    v rev-parse cafe facade
+    v rev-parse "$first"
+    v rev-parse --verify "$first^{commit}"
+    v log --oneline cafe
+    v log --oneline facade
+    v show -s --format=%s cafe
+    v show -s --format=%s "$first"
+    v show -s --format=%s "$(g rev-parse HEAD | cut -c1-5)"
+    v show -s --format=%s "$(g rev-parse HEAD | cut -c1-8)"
+    zero="$(g rev-parse HEAD | cut -c1-2)00"
+    v rev-parse "$zero"
+    v rev-parse "$(g rev-parse HEAD | cut -c1-2)0"
+    mkdir ../blobs
+    for i in $(seq 1 2500); do echo "blob $i" >"../blobs/$i"; done
+    seq 1 2500 | (cd ../blobs && g hash-object --stdin-paths) >../ids
+    pre=$(cut -c1-4 ../ids | sort | uniq -d | head -1)
+    for i in $(grep -n "^$pre" ../ids | cut -d: -f1); do g hash-object -w "../blobs/$i" >/dev/null; done
+    v rev-parse "$pre"
+    v cat-file -t "$pre"
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

@@ -1835,3 +1835,17 @@ Left undone: the in-memory `RefStore.packed` snapshot is not refreshed after `de
 changing that is a public-API change) — recorded as "A1 (remainder)" in `GAPS.md`. A15 is not defined in the queue.
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 270 passed / 0 failed / 0 ignored;
 `scenarios.sh` 316 scenarios, `failures: 0`.
+
+### Block 12 — A4 (hex-looking names: refs before short ids, nibble-exact prefixes)
+
+Scenario `s_revparse_hexnames` (new, real-git fixture): branches `cafe`/`facade`, a branch named after the first four digits
+of an existing commit, `xx00` / odd-length prefixes, and an ambiguous four-digit blob pair found by hashing. Fails on
+`f686239` (`rev-parse cafe` exit 128, `6700` resolved to the `67..` commit, ambiguity text differs); passes after.
+Fix (`revparse.rs`): ref lookup precedes abbreviations; abbreviations are matched on hex text, so `ab00` is not `ab`;
+`warning: refname 'X' is ambiguous.` when a ref and a unique short id share a name; ambiguous prefixes print git's
+`error: short object ID` + `hint:` candidate block (tag, commit, tree, blob order; date and subject for commits/tags)
+before returning `AmbiguousPrefix`. `cat-file` maps it to `fatal: Not a valid object name <spec>`. Rust test `short_date_is_utc_calendar_date`.
+Left undone (in `GAPS.md` as "A4 (remainder)"): no fanout (still scans `oids()`), `Odb::resolve_prefix` still has the `00` fill reading
+(public API), hint abbreviations fixed at 7 digits until A14.
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 271 passed / 0 failed / 0 ignored;
+`scenarios.sh` 317 scenarios, `failures: 0`.

@@ -811,6 +811,10 @@ pub fn run_cat_file(global: &GlobalArgs, args: &CatFileArgs) -> Result<i32> {
             Err(error) => return Err(error.into()),
         },
         Err(_) if args.exists => return Ok(1),
+        // Git has already printed the candidate list; the fatal line names the spec.
+        Err(rivet_core::Error::AmbiguousPrefix { .. }) => {
+            return Err(anyhow::anyhow!("Not a valid object name {spec}"));
+        }
         Err(error) => return Err(error.into()),
     };
 

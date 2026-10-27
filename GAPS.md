@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 316 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 317 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-27, gate: 270 tests / 0 failed, 316 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-27, gate: 271 tests / 0 failed, 317 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -222,7 +222,6 @@ deleted in the commit that fixes it. A15 is not in the queue yet.
 
 * **A2** — criss-cross merge uses `bases.first()` and commits a tree git conflicts on (`branching.rs`).
 * **A3** — `.gitattributes` / `core.autocrlf` give different blobs from git (`worktree/add.rs`, `checkout.rs`).
-* **A4** — hex-looking ref names resolve as short ids before refs; trailing `00` bytes read as fill (`revparse.rs`, `hash.rs`).
 * **A5** — delta chains deeper than 50 cannot be read; errors carry an all-zero id (`pack/reader.rs`).
 * **A6** — `.git/shallow` is never read; shallow clones fail `log`/`fsck`.
 * **A7** — unknown `extensions.*` not refused; `preciousObjects` ignored by `gc`/`prune`/`repack -d`.
@@ -234,6 +233,7 @@ deleted in the commit that fixes it. A15 is not in the queue yet.
 * **A13** — `inflate_at` / `apply_delta` size allocations from untrusted declared sizes; temp pack names are not unique.
 * **A14** — `rev-parse --short HEAD` parses `HEAD` as the length; `history::abbrev` always prints 7 chars and scans the odb.
 * **A1 (remainder)** — in-memory `RefStore` packed snapshot is not refreshed after `delete`/`rename` (the on-disk file is now correct).
+* **A4 (remainder)** — short ids are matched by scanning `Odb::oids()` (no fanout use); `Odb::resolve_prefix` still reads a trailing `00` byte as fill (used by `revwalk.rs` `RevSpec::Abbrev`); hint abbreviations are a fixed 7 digits (A14).
 
 ## Reporting a gap
 
