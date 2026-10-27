@@ -2349,6 +2349,17 @@ pub fn merge_commit(
     }
 
     let base = match rivet_core::merge_bases(repository.odb(), ours, theirs) {
+        Ok(bases) if bases.len() > 1 => {
+            // git's recursive strategy merges the bases into a virtual one; taking `first()` would
+            // commit a tree git conflicts on, so refuse by name instead.
+            let names: Vec<String> = bases.iter().map(|b| b.to_string()).collect();
+            eprintln!(
+                "fatal: merge with more than one merge base ({}) is not implemented: \
+                 the recursive strategy's virtual merge base is not built",
+                names.join(", ")
+            );
+            return Ok(128);
+        }
         Ok(bases) => bases.first().copied(),
         Err(rivet_core::Error::NoMergeBase { .. }) => None,
         Err(error) => return Err(error.into()),

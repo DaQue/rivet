@@ -1892,3 +1892,12 @@ them). `gc` with `extensions.preciousObjects` still packs refs and expires reflo
 Left undone: rivet has no `prune` command, so git's `cannot prune in a precious-objects repo` is not covered; git's `gc` also writes
 `objects/info/commit-graph`, which rivet does not.
 Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 273 passed / 0 failed; `scenarios.sh` 320 scenarios, `failures: 0`.
+
+### Block 12 — A2 (criss-cross merge), refusal only
+
+Rust test `merge_with_two_bases_is_refused` (`tests/merge_criss_cross_refusal.rs`, fixture built by real git, `merge-base --all` = 2 bases).
+Fails on `721f2ce` (rivet exited 0 and committed a merge using `bases.first()`); passes after.
+Fix: `merge` refuses when `merge_bases` returns more than one base: names them, exit 128, HEAD and work tree untouched.
+Not a differential scenario because git itself would proceed with a virtual base; the refusal is recorded in `GAPS.md` (A2 remainder).
+Left undone: the recursive virtual merge base (separate commit; not attempted this session).
+Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 274 passed / 0 failed; `scenarios.sh` 320 PASS, `failures: 0`.

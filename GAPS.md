@@ -220,7 +220,7 @@ Differences that are decisions, not bugs. Each is documented where it happens in
 Broken in repositories real git wrote (`docs/reviews/2026-10-27-code-review.md`). Each line is
 deleted in the commit that fixes it. A15 is not in the queue yet.
 
-* **A2** — criss-cross merge uses `bases.first()` and commits a tree git conflicts on (`branching.rs`).
+* **A2 (remainder)** — a merge with more than one merge base is refused by name (`fatal: merge with more than one merge base (...) is not implemented`, exit 128); the recursive virtual base is not built (`branching.rs`).
 * **A3** — `.gitattributes` / `core.autocrlf` give different blobs from git (`worktree/add.rs`, `checkout.rs`).
 * **A6** — `.git/shallow` is never read; shallow clones fail `log`/`fsck`.
 * **A8** — malformed-but-real identity lines abort `log` (`object/commit.rs`).
