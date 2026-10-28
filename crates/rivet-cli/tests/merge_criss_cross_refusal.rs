@@ -1,5 +1,6 @@
-//! A merge with more than one merge base is refused by name: git builds a virtual base
-//! recursively and may conflict where taking one base would commit a clean (wrong) tree.
+//! A merge whose several merge bases conflict with each other is refused by name: git keeps the
+//! conflict markers in its virtual base, which is not built, and taking one base would commit a
+//! tree git does not. (When the bases merge cleanly the merge works: `s_merge_criss_cross`.)
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -42,15 +43,15 @@ fn merge_with_two_bases_is_refused() {
     git(&dir, &["init", "-q", "-b", "main"]);
     commit(&dir, "f", "a\n", "base");
     git(&dir, &["checkout", "-q", "-b", "x", "main"]);
-    commit(&dir, "x", "x\n", "x1");
+    commit(&dir, "f", "x\n", "x1");
     git(&dir, &["checkout", "-q", "-b", "y", "main"]);
-    commit(&dir, "y", "y\n", "y1");
+    commit(&dir, "f", "y\n", "y1");
     let x1 = git(&dir, &["rev-parse", "x"]);
     let y1 = git(&dir, &["rev-parse", "y"]);
     git(&dir, &["checkout", "-q", "x"]);
-    git(&dir, &["merge", "-q", "--no-edit", &y1]);
+    git(&dir, &["merge", "-q", "-s", "ours", "--no-edit", &y1]);
     git(&dir, &["checkout", "-q", "y"]);
-    git(&dir, &["merge", "-q", "--no-edit", &x1]);
+    git(&dir, &["merge", "-q", "-s", "ours", "--no-edit", &x1]);
     commit(&dir, "y2", "y2\n", "y2");
     git(&dir, &["checkout", "-q", "x"]);
     commit(&dir, "x2", "x2\n", "x2");

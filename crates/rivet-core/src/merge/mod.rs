@@ -73,7 +73,9 @@ pub mod content;
 pub mod state;
 pub mod tree;
 
-pub use base::{MAX_MERGE_BASE_STEPS, MergeBase, merge_base, merge_bases};
+pub use base::{
+    BaseTree, MAX_MERGE_BASE_STEPS, MergeBase, merge_base, merge_base_tree, merge_bases,
+};
 pub use content::{ContentMerge, merge_content};
 pub use state::{
     MERGE_HEAD, MERGE_MSG, MergeState, ORIG_HEAD, abort_merge, clear_merge_state,

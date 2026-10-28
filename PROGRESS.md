@@ -1975,3 +1975,10 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Proof: scenario `s_check_attr` (new; global file, root, sub, deep and `info/attributes` layers, a macro, `binary`, `dir/` rules, quoted pattern, `--stdin` with and without `-z`, from a subdirectory, outside path, and every usage error). `check-attr` did not exist on `d6864c0`, so the scenario fails there. Rust tests: three more in `convert::tests`.
 * Left undone: `--cached`, `--source`; git's stderr warning for `[attr]` macros in sub-directory files (`[attr]m1 q1 not allowed: sub/.gitattributes:1`) is not printed by rivet.
 * Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 289 passed / 0 failed / 0 ignored; `scenarios.sh` 326 PASS, `failures: 0`.
+
+## Block 13 — C3 (A2: recursive virtual merge base)
+* `rivet-core/src/merge/base.rs`: new `merge_base_tree` / `BaseTree`. With several merge bases they are folded pairwise (list reversed as ort does), each pair merged with `merge_trees` against its own base found the same way (so nested criss-crosses recurse); the result tree stands in as the single base and no virtual commit is written. A virtual commit's own merge bases with a real one are the maximal ones among its parents'.
+* `ops.rs`: new `Repository::merge_base_tree_into_worktree`; `merge_into_worktree` delegates to it. `branching.rs`: `merge` uses the virtual base, and `cleanly_content_merged` (the `Auto-merging` lines) takes a base tree.
+* Still refused by name: the bases' own merge conflicts (git writes markers into the virtual tree). `merge_criss_cross_refusal.rs` now builds that fixture (`-s ours` cross merges of conflicting edits).
+* Proof: scenarios `s_merge_criss_cross` (clean, both directions, `merge-base --all`, graph, `ls-files -s`, `fsck`) and `s_merge_criss_cross_conflict` (conflict markers/stages in both directions, `merge --abort`). Both fail on `0c6d560`: rivet exits 128 where git merges.
+* Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 289 passed / 0 failed / 0 ignored; `scenarios.sh` 328 PASS, `failures: 0`.

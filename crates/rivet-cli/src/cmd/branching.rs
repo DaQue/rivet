@@ -2348,23 +2348,33 @@ pub fn merge_commit(
         return Ok(128);
     }
 
+    let mut base_tree = None;
     let base = match rivet_core::merge_bases(repository.odb(), ours, theirs) {
         Ok(bases) if bases.len() > 1 => {
-            // git's recursive strategy merges the bases into a virtual one; taking `first()` would
-            // commit a tree git conflicts on, so refuse by name instead.
-            let names: Vec<String> = bases.iter().map(|b| b.to_string()).collect();
-            eprintln!(
-                "fatal: merge with more than one merge base ({}) is not implemented: \
-                 the recursive strategy's virtual merge base is not built",
-                names.join(", ")
-            );
-            return Ok(128);
+            // git's recursive strategy merges the bases into a virtual one.
+            match rivet_core::merge_base_tree(repository.odb(), ours, theirs, options)? {
+                rivet_core::BaseTree::Tree(tree) => {
+                    base_tree = Some(tree);
+                    None
+                }
+                _ => {
+                    // git writes the markers of the inner conflict into the virtual base; taking
+                    // `first()` would commit a tree git conflicts on, so refuse by name instead.
+                    let names: Vec<String> = bases.iter().map(|b| b.to_string()).collect();
+                    eprintln!(
+                        "fatal: merge with more than one merge base ({}) is not implemented: \
+                         merging the bases conflicts and the conflicted virtual base is not built",
+                        names.join(", ")
+                    );
+                    return Ok(128);
+                }
+            }
         }
         Ok(bases) => bases.first().copied(),
         Err(rivet_core::Error::NoMergeBase { .. }) => None,
         Err(error) => return Err(error.into()),
     };
-    if base.is_none() && !allow_unrelated {
+    if base.is_none() && base_tree.is_none() && !allow_unrelated {
         eprintln!("fatal: refusing to merge unrelated histories");
         return Ok(128);
     }
@@ -2376,7 +2386,11 @@ pub fn merge_commit(
     } else {
         None
     };
-    let result = match repository.merge_into_worktree(base, theirs, &options) {
+    let base_tree = match (base, base_tree) {
+        (Some(base), _) => Some(repository.commit_tree(base)?),
+        (None, tree) => tree,
+    };
+    let result = match repository.merge_base_tree_into_worktree(base_tree, theirs, &options) {
         Ok(result) => result,
         Err(error) => {
             if let Some(stash) = stashed {
@@ -2386,7 +2400,7 @@ pub fn merge_commit(
         }
     };
 
-    let auto_merged = cleanly_content_merged(repository, base, ours, theirs, &result)?;
+    let auto_merged = cleanly_content_merged(repository, base_tree, ours, theirs, &result)?;
     let conflicted = print_merge_report(&result, label, &auto_merged);
 
     if squash {
@@ -2594,15 +2608,14 @@ fn blob_at(repository: &Repository, tree: ObjectId, path: &[u8]) -> Result<Optio
 /// `Auto-merging <path>`: a file present in the base and on both sides, changed differently.
 fn cleanly_content_merged(
     repository: &Repository,
-    base: Option<ObjectId>,
+    base_tree: Option<ObjectId>,
     ours: ObjectId,
     theirs: ObjectId,
     result: &rivet_core::TreeMerge,
 ) -> Result<Vec<BString>> {
-    let Some(base) = base else {
+    let Some(base_tree) = base_tree else {
         return Ok(Vec::new());
     };
-    let base_tree = repository.commit_tree(base)?;
     let our_tree = repository.commit_tree(ours)?;
     let their_tree = repository.commit_tree(theirs)?;
     let mut out = Vec::new();

@@ -10457,6 +10457,59 @@ s_index_v4() {
     v fsck
 }
 
+# Criss-cross history built by real git: the merge bases of main and side are x1 and y1, whose
+# virtual merge decides line 8. Merged against either base alone, one direction would conflict.
+criss_cross_fixture() {
+    g init -q -b main repo; cd repo
+    printf '1\n2\n3\n4\n5\n6\n7\n8\n9\n' >f; g add f; tick; g commit -q -m base
+    g branch side
+    tick; sed -i 2s/.*/X2/ f; g commit -q -a -m x1
+    g switch -q side
+    tick; sed -i 8s/.*/Y8/ f; echo y >y; g add y; g commit -q -a -m y1
+    g switch -q main
+    tick; g merge -q --no-edit side
+    g switch -q side
+    tick; g merge -q --no-edit main~1
+    g switch -q main
+    tick; sed -i 8s/.*/M8/ f; g commit -q -a -m x2
+    g switch -q side
+    tick; echo y2 >y2; g add y2; g commit -q -m y2
+    g switch -q main
+    g branch mainb
+}
+
+s_merge_criss_cross() {
+    criss_cross_fixture
+    v merge-base --all main side
+    v merge --no-edit side
+    v status --short
+    cat f
+    v ls-files -s
+    v log --oneline --graph
+    g switch -q side
+    v merge --no-edit mainb
+    v ls-files -s
+    cat f
+    v log --oneline
+    v fsck
+}
+
+s_merge_criss_cross_conflict() {
+    criss_cross_fixture
+    tick; g switch -q side; sed -i 5s/.*/S5/ f; g commit -q -a -m side5
+    g switch -q main; sed -i 5s/.*/M5/ f; tick; g commit -q -a -m main5
+    g branch mainb
+    v merge --no-edit side
+    v status --short
+    cat f
+    v ls-files -s
+    v merge --abort
+    g switch -q side
+    v merge --no-edit mainb
+    cat f
+    v ls-files -s
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

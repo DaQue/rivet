@@ -782,6 +782,21 @@ impl Repository {
         theirs: ObjectId,
         options: &crate::merge::MergeOptions,
     ) -> Result<crate::merge::TreeMerge> {
+        let base_tree = match base {
+            Some(base) => Some(self.commit_tree(base)?),
+            None => None,
+        };
+        self.merge_base_tree_into_worktree(base_tree, theirs, options)
+    }
+
+    /// As [`Repository::merge_into_worktree`], with the base given as a tree: a criss-cross
+    /// merge's virtual base is a tree no commit records.
+    pub fn merge_base_tree_into_worktree(
+        &mut self,
+        base_tree: Option<ObjectId>,
+        theirs: ObjectId,
+        options: &crate::merge::MergeOptions,
+    ) -> Result<crate::merge::TreeMerge> {
         let root = self.worktree()?.require_root("merge")?.to_path_buf();
         let ours_commit = self
             .head()?
@@ -789,10 +804,6 @@ impl Repository {
             .ok_or_else(|| Error::Message("cannot merge into an unborn branch".to_string()))?;
         let ours_tree = self.commit_tree(ours_commit)?;
         let theirs_tree = self.commit_tree(theirs)?;
-        let base_tree = match base {
-            Some(base) => Some(self.commit_tree(base)?),
-            None => None,
-        };
         let mut result =
             crate::merge::merge_trees(self.odb(), base_tree, ours_tree, theirs_tree, options)?;
         let ours_map = flatten_tree(self.odb(), ours_tree)?;
