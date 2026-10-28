@@ -10803,6 +10803,184 @@ s_diff_tree() {
     done
 }
 
+s_mktree() {
+    v init -q repo; cd repo
+    echo a >a; echo b >b; mkdir d; echo c >d/c
+    v add .; tick; v commit -q -m one
+    B=$(g rev-parse HEAD:a); C=$(g rev-parse HEAD:b); D=$(g rev-parse HEAD:d); H=$(g rev-parse HEAD)
+    E=$(g mktree </dev/null)
+    U=1111111111111111111111111111111111111111
+    T=$'\t'
+    # plain trees, ordering (a < a.b < a/ < a0), the same tree id as the committed one
+    vin "100644 blob $B${T}a
+100644 blob $C${T}b
+040000 tree $D${T}d
+" mktree
+    vin "040000 tree $D${T}d
+100644 blob $C${T}b
+100644 blob $B${T}a
+" mktree
+    vin "100644 blob $B${T}a0
+040000 tree $E${T}a
+100644 blob $B${T}a.b
+100644 blob $B${T}a
+" mktree
+    vin '' mktree
+    vin "100644 blob $B${T}z" mktree
+    vin "100644 blob $B${T}z
+" mktree
+    # the output is a real tree
+    O=$(printf '100644 blob %s\tq\n' "$B" | g mktree)
+    v cat-file -p "$O"
+    v fsck
+    # duplicates are kept, in input order; modes are written as given
+    vin "100644 blob $B${T}a
+100644 blob $C${T}a
+" mktree
+    vin "100644 blob $C${T}a
+100755 blob $B${T}a
+" mktree
+    vin "100664 blob $B${T}l
+" mktree
+    vin "100755 blob $B${T}x
+120000 blob $B${T}y
+" mktree
+    vin "40000 tree $E${T}t
+" mktree
+    vin "100644 blob $B${T}z
+" mktree extra
+    # names: quoting, odd characters, bad names
+    vin "100644 blob $B${T}\"a\\tb\"
+100644 blob $B${T}\"\\303\\251\"
+" mktree
+    vin "100644 blob $B${T}a\\nb
+" mktree
+    vin "100644 blob $B${T}.
+100644 blob $B${T}..
+100644 blob $B${T}.git
+100644 blob $B${T} lead
+" mktree
+    vin "100644 blob $B${T}z
+" mktree
+    vin "100644 blob $B${T}/
+" mktree
+    vin "100644 blob $B${T}a/b
+" mktree
+    vin "100644 blob $B${T}\"abc
+" mktree
+    vin "100644 blob $B${T}
+" mktree
+    vin "100644 blob $B${T}z
+" mktree --no-missing
+    # input format errors
+    vin "100644 blob $B z
+" mktree
+    vin "100644 $B${T}z
+" mktree
+    vin "100644  blob $B${T}z
+" mktree
+    vin "100644 blob ${B%?}${T}z
+" mktree
+    vin "100644 blob ${B}00${T}z
+" mktree
+    vin "abc blob $B${T}z
+" mktree
+    vin "100644x blob $B${T}z
+" mktree
+    vin "$B
+" mktree
+    vin "100644 blob $(printf %s "$B" | tr a-f A-F)${T}z
+" mktree
+    vin "100644 BLOB $B${T}z
+" mktree
+    vin "100644 foo $B${T}z
+" mktree
+    vin "100644 blob $B${T}z
+
+100644 blob $B${T}y
+" mktree
+    # mode and type agree, and the object agrees with both
+    vin "040000 tree $B${T}d
+" mktree
+    vin "040000 blob $B${T}d
+" mktree
+    vin "100644 tree $E${T}d
+" mktree
+    vin "100644 commit $H${T}d
+" mktree
+    vin "160000 blob $B${T}d
+" mktree
+    vin "100644 blob $D${T}d
+" mktree
+    vin "160000 commit $H${T}sub
+" mktree
+    vin "160000 commit $U${T}sub
+" mktree
+    vin "160001 commit $U${T}sub
+" mktree --missing
+    # missing objects
+    vin "100644 blob $U${T}z
+" mktree
+    vin "100644 blob $U${T}z
+" mktree --missing
+    vin "100644 blob $U${T}z
+" mktree --missing --no-missing
+    vin "100644 blob $U${T}z
+" mktree --miss
+    vin "040000 tree $U${T}z
+" mktree --missing
+    vin "100644 commit $U${T}z
+" mktree --missing
+    # batch
+    vin "100644 blob $B${T}z
+
+100644 blob $C${T}y
+" mktree --batch
+    vin "
+100644 blob $B${T}y
+" mktree --batch
+    vin "100644 blob $B${T}z
+
+
+100644 blob $C${T}y
+" mktree --batch
+    vin "100644 blob $B${T}z
+" mktree --batch
+    vin "100644 blob $B${T}z
+" mktree --batch --no-batch
+    vin '' mktree --batch
+    vin "
+" mktree --batch
+    vin "100644 blob $B${T}z
+
+100644 blob $U${T}y
+" mktree --batch
+    vin "100644 blob $B${T}z
+
+100644 blob $B z
+" mktree --batch
+    # NUL terminated input: no quoting, tabs and newlines in names
+    { printf '100644 blob %s\ta\n\0' "$B"; printf '100644 blob %s\t"q"\0' "$C"; } >z.in
+    STDIN_FILE=z.in v mktree -z
+    { printf '100644 blob %s\ta\0' "$B"; printf '\0'; printf '100644 blob %s\tb\0' "$C"; } >z.in
+    STDIN_FILE=z.in v mktree -z --batch
+    STDIN_FILE=z.in v mktree -z
+    printf '100644 blob %s\tz' "$B" >z.in
+    STDIN_FILE=z.in v mktree -z
+    printf '100644 blob %s\tz\0' "$B" >z.in
+    STDIN_FILE=z.in v mktree -z
+    STDIN_FILE=z.in v mktree -zz
+    # options
+    vin '' mktree --bogus
+    vin '' mktree -Q
+    vin '' mktree --no
+    vin '' mktree -h
+    vin "100644 blob $B${T}z
+" mktree --
+    # nothing moved (fsck is left out: it judges the deliberately odd trees above differently)
+    v for-each-ref
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

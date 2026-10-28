@@ -40,7 +40,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
     am, apply, archive, attr, bisect, blame, branching, bundle, cherry, clean, committree,
-    difftree, format_patch, grep, history, hook, ignore, lsremote, maintenance, mv, notes,
+    difftree, format_patch, grep, history, hook, ignore, lsremote, maintenance, mktree, mv, notes,
     packrefs, plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot, sparse, stash,
     submodule, symbolicref, tag, updateref, worktree,
 };
@@ -344,6 +344,10 @@ pub enum Commands {
     /// Compare the content and mode of blobs found via two tree objects.
     #[command(name = "diff-tree", disable_help_flag = true)]
     DiffTree(difftree::DiffTreeArgs),
+
+    /// Build a tree object from `ls-tree` formatted text on standard input.
+    #[command(name = "mktree", disable_help_flag = true)]
+    MkTree(mktree::MkTreeArgs),
 }
 
 /// The object format a repository is created with, or expects.

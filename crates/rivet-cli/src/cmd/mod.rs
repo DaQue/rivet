@@ -52,6 +52,7 @@ pub mod hook;
 pub mod ignore;
 pub mod lsremote;
 pub mod maintenance;
+pub mod mktree;
 pub mod mv;
 pub mod notes;
 pub mod packrefs;
@@ -177,6 +178,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::UpdateRef(args) => updateref::run_update_ref(&global, &args),
         Commands::CommitTree(args) => committree::run_commit_tree(&global, &args),
         Commands::DiffTree(args) => difftree::run_diff_tree(&global, &args),
+        Commands::MkTree(args) => mktree::run_mktree(&global, &args),
     }
 }
 
