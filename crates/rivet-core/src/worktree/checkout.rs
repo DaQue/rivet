@@ -547,26 +547,25 @@ impl CheckoutPlan {
         // Writes before deletes, because a path is often both: renaming `a.txt` to `b.txt` is a
         // create of `b.txt` and a remove of `a.txt`, and doing the remove first gives a window
         // in which neither exists.
-        for entry in &self.entries {
-            if entry.action != CheckoutAction::Create {
-                continue;
+        // `.gitattributes` files go first, so the conversions of the files written after them
+        // are decided by the attributes of the tree being checked out, not the one being left.
+        let is_attributes = |entry: &CheckoutEntry| {
+            entry.path.rsplit(|b| *b == b'/').next() == Some(&b".gitattributes"[..])
+        };
+        for attributes_pass in [true, false] {
+            for action in [CheckoutAction::Create, CheckoutAction::Update] {
+                for entry in &self.entries {
+                    if entry.action != action || is_attributes(entry) != attributes_pass {
+                        continue;
+                    }
+                    let (oid, mode) = match (entry.oid, entry.mode) {
+                        (Some(oid), Some(mode)) => (oid, mode),
+                        // Only a remove carries neither; the plan cannot produce any other pair.
+                        _ => continue,
+                    };
+                    write_blob(worktree, BStr::new(&entry.path[..]), oid, mode, odb)?;
+                }
             }
-            let (oid, mode) = match (entry.oid, entry.mode) {
-                (Some(oid), Some(mode)) => (oid, mode),
-                // Only a remove carries neither; the plan cannot produce any other pair.
-                _ => continue,
-            };
-            write_blob(worktree, BStr::new(&entry.path[..]), oid, mode, odb)?;
-        }
-        for entry in &self.entries {
-            if entry.action != CheckoutAction::Update {
-                continue;
-            }
-            let (oid, mode) = match (entry.oid, entry.mode) {
-                (Some(oid), Some(mode)) => (oid, mode),
-                _ => continue,
-            };
-            write_blob(worktree, BStr::new(&entry.path[..]), oid, mode, odb)?;
         }
         for entry in &self.entries {
             if entry.action != CheckoutAction::Keep {
@@ -715,7 +714,10 @@ pub fn write_blob(
             mode: mode.to_u32(),
         });
     }
-    let data = odb.read_typed(&oid, ObjectKind::Blob)?.into_data();
+    let mut data = odb.read_typed(&oid, ObjectKind::Blob)?.into_data();
+    if mode != EntryMode::Link {
+        data = worktree.smudge_content(path, data)?;
+    }
     write_bytes(worktree, path, &data, mode)
 }
 

@@ -534,7 +534,7 @@ fn file_type(mode: crate::object::EntryMode) -> u32 {
 pub fn unstaged_changes(
     worktree: &Worktree,
     index: &Index,
-    _odb: &Odb,
+    odb: &Odb,
     refresh: bool,
     stat_cache: &mut crate::worktree::StatCache,
 ) -> Result<Vec<StatusEntry>> {
@@ -583,7 +583,9 @@ pub fn unstaged_changes(
         }
 
         let mode = data.mode;
-        let new_oid = worktree.hash_file(BStr::new(&entry.path))?;
+        let new_oid = worktree.hash_file_with(BStr::new(&entry.path), &mut || {
+            crate::worktree::add::index_blob_has_cr(index, odb, BStr::new(&entry.path))
+        })?;
         if new_oid == entry.oid && mode == entry.mode {
             continue;
         }

@@ -136,6 +136,9 @@ pub struct Worktree {
     /// `core.protectNTFS` — whether Windows-only path hazards are refused. Off by default on
     /// Unix, on by default on Windows, exactly as Git defaults it.
     protect_ntfs: bool,
+    /// `core.autocrlf` / `core.eol` / `core.safecrlf` / attribute settings for the clean and
+    /// smudge conversions.
+    convert: crate::convert::ConvertConfig,
 }
 
 impl Worktree {
@@ -169,6 +172,7 @@ impl Worktree {
         let protect_ntfs = config
             .get_bool(BStr::new(b"core.protectNTFS"))?
             .unwrap_or(cfg!(windows));
+        let convert = crate::convert::ConvertConfig::from_config(config)?;
         Ok(Self {
             root,
             format,
@@ -176,7 +180,76 @@ impl Worktree {
             symlinks,
             ignore_case,
             protect_ntfs,
+            convert,
         })
+    }
+
+    /// The common git directory, found from `<root>/.git` (a directory, or a `gitdir:` file for a
+    /// linked work tree), where `info/attributes` lives.
+    fn common_git_dir(&self) -> Option<PathBuf> {
+        let root = self.root()?;
+        let dot_git = root.join(".git");
+        let mut dir = if dot_git.is_file() {
+            let text = std::fs::read_to_string(&dot_git).ok()?;
+            let target = Path::new(text.strip_prefix("gitdir:")?.trim());
+            if target.is_absolute() {
+                target.to_path_buf()
+            } else {
+                root.join(target)
+            }
+        } else {
+            dot_git
+        };
+        if let Ok(common) = std::fs::read_to_string(dir.join("commondir")) {
+            dir = dir.join(common.trim());
+        }
+        Some(dir)
+    }
+
+    /// Phase 4 — the attribute stack that applies to `path`.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Error::BareRepository`] when there is no work tree.
+    pub fn attr_stack(&self, path: &BStr) -> Result<crate::convert::AttrStack> {
+        let root = self.require_root("attributes")?;
+        Ok(crate::convert::AttrStack::load(
+            root,
+            self.common_git_dir().as_deref(),
+            &self.convert,
+            path,
+        ))
+    }
+
+    /// Phase 4 — the clean conversion (work tree → blob) of the content of a regular file.
+    ///
+    /// `index_has_cr` says whether the index blob for the path holds a CR (asked only when it
+    /// matters); `report` enables the `core.safecrlf` warning, which git only gives when it
+    /// stores the object.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Error::Message`] for an attribute that cannot be honoured, and for
+    /// `core.safecrlf=true` when the conversion would not round-trip.
+    pub fn clean_content(
+        &self,
+        path: &BStr,
+        data: Vec<u8>,
+        index_has_cr: &mut dyn FnMut() -> bool,
+        report: bool,
+    ) -> Result<Vec<u8>> {
+        let stack = self.attr_stack(path)?;
+        self.convert.clean(&stack, path, data, index_has_cr, report)
+    }
+
+    /// Phase 4 — the smudge conversion (blob → work tree) of a regular file's content.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Error::Message`] for an attribute that cannot be honoured.
+    pub fn smudge_content(&self, path: &BStr, data: Vec<u8>) -> Result<Vec<u8>> {
+        let stack = self.attr_stack(path)?;
+        self.convert.smudge(&stack, path, data)
     }
 
     /// Phase 4 — the work tree root, or `None` when the repository is bare.
@@ -516,7 +589,28 @@ impl Worktree {
     ///
     /// As [`Worktree::read_file`], plus the hasher's collision-detection path.
     pub fn hash_file(&self, path: &BStr) -> Result<crate::hash::ObjectId> {
-        let buf = self.read_file(path)?;
+        self.hash_file_with(path, &mut || false)
+    }
+
+    /// Phase 4 — [`Worktree::hash_file`] with the answer to "does the index blob for this path
+    /// contain a CR", which `text=auto` consults before normalising line endings.
+    ///
+    /// # Errors
+    ///
+    /// As [`Worktree::hash_file`].
+    pub fn hash_file_with(
+        &self,
+        path: &BStr,
+        index_has_cr: &mut dyn FnMut() -> bool,
+    ) -> Result<crate::hash::ObjectId> {
+        let mut buf = self.read_file(path)?;
+        let is_link = self.symlinks
+            && std::fs::symlink_metadata(self.join(path)?)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+        if !is_link {
+            buf = self.clean_content(path, buf, index_has_cr, false)?;
+        }
         // The header is part of the identity: Git hashes `<kind> <len>\0` followed by the body,
         // so hashing the bytes alone yields an id no blob in the repository can match.
         let (id, _) = hash_object(self.format, ObjectKind::Blob, &buf)?;

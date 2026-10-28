@@ -94,6 +94,7 @@
 pub mod archive;
 pub mod bundle;
 pub mod config;
+pub mod convert;
 pub mod diff;
 pub mod error;
 pub mod fsck;

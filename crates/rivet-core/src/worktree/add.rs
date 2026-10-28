@@ -51,6 +51,20 @@ use crate::object::{EntryMode, ObjectKind, hash_object};
 use crate::odb::Odb;
 use crate::worktree::{StatCache, Worktree, WorktreeWalkOptions, check_relative_path};
 
+/// Whether the blob the index holds for `path` contains a CR — what `text=auto` asks before it
+/// normalises line endings (git's `has_crlf_in_index`).
+pub(crate) fn index_blob_has_cr(index: &Index, odb: &Odb, path: &BStr) -> bool {
+    let Some(entry) = index.entry(path) else {
+        return false;
+    };
+    if entry.stage() != Stage::Normal || matches!(entry.mode, EntryMode::Link | EntryMode::Commit) {
+        return false;
+    }
+    odb.read_typed(&entry.oid, ObjectKind::Blob)
+        .map(|object| object.data().contains(&b'\r'))
+        .unwrap_or(false)
+}
+
 /// Phase 3 — how an `add` should behave.
 ///
 /// # Caveats
@@ -399,9 +413,19 @@ pub fn add_paths(
         let oid = if options.intent_to_add {
             empty_blob
         } else if options.dry_run {
-            worktree.hash_file(BStr::new(&path))?
+            worktree.hash_file_with(BStr::new(&path), &mut || {
+                index_blob_has_cr(index, odb, BStr::new(&path))
+            })?
         } else {
-            let data = worktree.read_file(BStr::new(&path))?;
+            let mut data = worktree.read_file(BStr::new(&path))?;
+            if stat.mode != EntryMode::Link {
+                data = worktree.clean_content(
+                    BStr::new(&path),
+                    data,
+                    &mut || index_blob_has_cr(index, odb, BStr::new(&path)),
+                    true,
+                )?;
+            }
             odb.write_raw(ObjectKind::Blob, &data)?
         };
 

@@ -10240,6 +10240,70 @@ EOF2
 
 # `git clone --shared` leaves `objects/info/alternates` and no objects of its own: every read command
 # must find the history through it, including a relative alternate and a chained one.
+# Put the bytes of the given files into the transcript, so a conversion difference is readable.
+dump_bytes() {
+    local f
+    for f in "$@"; do echo "bytes $f:$(od -An -c "$f" | tr -s ' ' | tr -d '\n')" >>"$TRANSCRIPT"; done
+}
+
+s_attributes_eol() {
+    g init -q repo; cd repo
+    printf '* text=auto\n*.txt eol=crlf\n*.bin -text\n*.lf eol=lf\n*.in text=auto eol=lf\n' >.gitattributes
+    mkdir sub
+    printf 'sub/*.dat -text\n' >sub/.gitattributes
+    printf 'a\r\nb\r\n' >crlf.dat; printf 'a\nb\n' >lf.dat; printf 'a\r\nb\n' >mixed.dat
+    printf 'a\0\r\nb\r\n' >nul.dat; printf 'a\rb\n' >lonecr.dat
+    printf 'a\r\nb\r\n' >w.txt; printf 'a\nb\n' >l.txt; printf 'a\r\n' >x.bin
+    printf 'a\r\nb\r\n' >e.lf; printf 'a\r\nb\r\n' >e.in; printf 'a\r\nb\r\n' >sub/s.dat
+    v add .
+    v ls-files -s
+    v status --short
+    tick; g commit -qm one
+    local files="crlf.dat lf.dat mixed.dat nul.dat lonecr.dat w.txt l.txt x.bin e.lf e.in sub/s.dat"
+    local c
+    for c in false true input; do
+        g config core.autocrlf $c
+        rm -f $files
+        v checkout -- .
+        dump_bytes $files
+        v status --short
+        vq add -A
+        v ls-files -s
+    done
+    # the safe-crlf diagnostics, and the refusal when it is set to true
+    g config core.autocrlf false
+    printf 'a\r\n' >new.dat; printf 'a\nb\n' >q.txt
+    v add new.dat q.txt
+    g config core.safecrlf true
+    printf 'a\r\n' >new2.dat
+    printf 'a\nb\n' >q2.txt
+    v add new2.dat
+    v add q2.txt
+    g config core.safecrlf false
+    v add new2.dat
+    v ls-files -s
+    cd ..
+    # no attributes at all: core.autocrlf decides, and an index blob that already holds a CR is kept
+    g init -q plain; cd plain
+    printf 'a\r\nb\r\n' >old.dat; printf 'x\r\n' >keep.dat
+    v add .
+    tick; g commit -qm one
+    for c in true input false; do
+        g config core.autocrlf $c
+        printf 'a\r\nb\r\nc\r\n' >old.dat; printf 'n\r\n' >fresh.dat
+        v add old.dat fresh.dat
+        v ls-files -s
+        v status --short
+        v rm -q --cached fresh.dat; rm -f fresh.dat
+        v reset -q --hard
+        dump_bytes old.dat keep.dat
+    done
+    printf '* text=auto\n' >.gitattributes
+    printf 'x\r\ny\r\n' >keep.dat
+    v add keep.dat
+    v ls-files -s
+}
+
 s_alternates() {
     g init -q repo; cd repo
     echo a >a; g add a; tick; g commit -qm one
@@ -10413,6 +10477,7 @@ for s in "$@"; do
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
+        s_attributes_eol) run_scenario "$s" repo plain ;;
         s_alternates) run_scenario "$s" repo cl cl2 rel/r ;;
         s_shallow) run_scenario "$s" src cl ;;
         *) run_scenario "$s" ;;
