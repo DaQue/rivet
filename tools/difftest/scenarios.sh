@@ -10755,6 +10755,54 @@ b' commit-tree $T
     v commit-tree $T -m 'utf8 spelled out'
 }
 
+s_diff_tree() {
+    v init -q repo; cd repo
+    mkdir d e; echo 1 >a; echo 2 >d/b; echo 3 >d/c; echo 4 >e/f
+    ln -s a link
+    v add .; tick; v commit -q -m one
+    ONE=$(g rev-parse HEAD)
+    echo 4 >>a; echo 5 >d/b; v rm -q d/c; echo n >d/n; chmod +x a
+    v rm -q -r e; mkdir e; echo x >e; v add -A; tick; v commit -q -m two
+    git_branch=$(g rev-parse --abbrev-ref HEAD)
+    v checkout -q -b side HEAD~1
+    echo s >s; v add s; tick; v commit -q -m side
+    v merge -q --no-edit "$git_branch"
+    for o in "" "-r" "-t -r" "-r --root" "--root" "-r --no-commit-id" "-r --name-only" "-r --name-status" \
+        "--name-only" "--name-status" "-r --stat" "--stat" "-r -p" "-p" "-r -z" "-r --name-only -z" \
+        "-r --name-status -z" "-r --abbrev" "-r --abbrev=10" "-s" "-r -s" "-r -m" "-r --first-parent" \
+        "-r -m --name-status" "-r -m --stat" "-r -m -p" "-r --name-only --stat" "-r --stat -p"; do
+        for rev in HEAD HEAD~1 HEAD^2 HEAD~2 "$ONE"; do
+            v diff-tree $o $rev
+        done
+    done
+    v diff-tree -r HEAD~1 HEAD
+    v diff-tree -r HEAD HEAD~1
+    v diff-tree -r HEAD~2 HEAD
+    v diff-tree HEAD~2 HEAD
+    v diff-tree -t -r HEAD~2 HEAD
+    v diff-tree -r HEAD~2 HEAD -- d
+    v diff-tree HEAD~2 HEAD -- d/b
+    v diff-tree -r HEAD~2 HEAD -- d/b a
+    v diff-tree -r HEAD~2 HEAD -- nosuchpath
+    v diff-tree -r --stat HEAD~2 HEAD -- d
+    v diff-tree -r -p HEAD~2 HEAD -- d/b
+    v diff-tree -r --root HEAD~2 -- d
+    v diff-tree -r 'HEAD^{tree}' HEAD~2
+    v diff-tree -r 'HEAD^{tree}'
+    v diff-tree -r HEAD~2:d HEAD:d
+    v diff-tree -r HEAD HEAD
+    v diff-tree -r nosuch
+    v diff-tree -r HEAD nosuch
+    v diff-tree -r HEAD:a
+    v diff-tree
+    v diff-tree --bogus HEAD
+    # a symlink replaced by a regular file is a type change in the raw formats
+    rm link; echo notlink >link; v add -A; tick; v commit -q -m retype
+    for o in "-r" "-r --name-status" "-r --name-only" "-t -r"; do
+        v diff-tree $o HEAD
+    done
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

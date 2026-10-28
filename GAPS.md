@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 331 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 332 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-28, gate: 296 tests / 0 failed, 331 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-28, gate: 297 tests / 0 failed, 332 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -207,6 +207,7 @@ The command works for the common case; the listed options or edge cases are miss
   git follows tags after a fetch with an explicit refspec where rivet does not.
 * **`update-ref --stdin`** — the `symref-update`, `symref-create`, `symref-delete` and `symref-verify` commands are refused by name (`not implemented: update-ref --stdin symref-…`, exit 128; `update_ref_refusals.rs`); `-0`/`--batch-updates` is not accepted. A `delete` releases its lock just before the removal, which takes the lock itself, so a concurrent writer can slip in between.
 * **`commit-tree`** — `-S`/`--gpg-sign` and a non-UTF-8 `i18n.commitEncoding` (git adds an `encoding` header) are refused by name (`commit-tree: signing (-S) is not supported`, exit 128; `commit_tree_refusals.rs`). Relative date words in `GIT_AUTHOR_DATE` (`2.days.ago`) are rejected as `invalid date format`, as `parse_git_date` does not read them.
+* **`diff-tree`** — `-c`/`--cc`, `--stdin`, `-M`/`-C`, `--numstat`, `--patch-with-raw`, `--patch-with-stat` and `--full-index` are refused by name (`diff-tree: <option> is not implemented`, exit 128; `diff_tree_refusals.rs`). `-p` of a symlink replaced by a regular file (or the reverse) prints one modification with mode lines where git prints a deletion and an addition; this is in the shared unified formatter, so `diff` has it too. `--first-parent` is accepted and changes nothing, as in git 2.x without `-m`.
 
 ## 3. Deliberate divergences
 

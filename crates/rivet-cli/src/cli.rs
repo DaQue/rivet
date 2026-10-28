@@ -40,9 +40,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
     am, apply, archive, attr, bisect, blame, branching, bundle, cherry, clean, committree,
-    format_patch, grep, history, hook, ignore, lsremote, maintenance, mv, notes, packrefs,
-    plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot, sparse, stash, submodule,
-    symbolicref, tag, updateref, worktree,
+    difftree, format_patch, grep, history, hook, ignore, lsremote, maintenance, mv, notes,
+    packrefs, plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot, sparse, stash,
+    submodule, symbolicref, tag, updateref, worktree,
 };
 
 /// The `rivet` command line.
@@ -340,6 +340,10 @@ pub enum Commands {
     /// Write a commit object for a tree, without moving any ref.
     #[command(name = "commit-tree", disable_help_flag = true)]
     CommitTree(committree::CommitTreeArgs),
+
+    /// Compare the content and mode of blobs found via two tree objects.
+    #[command(name = "diff-tree", disable_help_flag = true)]
+    DiffTree(difftree::DiffTreeArgs),
 }
 
 /// The object format a repository is created with, or expects.
