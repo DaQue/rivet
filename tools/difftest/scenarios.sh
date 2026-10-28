@@ -10429,6 +10429,37 @@ s_malformed_ident() {
     v fsck
 }
 
+# A8 remainder: an identity line with no `<email>` or no dated `+zone` is not rendered as if the
+# part were there (no `Author:`/`Date:` line, empty or unexpanded `%a?` placeholders).
+s_malformed_ident_render() {
+    g init -q r; cd r
+    local t p="" c a
+    t=$(g hash-object -t tree -w /dev/null)
+    for a in "Foo 1234 +0000" "Foo <foo@x.com>" "Foo <foo@x.com> 99999999999999999999999 +0000" \
+             "Foo <foo@x.com> 1234 +00000" "Foo <foo@x.com> 1234" "Foo <foo@x.com> 1234 +0000"; do
+        c=$(printf 'tree %s\n%sauthor %s\ncommitter C <c@x> 1234 +0000\n\nmsg\n' "$t" "$p" "$a" \
+            | g hash-object -t commit -w --stdin --literally)
+        p="parent $c
+"
+    done
+    # a committer with no date, to cover the `%c` side and the Commit/CommitDate lines
+    c=$(printf 'tree %s\nparent %s\nauthor A <a@x> 5 +0100\ncommitter Nobody 7 +0000\n\nlast\n' "$t" "$c" \
+        | g hash-object -t commit -w --stdin --literally)
+    g update-ref refs/heads/master "$c"
+    g symbolic-ref HEAD refs/heads/master
+    local f
+    for f in short medium full fuller; do
+        v log --pretty=$f
+    done
+    v log --format='%h|%an|%ae|%ad|%at|%aI|%aD|%ar|%as|%ai|%aN|%aE'
+    v log --format='%h|%cn|%ce|%cd|%ct|%cI|%cD|%cs|%cN|%cE'
+    v log --format='%h|%ad|%at' --date=iso
+    v log --format='%h|%ad|%at' --date=raw
+    v log --format='%h|%ad' --date=short
+    v show -s --format='%an|%ae|%ad|%aI' HEAD~2
+    v fsck
+}
+
 # `feature.manyFiles` / `index.version=4` make git write the prefix-compressed v4 index; rivet must read
 # it back path for path (and, with no way to write v4, still leave an index git reads).
 s_index_v4() {

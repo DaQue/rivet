@@ -956,6 +956,8 @@ struct LogCommit {
     tree: ObjectId,
     author: rivet_core::Signature,
     committer: rivet_core::Signature,
+    author_presence: pretty::Presence,
+    committer_presence: pretty::Presence,
     message: Vec<u8>,
 }
 
@@ -1028,6 +1030,8 @@ fn read_commit(repository: &Repository, oid: &ObjectId) -> Result<LogCommit> {
         tree: commit.tree,
         author: commit.author.clone(),
         committer: commit.committer.clone(),
+        author_presence: pretty::Presence::of_header(commit.raw, b"author"),
+        committer_presence: pretty::Presence::of_header(commit.raw, b"committer"),
         message: commit.message.to_vec(),
     })
 }
@@ -1601,6 +1605,8 @@ fn render_commit(
         parents: &commit.parents,
         author: &commit.author,
         committer: &commit.committer,
+        author_presence: &commit.author_presence,
+        committer_presence: &commit.committer_presence,
         message: &commit.message,
         decorations: look.decorations.get(oid).map_or(&[], Vec::as_slice),
     };

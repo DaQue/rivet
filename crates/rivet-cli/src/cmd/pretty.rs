@@ -220,6 +220,49 @@ pub fn parse_color_spec(spec: &str) -> Option<String> {
     })
 }
 
+/// Which parts of an identity line git's `split_ident_line` found. [`Signature`] fills the parts a
+/// malformed line lacks with empty values, so the renderer asks this before printing them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Presence {
+    /// A `<email>` was found: without it git leaves out the `Author:`/`Commit:` line.
+    pub mail: bool,
+    /// The decimal timestamp exactly as written, present only when a `+`/`-` zone follows it.
+    pub date: Option<Vec<u8>>,
+}
+
+impl Presence {
+    /// Read the identity on the `header` line (`author`, `committer`) of a raw commit body.
+    pub fn of_header(raw: &[u8], header: &[u8]) -> Self {
+        for line in raw.lines() {
+            if line.is_empty() {
+                break;
+            }
+            if let Some(value) = line.strip_prefix(header).and_then(|v| v.strip_prefix(b" ")) {
+                return Self::of_ident(value);
+            }
+        }
+        Self::default()
+    }
+
+    fn of_ident(line: &[u8]) -> Self {
+        let Some(open) = line.find_byte(b'<') else {
+            return Self::default();
+        };
+        let Some(close) = line[open + 1..].find_byte(b'>') else {
+            return Self::default();
+        };
+        let rest = line[open + 1 + close + 1..].trim_start_with(|c| c == ' ');
+        let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+        let after = rest[digits..].trim_start_with(|c| c == ' ');
+        let zone = matches!(after.first(), Some(b'+' | b'-'))
+            && after[1..].first().is_some_and(u8::is_ascii_digit);
+        Self {
+            mail: true,
+            date: (digits > 0 && zone).then(|| rest[..digits].to_vec()),
+        }
+    }
+}
+
 /// What a layout needs to know about one commit.
 pub struct Entry<'a> {
     pub oid: ObjectId,
@@ -227,6 +270,8 @@ pub struct Entry<'a> {
     pub parents: &'a [ObjectId],
     pub author: &'a Signature,
     pub committer: &'a Signature,
+    pub author_presence: &'a Presence,
+    pub committer_presence: &'a Presence,
     pub message: &'a [u8],
     /// Ref names pointing at the commit, already in display order (`HEAD -> main`, `tag: v1`).
     pub decorations: &'a [Decoration],
@@ -247,9 +292,14 @@ pub struct Style<'a> {
 }
 
 impl Style<'_> {
-    fn date_of(&self, sig: &Signature) -> String {
-        rivet_core::ops::format_date_style(self.date, sig.when, sig.tz_offset_minutes, self.now)
-            .unwrap_or_default()
+    /// The date text; an identity with no usable date (git: no `+zone` after the digits) is the epoch.
+    fn date_of(&self, sig: &Signature, presence: &Presence) -> String {
+        let (when, tz) = if presence.date.is_some() {
+            (sig.when, sig.tz_offset_minutes)
+        } else {
+            (0, 0)
+        };
+        rivet_core::ops::format_date_style(self.date, when, tz, self.now).unwrap_or_default()
     }
 }
 
@@ -345,28 +395,44 @@ pub fn render(layout: &Layout, e: &Entry<'_>, style: &Style<'_>) -> Vec<u8> {
                 let parents: Vec<String> = e.parents.iter().map(&id).collect();
                 out.extend_from_slice(format!("Merge: {}\n", parents.join(" ")).as_bytes());
             }
+            let line = |out: &mut Vec<u8>, label: &str, sig: &Signature, presence: &Presence| {
+                if presence.mail {
+                    out.extend_from_slice(format!("{label}{}\n", person(sig)).as_bytes());
+                }
+            };
             match layout {
                 Layout::Full => {
-                    out.extend_from_slice(format!("Author: {}\n", person(e.author)).as_bytes());
-                    out.extend_from_slice(format!("Commit: {}\n", person(e.committer)).as_bytes());
+                    line(&mut out, "Author: ", e.author, e.author_presence);
+                    line(&mut out, "Commit: ", e.committer, e.committer_presence);
                 }
                 Layout::Fuller => {
-                    out.extend_from_slice(format!("Author:     {}\n", person(e.author)).as_bytes());
-                    out.extend_from_slice(
-                        format!("AuthorDate: {}\n", style.date_of(e.author)).as_bytes(),
-                    );
-                    out.extend_from_slice(
-                        format!("Commit:     {}\n", person(e.committer)).as_bytes(),
-                    );
-                    out.extend_from_slice(
-                        format!("CommitDate: {}\n", style.date_of(e.committer)).as_bytes(),
-                    );
+                    line(&mut out, "Author:     ", e.author, e.author_presence);
+                    if e.author_presence.mail {
+                        out.extend_from_slice(
+                            format!(
+                                "AuthorDate: {}\n",
+                                style.date_of(e.author, e.author_presence)
+                            )
+                            .as_bytes(),
+                        );
+                    }
+                    line(&mut out, "Commit:     ", e.committer, e.committer_presence);
+                    if e.committer_presence.mail {
+                        out.extend_from_slice(
+                            format!(
+                                "CommitDate: {}\n",
+                                style.date_of(e.committer, e.committer_presence)
+                            )
+                            .as_bytes(),
+                        );
+                    }
                 }
                 _ => {
-                    out.extend_from_slice(format!("Author: {}\n", person(e.author)).as_bytes());
-                    if *layout == Layout::Medium {
+                    line(&mut out, "Author: ", e.author, e.author_presence);
+                    if *layout == Layout::Medium && e.author_presence.mail {
                         out.extend_from_slice(
-                            format!("Date:   {}\n", style.date_of(e.author)).as_bytes(),
+                            format!("Date:   {}\n", style.date_of(e.author, e.author_presence))
+                                .as_bytes(),
                         );
                     }
                 }
@@ -443,11 +509,22 @@ fn expand(template: &str, e: &Entry<'_>, style: &Style<'_>, out: &mut Vec<u8>) {
 }
 
 fn placeholder(rest: &[u8], e: &Entry<'_>, style: &Style<'_>) -> Option<(usize, Vec<u8>)> {
-    let sig_field = |sig: &Signature, field: u8| -> Option<Vec<u8>> {
+    let sig_field = |sig: &Signature, presence: &Presence, field: u8| -> Option<Vec<u8>> {
+        // git: no `<email>` leaves `%aN`/`%aE` unexpanded; no dated `+zone` leaves `%aI`/`%as`
+        // unexpanded and every other date placeholder empty.
+        if !presence.mail && matches!(field, b'N' | b'E') {
+            return None;
+        }
+        if presence.date.is_none() && matches!(field, b'I' | b's') {
+            return None;
+        }
+        if presence.date.is_none() && b"dDrit".contains(&field) {
+            return Some(Vec::new());
+        }
         Some(match field {
             b'n' | b'N' => sig.name.to_vec(),
             b'e' | b'E' => sig.email.to_vec(),
-            b'd' => style.date_of(sig).into_bytes(),
+            b'd' => style.date_of(sig, presence).into_bytes(),
             b'D' => rivet_core::ops::format_date_style(
                 "rfc2822",
                 sig.when,
@@ -483,18 +560,18 @@ fn placeholder(rest: &[u8], e: &Entry<'_>, style: &Style<'_>) -> Option<(usize, 
                 style.now,
             )?
             .into_bytes(),
-            b't' => sig.when.to_string().into_bytes(),
+            b't' => presence.date.clone().unwrap_or_default(),
             _ => return None,
         })
     };
     if rest.len() >= 2 && (rest[0] == b'a' || rest[0] == b'c') && b"nNeEdDrIist".contains(&rest[1])
     {
-        let sig = if rest[0] == b'a' {
-            e.author
+        let (sig, presence) = if rest[0] == b'a' {
+            (e.author, e.author_presence)
         } else {
-            e.committer
+            (e.committer, e.committer_presence)
         };
-        return sig_field(sig, rest[1]).map(|t| (2, t));
+        return sig_field(sig, presence, rest[1]).map(|t| (2, t));
     }
     if rest.len() >= 3 && rest[0] == b'x' {
         // %x00 – %x7f: a literal byte given in hex.
@@ -574,7 +651,49 @@ pub fn check_date_style(style: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_color_spec;
+    use super::{Presence, parse_color_spec};
+
+    /// Expectations from `git log --format=%ad|%at` over the same identity lines (A8).
+    #[test]
+    fn presence_follows_split_ident_line() {
+        let of = |ident: &[u8]| {
+            let raw = [
+                b"tree x\nauthor ",
+                ident,
+                b"\ncommitter C <c@x> 1 +0000\n\nm\n",
+            ]
+            .concat();
+            Presence::of_header(&raw, b"author")
+        };
+        let dated = |digits: &[u8]| Presence {
+            mail: true,
+            date: Some(digits.to_vec()),
+        };
+        assert_eq!(of(b"Foo 1234 +0000"), Presence::default());
+        assert_eq!(
+            of(b"Foo <foo@x.com>"),
+            Presence {
+                mail: true,
+                date: None
+            }
+        );
+        assert_eq!(
+            of(b"Foo <foo@x.com> 1234"),
+            Presence {
+                mail: true,
+                date: None
+            }
+        );
+        assert_eq!(of(b"Foo <foo@x.com> 1234 +0000"), dated(b"1234"));
+        assert_eq!(
+            of(b"Foo <foo@x.com> 99999999999999999999999 +0000"),
+            dated(b"99999999999999999999999")
+        );
+        assert_eq!(
+            Presence::of_header(b"tree x\n\nauthor A <a> 1 +0000\n", b"author"),
+            Presence::default()
+        );
+    }
 
     /// Every expectation below was produced by `git -c color.diff.commit=<spec> log --color=always`.
     #[test]
