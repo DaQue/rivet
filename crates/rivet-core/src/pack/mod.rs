@@ -371,7 +371,11 @@ pub fn index_pack(
             });
         }
         let entry = file.entry_at(pos as u64)?;
-        let (payload, consumed) = inflate_at(pack, entry.data_offset as usize)?;
+        let (payload, consumed) = inflate_bounded(
+            pack,
+            entry.data_offset as usize,
+            usize::try_from(entry.size).unwrap_or(usize::MAX),
+        )?;
         if payload.len() as u64 != entry.size {
             return Err(Error::CorruptPack {
                 reason: "entry payload length disagrees with its header".into(),
@@ -570,7 +574,11 @@ pub fn fix_thin_pack(
         {
             missing.push(oid);
         }
-        let (_payload, consumed) = inflate_at(pack, entry.data_offset as usize)?;
+        let (_payload, consumed) = inflate_bounded(
+            pack,
+            entry.data_offset as usize,
+            usize::try_from(entry.size).unwrap_or(usize::MAX),
+        )?;
         pos = entry.data_offset as usize + consumed;
     }
 
@@ -789,6 +797,28 @@ mod bounds_tests {
         assert_eq!(out, payload);
         assert_eq!(used, z.len());
         assert_eq!(inflate_at(&z, 0).unwrap().0.len(), 100_000);
+    }
+
+    #[test]
+    fn index_pack_refuses_stream_larger_than_declared_size() {
+        use crate::hash::ObjectFormat;
+
+        // One blob entry whose header declares 10 bytes but whose zlib stream inflates to 100000.
+        let mut pack = b"PACK".to_vec();
+        pack.extend_from_slice(&2u32.to_be_bytes());
+        pack.extend_from_slice(&1u32.to_be_bytes());
+        pack.push((3 << 4) | 10);
+        pack.extend_from_slice(&deflate(&vec![7u8; 100_000]).unwrap());
+        let mut hasher = ObjectFormat::Sha1.hasher();
+        hasher.update(&pack);
+        let sum = hasher.finish().unwrap();
+        pack.extend_from_slice(sum.as_bytes());
+
+        let err = super::index_pack(&pack, ObjectFormat::Sha1, None).unwrap_err();
+        match err {
+            Error::CorruptPack { reason } => assert!(reason.contains("declares"), "{reason}"),
+            other => panic!("expected CorruptPack, got {other:?}"),
+        }
     }
 
     #[test]
