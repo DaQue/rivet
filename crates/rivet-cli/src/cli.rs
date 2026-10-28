@@ -39,10 +39,10 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    am, apply, archive, attr, bisect, blame, branching, bundle, cherry, clean, format_patch, grep,
-    history, hook, ignore, lsremote, maintenance, mv, notes, packrefs, plumbing, query, rebase,
-    reflog, remote, sequencer, setup, snapshot, sparse, stash, submodule, symbolicref, tag,
-    updateref, worktree,
+    am, apply, archive, attr, bisect, blame, branching, bundle, cherry, clean, committree,
+    format_patch, grep, history, hook, ignore, lsremote, maintenance, mv, notes, packrefs,
+    plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot, sparse, stash, submodule,
+    symbolicref, tag, updateref, worktree,
 };
 
 /// The `rivet` command line.
@@ -336,6 +336,10 @@ pub enum Commands {
     /// Create, move, verify or delete refs, singly or as a transaction.
     #[command(name = "update-ref")]
     UpdateRef(updateref::UpdateRefArgs),
+
+    /// Write a commit object for a tree, without moving any ref.
+    #[command(name = "commit-tree", disable_help_flag = true)]
+    CommitTree(committree::CommitTreeArgs),
 }
 
 /// The object format a repository is created with, or expects.

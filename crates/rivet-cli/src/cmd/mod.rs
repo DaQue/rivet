@@ -40,6 +40,7 @@ pub mod branching;
 pub mod bundle;
 pub mod cherry;
 pub mod clean;
+pub mod committree;
 mod foreachref;
 pub mod format_patch;
 mod gitwalk;
@@ -173,6 +174,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::LsRemote(args) => lsremote::run_ls_remote(&global, &args),
         Commands::SymbolicRef(args) => symbolicref::run_symbolic_ref(&global, &args),
         Commands::UpdateRef(args) => updateref::run_update_ref(&global, &args),
+        Commands::CommitTree(args) => committree::run_commit_tree(&global, &args),
     }
 }
 

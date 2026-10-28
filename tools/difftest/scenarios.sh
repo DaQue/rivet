@@ -10674,6 +10674,87 @@ s_update_ref() {
     v fsck
 }
 
+s_commit_tree() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    echo b >a; v commit -q -a -m two
+    T=$(g rev-parse HEAD^{tree}); P=$(g rev-parse HEAD); Q=$(g rev-parse HEAD~1)
+    B=$(g rev-parse HEAD:a)
+    printf 'from a file\n\n\n' >msg.txt
+    printf 'no newline' >raw.txt
+    # messages: one -m, several, -F, mixed, stdin, empty, no trailing newline
+    v commit-tree $T -m one
+    v commit-tree $T -m one -m two -m 'three
+'
+    v commit-tree $T -m 'multi
+line' -m ''
+    v commit-tree $T -F msg.txt
+    v commit-tree $T -F msg.txt -m after
+    v commit-tree $T -m before -F raw.txt -F msg.txt
+    v commit-tree $T -F raw.txt
+    vin 'from stdin
+' commit-tree $T
+    vin 'a
+b' commit-tree $T
+    vin 'dash
+' commit-tree $T -F -
+    vin 'also stdin
+' commit-tree $T -m ''
+    v commit-tree $T
+    v commit-tree -m x $T
+    v commit-tree -mx -p$P $T
+    v commit-tree $T -m x --
+    v commit-tree -- $T -m x
+    # parents
+    v commit-tree $T -p $P -m child
+    v commit-tree $T -p $P -p $Q -m merge
+    v commit-tree $T -p $Q -p $P -m merge
+    v commit-tree $T -p HEAD -p HEAD~1 -m names
+    v commit-tree $T -p $P -p $P -m dup
+    v commit-tree $T -p $T -m nottree
+    v commit-tree $T -p nosuch -m x
+    v commit-tree $T -p ${P%?}0 -m x
+    # trees
+    v commit-tree HEAD^{tree} -m peeled
+    v commit-tree $P -m commitastree
+    v commit-tree $B -m blobastree
+    v commit-tree nosuch -m x
+    v commit-tree
+    v commit-tree $T $T -m x
+    v commit-tree $T -m x extra
+    # usage and file errors
+    v commit-tree $T -p
+    v commit-tree $T -m
+    v commit-tree $T -F
+    v commit-tree $T -F nofile.txt
+    v commit-tree $T --bogus
+    v commit-tree $T -Z
+    # identity and dates
+    GIT_AUTHOR_DATE='2020-01-02T03:04:05+0200' GIT_COMMITTER_DATE='@1600000000 -0500' v commit-tree $T -m dates
+    GIT_AUTHOR_DATE='1234567890 +0000' v commit-tree $T -m authordate
+    GIT_COMMITTER_DATE='2021-06-07 08:09:10 +0530' v commit-tree $T -m committerdate
+    GIT_AUTHOR_DATE=garbage v commit-tree $T -m x
+    GIT_COMMITTER_DATE=garbage v commit-tree $T -m x
+    GIT_AUTHOR_NAME='Other Person' GIT_AUTHOR_EMAIL='o@example.com' GIT_COMMITTER_NAME='Third' GIT_COMMITTER_EMAIL='t@example.com' v commit-tree $T -m ident
+    v config user.name 'Config Name'
+    v config user.email 'config@example.com'
+    v commit-tree $T -m config
+    # the object must be a readable commit and nothing moved
+    O=$(g commit-tree $T -p $P -m final)
+    v cat-file -p $O
+    v cat-file -t $O
+    v fsck
+    v for-each-ref
+    v rev-parse HEAD
+    # bytes that are not UTF-8: the same warning, the same bytes
+    printf 'bad \xff\xfe bytes\n' >bad.txt
+    v commit-tree $T -F bad.txt
+    printf 'nonchar \xef\xbf\xbe and trunc \xe2\x82\n' >bad2.txt
+    v commit-tree $T -F bad2.txt
+    v config i18n.commitEncoding utf-8
+    v commit-tree $T -m 'utf8 spelled out'
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
