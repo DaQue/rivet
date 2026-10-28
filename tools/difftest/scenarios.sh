@@ -1421,6 +1421,47 @@ s_check_ignore() {
     v check-ignore -n -v other
 }
 
+s_check_attr() {
+    g init -q repo; cd repo
+    mkdir -p sub/deep
+    printf '* zeta alpha=1\n*.c eol=lf text\n*.bin binary\n[attr]mac ma mb=1\nm.h mac\ndir/ dirattr\n"q r" sp\n' >.gitattributes
+    printf '*.c beta -zeta\n*.h gamma\n*.txt -eol !alpha\n' >sub/.gitattributes
+    printf '* nu\n' >sub/deep/.gitattributes
+    printf '*.c omega v=info\n' >.git/info/attributes
+    printf '* glob\n' >../global-attrs
+    printf '[core]\n\tattributesFile = %s\n' "$PWD/../global-attrs" >>.git/config
+    v check-attr -a x.c
+    v check-attr -a sub/x.c sub/x.h x.c
+    v check-attr -a x.c sub/x.h
+    v check-attr --all sub/deep/f
+    v check-attr -a x.bin m.h
+    v check-attr -a sub/a.txt
+    v check-attr text eol nope -- x.c sub/a.txt
+    v check-attr text -- x.c
+    v check-attr v eol -- x.c sub/x.c
+    v check-attr -a dir/ dir sub/ sub
+    v check-attr dirattr -- dir/ dir
+    v check-attr -a "q r"
+    v check-attr -a -- x.c
+    v check-attr binary diff merge text -- x.bin
+    v check-attr -z text -- x.c
+    printf 'x.c\nsub/x.h\n' >in.txt
+    STDIN_FILE=in.txt v check-attr --stdin -a
+    STDIN_FILE=in.txt v check-attr --stdin text eol
+    STDIN_FILE=in.txt v check-attr --stdin text --
+    printf 'x.c\0sub/x.h\0' >in0.txt
+    STDIN_FILE=in0.txt v check-attr --stdin -z -a
+    STDIN_FILE=in0.txt v check-attr --stdin -z text
+    (cd sub && v check-attr -a x.c ../x.c ./x.c)
+    v check-attr text -- ../outside
+    v check-attr
+    v check-attr text
+    v check-attr -- x.c
+    v check-attr -a text -- x.c
+    v check-attr -a --bogus x.c
+    STDIN_FILE=in.txt v check-attr --stdin text -- x.c
+}
+
 s_fsck_verify_pack() {
     g init -q repo; cd repo
     seq 1 400 >big; g add big; g commit -q -m one

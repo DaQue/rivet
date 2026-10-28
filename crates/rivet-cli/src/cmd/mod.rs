@@ -33,6 +33,7 @@
 pub mod am;
 pub mod apply;
 pub mod archive;
+pub mod attr;
 pub mod bisect;
 pub mod blame;
 pub mod branching;
@@ -140,6 +141,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::CherryPick(args) => sequencer::run_cherry_pick(&global, &args),
         Commands::Revert(args) => sequencer::run_revert(&global, &args),
         Commands::Tag(args) => tag::run_tag(&global, &args),
+        Commands::CheckAttr(args) => attr::run_check_attr(&global, &args),
         Commands::CheckIgnore(args) => ignore::run_check_ignore(&global, &args),
         Commands::Remote(args) => remote::run_remote(&global, &args),
         Commands::Fetch(args) => remote::run_fetch(&global, &args),

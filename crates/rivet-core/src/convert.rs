@@ -164,9 +164,18 @@ struct Rule {
     attrs: Vec<(BString, Attr)>,
 }
 
+/// One parsed attribute file: its rules, and the attribute names in the order git registers them.
+struct Frame {
+    rules: Vec<Rule>,
+    names: Vec<BString>,
+}
+
 /// The attribute rules that apply below one path, lowest priority first.
 pub struct AttrStack {
-    frames: Vec<Vec<Rule>>,
+    frames: Vec<Frame>,
+    /// Indices into `frames` in the order git reads the files, which is not precedence order:
+    /// the global file, the root `.gitattributes`, `info/attributes`, then the sub-directories.
+    registration: Vec<usize>,
     macros: BTreeMap<BString, Vec<(BString, Attr)>>,
 }
 
@@ -185,26 +194,66 @@ fn parse_attr_word(word: &[u8]) -> (BString, Attr) {
     }
 }
 
+/// Split a `.gitattributes` line into its pattern and the attribute words, undoing the C-style
+/// quoting of a pattern that starts with a double quote.
+fn split_attr_pattern(line: &[u8]) -> (Vec<u8>, &[u8]) {
+    if line.first() == Some(&b'"') {
+        let mut out = Vec::new();
+        let mut i = 1;
+        while i < line.len() {
+            match line[i] {
+                b'"' => return (out, &line[i + 1..]),
+                b'\\' if i + 1 < line.len() => {
+                    i += 1;
+                    match line[i] {
+                        b'n' => out.push(b'\n'),
+                        b't' => out.push(b'\t'),
+                        c @ b'0'..=b'7' => {
+                            let mut v = u32::from(c - b'0');
+                            let mut n = 1;
+                            while n < 3 && i + 1 < line.len() && matches!(line[i + 1], b'0'..=b'7')
+                            {
+                                i += 1;
+                                v = v * 8 + u32::from(line[i] - b'0');
+                                n += 1;
+                            }
+                            out.push((v & 0xff) as u8);
+                        }
+                        c => out.push(c),
+                    }
+                }
+                c => out.push(c),
+            }
+            i += 1;
+        }
+    }
+    let split = line
+        .iter()
+        .position(|b| b.is_ascii_whitespace())
+        .unwrap_or(line.len());
+    (line[..split].to_vec(), &line[split..])
+}
+
 fn parse_attribute_file(
     data: &[u8],
     base: &[u8],
     top: bool,
     macros: &mut BTreeMap<BString, Vec<(BString, Attr)>>,
-) -> Vec<Rule> {
+) -> Frame {
     let mut rules = Vec::new();
+    let mut names: Vec<BString> = Vec::new();
     for line in data.split(|b| *b == b'\n') {
         let line = line.trim_with(|c| c.is_ascii_whitespace());
         if line.is_empty() || line.starts_with(b"#") {
             continue;
         }
-        let split = line
-            .iter()
-            .position(|b| b.is_ascii_whitespace())
-            .unwrap_or(line.len());
-        let (pattern, rest) = line.split_at(split);
+        let (pattern, rest) = split_attr_pattern(line);
+        let pattern = &pattern[..];
         let attrs: Vec<(BString, Attr)> = rest.fields().map(parse_attr_word).collect();
         if let Some(name) = pattern.strip_prefix(b"[attr]") {
             if top {
+                names.push(BString::from(name));
+                names.extend(attrs.iter().map(|(n, _)| n.clone()));
                 macros.insert(BString::from(name), attrs);
             }
             continue;
@@ -218,10 +267,11 @@ fn parse_attribute_file(
             0,
             BStr::new(base),
         ) {
+            names.extend(attrs.iter().map(|(n, _)| n.clone()));
             rules.push(Rule { pattern, attrs });
         }
     }
-    rules
+    Frame { rules, names }
 }
 
 impl AttrStack {
@@ -236,9 +286,13 @@ impl AttrStack {
     ) -> Self {
         let mut macros = BTreeMap::new();
         let mut frames = Vec::new();
+        let mut global = None;
+        let mut root_frame = None;
+        let mut info = None;
         if let Some(file) = &config.attributes_file
             && let Ok(data) = std::fs::read(file)
         {
+            global = Some(frames.len());
             frames.push(parse_attribute_file(&data, b"", true, &mut macros));
         }
         let mut dir = root.to_path_buf();
@@ -248,6 +302,9 @@ impl AttrStack {
         let mut level = 0;
         loop {
             if let Ok(data) = std::fs::read(dir.join(".gitattributes")) {
+                if level == 0 {
+                    root_frame = Some(frames.len());
+                }
                 frames.push(parse_attribute_file(&data, &base, level == 0, &mut macros));
             }
             let Some(part) = parts.get(level) else { break };
@@ -265,9 +322,35 @@ impl AttrStack {
         if let Some(common) = common_dir
             && let Ok(data) = std::fs::read(common.join("info/attributes"))
         {
+            info = Some(frames.len());
             frames.push(parse_attribute_file(&data, b"", true, &mut macros));
         }
-        Self { frames, macros }
+        let first: Vec<usize> = [global, root_frame, info].into_iter().flatten().collect();
+        let mut registration = first.clone();
+        registration.extend((0..frames.len()).filter(|i| !first.contains(i)));
+        Self {
+            frames,
+            registration,
+            macros,
+        }
+    }
+
+    /// The attribute names git has registered after reading this stack's files, in the order
+    /// `check-attr --all` lists them: the built-in `binary` macro and its expansion first, then
+    /// each file's names in the order git reads the files. Names may repeat across files.
+    pub fn registered(&self) -> Vec<BString> {
+        let mut out: Vec<BString> = ["binary", "diff", "merge", "text"]
+            .into_iter()
+            .map(BString::from)
+            .collect();
+        for &i in &self.registration {
+            for name in &self.frames[i].names {
+                if !out.contains(name) {
+                    out.push(name.clone());
+                }
+            }
+        }
+        out
     }
 
     fn apply(&self, target: &[u8], name: &[u8], state: &Attr, result: &mut Attr, depth: usize) {
@@ -290,10 +373,15 @@ impl AttrStack {
 
     /// The state of attribute `name` for `path`.
     pub fn lookup(&self, path: &BStr, name: &[u8]) -> Attr {
+        self.lookup_kind(path, PathKind::File, name)
+    }
+
+    /// Like [`AttrStack::lookup`], for a path known to be a directory or a file.
+    pub fn lookup_kind(&self, path: &BStr, kind: PathKind, name: &[u8]) -> Attr {
         let mut result = Attr::Unspecified;
         for frame in &self.frames {
-            for rule in frame {
-                if rule.pattern.matches(path, PathKind::File) {
+            for rule in &frame.rules {
+                if rule.pattern.matches(path, kind) {
                     for (n, s) in &rule.attrs {
                         self.apply(name, n, s, &mut result, 0);
                     }
@@ -594,6 +682,7 @@ mod tests {
         let frame = parse_attribute_file(text.as_bytes(), b"", true, &mut macros);
         AttrStack {
             frames: vec![frame],
+            registration: vec![0],
             macros,
         }
     }
@@ -707,5 +796,34 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.to_string(), "CRLF would be replaced by LF in n.dat");
+    }
+
+    #[test]
+    fn registered_lists_builtins_then_names_in_file_order() {
+        let s = stack("* zeta alpha=1\n[attr]mac ma mb=1\n*.c eol=lf text\n");
+        let names: Vec<String> = s.registered().iter().map(|n| n.to_string()).collect();
+        assert_eq!(
+            names,
+            [
+                "binary", "diff", "merge", "text", "zeta", "alpha", "mac", "ma", "mb", "eol"
+            ]
+        );
+    }
+
+    #[test]
+    fn quoted_pattern_with_a_space_is_unquoted() {
+        let s = stack("\"q r\" sp\n");
+        assert_eq!(s.lookup(BStr::new("q r"), b"sp"), Attr::Set);
+        assert_eq!(s.lookup(BStr::new("q"), b"sp"), Attr::Unspecified);
+    }
+
+    #[test]
+    fn directory_pattern_only_matches_a_directory_path() {
+        let s = stack("dir/ d\n");
+        assert_eq!(
+            s.lookup_kind(BStr::new("dir"), PathKind::Directory, b"d"),
+            Attr::Set
+        );
+        assert_eq!(s.lookup(BStr::new("dir"), b"d"), Attr::Unspecified);
     }
 }

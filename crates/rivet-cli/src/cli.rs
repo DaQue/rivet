@@ -39,7 +39,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cmd::{
-    am, apply, archive, bisect, blame, branching, bundle, cherry, clean, format_patch, grep,
+    am, apply, archive, attr, bisect, blame, branching, bundle, cherry, clean, format_patch, grep,
     history, hook, ignore, lsremote, maintenance, mv, notes, packrefs, plumbing, query, rebase,
     reflog, remote, sequencer, setup, snapshot, sparse, stash, submodule, symbolicref, tag,
     worktree,
@@ -226,6 +226,10 @@ pub enum Commands {
 
     /// List, create, verify and delete tags.
     Tag(tag::TagArgs),
+
+    /// Show the `.gitattributes` state of paths.
+    #[command(name = "check-attr")]
+    CheckAttr(attr::CheckAttrArgs),
 
     /// Debug `.gitignore` rules against paths.
     #[command(name = "check-ignore")]
