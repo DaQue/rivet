@@ -334,6 +334,56 @@ impl Repository {
         Ok(())
     }
 
+    /// Walk everything reachable from `starts` and fail if any object is absent.
+    ///
+    /// `known` are local tips whose closure is already trusted (git's `--not --all`); shallow
+    /// boundaries end the commit walk, and gitlinks are not followed.
+    pub(crate) fn ensure_connected(
+        &self,
+        starts: &[ObjectId],
+        known: &[ObjectId],
+        url: &str,
+    ) -> Result<()> {
+        let odb = self.odb();
+        let format = self.format();
+        let missing = || Error::Message(format!("{url} did not send all necessary objects\n"));
+        let mut seen: std::collections::HashSet<ObjectId> = known.iter().copied().collect();
+        let mut stack = Vec::new();
+        for start in starts {
+            if seen.insert(*start) {
+                stack.push(*start);
+            }
+        }
+        while let Some(oid) = stack.pop() {
+            if !odb.contains(&oid) {
+                return Err(missing());
+            }
+            let object = odb.read(&oid)?;
+            let mut next = Vec::new();
+            match object.parse_as(format)? {
+                crate::object::AnyObject::Blob(_) => {}
+                crate::object::AnyObject::Tag(tag) => next.push(tag.object),
+                crate::object::AnyObject::Commit(commit) => {
+                    next.push(commit.tree);
+                    next.extend(odb.visible_parents(&oid, &commit));
+                }
+                crate::object::AnyObject::Tree(tree) => {
+                    for entry in &tree.entries {
+                        if entry.mode != crate::object::EntryMode::Commit {
+                            next.push(entry.oid);
+                        }
+                    }
+                }
+            }
+            for child in next {
+                if seen.insert(child) {
+                    stack.push(child);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Fetch from `remote` (a configured name or a URL).
     pub fn fetch_remote(&mut self, remote: &str, request: &FetchRequest) -> Result<FetchReport> {
         let config = self.remote_config(remote)?;
@@ -549,6 +599,14 @@ impl Repository {
             mappings.extend(tag_maps);
         }
         let _ = transport.disconnect();
+
+        // Like git's `check_connected`: every advertised tip we are about to point a ref at must
+        // be complete in the odb before any ref moves. A server that sent a short pack fails here,
+        // with no ref written.
+        if !request.dry_run {
+            let starts: Vec<ObjectId> = mappings.iter().map(|m| m.oid).collect();
+            self.ensure_connected(&starts, &tips, &display_remote_url(&url_text))?;
+        }
 
         // Width of the source column: the longest remote name among refs that map somewhere.
         let width = mappings
@@ -1246,4 +1304,82 @@ pub fn remote_head_branch(advertisement: &RefAdvertisement) -> Option<BString> {
         )
     });
     candidates.first().map(|r| r.name.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?} failed");
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// Pack the closure of HEAD in `src`, leaving out every object id in `omit`.
+    fn pack_without(src: &Path, omit: &[&str]) -> Vec<u8> {
+        let listing = git(src, &["rev-list", "--objects", "HEAD"]);
+        let ids: Vec<&str> = listing
+            .lines()
+            .filter_map(|l| l.split(' ').next())
+            .filter(|id| !omit.contains(id))
+            .collect();
+        let mut child = Command::new("git")
+            .args(["pack-objects", "--stdout"])
+            .current_dir(src)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        for id in &ids {
+            writeln!(stdin, "{id}").unwrap();
+        }
+        drop(stdin);
+        child.wait_with_output().unwrap().stdout
+    }
+
+    #[test]
+    fn short_pack_fails_the_connectivity_check_and_a_full_pack_passes() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        git(src.path(), &["init", "-q"]);
+        std::fs::create_dir(src.path().join("d")).unwrap();
+        std::fs::write(src.path().join("a.txt"), "alpha\n").unwrap();
+        std::fs::write(src.path().join("d/b.txt"), "beta\n").unwrap();
+        git(src.path(), &["add", "."]);
+        git(src.path(), &["commit", "-q", "-m", "one"]);
+        let head = git(src.path(), &["rev-parse", "HEAD"]);
+        let blob = git(src.path(), &["rev-parse", "HEAD:d/b.txt"]);
+        let head = ObjectId::from_hex(crate::ObjectFormat::Sha1, BStr::new(head.trim())).unwrap();
+
+        git(dst.path(), &["init", "-q"]);
+        let mut repo = Repository::discover(dst.path()).unwrap();
+
+        repo.store_downloaded(&pack_without(src.path(), &[blob.trim()]))
+            .unwrap();
+        let err = repo
+            .ensure_connected(&[head], &[], "https://example.com/r.git")
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "https://example.com/r.git did not send all necessary objects\n"
+        );
+
+        repo.store_downloaded(&pack_without(src.path(), &[]))
+            .unwrap();
+        repo.ensure_connected(&[head], &[], "https://example.com/r.git")
+            .unwrap();
+    }
 }

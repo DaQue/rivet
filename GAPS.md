@@ -5,7 +5,7 @@ against the real `git` binary by the differential suite in `tools/difftest/scena
 (currently 329 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-28, gate: 292 tests / 0 failed, 329 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-28, gate: 293 tests / 0 failed, 329 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -223,7 +223,6 @@ deleted in the commit that fixes it. A15 is not in the queue yet.
 
 * **A2 (remainder)** — a criss-cross merge builds git's virtual base (`merge_base_tree`, `s_merge_criss_cross`), but when merging the bases themselves conflicts, git keeps the conflict markers in the virtual tree; rivet refuses by name (`fatal: merge with more than one merge base (...) is not implemented`, exit 128; `merge_criss_cross_refusal.rs`). Other callers of the merge (rebase, cherry-pick, stash) still use one base.
 * **A3 (remainder)** — `text`/`eol`/`crlf`/`binary`, `core.autocrlf`, `core.eol`, `core.safecrlf` and the attribute stack (`convert.rs`) now apply on `add`/`status`/`checkout`; `ident`, `working-tree-encoding` and a configured `filter=` driver are refused by name. Not converted yet: merge results (`merge/tree.rs` `write_bytes`), `stash` of untracked files, `commit -a` snapshots in `ops.rs`, `diff`/`grep`/`blame` of the work tree, and `.gitattributes` is read from the work tree only (not the index in a sparse or bare checkout).
-* **A11** — no post-fetch connectivity check (git: `<url> did not send all necessary objects`, abort before writing refs). Not landed: rivet's own transports already fail on a corrupt remote, so no scenario can make a fetch return a short pack, and an unproven check was not committed.
 * **A13 (remainder)** — `index_pack` still inflates entries with the unbounded `inflate_at`; only `PackFile::get_at_offset` bounds output by the entry's declared size.
 * **A4 (remainder)** — short ids are matched by scanning `Odb::oids()` (no fanout use); `Odb::resolve_prefix` still reads a trailing `00` byte as fill (used by `revwalk.rs` `RevSpec::Abbrev`).
 
