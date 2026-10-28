@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 329 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 330 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-28, gate: 294 tests / 0 failed, 329 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-28, gate: 295 tests / 0 failed, 330 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -205,6 +205,7 @@ The command works for the common case; the listed options or edge cases are miss
   tip rather than the fork point.
 * **Network protocol** — v2 capabilities other than `object-format=sha1` are not implemented;
   git follows tags after a fetch with an explicit refspec where rivet does not.
+* **`update-ref --stdin`** — the `symref-update`, `symref-create`, `symref-delete` and `symref-verify` commands are refused by name (`not implemented: update-ref --stdin symref-…`, exit 128; `update_ref_refusals.rs`); `-0`/`--batch-updates` is not accepted. A `delete` releases its lock just before the removal, which takes the lock itself, so a concurrent writer can slip in between.
 
 ## 3. Deliberate divergences
 

@@ -42,7 +42,7 @@ use crate::cmd::{
     am, apply, archive, attr, bisect, blame, branching, bundle, cherry, clean, format_patch, grep,
     history, hook, ignore, lsremote, maintenance, mv, notes, packrefs, plumbing, query, rebase,
     reflog, remote, sequencer, setup, snapshot, sparse, stash, submodule, symbolicref, tag,
-    worktree,
+    updateref, worktree,
 };
 
 /// The `rivet` command line.
@@ -332,6 +332,10 @@ pub enum Commands {
     /// Read, write or delete a symbolic ref.
     #[command(name = "symbolic-ref")]
     SymbolicRef(symbolicref::SymbolicRefArgs),
+
+    /// Create, move, verify or delete refs, singly or as a transaction.
+    #[command(name = "update-ref")]
+    UpdateRef(updateref::UpdateRefArgs),
 }
 
 /// The object format a repository is created with, or expects.

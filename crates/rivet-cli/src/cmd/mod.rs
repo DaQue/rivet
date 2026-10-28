@@ -70,6 +70,7 @@ pub mod stash;
 pub mod submodule;
 pub mod symbolicref;
 pub mod tag;
+pub mod updateref;
 pub mod worktree;
 
 use std::path::Path;
@@ -171,6 +172,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::Hook(args) => hook::run_hook(&global, &args),
         Commands::LsRemote(args) => lsremote::run_ls_remote(&global, &args),
         Commands::SymbolicRef(args) => symbolicref::run_symbolic_ref(&global, &args),
+        Commands::UpdateRef(args) => updateref::run_update_ref(&global, &args),
     }
 }
 

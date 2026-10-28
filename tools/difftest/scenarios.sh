@@ -10541,6 +10541,139 @@ s_merge_criss_cross_conflict() {
     v ls-files -s
 }
 
+s_update_ref() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    echo b >a; v commit -q -a -m two
+    A=$(g rev-parse HEAD~1); B=$(g rev-parse HEAD); Z=0000000000000000000000000000000000000000
+    # in <input> <args...>: feed update-ref --stdin from a file
+    ur_in() { printf "$1" >.git/stdin.txt; shift; STDIN_FILE=.git/stdin.txt v update-ref "$@"; }
+    # positional create, move, stale old, create-only, missing ref with an old
+    v update-ref refs/heads/x $A
+    v update-ref refs/heads/x $B $B
+    v update-ref refs/heads/x $B $A
+    v update-ref refs/heads/x $B $B
+    v update-ref refs/heads/y $B $Z
+    v update-ref refs/heads/y $B $Z
+    v update-ref refs/heads/y $B ''
+    v update-ref refs/heads/nope $B $A
+    v update-ref -m 'a reason' refs/heads/m $A
+    v update-ref -m 'moved' refs/heads/m HEAD
+    v update-ref refs/heads/m HEAD~1
+    v update-ref refs/heads/q nothex
+    v update-ref 'bad name' $A
+    v update-ref refs/tags/t $A
+    v update-ref refs/tags/t2 $A
+    v for-each-ref
+    # delete: right, wrong, absent old, absent
+    v update-ref -d refs/heads/x $A
+    v update-ref -d refs/heads/x $B
+    v update-ref -d refs/heads/x
+    v update-ref -d refs/heads/zz
+    v update-ref -d refs/heads/y $B
+    v update-ref refs/heads/y $B
+    v update-ref refs/heads/y $Z
+    v update-ref refs/heads/y2 $B $B
+    v update-ref refs/heads/y2 $Z
+    v update-ref refs/heads/y2
+    # usage errors
+    v update-ref
+    v update-ref HEAD
+    v update-ref -d
+    v update-ref -d refs/heads/m $A $B
+    v update-ref refs/heads/m $A $B extra
+    # through a symbolic ref, and --no-deref
+    v update-ref HEAD $A
+    v log --oneline
+    v update-ref -m back HEAD $B
+    v reflog show HEAD
+    v reflog show master
+    v symbolic-ref refs/heads/alias refs/heads/m
+    v update-ref refs/heads/alias $A
+    v rev-parse refs/heads/m
+    v update-ref --no-deref refs/heads/alias $B
+    v symbolic-ref -q refs/heads/alias
+    v update-ref --no-deref HEAD $A
+    v symbolic-ref -q HEAD
+    v update-ref --no-deref HEAD refs/heads/master
+    v checkout -q master
+    v update-ref --create-reflog refs/tags/forced $A
+    v update-ref --create-reflog -m forced refs/tags/forced $B
+    # packed refs
+    v pack-refs --all
+    v update-ref refs/heads/m $B
+    v update-ref -d refs/heads/m $B
+    v update-ref -d refs/tags/t
+    v for-each-ref
+    # --stdin, line mode
+    ur_in "create refs/heads/a $A\n" --stdin
+    ur_in "create refs/heads/a $A\n" --stdin
+    ur_in "update refs/heads/a $B $A\n" --stdin
+    ur_in "update refs/heads/a $B $A\n" --stdin
+    ur_in "update refs/heads/a $A $Z\n" --stdin
+    ur_in "verify refs/heads/a $B\n" --stdin
+    ur_in "verify refs/heads/a $A\n" --stdin
+    ur_in "verify refs/heads/nope\n" --stdin
+    ur_in "verify refs/heads/nope $Z\n" --stdin
+    ur_in "delete refs/heads/a $A\n" --stdin
+    ur_in "delete refs/heads/a $B\n" --stdin
+    ur_in "delete refs/heads/nope\n" --stdin
+    ur_in "delete refs/heads/nope $B\n" --stdin
+    ur_in "update refs/heads/c $A\ncreate refs/heads/d $B\n" --stdin
+    ur_in "update refs/heads/c $B\nupdate refs/heads/d $A $A\n" --stdin
+    ur_in "update refs/heads/c $B\nupdate refs/heads/c $A\n" --stdin
+    ur_in "update refs/heads/c $B\nverify refs/heads/d $A\n" --stdin
+    ur_in "update refs/heads/c $B\ndelete refs/heads/d $B\n" --stdin
+    ur_in "update refs/heads/c $Z\n" --stdin
+    ur_in "update refs/heads/c $B\n" --stdin
+    ur_in "update refs/heads/c '' $B\n" --stdin
+    ur_in "update refs/heads/c $A\n" -m viastdin --stdin
+    ur_in "option no-deref\nupdate HEAD $A\n" --stdin
+    ur_in "option bogus\nupdate refs/heads/c $A\n" --stdin
+    ur_in "update refs/heads/c\n" --stdin
+    ur_in "update refs/heads/c nothex\n" --stdin
+    ur_in "update refs/heads/c $B $A extra\n" --stdin
+    ur_in "update refs/heads/c $B nothex\n" --stdin
+    ur_in "update bad..name $B\n" --stdin
+    ur_in "bogus x\n" --stdin
+    ur_in "update\n" --stdin
+    ur_in "" --stdin
+    ur_in "update refs/heads/c $B\n" --stdin extra
+    # transactions
+    ur_in "start\nupdate refs/heads/c $A\nprepare\ncommit\n" --stdin
+    ur_in "start\nupdate refs/heads/c $B\nprepare\nabort\n" --stdin
+    ur_in "start\nupdate refs/heads/c $B\nprepare\n" --stdin
+    ur_in "start\nupdate refs/heads/c $B\n" --stdin
+    ur_in "start\nupdate refs/heads/c $B\ncommit\n" --stdin
+    ur_in "start\nupdate refs/heads/c $A $B\nupdate refs/heads/e $B\nprepare\ncommit\n" --stdin
+    ur_in "start\nupdate refs/heads/c $A $B\nprepare\ncommit\n" --stdin
+    ur_in "start\nstart\n" --stdin
+    ur_in "prepare\n" --stdin
+    ur_in "commit\n" --stdin
+    ur_in "abort\n" --stdin
+    ur_in "start\nabort\ncommit\n" --stdin
+    ur_in "start\ncommit\nupdate refs/heads/c $B\n" --stdin
+    v for-each-ref
+    # --stdin -z
+    ur_in "update refs/heads/z\x00$A\x00\x00" -z --stdin
+    ur_in "update refs/heads/z\x00$B\x00$A\x00" -z --stdin
+    ur_in "update refs/heads/z\x00$B\x00$A\x00" -z --stdin
+    ur_in "update refs/heads/z\x00$A\x00" -z --stdin
+    ur_in "create refs/heads/z2\x00$A\x00" -z --stdin
+    ur_in "create refs/heads/z2\x00$A\x00" -z --stdin
+    ur_in "verify refs/heads/z2\x00$A\x00" -z --stdin
+    ur_in "verify refs/heads/z2\x00$B\x00" -z --stdin
+    ur_in "delete refs/heads/z2\x00$B\x00" -z --stdin
+    ur_in "delete refs/heads/z2\x00\x00" -z --stdin
+    ur_in "start\x00update refs/heads/z\x00$A\x00\x00prepare\x00abort\x00" -z --stdin
+    ur_in "start\x00update refs/heads/z\x00$A\x00\x00commit\x00" -z --stdin
+    ur_in "option no-deref\x00update HEAD\x00$A\x00\x00" -z --stdin
+    v for-each-ref
+    v reflog show refs/heads/c
+    v reflog show HEAD
+    v fsck
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
