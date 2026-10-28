@@ -420,7 +420,11 @@ pub struct RefStore {
     /// checked against it.
     format: ObjectFormat,
     /// The last parsed `packed-refs`, re-read by [`RefStore::refresh`].
-    packed: PackedRefs,
+    snapshot: PackedRefs,
+    /// The `packed-refs` as this store's own `delete` and `rename` last left it. They take `&self`,
+    /// so they cannot replace `snapshot`; when this is set it shadows the snapshot for every lookup,
+    /// so a later operation in the same process never acts on a ref the first one removed.
+    live: std::sync::RwLock<Option<std::sync::Arc<PackedRefs>>>,
 }
 
 /// Whether a ref belongs to one work tree rather than to the whole repository: `HEAD` and the other
@@ -469,7 +473,8 @@ impl RefStore {
             git_dir: git_dir.to_path_buf(),
             common_dir: common_dir.to_path_buf(),
             format,
-            packed: PackedRefs::load(common_dir, format)?,
+            snapshot: PackedRefs::load(common_dir, format)?,
+            live: std::sync::RwLock::new(None),
         })
     }
 
@@ -517,7 +522,8 @@ impl RefStore {
     ///
     /// As [`RefStore::open`].
     pub fn refresh(&mut self) -> Result<()> {
-        self.packed = PackedRefs::load(&self.common_dir, self.format)?;
+        self.snapshot = PackedRefs::load(&self.common_dir, self.format)?;
+        *self.live.get_mut().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(())
     }
 
@@ -542,7 +548,7 @@ impl RefStore {
         if let Some(target) = loose::try_read(self.home(name), name, self.format)? {
             return Ok(target);
         }
-        match self.packed.get(name) {
+        match self.with_packed(|p| p.get(name)) {
             Some(oid) => Ok(RefTarget::Direct(oid)),
             None => Err(Error::RefNotFound {
                 name: name_bytes(name),
@@ -1051,8 +1057,9 @@ impl RefStore {
             });
         }
         let git_dir = self.home(name);
+        self.reload_live()?;
         let loose_present = loose::exists(git_dir, name);
-        let packed_present = self.packed.get(name).is_some();
+        let packed_present = self.with_packed(|p| p.get(name).is_some());
         if !loose_present && !packed_present {
             return Err(Error::RefNotFound {
                 name: name_bytes(name),
@@ -1065,6 +1072,7 @@ impl RefStore {
         reflog::delete(git_dir, name)?;
         if packed_present {
             PackedRefs::remove_locked(&self.common_dir, self.format, &[name])?;
+            self.reload_live()?;
         }
         Ok(())
     }
@@ -1092,6 +1100,7 @@ impl RefStore {
     /// [`crate::error::Error::LockHeld`] for either lock; and
     /// [`crate::error::Error::IoAtPath`] if the move fails.
     pub fn rename(&self, from: &RefName, to: &RefName) -> Result<()> {
+        self.reload_live()?;
         if self.exists(to) {
             return Err(Error::Message(format!("ref {} already exists", to)));
         }
@@ -1110,8 +1119,9 @@ impl RefStore {
             }
             std::fs::rename(&from_log, &to_log).map_err(|e| io_at(&from_log, e))?;
         }
-        if self.packed.get(from).is_some() {
+        if self.with_packed(|p| p.get(from).is_some()) {
             PackedRefs::remove_locked(&self.common_dir, self.format, &[from])?;
+            self.reload_live()?;
         }
         let _ = from_lock.release();
         Ok(())
@@ -1153,15 +1163,17 @@ impl RefStore {
                     .filter(|(name, _)| is_per_worktree(name.as_bytes())),
             );
         }
-        for entry in self.packed.iter() {
-            if !entry.name.as_bytes().starts_with(prefix) {
-                continue;
+        self.with_packed(|packed| {
+            for entry in packed.iter() {
+                if !entry.name.as_bytes().starts_with(prefix) {
+                    continue;
+                }
+                if out.iter().any(|(name, _)| name == &entry.name) {
+                    continue;
+                }
+                out.push((entry.name.clone(), RefTarget::Direct(entry.target)));
             }
-            if out.iter().any(|(name, _)| name == &entry.name) {
-                continue;
-            }
-            out.push((entry.name.clone(), RefTarget::Direct(entry.target)));
-        }
+        });
         out.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         Ok(out)
     }
@@ -1284,7 +1296,7 @@ impl RefStore {
     /// infallible.
     pub fn location(&self, name: &RefName) -> Option<RefLocation> {
         let loose_present = loose::exists(self.home(name), name);
-        let packed_present = self.packed.get(name).is_some();
+        let packed_present = self.with_packed(|p| p.get(name).is_some());
         if !loose_present && !packed_present {
             None
         } else {
@@ -1339,7 +1351,23 @@ impl RefStore {
     /// read-modify-write the whole file and would otherwise re-parse it; a caller reading a value
     /// must go through [`RefStore::read`] so that loose shadowing applies.
     pub fn packed(&self) -> &PackedRefs {
-        &self.packed
+        &self.snapshot
+    }
+
+    /// Run `f` over the freshest packed view: what this store's own removals left, else the snapshot.
+    fn with_packed<R>(&self, f: impl FnOnce(&PackedRefs) -> R) -> R {
+        let live = self.live.read().unwrap_or_else(|e| e.into_inner());
+        match live.as_deref() {
+            Some(packed) => f(packed),
+            None => f(&self.snapshot),
+        }
+    }
+
+    /// Re-read `packed-refs` into the live view, so the next lookup sees what is on disk now.
+    fn reload_live(&self) -> Result<()> {
+        let fresh = PackedRefs::load(&self.common_dir, self.format)?;
+        *self.live.write().unwrap_or_else(|e| e.into_inner()) = Some(std::sync::Arc::new(fresh));
+        Ok(())
     }
 
     /// Phase 2 — write `packed-refs` from the given set, replacing the file and the snapshot.
@@ -1361,7 +1389,8 @@ impl RefStore {
     /// [`crate::error::Error::LockHeld`], and [`crate::error::Error::IoAtPath`] if the write fails.
     pub fn write_packed(&mut self, packed: PackedRefs) -> Result<()> {
         packed.write(&self.common_dir, self.format)?;
-        self.packed = packed;
+        self.snapshot = packed;
+        *self.live.get_mut().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(())
     }
 
@@ -1661,4 +1690,91 @@ fn collect_locks(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use packed::PackedRef;
+
+    fn id(byte: u8) -> ObjectId {
+        let hex = format!("{byte:02x}").repeat(20);
+        ObjectId::from_hex(ObjectFormat::Sha1, hex.as_bytes().into()).unwrap()
+    }
+
+    fn name(n: &str) -> RefName {
+        RefName::from_bytes(n.as_bytes()).unwrap()
+    }
+
+    /// Three loose branches, then packed the way `pack-refs --all --prune` leaves them.
+    fn packed_repo(dir: &Path) -> RefStore {
+        let store = RefStore::open(dir, ObjectFormat::Sha1).unwrap();
+        let mut packed = PackedRefs::new();
+        for (n, b) in [("a", 1u8), ("b", 2), ("c", 3)] {
+            let r = name(&format!("refs/heads/{n}"));
+            store.set_direct(&r, id(b), None).unwrap();
+            packed.insert(PackedRef {
+                name: r.clone(),
+                target: id(b),
+                peeled: None,
+            });
+        }
+        packed.write(dir, ObjectFormat::Sha1).unwrap();
+        for n in ["a", "b", "c"] {
+            loose::delete(dir, &name(&format!("refs/heads/{n}"))).unwrap();
+        }
+        store
+    }
+
+    /// `delete` takes `&self`, so the packed snapshot cannot be replaced; a second operation in the
+    /// same process must still not see the first one's ref.
+    #[test]
+    fn two_deletes_after_pack_refs_in_one_store_leave_only_the_third() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("refs/heads")).unwrap();
+        let store = packed_repo(dir.path());
+        let (a, b, c) = (
+            name("refs/heads/a"),
+            name("refs/heads/b"),
+            name("refs/heads/c"),
+        );
+        store.delete(&a).unwrap();
+        assert!(
+            !store.exists(&a),
+            "a deleted ref must not read back from the old snapshot"
+        );
+        store.delete(&b).unwrap();
+        assert!(matches!(store.read(&a), Err(Error::RefNotFound { .. })));
+        assert!(matches!(store.read(&b), Err(Error::RefNotFound { .. })));
+        assert_eq!(store.read(&c).unwrap().oid().unwrap(), id(3));
+        let listed: Vec<_> = store.list(b"refs/heads/").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0, c);
+        let on_disk = PackedRefs::load(dir.path(), ObjectFormat::Sha1).unwrap();
+        assert_eq!(on_disk.len(), 1);
+    }
+
+    /// A store opened before another process ran `pack-refs` holds an empty snapshot; deleting a
+    /// ref that is only packed now must find it, and renaming must not leave the old name behind.
+    #[test]
+    fn delete_and_rename_see_a_pack_refs_that_ran_after_open() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("refs/heads")).unwrap();
+        let early = RefStore::open(dir.path(), ObjectFormat::Sha1).unwrap();
+        let _late = packed_repo(dir.path());
+        let (a, b, c) = (
+            name("refs/heads/a"),
+            name("refs/heads/b"),
+            name("refs/heads/c"),
+        );
+        early.delete(&a).unwrap();
+        assert!(!early.exists(&a));
+        early.rename(&b, &name("refs/heads/d")).unwrap();
+        assert!(!early.exists(&b));
+        assert_eq!(
+            early.read(&name("refs/heads/d")).unwrap().oid().unwrap(),
+            id(2)
+        );
+        assert_eq!(early.read(&c).unwrap().oid().unwrap(), id(3));
+    }
 }
