@@ -365,6 +365,28 @@ impl<'r> Blamer<'r> {
         Ok(map)
     }
 
+    /// The entry for `path` in `tree`, read by walking down the path instead of flattening the
+    /// whole tree: a history walk asks this once per commit, and the tree can be huge.
+    fn entry_at(&self, tree: ObjectId, path: &[u8]) -> Result<Option<(EntryMode, ObjectId)>> {
+        let mut current = tree;
+        let mut parts = path.split(|&b| b == b'/').peekable();
+        while let Some(part) = parts.next() {
+            let object = self.repo.odb().read_typed(&current, ObjectKind::Tree)?;
+            let parsed = rivet_core::Tree::parse(self.repo.format(), object.data())?;
+            let Some(entry) = parsed.iter().find(|entry| entry.name.as_slice() == part) else {
+                return Ok(None);
+            };
+            if parts.peek().is_none() {
+                return Ok((entry.mode != EntryMode::Tree).then_some((entry.mode, entry.oid)));
+            }
+            if entry.mode != EntryMode::Tree {
+                return Ok(None);
+            }
+            current = entry.oid;
+        }
+        Ok(None)
+    }
+
     fn commit_date(&mut self, commit: ObjectId) -> Result<i64> {
         if let Some(date) = self.dates.get(&commit) {
             return Ok(*date);
@@ -417,10 +439,10 @@ impl<'r> Blamer<'r> {
         let path = self.origins[origin].path.clone();
         let commit = self.origins[origin].commit;
         let parent_tree = self.repo.commit_tree(parent)?;
-        let map = self.tree_map(parent_tree)?;
-        if let Some((_, blob)) = map.get(BStr::new(&path)) {
-            return Ok(Some(self.get_origin(Some(parent), &path, *blob)?));
+        if let Some((_, blob)) = self.entry_at(parent_tree, &path)? {
+            return Ok(Some(self.get_origin(Some(parent), &path, blob)?));
         }
+        let map = self.tree_map(parent_tree)?;
         let child_tree = match commit {
             Some(oid) => self.repo.commit_tree(oid)?,
             None => self.tip_tree,
@@ -1069,9 +1091,10 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
         let abbrev = if args.long {
             repository.format().hex_len()
         } else if any_boundary {
-            8
+            (super::history::abbrev_minimum(&repository, None) + 1)
+                .min(repository.format().hex_len())
         } else {
-            7
+            super::history::abbrev_minimum(&repository, None)
         };
         let name_of = |commit: &Option<ObjectId>| -> String {
             let person = &people[commit];

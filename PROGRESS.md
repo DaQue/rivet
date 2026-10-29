@@ -2045,3 +2045,10 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Proof: scenario `s_rerere` (about 190 commands against real git; stdout, stderr, exit codes, and an `rr-cache`/`MERGE_RR` dump in `state_of` and `rrdump`). It fails on `3054640` because the command does not exist there. Rust tests in `rerere.rs` pin git's conflict id.
 * Left undone (in `GAPS.md`): `forget` after `git add` (needs resolve-undo), `conflict-marker-size`, merge drivers, `am --3way`/`stash`/`checkout -m`.
 * Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 301 passed / 0 failed / 0 ignored; `scenarios.sh` 335 PASS, `failures: 0`.
+
+## Block 16 — blame performance
+* Baseline (`tools/difftest/blame_bench.sh`, 3000 commits, 21k objects, a 1500-line file edited in every commit, release build): git 0.18 s, rivet 12.2 s (about 68x). The hot path was `find_origin`, which flattened the whole parent tree for every commit just to look up one path. It now walks down the path (`Blamer::entry_at`) and flattens only for rename detection. After: rivet 0.77 s (about 4x git), output byte-identical to git's.
+* Also fixed on the way: the abbreviation width was hard-coded to 7/8; it now follows `core.abbrev` and the repository's automatic length like git (the bench fixture printed 8 digits where git prints 9).
+* Scenario `s_blame_rename_merge` (rename after a merge, a deep path, history revisions, `-f`, `-p`, `core.abbrev`); it fails on `027ef4a` because of the abbreviation width. The `s_blame*` scenarios stay green.
+* Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 301 passed / 0 failed / 0 ignored; `scenarios.sh` 336 PASS, `failures: 0`.
+* Left undone: `blame -n` is not parsed (in `GAPS.md`).

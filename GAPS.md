@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 335 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 336 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-29, gate: 301 tests / 0 failed, 335 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-29, gate: 301 tests / 0 failed, 336 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -210,6 +210,7 @@ The command works for the common case; the listed options or edge cases are miss
 * **`diff-tree`** — `-c`/`--cc`, `--stdin`, `-M`/`-C`, `--numstat`, `--patch-with-raw`, `--patch-with-stat` and `--full-index` are refused by name (`diff-tree: <option> is not implemented`, exit 128; `diff_tree_refusals.rs`). `-p` of a symlink replaced by a regular file (or the reverse) prints one modification with mode lines where git prints a deletion and an addition; this is in the shared unified formatter, so `diff` has it too. `--first-parent` is accepted and changes nothing, as in git 2.x without `-m`.
 * **`mktree`** — a mode with a sign or wider than 32 bits is refused by name (`mktree: a negative mode is not implemented`, `mktree: a mode wider than 32 bits is not implemented`, exit 128; `mktree_refusals.rs`), because git's `strtoul` reading of such a mode wraps. Leading whitespace and `+` before a mode are accepted, as in git. 
 * **`rerere`** — `status`, `remaining`, `diff`, `gc`, `clear`, `forget` and the hook that `merge` (also `--squash`, `--continue`), `cherry-pick`, `revert`, `rebase` and `commit` run are byte-compatible with git's `rr-cache` and `MERGE_RR` (`s_rerere`, variants included). Not done: `forget` only sees paths that are still conflicted in the index — git also restores them from the resolve-undo (`REUC`) extension after `git add`, which rivet neither writes nor consults; the `conflict-marker-size` attribute and per-path `merge=` drivers are ignored (marker width 7, the built-in text merge); `am --3way`, `stash apply/pop` and `checkout -m` do not run rerere; `gc.rerereResolved`/`gc.rerereUnresolved` accept an integer number of days, `now` or `never` only, not git's date expressions.
+* **`blame -n`/`--show-number`** — the flag is not parsed (clap rejects it as an unknown argument, exit 2).
 
 ## 3. Deliberate divergences
 

@@ -11269,6 +11269,42 @@ s_rerere() {
     v log --oneline
 }
 
+s_blame_rename_merge() {
+    v init -q repo; cd repo
+    mkdir -p src/deep/er
+    seq 1 12 | sed 's/^/orig /' >src/deep/er/f.txt
+    printf 'x\ny\n' >other.txt
+    v add -A; tick; v commit -q -m root
+    v checkout -q -b side
+    sed -i 's/^orig 3$/side three/' src/deep/er/f.txt
+    v add -A; tick; GIT_AUTHOR_NAME=Sid v commit -q -m side-edit
+    v checkout -q main
+    sed -i 's/^orig 9$/main nine/' src/deep/er/f.txt
+    v add -A; tick; GIT_AUTHOR_NAME=Mia v commit -q -m main-edit
+    tick; v merge -q --no-ff -m merged side
+    v mv src/deep/er/f.txt moved.txt
+    tick; v commit -q -m rename
+    sed -i 's/^orig 6$/after rename six/' moved.txt
+    v add -A; tick; GIT_AUTHOR_NAME=Ren v commit -q -m post-rename
+    printf 'tail\n' >>moved.txt
+    v add -A; tick; v commit -q -m tail
+    v blame moved.txt
+    v blame -s moved.txt
+    v blame -l moved.txt
+    v blame -p moved.txt
+    v blame -L 2,5 moved.txt
+    v blame HEAD~2 moved.txt
+    v blame HEAD~3 -- moved.txt
+    v blame main~3 -- src/deep/er/f.txt
+    v blame -f moved.txt
+    v blame other.txt
+    v blame nosuch.txt
+    v config core.abbrev 12
+    v blame moved.txt
+    v config core.abbrev 4
+    v blame -s moved.txt
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
