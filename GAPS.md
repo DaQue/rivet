@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 338 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 339 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-29, gate: 305 tests / 0 failed, 338 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-29, gate: 310 tests / 0 failed, 339 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -212,6 +212,7 @@ The command works for the common case; the listed options or edge cases are miss
 * **`rerere`** — `status`, `remaining`, `diff`, `gc`, `clear`, `forget` and the hook that `merge` (also `--squash`, `--continue`), `cherry-pick`, `revert`, `rebase` and `commit` run are byte-compatible with git's `rr-cache` and `MERGE_RR` (`s_rerere`, variants included). Not done: `forget` only sees paths that are still conflicted in the index — git also restores them from the resolve-undo (`REUC`) extension after `git add`, which rivet neither writes nor consults; the `conflict-marker-size` attribute and per-path `merge=` drivers are ignored (marker width 7, the built-in text merge); `am --3way`, `stash apply/pop` and `checkout -m` do not run rerere; `gc.rerereResolved`/`gc.rerereUnresolved` accept an integer number of days, `now` or `never` only, not git's date expressions.
 * **`blame -n`/`--show-number`** — the flag is not parsed (clap rejects it as an unknown argument, exit 2).
 * **`update-index`** — only `--index-version`, `--show-index-version` and `--[no-]split-index` exist. Every other option (`--refresh`, `--add`, `--remove`, `--cacheinfo`, `--assume-unchanged`, `--skip-worktree`, `--stdin`, `--index-info`, paths, …) is refused by name (`update-index: --<opt> is not implemented`, exit 128; `update_index_refusals.rs`). `add -N` writes an entry for the empty blob without the intent-to-add bit, so it never forces a v3 index as git does.
+* **`commit-graph` and `multi-pack-index`** — read only (`rivet_core::commit_graph`, `rivet_core::midx`; rivet never writes them). The commit-graph (single file, or a split chain) answers tree, parents, commit time and generation for the history walk (`walk_oids`, except author-date order) and is dropped for a shallow repository; the multi-pack-index (one file, every named pack present) answers `Odb::contains`. A file that fails its structural checks is ignored as a whole. Not done: the trailing checksum is not verified on open (git does not either; `commit-graph verify` is absent), generation number v2 (`GDA2`) and Bloom filters are ignored, `core.commitGraph=false` and `core.multiPackIndex=false` are not read, an incremental `multi-pack-index.d/` chain is ignored, `fsck` does not verify the files (git exits 16 on a damaged one), and `rev-list` pruning by generation number is not used.
 
 ## 3. Deliberate divergences
 

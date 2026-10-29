@@ -11428,6 +11428,70 @@ s_split_index() {
     v write-tree
 }
 
+# The commit-graph and multi-pack-index files as they are now, into the transcript.
+graphfiles() {
+    local gd; gd=$(g rev-parse --git-dir)
+    for f in "$gd"/objects/info/commit-graph "$gd"/objects/info/commit-graphs/* "$gd"/objects/pack/multi-pack-index; do
+        [ -f "$f" ] && echo "graph file $(basename "$f") $(sha1sum <"$f" | cut -c1-12)" >>"$TRANSCRIPT"
+    done
+}
+
+s_commit_graph() {
+    v init -q repo; cd repo
+    commit() { echo "$1" >"$1"; v add "$1"; tick; v commit -q -m "$1"; }
+    commit a; commit b
+    for br in x y z; do v checkout -q -b $br main; commit ${br}1; commit ${br}2; done
+    v checkout -q main; commit c
+    tick; g merge -q --no-ff -m octopus x y z
+    commit d
+    v checkout -q --orphan other; g rm -rfq .; commit lone
+    v checkout -q main; tick; v merge -q --allow-unrelated-histories -m join other
+    commit e
+    v tag -a -m rel v1 HEAD~1
+    queries() {
+        v log --oneline --graph --all
+        v log --format='%h %p' --topo-order --all
+        v log --format='%h %ct' --date-order --all
+        v log --format='%h %at' --author-date-order --all
+        v rev-list --all
+        v rev-list --count HEAD
+        v rev-list --first-parent HEAD
+        v rev-list --reverse HEAD~3..HEAD
+        v rev-list main ^x
+        v rev-list --parents --all
+        v rev-list --max-count=3 --skip=1 --all
+        v rev-list --since=1700000300 --all
+        v merge-base x y; v merge-base --all main other; v merge-base --is-ancestor x main
+        v describe; v describe --all x2
+        v rev-parse HEAD~2 'HEAD^2' 'HEAD^{tree}' main@{0}
+        v cat-file -e HEAD; v cat-file -t HEAD~1
+        v log --format=%s x..main
+        v shortlog -s -n HEAD
+        v status --short
+    }
+    queries
+    g commit-graph write --reachable --changed-paths
+    queries; v fsck; graphfiles
+    # a split chain on top, and a multi-pack-index over two packs
+    g repack -q -a -d; commit f; g repack -q -d
+    g commit-graph write --reachable --split=no-merge
+    commit g1
+    g commit-graph write --reachable --split=no-merge
+    g multi-pack-index write
+    queries; v fsck; graphfiles
+    v cat-file -e "$(g rev-parse HEAD)"; v cat-file -e 0000000000000000000000000000000000000001
+    v rev-list --objects --all
+    v cat-file --batch-check --batch-all-objects
+    # damaged files are ignored: the answers are git's, from the objects
+    gdir=$(g rev-parse --git-dir)
+    head -c 200 "$gdir/objects/info/commit-graphs/commit-graph-chain" >/dev/null
+    for f in "$gdir"/objects/info/commit-graphs/graph-*.graph; do
+        head -c 300 "$f" >"$f.cut"; mv "$f.cut" "$f"
+    done
+    # git complains about the damaged chain on stderr; only the answers are compared
+    NO_ERR=1; queries; NO_ERR=0; graphfiles
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

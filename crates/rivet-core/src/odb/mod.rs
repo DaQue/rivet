@@ -153,6 +153,14 @@ pub struct Odb {
     alternates: Vec<Odb>,
     /// Commits listed in `<git-dir>/shallow`: their parents are treated as absent.
     shallow: std::collections::HashSet<ObjectId>,
+    /// Which `.idx` file each entry of `packs` came from (empty for a pack added in memory).
+    pack_names: Vec<String>,
+    /// `objects/pack/multi-pack-index`, when it is intact and every pack it names is present.
+    midx: Option<crate::midx::MultiPackIndex>,
+    /// For each entry of `packs`: whether `midx` covers it.
+    covered: Vec<bool>,
+    /// `objects/info/commit-graph` (or its split chain), when it is intact.
+    commit_graph: Option<crate::commit_graph::CommitGraph>,
 }
 
 /// Git's `MAX_ALTERNATE_DEPTH`: alternates of alternates are followed this many levels.
@@ -193,6 +201,10 @@ impl Odb {
                     odb.shallow.insert(id);
                 }
             }
+        }
+        // A shallow boundary hides parents the graph still lists, so git stops using the graph.
+        if !odb.shallow.is_empty() {
+            odb.commit_graph = None;
         }
         Ok(odb)
     }
@@ -239,6 +251,7 @@ impl Odb {
         let loose = loose::LooseObjectStore::open(objects_dir, format);
 
         let mut packs = Vec::new();
+        let mut named: Vec<(String, packed::PackedObjectStore)> = Vec::new();
         let pack_dir = objects_dir.join("pack");
         // A missing `pack` directory is not an error: a fresh or gc'd repository has none.
         for entry in read_pack_dir(&pack_dir)? {
@@ -254,9 +267,23 @@ impl Odb {
             let data = fs::read(&pack_path)?;
             let index = fs::read(entry.path())?;
             let pack = packed::PackedObjectStore::open(data, index, format)?;
+            named.push((file_name, pack));
+        }
+        named.sort_by_key(|(_, pack)| pack.checksum());
+        let mut pack_names = Vec::new();
+        for (name, pack) in named {
+            pack_names.push(name);
             packs.push(pack);
         }
-        packs.sort_by_key(|pack| pack.checksum());
+        // The multi-pack-index only counts when every pack it names is here; otherwise it would
+        // vouch for objects that are gone.
+        let midx = crate::midx::MultiPackIndex::open(&pack_dir, format)
+            .filter(|m| m.pack_names().iter().all(|n| pack_names.contains(n)));
+        let covered = pack_names
+            .iter()
+            .map(|n| midx.as_ref().is_some_and(|m| m.pack_names().contains(n)))
+            .collect();
+        let commit_graph = crate::commit_graph::CommitGraph::open(objects_dir, format);
 
         let mut alternates = Vec::new();
         if depth < MAX_ALTERNATE_DEPTH
@@ -285,6 +312,10 @@ impl Odb {
             abbrev_len: Cell::new(None),
             alternates,
             shallow: std::collections::HashSet::new(),
+            pack_names,
+            midx,
+            covered,
+            commit_graph,
         })
     }
 
@@ -373,6 +404,8 @@ impl Odb {
                 continue;
             }
             self.packs.push(pack);
+            self.pack_names.push(file_name);
+            self.covered.push(false);
         }
         Ok(())
     }
@@ -390,8 +423,40 @@ impl Odb {
     /// * **A `false` is only as fresh as the last refresh.** See [`Odb::refresh`].
     pub fn contains(&self, oid: &ObjectId) -> bool {
         self.loose.contains(oid)
-            || self.packs.iter().any(|pack| pack.contains(oid))
+            || self.packed_contains(oid)
             || self.alternates.iter().any(|alt| alt.contains(oid))
+    }
+
+    /// Whether some local pack holds `oid`: one multi-pack-index lookup for the packs it covers,
+    /// then each pack it does not cover.
+    fn packed_contains(&self, oid: &ObjectId) -> bool {
+        if let Some(midx) = &self.midx {
+            if midx.contains(oid) {
+                return true;
+            }
+            return self
+                .packs
+                .iter()
+                .zip(&self.covered)
+                .any(|(pack, covered)| !covered && pack.contains(oid));
+        }
+        self.packs.iter().any(|pack| pack.contains(oid))
+    }
+
+    /// The commit-graph of this database, if there is an intact one.
+    pub fn commit_graph(&self) -> Option<&crate::commit_graph::CommitGraph> {
+        self.commit_graph.as_ref()
+    }
+
+    /// The multi-pack-index of this database, if there is an intact one covering present packs.
+    pub fn multi_pack_index(&self) -> Option<&crate::midx::MultiPackIndex> {
+        self.midx.as_ref()
+    }
+
+    /// Tree, parents, committer time and generation of a commit, from the commit-graph when it
+    /// lists the commit; `None` sends the caller to the commit object.
+    pub fn graph_commit(&self, oid: &ObjectId) -> Option<crate::commit_graph::GraphCommit> {
+        self.commit_graph.as_ref()?.commit(oid)
     }
 
     /// Phase 10 — read one object, hash-verified.
@@ -743,6 +808,8 @@ impl Odb {
             });
         }
         self.packs.push(new);
+        self.pack_names.push(String::new());
+        self.covered.push(false);
         Ok(())
     }
 }

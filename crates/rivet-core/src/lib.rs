@@ -93,6 +93,7 @@
 
 pub mod archive;
 pub mod bundle;
+pub mod commit_graph;
 pub mod config;
 pub mod convert;
 pub mod diff;
@@ -104,6 +105,7 @@ pub mod hooks;
 pub mod ignore;
 pub mod index;
 pub mod merge;
+pub mod midx;
 pub mod object;
 pub mod odb;
 pub mod ops;

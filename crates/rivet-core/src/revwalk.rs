@@ -804,7 +804,17 @@ pub fn walk_oids(odb: &Odb, starts: &[ObjectId], options: &WalkOptions) -> Resul
         author_time: i64,
     }
     let format = odb.format();
+    // The commit-graph carries no author time, so an author-date walk reads the objects.
+    let use_graph = !matches!(options.sort, SortOrder::AuthorDate);
     let load = |oid: &ObjectId| -> Result<Info> {
+        if use_graph && let Some(entry) = odb.graph_commit(oid) {
+            return Ok(Info {
+                parents: entry.parents,
+                tree: entry.tree,
+                committer_time: entry.commit_time,
+                author_time: entry.commit_time,
+            });
+        }
         let object = odb.read_typed(oid, crate::object::ObjectKind::Commit)?;
         let commit = Commit::parse(format, object.data())?;
         Ok(Info {
