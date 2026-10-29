@@ -146,9 +146,9 @@ pub use crate::merge::{
     BaseTree, Conflict, ConflictHunk, ConflictKind, ConflictStyle, ContentMerge,
     MAX_MERGE_BASE_STEPS, MERGE_HEAD, MERGE_MSG, MergeBase, MergeOptions, MergeOutcome, MergeSide,
     MergeState, ORIG_HEAD, PathMerge, TreeMerge, abort_merge, clear_merge_state, merge_base,
-    merge_base_tree, merge_bases, merge_content, merge_in_progress, merge_path, merge_trees,
-    merge_worktree_paths, read_merge_state, write_conflict_stages, write_merge_state,
-    write_merged_worktree, write_orig_head,
+    merge_base_tree, merge_bases, merge_bases_by_date, merge_content, merge_in_progress,
+    merge_path, merge_trees, merge_worktree_paths, read_merge_state, write_conflict_stages,
+    write_merge_state, write_merged_worktree, write_orig_head,
 };
 pub use crate::object::{
     AnyObject, Blob, Commit, CommitBuilder, EntryMode, Object, ObjectKind, Signature, Tag, Tree,

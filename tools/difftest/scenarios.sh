@@ -11492,6 +11492,43 @@ s_commit_graph() {
     NO_ERR=1; queries; NO_ERR=0; graphfiles
 }
 
+s_merge_criss_cross_markers() {
+    g init -q -b main repo; cd repo
+    printf '1\n2\n3\n4\n5\n6\n7\n8\n9\n' >f; printf 'k\n' >k; g add f k; tick; g commit -q -m base
+    g branch side
+    tick; sed -i 5s/.*/X5/ f; g commit -q -a -m x1
+    g switch -q side
+    tick; sed -i 5s/.*/Y5/ f; g commit -q -a -m y1
+    g switch -q main
+    tick; g merge -q side >/dev/null 2>&1; printf '1\n2\n3\n4\nR1\n6\n7\n8\n9\n' >f; g commit -q -a -m M1
+    g switch -q side
+    tick; g merge -q main~1 >/dev/null 2>&1; printf '1\n2\n3\n4\nR2\n6\n7\n8\n9\n' >f; g commit -q -a -m M2
+    g switch -q main
+    tick; sed -i 2s/.*/XX2/ f; g commit -q -a -m x2
+    g switch -q side
+    tick; sed -i 8s/.*/YY8/ f; g commit -q -a -m y2
+    g switch -q main
+    g branch keep
+    v merge-base --all main side
+    v merge side
+    cat f; v ls-files -s; v status --short
+    v merge --abort
+    v config merge.conflictStyle diff3
+    v merge side
+    cat f
+    v merge --abort
+    # the other direction, and a resolution that makes the bases agree again
+    g switch -q side
+    v merge main
+    cat f; v ls-files -s
+    v merge --abort
+    v config --unset merge.conflictStyle
+    printf '1\n2\n3\n4\nR1\n6\n7\n8\n9\n' >f; g commit -q -a -m resolve-side
+    v merge main
+    cat f; v ls-files -s
+    v fsck --no-dangling
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

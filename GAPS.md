@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 339 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 340 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-29, gate: 310 tests / 0 failed, 339 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-29, gate: 310 tests / 0 failed, 340 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -229,7 +229,7 @@ Differences that are decisions, not bugs. Each is documented where it happens in
 Broken in repositories real git wrote (`docs/reviews/2026-10-27-code-review.md`). Each line is
 deleted in the commit that fixes it. A15 is not in the queue yet.
 
-* **A2 (remainder)** — a criss-cross merge builds git's virtual base (`merge_base_tree`, `s_merge_criss_cross`), but when merging the bases themselves conflicts, git keeps the conflict markers in the virtual tree; rivet refuses by name (`fatal: merge with more than one merge base (...) is not implemented`, exit 128; `merge_criss_cross_refusal.rs`). Other callers of the merge (rebase, cherry-pick, stash) still use one base.
+* **A2 (remainder)** — the recursive merge base is built for criss-cross histories, including when merging the bases conflicts in file content: the virtual base keeps the markers (nine characters wide at the first level, `Temporary merge branch 1/2`, git's `diff3` base names; `s_merge_criss_cross_markers`). A base merge whose conflict is of another kind (modify/delete, binary, mode, submodule, directory/file, rename) is still refused by name (`fatal: merge with more than one merge base (...) is not implemented`, exit 128; `merge_criss_cross_refusal.rs`). `merge.conflictStyle` is now read by `merge` and `pull` only; `cherry-pick`, `revert`, `rebase`, `stash` and `checkout -m` still ignore it, and their `diff3` base labels (`parent of <id> (<subject>)`) are not written. Markers nested more than one virtual level deep (width `7 + 2 * depth`) are written from git's rule for the first level and not verified deeper.
 * **A3 (remainder)** — `text`/`eol`/`crlf`/`binary`, `core.autocrlf`, `core.eol`, `core.safecrlf` and the attribute stack (`convert.rs`) now apply on `add`/`status`/`checkout`; `ident`, `working-tree-encoding` and a configured `filter=` driver are refused by name. Not converted yet: merge results (`merge/tree.rs` `write_bytes`), `stash` of untracked files, `commit -a` snapshots in `ops.rs`, `diff`/`grep`/`blame` of the work tree, and `.gitattributes` is read from the work tree only (not the index in a sparse or bare checkout).
 * **A4 (remainder)** — short ids are matched by scanning `Odb::oids()` (no fanout use); `Odb::resolve_prefix` still reads a trailing `00` byte as fill (used by `revwalk.rs` `RevSpec::Abbrev`).
 

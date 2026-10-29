@@ -96,6 +96,31 @@ pub fn merge_trees(
     theirs: ObjectId,
     options: &MergeOptions,
 ) -> Result<crate::merge::TreeMerge> {
+    let level = Level {
+        depth: 0,
+        base_label: std::str::from_utf8(&options.base_label).unwrap_or("base"),
+    };
+    merge_trees_in(odb, base, ours, theirs, options, &level)
+}
+
+/// Where in the recursive merge-base walk a tree merge happens. At the top (depth 0) a conflict
+/// writes no tree. Building a virtual base (depth 1 and up) keeps the conflicted *content* in the
+/// tree, markers included and two characters wider per level, as git's recursive merge does.
+pub(crate) struct Level<'a> {
+    pub depth: usize,
+    /// The label after `|||||||` in `diff3` output (`base` at the top).
+    pub base_label: &'a str,
+}
+
+/// [`merge_trees`] at a given [`Level`].
+pub(crate) fn merge_trees_in(
+    odb: &Odb,
+    base: Option<ObjectId>,
+    ours: ObjectId,
+    theirs: ObjectId,
+    options: &MergeOptions,
+    level: &Level<'_>,
+) -> Result<crate::merge::TreeMerge> {
     let mut base_entries = match base {
         Some(oid) => flatten_tree(odb, oid)?,
         None => BTreeMap::new(),
@@ -222,7 +247,7 @@ pub fn merge_trees(
                         message: None,
                     });
                 } else {
-                    match merge_blob_contents(odb, None, our.1, their.1, options)? {
+                    match merge_blob_contents(odb, None, our.1, their.1, options, level)? {
                         ContentOutcome::Clean(data) => {
                             let oid = odb.write(&crate::object::Object::Blob(data))?;
                             let mode = (our.0).max(their.0);
@@ -249,7 +274,11 @@ pub fn merge_trees(
                                 message: None,
                             });
                         }
-                        ContentOutcome::Conflict(hunks) => {
+                        ContentOutcome::Conflict(hunks, data) => {
+                            if level.depth > 0 {
+                                let oid = odb.write(&crate::object::Object::Blob(data))?;
+                                tree_entries.push((path.clone(), our.0.max(their.0), oid));
+                            }
                             result.paths.push(PathMerge {
                                 path: path.clone(),
                                 result: Some(our.1),
@@ -378,7 +407,14 @@ pub fn merge_trees(
                         });
                         continue;
                     };
-                    match merge_blob_contents(odb, Some(base_entry.1), our.1, their.1, options)? {
+                    match merge_blob_contents(
+                        odb,
+                        Some(base_entry.1),
+                        our.1,
+                        their.1,
+                        options,
+                        level,
+                    )? {
                         ContentOutcome::Clean(data) => {
                             let oid = odb.write(&crate::object::Object::Blob(data))?;
                             result.paths.push(PathMerge {
@@ -404,7 +440,11 @@ pub fn merge_trees(
                                 message: None,
                             });
                         }
-                        ContentOutcome::Conflict(hunks) => {
+                        ContentOutcome::Conflict(hunks, data) => {
+                            if level.depth > 0 {
+                                let oid = odb.write(&crate::object::Object::Blob(data))?;
+                                tree_entries.push((path.clone(), mode, oid));
+                            }
                             result.paths.push(PathMerge {
                                 path: path.clone(),
                                 result: Some(our.1),
@@ -427,7 +467,16 @@ pub fn merge_trees(
     }
 
     result.clean = result.conflicts.is_empty();
-    if result.clean {
+    // A virtual base keeps its content conflicts as marker text; any other kind of conflict has
+    // no such rendering here, so no tree is built and the caller refuses.
+    let virtual_tree = level.depth > 0
+        && result.conflicts.iter().all(|c| {
+            matches!(
+                c.kind,
+                crate::merge::ConflictKind::Content | crate::merge::ConflictKind::AddAdd
+            )
+        });
+    if result.clean || virtual_tree {
         let mut index = Index::new();
         for (path, mode, oid) in tree_entries {
             index.insert(crate::index::IndexEntry {
@@ -500,7 +549,7 @@ fn has_child(map: &BTreeMap<BString, (EntryMode, ObjectId)>, path: &BStr) -> boo
 /// The three outcomes a content merge has that matter to the tree walk.
 enum ContentOutcome {
     Clean(Vec<u8>),
-    Conflict(Vec<crate::merge::ConflictHunk>),
+    Conflict(Vec<crate::merge::ConflictHunk>, Vec<u8>),
     Binary,
 }
 
@@ -521,6 +570,7 @@ fn merge_blob_contents(
     ours: ObjectId,
     theirs: ObjectId,
     options: &MergeOptions,
+    level: &Level<'_>,
 ) -> Result<ContentOutcome> {
     let base_data = match base {
         Some(oid) => Some(read_blob(odb, oid)?),
@@ -537,7 +587,7 @@ fn merge_blob_contents(
     if binary {
         return Ok(ContentOutcome::Binary);
     }
-    let merged = crate::merge::merge_content(
+    let merged = crate::merge::content::merge_content_marked(
         base_data.as_deref(),
         &our_data,
         &their_data,
@@ -545,11 +595,15 @@ fn merge_blob_contents(
             std::str::from_utf8(&options.labels.0).unwrap_or("ours"),
             std::str::from_utf8(&options.labels.1).unwrap_or("theirs"),
         ),
+        &crate::merge::content::Markers {
+            size: 7 + 2 * level.depth,
+            base_label: level.base_label,
+        },
         options.conflict_style,
         options.diff_algorithm,
     )?;
     if merged.conflict {
-        Ok(ContentOutcome::Conflict(merged.hunks))
+        Ok(ContentOutcome::Conflict(merged.hunks, merged.data.to_vec()))
     } else {
         Ok(ContentOutcome::Clean(merged.data.to_vec()))
     }
@@ -647,7 +701,17 @@ pub fn merge_path(
 
     let our_oid = ours_present.expect("checked above");
     let their_oid = theirs_present.expect("checked above");
-    match merge_blob_contents(odb, base_present, our_oid, their_oid, options)? {
+    match merge_blob_contents(
+        odb,
+        base_present,
+        our_oid,
+        their_oid,
+        options,
+        &Level {
+            depth: 0,
+            base_label: std::str::from_utf8(&options.base_label).unwrap_or("base"),
+        },
+    )? {
         ContentOutcome::Clean(data) => {
             let oid = odb.write(&crate::object::Object::Blob(data))?;
             Ok(PathMerge {
@@ -661,7 +725,7 @@ pub fn merge_path(
             result: Some(our_oid),
             kind: Some(crate::merge::ConflictKind::Binary),
         }),
-        ContentOutcome::Conflict(_) => Ok(PathMerge {
+        ContentOutcome::Conflict(..) => Ok(PathMerge {
             path: path.to_owned(),
             result: Some(our_oid),
             kind: Some(crate::merge::ConflictKind::Content),

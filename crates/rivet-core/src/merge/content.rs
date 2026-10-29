@@ -115,6 +115,39 @@ pub fn merge_content(
     style: ConflictStyle,
     algorithm: crate::diff::DiffAlgorithm,
 ) -> Result<ContentMerge> {
+    merge_content_marked(
+        base,
+        ours,
+        theirs,
+        labels,
+        &Markers {
+            size: 7,
+            base_label: "base",
+        },
+        style,
+        algorithm,
+    )
+}
+
+/// How the conflict markers of one merge are written: their width and the label after the
+/// `|||||||` of the `diff3` styles.
+pub(crate) struct Markers<'a> {
+    /// Characters per marker: seven, plus two per level when a virtual merge base is built.
+    pub size: usize,
+    /// The text after the base marker in `diff3`/`zdiff3` output.
+    pub base_label: &'a str,
+}
+
+/// [`merge_content`] with explicit marker width and base label.
+pub(crate) fn merge_content_marked(
+    base: Option<&[u8]>,
+    ours: &[u8],
+    theirs: &[u8],
+    labels: (&str, &str),
+    markers: &Markers<'_>,
+    style: ConflictStyle,
+    algorithm: crate::diff::DiffAlgorithm,
+) -> Result<ContentMerge> {
     let base_bytes: &[u8] = base.unwrap_or(&[]);
     let base_lines = lines_keeping_newline(base_bytes);
     let our_lines = lines_keeping_newline(ours);
@@ -171,7 +204,15 @@ pub fn merge_content(
                 out.extend_from_slice(line);
             }
         } else {
-            emit_conflict(&mut out, base_slice, our_slice, their_slice, labels, style);
+            emit_conflict(
+                &mut out,
+                base_slice,
+                our_slice,
+                their_slice,
+                labels,
+                markers,
+                style,
+            );
             hunks.push(ConflictHunk {
                 ours_start: our_start,
                 ours_len: our_end - our_start,
@@ -407,6 +448,7 @@ fn emit_conflict(
     ours: &[&[u8]],
     theirs: &[&[u8]],
     labels: (&str, &str),
+    markers: &Markers<'_>,
     style: ConflictStyle,
 ) {
     if !out.is_empty() && !out.ends_with(b"\n") {
@@ -473,6 +515,7 @@ fn emit_conflict(
                 &ours[our_start..our_end],
                 &theirs[their_start..their_end],
                 labels,
+                markers,
                 style,
             );
             for line in &ours[our_end..our_end + suffix] {
@@ -491,6 +534,7 @@ fn emit_conflict(
         &ours[our_start..our_end],
         &theirs[their_start..their_end],
         labels,
+        markers,
         style,
     );
 }
@@ -501,21 +545,26 @@ fn write_marker_block(
     ours: &[&[u8]],
     theirs: &[&[u8]],
     labels: (&str, &str),
+    markers: &Markers<'_>,
     style: ConflictStyle,
 ) {
-    out.extend_from_slice(b"<<<<<<< ");
-    out.extend_from_slice(labels.0.as_bytes());
-    out.push(b'\n');
+    let line = |out: &mut Vec<u8>, ch: u8, label: &str| {
+        out.extend(std::iter::repeat_n(ch, markers.size));
+        if !label.is_empty() {
+            out.push(b' ');
+            out.extend_from_slice(label.as_bytes());
+        }
+        out.push(b'\n');
+    };
+    line(out, b'<', labels.0);
     write_section(out, ours);
     if style != ConflictStyle::Merge {
-        out.extend_from_slice(b"||||||| base\n");
+        line(out, b'|', markers.base_label);
         write_section(out, base);
     }
-    out.extend_from_slice(b"=======\n");
+    line(out, b'=', "");
     write_section(out, theirs);
-    out.extend_from_slice(b">>>>>>> ");
-    out.extend_from_slice(labels.1.as_bytes());
-    out.push(b'\n');
+    line(out, b'>', labels.1);
 }
 
 /// Write a section of a conflict, guaranteeing the next marker starts on its own line.

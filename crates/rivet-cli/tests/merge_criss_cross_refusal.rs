@@ -1,6 +1,8 @@
-//! A merge whose several merge bases conflict with each other is refused by name: git keeps the
-//! conflict markers in its virtual base, which is not built, and taking one base would commit a
-//! tree git does not. (When the bases merge cleanly the merge works: `s_merge_criss_cross`.)
+//! A merge whose several merge bases conflict with each other *other than in file content* (here
+//! modify/delete) is refused by name: the virtual base has no rendering for that conflict here, and
+//! taking one base would commit a tree git does not. (When the bases merge cleanly the merge works,
+//! `s_merge_criss_cross`; when they conflict in content, the virtual base keeps the markers like
+//! git's, `s_merge_criss_cross_markers`.)
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -45,7 +47,8 @@ fn merge_with_two_bases_is_refused() {
     git(&dir, &["checkout", "-q", "-b", "x", "main"]);
     commit(&dir, "f", "x\n", "x1");
     git(&dir, &["checkout", "-q", "-b", "y", "main"]);
-    commit(&dir, "f", "y\n", "y1");
+    git(&dir, &["rm", "-q", "f"]);
+    git(&dir, &["commit", "-qm", "y1"]);
     let x1 = git(&dir, &["rev-parse", "x"]);
     let y1 = git(&dir, &["rev-parse", "y"]);
     git(&dir, &["checkout", "-q", "x"]);

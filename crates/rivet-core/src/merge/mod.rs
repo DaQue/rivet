@@ -75,6 +75,7 @@ pub mod tree;
 
 pub use base::{
     BaseTree, MAX_MERGE_BASE_STEPS, MergeBase, merge_base, merge_base_tree, merge_bases,
+    merge_bases_by_date,
 };
 pub use content::{ContentMerge, merge_content};
 pub use state::{
@@ -336,6 +337,9 @@ pub struct MergeOptions {
     /// markers, so the file cannot be reproduced without them. The defaults are the neutral
     /// spellings; a caller that knows the branch names should set them.
     pub labels: (BString, BString),
+    /// The text after `|||||||` in `diff3` and `zdiff3` output: git writes the abbreviated id of
+    /// the merge base, or `merged common ancestors` for a virtual one. `base` by default.
+    pub base_label: BString,
 }
 
 impl MergeOptions {
@@ -348,6 +352,7 @@ impl MergeOptions {
             diff_algorithm: crate::diff::DiffAlgorithm::Myers,
             no_ff: false,
             labels: (BString::from("ours"), BString::from("theirs")),
+            base_label: BString::from("base"),
         }
     }
 

@@ -1357,7 +1357,7 @@ pub fn run_merge_base(global: &GlobalArgs, args: &MergeBaseArgs) -> Result<i32> 
     if args.is_ancestor {
         return Ok(if repository.is_ancestor(a, b)? { 0 } else { 1 });
     }
-    let bases = rivet_core::merge_bases(repository.odb(), a, b).unwrap_or_default();
+    let bases = rivet_core::merge_bases_by_date(repository.odb(), a, b).unwrap_or_default();
     if bases.is_empty() {
         return Ok(1);
     }

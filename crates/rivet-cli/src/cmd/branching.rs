@@ -1231,6 +1231,9 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         .unwrap_or_else(|| merge_message(&repository, &spec));
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(&repository, "merge.renames");
+    if let Some(style) = super::config_conflict_style(&repository) {
+        options.conflict_style = style;
+    }
     if let Some(style) = args.conflict {
         options.conflict_style = style.into();
     }
@@ -2396,6 +2399,17 @@ pub fn merge_commit(
 
     let mut options = options.clone();
     options.labels = (BString::from("HEAD"), BString::from(label));
+    // `diff3` shows the base as its abbreviated id, or as git's name for a merged virtual one.
+    options.base_label = match (base, &base_tree) {
+        (Some(base), _) => BString::from(
+            repository
+                .odb()
+                .abbreviate(&base, repository.odb().default_abbrev_len())
+                .unwrap_or_else(|_| base.to_string()),
+        ),
+        (None, Some(_)) => BString::from("merged common ancestors"),
+        (None, None) => options.base_label.clone(),
+    };
     let stashed = if autostash {
         super::rebase::create_autostash(repository)?
     } else {

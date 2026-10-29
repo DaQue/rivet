@@ -607,3 +607,17 @@ pub fn detect_renames(
     }
     Ok(())
 }
+
+/// The `merge.conflictStyle` setting: `merge`, `diff3` or `zdiff3`; anything else is ignored.
+pub fn config_conflict_style(repository: &Repository) -> Option<rivet_core::ConflictStyle> {
+    let value = repository
+        .config_value(bstr::BStr::new(b"merge.conflictstyle"))
+        .ok()
+        .flatten()?;
+    match value.to_ascii_lowercase().as_slice() {
+        b"merge" => Some(rivet_core::ConflictStyle::Merge),
+        b"diff3" => Some(rivet_core::ConflictStyle::Diff3),
+        b"zdiff3" => Some(rivet_core::ConflictStyle::Zd3),
+        _ => None,
+    }
+}

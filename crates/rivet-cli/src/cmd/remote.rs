@@ -1057,6 +1057,9 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
     }
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(&repository, "merge.renames");
+    if let Some(style) = super::config_conflict_style(&repository) {
+        options.conflict_style = style;
+    }
     super::branching::merge_commit(
         &mut repository,
         theirs,

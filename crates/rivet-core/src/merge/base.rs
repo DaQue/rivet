@@ -220,6 +220,33 @@ pub fn merge_bases(odb: &Odb, ours: ObjectId, theirs: ObjectId) -> Result<Vec<Ob
     Ok(bases)
 }
 
+/// Phase 9 — [`merge_bases`] in the order `git merge-base --all` prints: newest committer date
+/// first, equal dates in object id order. That order decides which base `merge-base` prints
+/// alone and which pair a recursive merge folds first, so it is part of the answer.
+///
+/// # Errors
+///
+/// As [`merge_bases`].
+pub fn merge_bases_by_date(odb: &Odb, ours: ObjectId, theirs: ObjectId) -> Result<Vec<ObjectId>> {
+    let mut bases = merge_bases(odb, ours, theirs)?;
+    sort_newest_first(odb, &mut bases)?;
+    Ok(bases)
+}
+
+fn sort_newest_first(odb: &Odb, bases: &mut Vec<ObjectId>) -> Result<()> {
+    let mut dated = Vec::with_capacity(bases.len());
+    for oid in bases.iter() {
+        let object = odb.read_typed(oid, ObjectKind::Commit)?;
+        let when = crate::object::Commit::parse(odb.format(), object.data())?
+            .committer
+            .when;
+        dated.push((std::cmp::Reverse(when), *oid));
+    }
+    dated.sort();
+    *bases = dated.into_iter().map(|(_, oid)| oid).collect();
+    Ok(())
+}
+
 /// The parents a commit records.
 fn parents_of(odb: &Odb, oid: ObjectId) -> Result<Vec<ObjectId>> {
     let object = odb.read_typed(&oid, ObjectKind::Commit)?;
@@ -334,38 +361,70 @@ pub fn merge_base_tree(
     theirs: ObjectId,
     options: &crate::merge::MergeOptions,
 ) -> Result<BaseTree> {
-    base_tree_of(odb, &BaseNode::Real(ours), theirs, options)
+    Ok(base_tree_of(odb, &BaseNode::Real(ours), theirs, options, 1)?.0)
 }
 
+/// The base of merging `ours` and `theirs`, and the name `diff3` markers give it: the abbreviated
+/// id of a single real base, or git's "merged common ancestors" for one built by merging. `depth`
+/// is the level of the merge that will use the base (the bases are merged one level deeper).
 fn base_tree_of(
     odb: &Odb,
     ours: &BaseNode,
     theirs: ObjectId,
     options: &crate::merge::MergeOptions,
-) -> Result<BaseTree> {
+    depth: usize,
+) -> Result<(BaseTree, String)> {
     let mut bases = ours.bases_with(odb, theirs)?;
+    sort_newest_first(odb, &mut bases)?;
     match bases.len() {
-        0 => return Ok(BaseTree::None),
-        1 => return Ok(BaseTree::Tree(BaseNode::Real(bases[0]).tree(odb)?)),
+        0 => return Ok((BaseTree::None, String::new())),
+        1 => {
+            let label = odb
+                .abbreviate(&bases[0], odb.default_abbrev_len())
+                .unwrap_or_else(|_| bases[0].to_string());
+            return Ok((BaseTree::Tree(BaseNode::Real(bases[0]).tree(odb)?), label));
+        }
         _ => {}
     }
     // git reverses its (date ordered) list before folding.
     bases.reverse();
     let mut bases = bases.into_iter();
     let mut merged = BaseNode::Real(bases.next().expect("two or more bases"));
+    // Both sides of a virtual merge carry git's fixed temporary names.
+    let mut inner = options.clone();
+    inner.labels = (
+        bstr::BString::from("Temporary merge branch 1"),
+        bstr::BString::from("Temporary merge branch 2"),
+    );
     for next in bases {
-        let base = match base_tree_of(odb, &merged, next, options)? {
+        let (base, label) = base_tree_of(odb, &merged, next, options, depth + 1)?;
+        let base = match base {
             BaseTree::None => None,
             BaseTree::Tree(tree) => Some(tree),
-            BaseTree::Conflicted => return Ok(BaseTree::Conflicted),
+            BaseTree::Conflicted => return Ok((BaseTree::Conflicted, String::new())),
         };
         let next_node = BaseNode::Real(next);
-        let result =
-            crate::merge::merge_trees(odb, base, merged.tree(odb)?, next_node.tree(odb)?, options)?;
-        let Some(tree) = result.tree.filter(|_| result.clean) else {
-            return Ok(BaseTree::Conflicted);
+        let level = crate::merge::tree::Level {
+            depth,
+            base_label: &label,
+        };
+        let result = crate::merge::tree::merge_trees_in(
+            odb,
+            base,
+            merged.tree(odb)?,
+            next_node.tree(odb)?,
+            &inner,
+            &level,
+        )?;
+        // A tree exists when the merge was clean or when its only conflicts are content ones,
+        // which the virtual base keeps as marker text.
+        let Some(tree) = result.tree else {
+            return Ok((BaseTree::Conflicted, String::new()));
         };
         merged = BaseNode::Virtual(tree, vec![merged, next_node]);
     }
-    Ok(BaseTree::Tree(merged.tree(odb)?))
+    Ok((
+        BaseTree::Tree(merged.tree(odb)?),
+        "merged common ancestors".to_string(),
+    ))
 }
