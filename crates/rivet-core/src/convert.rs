@@ -284,6 +284,19 @@ impl AttrStack {
         config: &ConvertConfig,
         path: &BStr,
     ) -> Self {
+        Self::load_with_index(root, common_dir, config, path, &BTreeMap::new())
+    }
+
+    /// [`AttrStack::load`] with the `.gitattributes` files the index holds for directories where
+    /// the work tree has none (keyed by the directory, empty for the root): git falls back to the
+    /// index blob for a file that is not checked out, as in a sparse checkout.
+    pub fn load_with_index(
+        root: &Path,
+        common_dir: Option<&Path>,
+        config: &ConvertConfig,
+        path: &BStr,
+        index_files: &BTreeMap<BString, Vec<u8>>,
+    ) -> Self {
         let mut macros = BTreeMap::new();
         let mut frames = Vec::new();
         let mut global = None;
@@ -301,7 +314,10 @@ impl AttrStack {
         parts.pop();
         let mut level = 0;
         loop {
-            if let Ok(data) = std::fs::read(dir.join(".gitattributes")) {
+            let found = std::fs::read(dir.join(".gitattributes"))
+                .ok()
+                .or_else(|| index_files.get(base.as_slice().as_bstr()).cloned());
+            if let Some(data) = found {
                 if level == 0 {
                     root_frame = Some(frames.len());
                 }

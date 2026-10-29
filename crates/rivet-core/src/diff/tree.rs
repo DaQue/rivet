@@ -791,7 +791,9 @@ pub fn work_tree_diff(
             continue;
         }
         let new_data = match change.new_oid {
-            Some(_) => match worktree.read_file(BStr::new(&change.path[..])) {
+            Some(_) => match worktree.read_file_cleaned(BStr::new(&change.path[..]), &mut || {
+                crate::worktree::add::index_blob_has_cr(index, odb, BStr::new(&change.path[..]))
+            }) {
                 Ok(data) => Some(data),
                 // The scan saw the file a moment ago; if it is gone now the honest reading is a
                 // deletion, which is also what a fresh scan would report.

@@ -597,7 +597,8 @@ impl Repository {
             }
             ignore.push_info_exclude(&common_dir)?;
         }
-        let worktree = Worktree::new(work_tree.as_deref(), format, &config)?;
+        let mut worktree = Worktree::new(work_tree.as_deref(), format, &config)?;
+        worktree.set_index_attributes(index_attribute_files(&worktree, &index, &odb));
 
         Ok(Self {
             git_dir,
@@ -999,6 +1000,8 @@ impl Repository {
         } else {
             Index::new()
         };
+        let files = index_attribute_files(&self.worktree, &self.index, &self.odb);
+        self.worktree.set_index_attributes(files);
         Ok(())
     }
 
@@ -1775,6 +1778,39 @@ pub fn gitfile_target(gitfile: &Path) -> Result<PathBuf> {
 ///
 /// The single definition of "what tree does this index describe", shared by
 /// [`Repository::write_tree`] and [`crate::index::IndexExt::write_tree`].
+/// The `.gitattributes` blobs the index holds for directories where the work tree has no such
+/// file (a sparse checkout leaves them out): git reads those from the index.
+fn index_attribute_files(
+    worktree: &Worktree,
+    index: &Index,
+    odb: &Odb,
+) -> std::collections::BTreeMap<BString, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let Some(root) = worktree.root() else {
+        return files;
+    };
+    for entry in index.entries() {
+        let dir = match entry.path.strip_suffix(b".gitattributes") {
+            Some(b"") => &entry.path[..0],
+            Some(dir) if dir.ends_with(b"/") => &dir[..dir.len() - 1],
+            _ => continue,
+        };
+        if entry.stage() != crate::index::Stage::Normal
+            || entry.mode == crate::object::EntryMode::Commit
+        {
+            continue;
+        }
+        let on_disk = root.join(std::ffi::OsStr::from_bytes(&entry.path));
+        if on_disk.symlink_metadata().is_ok() {
+            continue;
+        }
+        if let Ok(blob) = odb.read_typed(&entry.oid, crate::object::ObjectKind::Blob) {
+            files.insert(BString::from(dir), blob.into_data());
+        }
+    }
+    files
+}
+
 pub(crate) fn write_tree_of(odb: &Odb, index: &crate::index::Index) -> Result<ObjectId> {
     let mut items: Vec<(Vec<BString>, crate::object::EntryMode, ObjectId)> = Vec::new();
     for entry in index.entries() {

@@ -139,6 +139,10 @@ pub struct Worktree {
     /// `core.autocrlf` / `core.eol` / `core.safecrlf` / attribute settings for the clean and
     /// smudge conversions.
     convert: crate::convert::ConvertConfig,
+    /// The `.gitattributes` blobs of the index for directories whose file is not in the work tree
+    /// (keyed by the directory, empty for the root); see
+    /// [`crate::convert::AttrStack::load_with_index`].
+    index_attributes: std::sync::Arc<std::collections::BTreeMap<BString, Vec<u8>>>,
 }
 
 impl Worktree {
@@ -181,7 +185,14 @@ impl Worktree {
             ignore_case,
             protect_ntfs,
             convert,
+            index_attributes: Default::default(),
         })
+    }
+
+    /// Give the work tree the index's `.gitattributes` for directories where the file is absent
+    /// from disk. The repository calls this after it reads the index.
+    pub fn set_index_attributes(&mut self, files: std::collections::BTreeMap<BString, Vec<u8>>) {
+        self.index_attributes = std::sync::Arc::new(files);
     }
 
     /// The common git directory, found from `<root>/.git` (a directory, or a `gitdir:` file for a
@@ -213,11 +224,12 @@ impl Worktree {
     /// [`crate::error::Error::BareRepository`] when there is no work tree.
     pub fn attr_stack(&self, path: &BStr) -> Result<crate::convert::AttrStack> {
         let root = self.require_root("attributes")?;
-        Ok(crate::convert::AttrStack::load(
+        Ok(crate::convert::AttrStack::load_with_index(
             root,
             self.common_git_dir().as_deref(),
             &self.convert,
             path,
+            &self.index_attributes,
         ))
     }
 
@@ -615,6 +627,29 @@ impl Worktree {
         // so hashing the bytes alone yields an id no blob in the repository can match.
         let (id, _) = hash_object(self.format, ObjectKind::Blob, &buf)?;
         Ok(id)
+    }
+
+    /// A file's content as `add` would store it: [`Worktree::read_file`] followed by the clean
+    /// conversion (`text`, `eol`, `core.autocrlf`), except for a symlink, whose target is kept as
+    /// it is. This is the work tree side of `diff` and `blame`, which compare blobs.
+    ///
+    /// # Errors
+    ///
+    /// As [`Worktree::hash_file`].
+    pub fn read_file_cleaned(
+        &self,
+        path: &BStr,
+        index_has_cr: &mut dyn FnMut() -> bool,
+    ) -> Result<Vec<u8>> {
+        let buf = self.read_file(path)?;
+        let is_link = self.symlinks
+            && std::fs::symlink_metadata(self.join(path)?)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+        if is_link {
+            return Ok(buf);
+        }
+        self.clean_content(path, buf, index_has_cr, false)
     }
 
     /// Phase 4 — the modification time of this work tree's index file.

@@ -668,7 +668,10 @@ fn push_impl(quiet: bool, repository: &mut Repository, args: &PushArgs, mode: Mo
             let Some(stat) = worktree.stat(BStr::new(&path[..]))? else {
                 continue;
             };
-            let data = worktree.read_file(BStr::new(&path[..]))?;
+            let mut data = worktree.read_file(BStr::new(&path[..]))?;
+            if stat.mode != rivet_core::object::EntryMode::Link {
+                data = worktree.clean_content(BStr::new(&path[..]), data, &mut || false, false)?;
+            }
             let oid = repository.odb().write_raw(ObjectKind::Blob, &data)?;
             files.insert(path.clone(), (stat.mode, oid));
         }
@@ -1089,6 +1092,8 @@ fn write_untracked(
     if mode == rivet_core::object::EntryMode::Link {
         std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(&data), &full)?;
     } else {
+        // The blob holds the normalised text; the file gets what a checkout would write.
+        let data = worktree.smudge_content(BStr::new(&path[..]), data)?;
         std::fs::write(&full, &data)?;
         if mode == rivet_core::object::EntryMode::BlobExecutable {
             std::fs::set_permissions(&full, std::fs::Permissions::from_mode(0o755))?;

@@ -908,7 +908,14 @@ pub fn write_merged_worktree(
                 )?;
                 // The marker-laden file is work tree content only; storing it as a blob would
                 // leave an object nothing references for `fsck` to report as dangling.
-                crate::worktree::checkout::write_bytes(worktree, path, &merged.data, mode)?;
+                // The marked-up file is work tree content like any other: it takes the smudge
+                // conversion (CRLF for `eol=crlf`, say), the blobs on both sides being LF.
+                let data = if mode == crate::object::EntryMode::Link {
+                    merged.data.to_vec()
+                } else {
+                    worktree.smudge_content(path, merged.data.to_vec())?
+                };
+                crate::worktree::checkout::write_bytes(worktree, path, &data, mode)?;
             }
             ConflictKind::Binary | ConflictKind::ModifyDelete => {
                 if let Some(oid) = conflict.ours {

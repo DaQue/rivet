@@ -1909,7 +1909,18 @@ fn tree_vs_worktree(
             continue;
         }
         let data = match worktree.stat(path_ref)? {
-            Some(_) => Some(worktree.read_file(path_ref)?),
+            Some(_) => Some(worktree.read_file_cleaned(path_ref, &mut || {
+                repository
+                    .index()
+                    .entry(path_ref)
+                    .and_then(|entry| {
+                        repository
+                            .odb()
+                            .read_typed(&entry.oid, rivet_core::ObjectKind::Blob)
+                            .ok()
+                    })
+                    .is_some_and(|blob| blob.data().contains(&b'\r'))
+            })?),
             None => None,
         };
         match (map.get(&path), data) {

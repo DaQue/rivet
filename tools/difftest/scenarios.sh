@@ -11721,6 +11721,106 @@ s_merge_criss_cross_nontext() {
     v fsck --no-dangling
 }
 
+# Line-ending conversion on the paths s_attributes_eol does not reach: merge results, stash of
+# untracked files, commit -a, the work tree side of diff and blame, and the attributes of a sparse
+# checkout. Blob contents are dumped through real git.
+eolblob() { local spec; for spec in "$@"; do { echo "## $spec"; g cat-file -p "$spec" | od -An -c; } >>"$TRANSCRIPT"; done; }
+
+s_attributes_eol_paths() {
+    g init -q repo; cd repo
+    printf '*.txt text eol=crlf\n*.cr text=auto eol=crlf\n*.lf eol=lf\n*.bin -text\n' >.gitattributes
+    printf 'one\ntwo\nthree\nfour\nfive\n' >a.txt; printf 'one\ntwo\nthree\n' >b.cr; printf 'one\ntwo\n' >c.lf
+    printf 'x\ny\n' >d.bin
+    v add -A; tick; v commit -q -m base
+    v checkout -q -b side
+    printf 'one\nSIDE\nthree\nfour\nfive\n' >a.txt; printf 'one\nSIDE\nthree\n' >b.cr; printf 'one\nSIDE\n' >c.lf
+    tick; v commit -q -a -m side
+    v checkout -q main
+    printf 'one\nMAIN\nthree\nfour\nfive\n' >a.txt; printf 'one\nMAIN\nthree\n' >b.cr; printf 'one\nMAIN\n' >c.lf
+    tick; v commit -q -a -m main
+    eolblob HEAD:a.txt HEAD:b.cr HEAD:c.lf
+    dump_bytes a.txt b.cr c.lf
+    # a conflicted merge: the marker files go through the smudge conversion
+    v merge side
+    dump_bytes a.txt b.cr c.lf
+    v ls-files -s -u
+    v status --short
+    # resolving by hand and committing stores LF blobs
+    printf 'resolved\r\n' >a.txt; printf 'resolved\r\n' >b.cr; printf 'resolved\n' >c.lf
+    v add a.txt b.cr c.lf
+    tick; v commit -q -m merged
+    eolblob HEAD:a.txt HEAD:b.cr HEAD:c.lf
+    # a clean merge writing a converted file
+    g branch -q more
+    v checkout -q more
+    printf 'resolved\nfour\nFIVE\n' >a.txt; tick; v commit -q -a -m more
+    v checkout -q main
+    printf 'resolved\nTWO\n' >b.cr; tick; v commit -q -a -m main2
+    v merge more
+    v status --short
+    dump_bytes a.txt b.cr
+    # commit -a snapshots the cleaned work tree
+    printf 'one\r\nedited\r\n' >b.cr; printf 'new\r\nlines\r\n' >c.lf
+    v commit -q -a -m snap
+    eolblob HEAD:b.cr HEAD:c.lf
+    v status --short
+    # stash of tracked and untracked files
+    printf 'tracked\r\nchange\r\n' >a.txt; printf 'fresh\r\nfile\r\n' >u.txt; printf 'raw\r\nfile\r\n' >v.bin
+    v status --short
+    v stash push -q -u
+    eolblob 'stash@{0}:a.txt' 'stash@{0}^3:u.txt' 'stash@{0}^3:v.bin'
+    v status --short
+    v stash pop -q
+    dump_bytes a.txt u.txt v.bin
+    v status --short
+    # the work tree side of diff and blame, with a CRLF file edited in the work tree
+    printf 'one\r\nedited\r\nmore\r\n' >b.cr
+    v diff
+    v diff --stat
+    v blame b.cr
+    printf 'one\r\nedited\r\nmore\r\n' >a.txt
+    v diff a.txt
+    v blame a.txt
+    # core.autocrlf without attributes
+    g checkout -q -f main 2>/dev/null; g reset -q --hard
+    g config core.autocrlf true
+    printf 'p\r\nq\r\n' >plain.dat; v add plain.dat; tick; v commit -q -m plain
+    eolblob HEAD:plain.dat
+    printf 'p\r\nq\r\nr\r\n' >plain.dat
+    v diff
+    vq commit -q -a -m plain2
+    eolblob HEAD:plain.dat
+    cd ..
+}
+
+# .gitattributes that are not in the work tree (outside a sparse-checkout definition) still apply:
+# git reads them from the index.
+s_attributes_sparse() {
+    g init -q repo; cd repo
+    printf '*.txt text eol=crlf\n' >.gitattributes
+    mkdir sub other
+    printf 'sub/*.dat -text\n' >sub/.gitattributes
+    printf 'a\nb\n' >sub/f.txt; printf 'a\nb\n' >sub/g.dat; printf 'a\nb\n' >other/h.txt; printf 'a\nb\n' >top.txt
+    printf 'x\n' >other/.gitattributes
+    v add -A; tick; v commit -q -m one
+    g sparse-checkout init --no-cone
+    printf '/sub/\n/top.txt\n' >.git/info/sparse-checkout
+    g sparse-checkout reapply
+    ls -a >>"$TRANSCRIPT"
+    v ls-files -t
+    dump_bytes sub/f.txt top.txt
+    v check-attr -a sub/f.txt other/h.txt sub/g.dat
+    v check-attr eol text -- sub/f.txt top.txt other/h.txt
+    printf 'new\nlines\n' >sub/n.txt
+    v add sub/n.txt
+    g cat-file -p :sub/n.txt | od -An -c >>"$TRANSCRIPT"
+    v status --short
+    rm sub/f.txt top.txt
+    v checkout -- sub/f.txt top.txt
+    dump_bytes sub/f.txt top.txt
+    v diff
+}
+
 # The commit-graph and multi-pack-index files as they are now, into the transcript.
 graphfiles() {
     local gd; gd=$(g rev-parse --git-dir)

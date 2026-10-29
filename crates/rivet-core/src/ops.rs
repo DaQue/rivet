@@ -504,7 +504,16 @@ impl Repository {
             if stat.mode == EntryMode::Tree {
                 continue;
             }
-            let data = worktree.read_file(path)?;
+            let mut data = worktree.read_file(path)?;
+            // The blob is what `add` would store: the clean conversion of the file.
+            if stat.mode != EntryMode::Link {
+                data = worktree.clean_content(
+                    path,
+                    data,
+                    &mut || crate::worktree::add::index_blob_has_cr(self.index(), self.odb(), path),
+                    false,
+                )?;
+            }
             let oid = self.odb().write_raw(ObjectKind::Blob, &data)?;
             tree_index.insert(make_index_entry(path, stat.mode, oid, Some(&stat)));
         }

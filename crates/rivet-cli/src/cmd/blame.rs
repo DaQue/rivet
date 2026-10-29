@@ -888,10 +888,18 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
 
     // Without a revision the work tree's version is blamed, so uncommitted lines show up.
     let (content, top_is_worktree) = if rev.is_none() {
-        match repository.worktree()?.read_file(BStr::new(&path[..])) {
+        let cleaned = repository
+            .worktree()?
+            .read_file_cleaned(BStr::new(&path[..]), &mut || committed.contains(&b'\r'));
+        match cleaned {
             Ok(data) => {
                 let changed = data != committed;
                 (data, changed)
+            }
+            // A conversion git would run and rivet cannot is reported as what it is.
+            Err(error @ rivet_core::Error::Message(_)) => {
+                eprintln!("fatal: {error}");
+                return Ok(128);
             }
             Err(_) => {
                 eprintln!("fatal: Cannot lstat '{file}': No such file or directory");
