@@ -11621,6 +11621,106 @@ s_add_intent_to_add() {
     vg fsck --strict --no-dangling
 }
 
+# The file's content, into the transcript (the scenarios' stdout is discarded).
+catf() { { echo "## $1"; cat "$1"; } >>"$TRANSCRIPT"; }
+
+# merge.conflictStyle and git's marker labels in cherry-pick, revert, rebase, stash pop/apply,
+# checkout -m / switch -m and rebase --autostash.
+s_conflict_style_ops() {
+    v init -q repo; cd repo
+    printf 'l1\nl2\nl3\nl4\nl5\n' >f; v add f; tick; v commit -q -m base
+    v checkout -q -b side
+    printf 'l1\nside\nl3\nl4\nl5s\n' >f; tick; v commit -q -a -m "side change"
+    v checkout -q main
+    printf 'l1\nmain\nl3\nl4\nl5m\n' >f; tick; v commit -q -a -m "main change"
+    printf 'l1\nmain2\nl3\nl4\nl5m\n' >f; tick; v commit -q -a -m "main two"
+    v checkout -q -b s2 base 2>/dev/null || v checkout -q -b s2 HEAD~2
+    echo g >g; v add g; tick; v commit -q -m "s2 change"
+    v checkout -q main
+    for style in merge diff3 zdiff3; do
+        v config merge.conflictStyle $style
+        v cherry-pick side; catf f; v ls-files -s -u; v cherry-pick --abort
+        v revert --no-edit HEAD~1; catf f; v ls-files -s -u; v revert --abort
+        v checkout -q side; v rebase main; catf f; v ls-files -s -u; v rebase --abort; v checkout -q main
+        printf 'l1\nstashed\nl3\nl4\nl5m\n' >f; v stash push -q
+        printf 'l1\nupstream\nl3\nl4\nl5m\n' >f; tick; v commit -q -a -m "up-$style"
+        v stash apply; catf f; v ls-files -s -u; v reset -q --hard
+        v stash pop; catf f; v ls-files -s -u; v reset -q --hard; v stash drop -q
+        printf 'l1\nlocal\nl3\nl4\nl5m\n' >f
+        v checkout -m side; catf f; v ls-files -s -u; v reset -q --hard; v stash drop -q; v checkout -q main
+        printf 'l1\nlocal2\nl3\nl4\nl5m\n' >f
+        v switch -m side; catf f; v reset -q --hard; v stash drop -q; v checkout -q main
+        v checkout -q s2; printf 'l1\ndirty\nl3\nl4\nl5m\n' >f
+        v rebase --autostash main; catf f; v ls-files -s -u; v status --short
+        v reset -q --hard; v stash drop -q; v rebase --abort; v checkout -q -f s2; v reset -q --hard s2@{1}; v checkout -q main
+    done
+    v config --unset merge.conflictStyle
+    v fsck --no-dangling
+}
+
+# Two conflicts separated by a few common lines: git joins them into one in `merge` style only.
+s_merge_conflict_gap() {
+    v init -q repo; cd repo
+    gaps="0 1 2 3 4 5 7"
+    for gap in $gaps; do seq 1 14 | sed 's/^/l/' >"f$gap"; done
+    seq 1 14 | sed 's/^/l/' >r3; seq 1 14 | sed 's/^/l/' >r7
+    v add -A; tick; v commit -q -m base
+    v branch -q theirs
+    for gap in $gaps; do sed -i "3s/.*/ours3/;$((4 + gap))s/.*/ours$((4 + gap))/" "f$gap"; done
+    sed -i '3s/.*/oX/;4s/.*/lc/;5s/.*/oY/' r3
+    sed -i '3s/.*/oX/;4s/.*/c1/;5s/.*/c2/;6s/.*/c3/;7s/.*/c4/;8s/.*/c5/;9s/.*/oY/' r7
+    tick; v commit -q -a -m ours
+    v checkout -q theirs
+    for gap in $gaps; do sed -i "3s/.*/theirs3/;$((4 + gap))s/.*/theirs$((4 + gap))/" "f$gap"; done
+    sed -i '3s/.*/tP/;4s/.*/lc/;5s/.*/tQ/' r3
+    sed -i '3s/.*/tP/;4s/.*/c1/;5s/.*/c2/;6s/.*/c3/;7s/.*/c4/;8s/.*/c5/;9s/.*/tQ/' r7
+    tick; v commit -q -a -m theirs
+    v checkout -q main
+    for style in merge diff3 zdiff3; do
+        v config merge.conflictStyle $style
+        v merge theirs
+        for gap in $gaps; do catf "f$gap"; done
+        catf r3; catf r7
+        v merge --abort
+    done
+}
+
+# A criss-cross whose merge bases conflict in a way text cannot show: git's virtual base keeps the
+# base's version (modify/delete, binary) or an empty file (add/add of a binary). Family $1 builds
+# x$1 and y$1 whose bases are the two sides of the conflict, then merges them.
+criss_family() {
+    local id=$1 x1 y1
+    v checkout -q main; eval "$2"; v add -A; tick; v commit -q -m "base$id"
+    v branch -q "x$id"; v branch -q "y$id"
+    v checkout -q "x$id"; eval "$3"; v add -A; tick; v commit -q -m "x1-$id"
+    x1=$(g rev-parse HEAD)
+    v checkout -q "y$id"; eval "$4"; v add -A; tick; v commit -q -m "y1-$id"
+    y1=$(g rev-parse HEAD)
+    v checkout -q "x$id"; tick; g merge -q -s ours --no-edit "$y1" >/dev/null
+    v checkout -q "y$id"; tick; g merge -q -s ours --no-edit "$x1" >/dev/null
+    v checkout -q "x$id"; echo x2 >"x2-$id"; v add -A; tick; v commit -q -m "x2-$id"
+    v checkout -q "y$id"; echo y2 >"y2-$id"; v add -A; tick; v commit -q -m "y2-$id"
+    v checkout -q "x$id"
+    v merge-base --all "x$id" "y$id"
+    v merge "y$id"; v ls-files -s; v status --short
+    v merge --abort
+    v checkout -q "y$id"
+    v merge "x$id"; v ls-files -s; v status --short
+    v merge --abort
+    v checkout -q main
+}
+
+s_merge_criss_cross_nontext() {
+    v init -q repo; cd repo
+    echo start >start; v add start; tick; v commit -q -m start
+    criss_family 1 'echo a >m1' 'echo x >m1' 'v rm -q m1'
+    criss_family 2 'echo a >m2' 'v rm -q m2' 'echo y >m2'
+    criss_family 3 'printf "a\0b" >b3' 'printf "x\0b" >b3' 'printf "y\0b" >b3'
+    criss_family 4 'echo k >k4' 'printf "x\0b" >b4' 'printf "y\0b" >b4'
+    criss_family 5 'seq 1 9 >t5; echo a >m5' 'sed -i 5s/.*/X/ t5; echo x >m5' 'sed -i 5s/.*/Y/ t5; v rm -q m5'
+    v fsck --no-dangling
+}
+
 # The commit-graph and multi-pack-index files as they are now, into the transcript.
 graphfiles() {
     local gd; gd=$(g rev-parse --git-dir)

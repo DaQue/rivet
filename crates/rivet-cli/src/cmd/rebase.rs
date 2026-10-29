@@ -471,6 +471,7 @@ pub(super) fn apply_autostash(repository: &mut Repository, stash: ObjectId) -> R
         base,
         "Updated upstream",
         "Stashed changes",
+        "Stash base",
     )? {
         super::stash::autostash_store(repository, stash, "autostash")?;
         eprintln!(
@@ -1106,6 +1107,9 @@ fn stop_for_edit(
 fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Result<i32> {
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(repository, "merge.renames");
+    if let Some(style) = super::config_conflict_style(repository) {
+        options.conflict_style = style;
+    }
     let interactive = interactive::is_interactive(dir);
     loop {
         let todo_text = read_state(dir, "git-rebase-todo");
@@ -1251,6 +1255,7 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
         let label = format!("{short} ({subject})");
         let mut merge_options = options.clone();
         merge_options.labels = (BString::from("HEAD"), BString::from(label.as_str()));
+        merge_options.base_label = BString::from(format!("parent of {label}"));
         let base = original.parents.first().copied();
         let result = match repository.merge_into_worktree(base, oid, &merge_options) {
             Ok(result) => result,

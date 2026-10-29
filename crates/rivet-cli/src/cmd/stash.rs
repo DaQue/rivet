@@ -941,6 +941,10 @@ fn apply(
         BString::from("Updated upstream"),
         BString::from("Stashed changes"),
     );
+    options.base_label = BString::from("Stash base");
+    if let Some(style) = super::config_conflict_style(repository) {
+        options.conflict_style = style;
+    }
     let nothing_tracked = repository.commit_tree(parents[0])? == repository.commit_tree(stash)?;
     let mut refused: Option<i32> = None;
     let mut conflicted = false;
@@ -1226,8 +1230,9 @@ pub(super) fn autostash_apply(
     stash: ObjectId,
     base: ObjectId,
     ours: &str,
+    base_label: &str,
 ) -> Result<bool> {
-    let conflicted = autostash_merge(repository, stash, base, ours, "local")?;
+    let conflicted = autostash_merge(repository, stash, base, ours, "local", base_label)?;
     if !conflicted {
         remove_entry(repository, 0)?;
     }
@@ -1242,10 +1247,15 @@ pub(super) fn autostash_merge(
     base: ObjectId,
     ours: &str,
     theirs: &str,
+    base_label: &str,
 ) -> Result<bool> {
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(repository, "merge.renames");
     options.labels = (BString::from(ours), BString::from(theirs));
+    options.base_label = BString::from(base_label);
+    if let Some(style) = super::config_conflict_style(repository) {
+        options.conflict_style = style;
+    }
     let index_before = repository.write_tree()?;
     let result = repository.merge_into_worktree(Some(base), stash, &options)?;
     if !result.conflicts.is_empty() {

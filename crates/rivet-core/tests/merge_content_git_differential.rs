@@ -238,3 +238,45 @@ fn skips_when_git_is_unavailable() {
         eprintln!("git not found; skipping");
     }
 }
+
+#[test]
+fn nearby_conflicts_are_joined_and_common_lines_split_a_conflict_like_git_in_merge_style() {
+    let base: Vec<u8> = (1..=14)
+        .map(|n| format!("l{n}\n"))
+        .collect::<String>()
+        .into_bytes();
+    let edit = |prefix: &str, lines: &[usize]| -> Vec<u8> {
+        let mut text: Vec<String> = (1..=14).map(|n| format!("l{n}")).collect();
+        for line in lines {
+            text[line - 1] = format!("{prefix}{line}");
+        }
+        text.iter()
+            .map(|l| format!("{l}\n"))
+            .collect::<String>()
+            .into_bytes()
+    };
+    // Conflicts one to five common lines apart: joined up to three lines, apart beyond that.
+    for second in [4, 5, 6, 7, 8, 9] {
+        compare_all_styles(&base, &edit("o", &[3, second]), &edit("t", &[3, second]));
+    }
+    // One conflicting block with a run of common lines inside it: git splits it there.
+    let rewrite = |first: &str, last: &str, common: usize| -> Vec<u8> {
+        let mut text: Vec<String> = (1..=14).map(|n| format!("l{n}")).collect();
+        text[2] = first.to_string();
+        for (offset, slot) in text[3..3 + common].iter_mut().enumerate() {
+            *slot = format!("c{offset}");
+        }
+        text[3 + common] = last.to_string();
+        text.iter()
+            .map(|l| format!("{l}\n"))
+            .collect::<String>()
+            .into_bytes()
+    };
+    for common in [1, 3, 4, 5] {
+        compare_all_styles(
+            &base,
+            &rewrite("oX", "oY", common),
+            &rewrite("tP", "tQ", common),
+        );
+    }
+}

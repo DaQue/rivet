@@ -229,6 +229,9 @@ fn run(
 
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(&repository, "merge.renames");
+    if let Some(style) = super::config_conflict_style(&repository) {
+        options.conflict_style = style;
+    }
 
     if picks.len() == 1 {
         return apply_one(&mut repository, &settings, &picks[0], &options);
@@ -447,6 +450,11 @@ fn apply_one(
     };
     let mut options = options.clone();
     options.labels = (BString::from("HEAD"), BString::from(label.as_str()));
+    // `diff3` shows the commit's parent for a pick and the commit itself for a revert.
+    options.base_label = BString::from(match op {
+        Op::Pick => format!("parent of {described}"),
+        Op::Revert => described.clone(),
+    });
 
     let result = match repository.merge_into_worktree(base, theirs, &options) {
         Ok(result) => result,

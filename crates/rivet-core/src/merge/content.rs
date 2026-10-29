@@ -166,6 +166,19 @@ pub(crate) fn merge_content_marked(
     all.sort_by_key(|(_, r)| (r.base_start, r.base_end));
 
     let clusters = cluster_regions(&all);
+    if style == ConflictStyle::Merge {
+        return Ok(merge_zealous(
+            &base_lines,
+            &our_lines,
+            &their_lines,
+            &our_boundary,
+            &their_boundary,
+            &clusters,
+            labels,
+            markers,
+            algorithm,
+        ));
+    }
 
     let mut out: Vec<u8> = Vec::new();
     let mut hunks: Vec<ConflictHunk> = Vec::new();
@@ -233,6 +246,176 @@ pub(crate) fn merge_content_marked(
         conflict: !hunks.is_empty(),
         hunks,
     })
+}
+
+/// One stretch of a zealous merge's output.
+#[derive(Clone)]
+enum Seg<'a> {
+    /// Text both sides agree on and neither changed (it can sit between two joined conflicts).
+    Common(Vec<&'a [u8]>),
+    /// Text a clean one-sided or identical change produced; it keeps neighbouring conflicts apart.
+    Clean(Vec<&'a [u8]>),
+    /// A conflict: the lines of each side and the base lines they replace.
+    Conflict {
+        ours: (usize, usize),
+        theirs: (usize, usize),
+        base: (usize, usize),
+    },
+}
+
+/// The `merge` style as git's zealous level writes it: every conflict is refined to the lines the
+/// two sides really disagree on (a common line inside it splits it in two), and two conflicts that
+/// only up to three common lines keep apart are joined again.
+#[allow(clippy::too_many_arguments)]
+fn merge_zealous(
+    base_lines: &[&[u8]],
+    our_lines: &[&[u8]],
+    their_lines: &[&[u8]],
+    our_boundary: &[usize],
+    their_boundary: &[usize],
+    clusters: &[Cluster],
+    labels: (&str, &str),
+    markers: &Markers<'_>,
+    algorithm: crate::diff::DiffAlgorithm,
+) -> ContentMerge {
+    let mut segs: Vec<Seg<'_>> = Vec::new();
+    let mut cursor = 0usize;
+    for cluster in clusters {
+        if cluster.base_start > cursor {
+            segs.push(Seg::Common(base_lines[cursor..cluster.base_start].to_vec()));
+        }
+        let our_start = our_boundary[cluster.base_start]
+            .min(cluster.ours.map(|r| r.side_start).unwrap_or(usize::MAX));
+        let our_end =
+            our_boundary[cluster.base_end].max(cluster.ours.map(|r| r.side_end).unwrap_or(0));
+        let their_start = their_boundary[cluster.base_start]
+            .min(cluster.theirs.map(|r| r.side_start).unwrap_or(usize::MAX));
+        let their_end =
+            their_boundary[cluster.base_end].max(cluster.theirs.map(|r| r.side_end).unwrap_or(0));
+        let ours = &our_lines[our_start..our_end];
+        let theirs = &their_lines[their_start..their_end];
+        let base = (cluster.base_start, cluster.base_end);
+        if lines_equal(ours, theirs) {
+            segs.push(Seg::Clean(ours.to_vec()));
+        } else if cluster.ours.is_none() {
+            segs.push(Seg::Clean(theirs.to_vec()));
+        } else if cluster.theirs.is_none() {
+            segs.push(Seg::Clean(ours.to_vec()));
+        } else {
+            // Refine: the edits between the two sides are the conflicts, the rest is common. A
+            // deletion and the insertion next to it are one conflict.
+            let mut groups: Vec<(usize, usize, usize, usize)> = Vec::new();
+            let mut open: Option<(usize, usize, usize, usize)> = None;
+            for edit in side_edits(ours, theirs, algorithm) {
+                if edit.is_change() {
+                    let (old_end, new_end) =
+                        (edit.old_index + edit.old_len, edit.new_index + edit.new_len);
+                    open = Some(match open {
+                        None => (edit.old_index, old_end, edit.new_index, new_end),
+                        Some((os, oe, ts, te)) => (os, oe.max(old_end), ts, te.max(new_end)),
+                    });
+                } else if let Some(group) = open.take() {
+                    groups.push(group);
+                }
+            }
+            groups.extend(open);
+            let mut at = 0usize;
+            for (os, oe, ts, te) in groups {
+                if os > at {
+                    segs.push(Seg::Common(ours[at..os].to_vec()));
+                }
+                segs.push(Seg::Conflict {
+                    ours: (our_start + os, our_start + oe),
+                    theirs: (their_start + ts, their_start + te),
+                    base,
+                });
+                at = oe;
+            }
+            if at < ours.len() {
+                segs.push(Seg::Common(ours[at..].to_vec()));
+            }
+        }
+        cursor = cluster.base_end;
+    }
+    if cursor < base_lines.len() {
+        segs.push(Seg::Common(base_lines[cursor..].to_vec()));
+    }
+
+    // Neighbouring common stretches are one stretch.
+    let mut merged: Vec<Seg<'_>> = Vec::with_capacity(segs.len());
+    for seg in segs {
+        match (merged.last_mut(), seg) {
+            (Some(Seg::Common(last)), Seg::Common(more)) => last.extend(more),
+            (_, seg) => merged.push(seg),
+        }
+    }
+    // Join two conflicts that at most three common lines separate.
+    let mut joined: Vec<Seg<'_>> = Vec::with_capacity(merged.len());
+    let mut i = 0;
+    while i < merged.len() {
+        let Seg::Conflict {
+            mut ours,
+            mut theirs,
+            mut base,
+        } = merged[i].clone()
+        else {
+            joined.push(merged[i].clone());
+            i += 1;
+            continue;
+        };
+        let mut next = i + 1;
+        while next + 1 < merged.len()
+            && matches!(&merged[next], Seg::Common(lines) if lines.len() <= 3)
+            && let Seg::Conflict {
+                ours: o,
+                theirs: t,
+                base: b,
+            } = &merged[next + 1]
+        {
+            ours.1 = o.1;
+            theirs.1 = t.1;
+            base = (base.0.min(b.0), base.1.max(b.1));
+            next += 2;
+        }
+        joined.push(Seg::Conflict { ours, theirs, base });
+        i = next;
+    }
+
+    let mut out: Vec<u8> = Vec::new();
+    let mut hunks: Vec<ConflictHunk> = Vec::new();
+    for seg in &joined {
+        match seg {
+            Seg::Common(lines) | Seg::Clean(lines) => {
+                for line in lines {
+                    out.extend_from_slice(line);
+                }
+            }
+            Seg::Conflict { ours, theirs, base } => {
+                emit_conflict(
+                    &mut out,
+                    &base_lines[base.0..base.1],
+                    &our_lines[ours.0..ours.1],
+                    &their_lines[theirs.0..theirs.1],
+                    labels,
+                    markers,
+                    ConflictStyle::Merge,
+                );
+                hunks.push(ConflictHunk {
+                    ours_start: ours.0,
+                    ours_len: ours.1 - ours.0,
+                    theirs_start: theirs.0,
+                    theirs_len: theirs.1 - theirs.0,
+                    base_start: base.0,
+                    base_len: base.1 - base.0,
+                });
+            }
+        }
+    }
+    ContentMerge {
+        data: BString::from(out),
+        conflict: !hunks.is_empty(),
+        hunks,
+    }
 }
 
 /// Which side a change region came from.

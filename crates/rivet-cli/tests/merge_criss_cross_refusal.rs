@@ -1,8 +1,9 @@
-//! A merge whose several merge bases conflict with each other *other than in file content* (here
-//! modify/delete) is refused by name: the virtual base has no rendering for that conflict here, and
-//! taking one base would commit a tree git does not. (When the bases merge cleanly the merge works,
+//! A merge whose several merge bases conflict with each other in a way the virtual base cannot
+//! render (here distinct types: an executable file against a symlink) is refused by name: taking
+//! one base would commit a tree git does not. (When the bases merge cleanly the merge works,
 //! `s_merge_criss_cross`; when they conflict in content, the virtual base keeps the markers like
-//! git's, `s_merge_criss_cross_markers`.)
+//! git's, `s_merge_criss_cross_markers`; modify/delete and binary conflicts keep the base's version,
+//! `s_merge_criss_cross_nontext`.)
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -45,9 +46,15 @@ fn merge_with_two_bases_is_refused() {
     git(&dir, &["init", "-q", "-b", "main"]);
     commit(&dir, "f", "a\n", "base");
     git(&dir, &["checkout", "-q", "-b", "x", "main"]);
-    commit(&dir, "f", "x\n", "x1");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.join("f"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    git(&dir, &["commit", "-qam", "x1"]);
     git(&dir, &["checkout", "-q", "-b", "y", "main"]);
     git(&dir, &["rm", "-q", "f"]);
+    std::os::unix::fs::symlink("a", dir.join("f")).unwrap();
+    git(&dir, &["add", "f"]);
     git(&dir, &["commit", "-qm", "y1"]);
     let x1 = git(&dir, &["rev-parse", "x"]);
     let y1 = git(&dir, &["rev-parse", "y"]);

@@ -259,6 +259,11 @@ pub(crate) fn merge_trees_in(
                             tree_entries.push((path, mode, oid));
                         }
                         ContentOutcome::Binary => {
+                            // With no base to keep, the virtual base gets the empty file.
+                            if level.depth > 0 {
+                                let empty = odb.write(&crate::object::Object::Blob(Vec::new()))?;
+                                tree_entries.push((path.clone(), (our.0).max(their.0), empty));
+                            }
                             result.paths.push(PathMerge {
                                 path: path.clone(),
                                 result: Some(our.1),
@@ -306,6 +311,11 @@ pub(crate) fn merge_trees_in(
                         kind: None,
                     });
                 } else {
+                    // A virtual base keeps the base's version of a path one side deleted and the
+                    // other changed.
+                    if level.depth > 0 {
+                        tree_entries.push((path.clone(), base_entry.0, base_entry.1));
+                    }
                     result.paths.push(PathMerge {
                         path: path.clone(),
                         result: Some(our.1),
@@ -330,6 +340,9 @@ pub(crate) fn merge_trees_in(
                         kind: None,
                     });
                 } else {
+                    if level.depth > 0 {
+                        tree_entries.push((path.clone(), base_entry.0, base_entry.1));
+                    }
                     result.paths.push(PathMerge {
                         path: path.clone(),
                         result: None,
@@ -425,6 +438,10 @@ pub(crate) fn merge_trees_in(
                             tree_entries.push((path, mode, oid));
                         }
                         ContentOutcome::Binary => {
+                            // A virtual base cannot hold either binary: it keeps the base's.
+                            if level.depth > 0 {
+                                tree_entries.push((path.clone(), mode, base_entry.1));
+                            }
                             result.paths.push(PathMerge {
                                 path: path.clone(),
                                 result: Some(our.1),
@@ -467,13 +484,18 @@ pub(crate) fn merge_trees_in(
     }
 
     result.clean = result.conflicts.is_empty();
-    // A virtual base keeps its content conflicts as marker text; any other kind of conflict has
-    // no such rendering here, so no tree is built and the caller refuses.
+    // A virtual base keeps its content conflicts as marker text and, for a binary or a
+    // modify/delete conflict, the base's version; any other kind of conflict has no such
+    // rendering here, so no tree is built and the caller refuses.
     let virtual_tree = level.depth > 0
         && result.conflicts.iter().all(|c| {
             matches!(
                 c.kind,
-                crate::merge::ConflictKind::Content | crate::merge::ConflictKind::AddAdd
+                crate::merge::ConflictKind::Content
+                    | crate::merge::ConflictKind::AddAdd
+                    | crate::merge::ConflictKind::Binary
+                    | crate::merge::ConflictKind::ModifyDelete
+                    | crate::merge::ConflictKind::DeleteModify
             )
         });
     if result.clean || virtual_tree {
@@ -815,7 +837,7 @@ pub fn write_merged_worktree(
     result: &crate::merge::TreeMerge,
     options: &MergeOptions,
 ) -> Result<()> {
-    use crate::merge::{ConflictKind, merge_content};
+    use crate::merge::ConflictKind;
 
     worktree.require_root("merge")?;
 
@@ -869,7 +891,7 @@ pub fn write_merged_worktree(
                     Some(oid) => read_blob(odb, oid)?,
                     None => Vec::new(),
                 };
-                let merged = merge_content(
+                let merged = crate::merge::content::merge_content_marked(
                     base.as_deref(),
                     &ours,
                     &theirs,
@@ -877,6 +899,10 @@ pub fn write_merged_worktree(
                         std::str::from_utf8(&options.labels.0).unwrap_or("ours"),
                         std::str::from_utf8(&options.labels.1).unwrap_or("theirs"),
                     ),
+                    &crate::merge::content::Markers {
+                        size: 7,
+                        base_label: std::str::from_utf8(&options.base_label).unwrap_or("base"),
+                    },
                     options.conflict_style,
                     options.diff_algorithm,
                 )?;

@@ -1864,7 +1864,15 @@ fn switch_to(
 
     let mut conflicted = false;
     if let Some((stash, base)) = autostash {
-        conflicted = super::stash::autostash_apply(repository, stash, base, label)?;
+        // `diff3` names the base after the branch being left, or its abbreviated id when detached.
+        let base_name = match old_head.branch() {
+            Some(branch) => branch.short_name().to_string(),
+            None => repository
+                .odb()
+                .abbreviate(&base, repository.odb().default_abbrev_len())
+                .unwrap_or_else(|_| base.to_string()),
+        };
+        conflicted = super::stash::autostash_apply(repository, stash, base, label, &base_name)?;
         if conflicted {
             eprintln!("Your local changes are stashed, however applying them");
             eprintln!("resulted in conflicts.  You can either resolve the conflicts");
@@ -2688,6 +2696,18 @@ pub(super) fn print_merge_report(
             | ConflictKind::AddAdd
             | ConflictKind::Mode
             | ConflictKind::Binary => {
+                if conflict.kind == ConflictKind::Binary {
+                    // The stash merge names its sides differently from every other merge.
+                    let ours = if label == "Stashed changes" {
+                        "Updated upstream"
+                    } else {
+                        "HEAD"
+                    };
+                    println!(
+                        "warning: Cannot merge binary files: {} ({ours} vs. {label})",
+                        conflict.path
+                    );
+                }
                 println!("Auto-merging {}", conflict.path);
                 let what = if conflict.kind == ConflictKind::AddAdd {
                     "add/add"
