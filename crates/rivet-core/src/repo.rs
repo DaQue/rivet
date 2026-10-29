@@ -1015,7 +1015,61 @@ impl Repository {
     ///
     /// [`crate::error::Error::LockHeld`] and [`crate::error::Error::IoAtPath`].
     pub fn write_index(&self) -> Result<()> {
-        self.index.write(&self.git_dir.join("index"), self.format)
+        use crate::index::SplitMode;
+        let path = self.git_dir.join("index");
+        let split = match self.config_flag("core.splitindex") {
+            Some(true) => SplitMode::Enable,
+            Some(false) => SplitMode::Disable,
+            None => SplitMode::Keep,
+        };
+        let max_percent = self
+            .config_value(bstr::BStr::new(b"splitindex.maxpercentchange"))
+            .ok()
+            .flatten()
+            .and_then(|v| crate::config::parse_int(bstr::BStr::new(&v[..])).ok())
+            .filter(|n| (0..=100).contains(n))
+            .map_or(20, |n| n as usize);
+        // A new index file starts at `index.version` (2 to 4), or v4 under `feature.manyFiles`;
+        // an existing one keeps the version it has.
+        if !path.exists()
+            && self.index.version() == crate::index::IndexVersion::V2
+            && let Some(version) = self.configured_index_version()
+        {
+            let mut index = self.index.clone();
+            index.set_version(version);
+            return index.write_with(&path, self.format, split, max_percent);
+        }
+        self.index
+            .write_with(&path, self.format, split, max_percent)
+    }
+
+    fn config_flag(&self, key: &str) -> Option<bool> {
+        self.config_value(bstr::BStr::new(key.as_bytes()))
+            .ok()
+            .flatten()
+            .and_then(|v| crate::config::parse_bool(bstr::BStr::new(&v[..])).ok())
+    }
+
+    fn configured_index_version(&self) -> Option<crate::index::IndexVersion> {
+        use bstr::BStr;
+        let value = self
+            .config_value(BStr::new(b"index.version"))
+            .ok()
+            .flatten();
+        if let Some(value) = value
+            && let Ok(n) = crate::config::parse_int(BStr::new(&value[..]))
+            && let Ok(version) = crate::index::IndexVersion::from_u32(n as u32)
+            && (2..=4).contains(&n)
+        {
+            return Some(version);
+        }
+        let many = self
+            .config_value(BStr::new(b"feature.manyfiles"))
+            .ok()
+            .flatten()
+            .and_then(|v| crate::config::parse_bool(BStr::new(&v[..])).ok())
+            .unwrap_or(false);
+        many.then_some(crate::index::IndexVersion::V4)
     }
 
     /// Phase 4 — the configuration.

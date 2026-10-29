@@ -42,7 +42,7 @@ use crate::cmd::{
     am, apply, archive, attr, bisect, blame, branching, bundle, cherry, clean, committree,
     difftree, format_patch, grep, history, hook, ignore, lsremote, maintenance, mktree, mv,
     namerev, notes, packrefs, plumbing, query, rebase, reflog, remote, rerere, sequencer, setup,
-    snapshot, sparse, stash, submodule, symbolicref, tag, updateref, worktree,
+    snapshot, sparse, stash, submodule, symbolicref, tag, updateindex, updateref, worktree,
 };
 
 /// The `rivet` command line.
@@ -356,6 +356,10 @@ pub enum Commands {
     /// Reuse recorded resolution of conflicted merges.
     #[command(name = "rerere", disable_help_flag = true)]
     Rerere(rerere::RerereArgs),
+
+    /// Register file contents in the working tree to the index (index-format options only).
+    #[command(name = "update-index", disable_help_flag = true)]
+    UpdateIndex(updateindex::UpdateIndexArgs),
 }
 
 /// The object format a repository is created with, or expects.

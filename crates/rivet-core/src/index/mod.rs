@@ -73,10 +73,13 @@
 //!   [`crate::error::Error::BadIndexChecksum`] and the index must then be treated as unusable
 //!   rather than partially trusted — a concurrent `git add` mid-write is the common cause, and
 //!   reading through it produces a mix of two states.
-//! * **v4 is read, never written.** v4 prefix-compresses paths (removing the common prefix with
+//! * **v4 is read and written.** v4 prefix-compresses paths (removing the common prefix with
 //!   the previous entry) and drops the padding, so [`Index::load`] decodes each path against the
-//!   one before it. Rivet writes v2 or v3 back, which Git reads. The split index (`link`) and the
-//!   sparse index (`sdir`) are refused by name with [`crate::error::Error::NotImplemented`].
+//!   one before it and a v4 index stays v4 when Rivet writes it. The split index (`link`) is read
+//!   by [`Index::load`] (merged with its `sharedindex.<hash>`) and written by
+//!   [`Index::write_with`]; [`Index::parse`], which has no directory to find the shared file in,
+//!   refuses it. The sparse index (`sdir`) is refused by name with
+//!   [`crate::error::Error::NotImplemented`].
 //! * **The stat data is a cache, not truth.** An entry's cached mtime and size are a *hint* that
 //!   the work tree file has not changed. Git's racy-git rule exists because the hint is unsound on
 //!   its own: if a file's mtime is not strictly older than the index's own mtime, the file may have
@@ -94,6 +97,8 @@ use bstr::{BStr, BString};
 use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{EntryMode, ObjectKind, hash_object};
+
+mod split;
 
 /// The largest path length the 12-bit name-length field can express, and therefore the longest
 /// path `parse` and `to_bytes` accept. Longer names are refused rather than truncated: a saturated
@@ -140,12 +145,27 @@ fn read_v4_varint(data: &[u8]) -> Result<(usize, usize)> {
     Ok((value, used))
 }
 
+/// Git's `encode_varint`: the offset encoding [`read_v4_varint`] reads.
+fn write_v4_varint(out: &mut Vec<u8>, mut value: usize) {
+    let mut bytes = [0u8; 10];
+    let mut at = bytes.len() - 1;
+    bytes[at] = (value & 0x7f) as u8;
+    value >>= 7;
+    while value != 0 {
+        value -= 1;
+        at -= 1;
+        bytes[at] = 0x80 | (value & 0x7f) as u8;
+        value >>= 7;
+    }
+    out.extend_from_slice(&bytes[at..]);
+}
+
 /// Refuse the `sdir` extension, which marks a sparse index.
 ///
 /// Optional by its lowercase signature, but dropping it is not safe: the file then holds directory
 /// entries (040000) standing for whole subtrees, and treating those as files reports every path
 /// under them as deleted.
-fn refuse_sparse_index(signature: [u8; 4]) -> Result<()> {
+fn refuse_sparse_index(signature: [u8; 4], allow_link: bool) -> Result<()> {
     if signature == *b"sdir" {
         return Err(Error::NotImplemented {
             what: "a sparse index (the `sdir` extension)",
@@ -153,7 +173,7 @@ fn refuse_sparse_index(signature: [u8; 4]) -> Result<()> {
     }
     // A split index keeps most entries in `sharedindex.<hash>` and lists only the changes here;
     // reading this file alone yields a handful of entries with empty names.
-    if signature == *b"link" {
+    if signature == *b"link" && !allow_link {
         return Err(Error::NotImplemented {
             what: "a split index (the `link` extension)",
         });
@@ -178,9 +198,9 @@ pub const DIRC_MAGIC: &[u8; 4] = b"DIRC";
 /// # Caveats
 ///
 /// Three. v2 is what every Git writes by default and what Rivet writes; v3 exists only to carry the
-/// extended flags word, and a repository with it is readable. **v4 is read but never written**: it
+/// extended flags word, and a repository with it is readable. **v4 is read and written**: it
 /// prefix-compresses paths and removes entry padding, which [`Index::load`] decodes entry by entry.
-/// The split index is refused by name when its `link` extension is met.
+/// The split index is merged with its shared index by [`Index::load`]; [`Index::parse`] refuses it.
 pub const MAX_INDEX_VERSION: u32 = 3;
 
 /// Phase 3 — which DIRC revision an index file is.
@@ -197,11 +217,11 @@ pub const MAX_INDEX_VERSION: u32 = 3;
 ///   *not* a byte-order mark: each stat field is separately big-endian and they are not packed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum IndexVersion {
-    /// Version 2 — the default since Git 1.6. Rivet's writer always emits this when it can.
+    /// Version 2 — the default since Git 1.6. Rivet's writer emits this unless the index is v4 or needs v3.
     V2,
     /// Version 3 — v2 plus a second flags word carrying `skip-worktree` and extended mode bits.
     V3,
-    /// Version 4 — prefix-compressed paths, no entry padding. Rivet reads it and writes v2 or v3.
+    /// Version 4 — prefix-compressed paths, no entry padding. Rivet reads and writes it.
     V4,
 }
 
@@ -833,6 +853,17 @@ impl IndexEntry {
     /// [`crate::error::Error::CorruptIndex`] for a path containing a NUL, and
     /// [`crate::error::Error::IndexEntryTooLong`] for a path past the format's limit.
     pub fn to_bytes(&self, format: ObjectFormat, version: IndexVersion) -> Result<Vec<u8>> {
+        self.to_bytes_after(format, version, b"")
+    }
+
+    /// [`IndexEntry::to_bytes`] for an entry that follows `previous` in the file; only v4 looks at
+    /// `previous` (its path is stored as a strip count plus suffix, and the entry is not padded).
+    fn to_bytes_after(
+        &self,
+        format: ObjectFormat,
+        version: IndexVersion,
+        previous: &[u8],
+    ) -> Result<Vec<u8>> {
         if self.path.contains(&0) {
             return Err(Error::CorruptIndex {
                 offset: 0,
@@ -845,7 +876,7 @@ impl IndexEntry {
             });
         }
         let ext_word = self.flags.is_extended();
-        if ext_word && !version.has_extended_flags() {
+        if ext_word && !version.has_extended_flags() && version != IndexVersion::V4 {
             return Err(Error::CorruptIndex {
                 offset: 0,
                 reason: "extended flags word in a version that does not carry one",
@@ -872,6 +903,17 @@ impl IndexEntry {
         out.extend_from_slice(&flags.bits().to_be_bytes());
         if ext_word {
             out.extend_from_slice(&self.extended_flags.to_be_bytes());
+        }
+        if version == IndexVersion::V4 {
+            let common = previous
+                .iter()
+                .zip(self.path.iter())
+                .take_while(|(a, b)| a == b)
+                .count();
+            write_v4_varint(&mut out, previous.len() - common);
+            out.extend_from_slice(&self.path[common..]);
+            out.push(0);
+            return Ok(out);
         }
         out.extend_from_slice(&self.path);
         out.push(0);
@@ -1205,7 +1247,7 @@ impl Index {
                     reason: "truncated extension data",
                 });
             }
-            refuse_sparse_index(sig)?;
+            refuse_sparse_index(sig, true)?;
             let ext_data = data[offset..offset + ext_len].to_vec();
             offset += ext_len;
             extensions.push(IndexExtension::new(sig, ext_data));
@@ -1223,11 +1265,12 @@ impl Index {
                 actual: actual_checksum,
             });
         }
-        Ok(Self {
+        let index = Self {
             version,
             entries,
             extensions,
-        })
+        };
+        index.resolve_split(path, format)
     }
 
     /// Phase 3 — parse and verify index bytes.
@@ -1300,7 +1343,7 @@ impl Index {
                     reason: "extension extends past end",
                 });
             }
-            refuse_sparse_index(sig)?;
+            refuse_sparse_index(sig, false)?;
             let ext_data = data[offset..offset + ext_len].to_vec();
             extensions.push(IndexExtension::new(sig, ext_data));
             offset += ext_len;
@@ -1341,23 +1384,42 @@ impl Index {
     ///   the caller's bug and, worse, would silently change which of two conflicting entries is
     ///   found first — [`Index::sort`] is the explicit operation.
     pub fn to_bytes(&self, format: ObjectFormat) -> Vec<u8> {
+        let extensions: Vec<&IndexExtension> = self
+            .extensions
+            .iter()
+            .filter(|e| !e.is_split_index_link())
+            .collect();
+        self.serialize(&self.entries, &extensions, format)
+    }
+
+    /// The file for `entries` and `extensions` at this index's version.
+    fn serialize(
+        &self,
+        entries: &[IndexEntry],
+        extensions: &[&IndexExtension],
+        format: ObjectFormat,
+    ) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(b"DIRC");
-        let version = if self.entries.iter().any(|e| e.flags.is_extended()) {
+        let version = if self.version == IndexVersion::V4 {
+            IndexVersion::V4
+        } else if entries.iter().any(|e| e.flags.is_extended()) {
             IndexVersion::V3
         } else {
             IndexVersion::V2
         };
         // Git's index header is big-endian, like every other on-disk integer Git writes.
         out.extend_from_slice(&version.as_u32().to_be_bytes());
-        out.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
-        for entry in &self.entries {
+        out.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+        let mut previous: &[u8] = b"";
+        for entry in entries {
             let bytes = entry
-                .to_bytes(format, version)
+                .to_bytes_after(format, version, previous)
                 .expect("entry serialization failed");
             out.extend_from_slice(&bytes);
+            previous = &entry.path;
         }
-        for ext in &self.extensions {
+        for ext in extensions {
             out.extend_from_slice(&ext.signature);
             // A cached extension is a signature, a big-endian byte count, then the bytes; writing
             // the payload without its length produces a file whose next read walks into the data.
@@ -1369,6 +1431,139 @@ impl Index {
         let checksum = hasher.finish().expect("hash computation failed");
         out.extend_from_slice(checksum.as_bytes());
         out
+    }
+
+    /// The bytes of the main index file under `mode`, plus a shared index to write beside it:
+    /// `None` for a plain index, `Some((name, bytes))` when a new `sharedindex.<hash>` is needed.
+    fn split_bytes(
+        &self,
+        dir: &Path,
+        format: ObjectFormat,
+        mode: SplitMode,
+        max_percent: usize,
+    ) -> (Vec<u8>, Option<(String, Vec<u8>)>) {
+        let link = self.extensions.iter().find(|e| e.is_split_index_link());
+        let want = match mode {
+            SplitMode::Enable => true,
+            SplitMode::Disable => false,
+            SplitMode::Keep => link.is_some(),
+        };
+        if !want {
+            return (self.to_bytes(format), None);
+        }
+        let others: Vec<&IndexExtension> = self
+            .extensions
+            .iter()
+            .filter(|e| !e.is_split_index_link())
+            .collect();
+        // The delta against the current shared index, when there is one worth keeping.
+        if let Some(link) = link
+            && let Ok(parsed) = split::parse_link(format, &link.data)
+            && let Some(base) = read_shared(dir, format, &parsed.shared)
+        {
+            let key = |e: &IndexEntry| (e.path.clone(), e.stage());
+            let mut positions = std::collections::HashMap::new();
+            for (i, e) in base.iter().enumerate() {
+                positions.insert(key(e), i);
+            }
+            let mut seen = vec![false; base.len()];
+            let (mut replaced, mut replacements, mut added) = (Vec::new(), Vec::new(), Vec::new());
+            for e in &self.entries {
+                match positions.get(&key(e)) {
+                    Some(&i) => {
+                        seen[i] = true;
+                        if !same_entry(e, &base[i]) {
+                            replaced.push(i);
+                            replacements.push((i, e.clone()));
+                        }
+                    }
+                    None => added.push(e.clone()),
+                }
+            }
+            let deleted: Vec<usize> = (0..base.len()).filter(|&i| !seen[i]).collect();
+            // Like git, only entries the shared index lacks count as "not shared": a replaced
+            // entry still belongs to its shared slot.
+            let changed = added.len();
+            if changed * 100 <= self.entries.len() * max_percent {
+                replacements.sort_by_key(|(i, _)| *i);
+                let mut main: Vec<IndexEntry> = replacements
+                    .into_iter()
+                    .map(|(_, mut e)| {
+                        e.path = BString::default();
+                        e
+                    })
+                    .collect();
+                main.extend(added);
+                let mut data = split::link_bytes(&parsed.shared, &deleted, &replaced);
+                data.shrink_to_fit();
+                let link = IndexExtension::new(*b"link", data);
+                let mut exts: Vec<&IndexExtension> = vec![&link];
+                exts.extend(others);
+                return (self.serialize(&main, &exts, format), None);
+            }
+        }
+        // A new shared index holding everything; the main file keeps only the other extensions.
+        let shared_bytes = self.serialize(&self.entries, &[], format);
+        let trailer = &shared_bytes[shared_bytes.len() - format.len()..];
+        let shared = ObjectId::from_bytes(format, trailer).expect("trailer is an object id");
+        let link = IndexExtension::new(*b"link", split::link_bytes(&shared, &[], &[]));
+        let mut exts: Vec<&IndexExtension> = vec![&link];
+        exts.extend(others);
+        (
+            self.serialize(&[], &exts, format),
+            Some((split::shared_name(&shared), shared_bytes)),
+        )
+    }
+
+    /// Merge the shared index named by a `link` extension into the entries read from the main file.
+    fn resolve_split(mut self, path: &Path, format: ObjectFormat) -> Result<Self> {
+        let Some(link) = self.extensions.iter().find(|e| e.is_split_index_link()) else {
+            return Ok(self);
+        };
+        let parsed = split::parse_link(format, &link.data)?;
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let shared_path = dir.join(split::shared_name(&parsed.shared));
+        let bytes = std::fs::read(&shared_path).map_err(|e| Error::IoAtPath {
+            path: BString::from(shared_path.to_string_lossy().as_bytes()),
+            source: e,
+        })?;
+        let shared = Index::parse(format, &bytes)?;
+        let mut merged = shared.entries;
+        let main = std::mem::take(&mut self.entries);
+        let replacements = parsed.replaced.len();
+        if main.len() < replacements {
+            return Err(Error::CorruptIndex {
+                offset: 0,
+                reason: "split index replaces more entries than it holds",
+            });
+        }
+        let mut main = main.into_iter();
+        for &position in &parsed.replaced {
+            let (Some(mut entry), Some(base)) = (main.next(), merged.get(position)) else {
+                return Err(Error::CorruptIndex {
+                    offset: 0,
+                    reason: "split index replaces an entry the shared index lacks",
+                });
+            };
+            entry.path = base.path.clone();
+            entry.flags = entry.flags.with_name_length(entry.path.len());
+            merged[position] = entry;
+        }
+        let mut drop = vec![false; merged.len()];
+        for &position in &parsed.deleted {
+            if let Some(slot) = drop.get_mut(position) {
+                *slot = true;
+            }
+        }
+        let mut entries: Vec<IndexEntry> = merged
+            .into_iter()
+            .zip(drop)
+            .filter_map(|(e, gone)| (!gone).then_some(e))
+            .collect();
+        entries.extend(main);
+        entries.sort_by(compare_entries);
+        self.entries = entries;
+        Ok(self)
     }
 
     /// Phase 3 — write to `path` atomically, via `path.lock`.
@@ -1390,13 +1585,41 @@ impl Index {
     /// [`crate::error::Error::LockHeld`] if `index.lock` exists, and
     /// [`crate::error::Error::IoAtPath`] if the write or rename fails.
     pub fn write(&self, path: &Path, format: ObjectFormat) -> Result<()> {
+        self.write_with(path, format, SplitMode::Keep, 20)
+    }
+
+    /// [`Index::write`] with an explicit split-index request: `Enable` writes a split index
+    /// (a new `sharedindex.<hash>` when there is none worth keeping), `Disable` writes a plain
+    /// one, `Keep` leaves a split index split and a plain one plain. `max_percent` is
+    /// `splitIndex.maxPercentChange`: past that share of changed entries the shared index is
+    /// rewritten.
+    pub fn write_with(
+        &self,
+        path: &Path,
+        format: ObjectFormat,
+        mode: SplitMode,
+        max_percent: usize,
+    ) -> Result<()> {
         let lock_path = path.with_file_name("index.lock");
         if lock_path.exists() {
             return Err(Error::LockHeld {
                 path: BString::from(path.to_string_lossy().as_bytes()),
             });
         }
-        let bytes = self.to_bytes(format);
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let (bytes, shared) = self.split_bytes(dir, format, mode, max_percent);
+        if let Some((name, data)) = shared {
+            let shared_path = dir.join(&name);
+            if !shared_path.exists() {
+                let tmp = dir.join(format!("{name}.tmp"));
+                std::fs::write(&tmp, &data)
+                    .and_then(|()| std::fs::rename(&tmp, &shared_path))
+                    .map_err(|e| Error::IoAtPath {
+                        path: BString::from(shared_path.to_string_lossy().as_bytes()),
+                        source: e,
+                    })?;
+            }
+        }
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("index");
         let tmp_path = path.with_file_name(format!("{}.tmp", file_name));
         let result = std::fs::write(&tmp_path, &bytes);
@@ -1422,6 +1645,12 @@ impl Index {
     /// Phase 3 — the index version this was read as.
     pub fn version(&self) -> IndexVersion {
         self.version
+    }
+
+    /// Choose the version the next write uses: `V4` is kept as asked, `V2`/`V3` are settled by
+    /// whether any entry needs the extended flags word.
+    pub fn set_version(&mut self, version: IndexVersion) {
+        self.version = version;
     }
 
     /// Phase 3 — the entries, in file order.
@@ -1872,6 +2101,32 @@ impl IndexExt for Index {
     }
 }
 
+/// What a write should do about the split index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitMode {
+    /// Keep the index as it is: split stays split, plain stays plain.
+    Keep,
+    /// Write a split index (`core.splitIndex=true`, `update-index --split-index`).
+    Enable,
+    /// Write a plain index (`core.splitIndex=false`, `update-index --no-split-index`).
+    Disable,
+}
+
+/// The entries of the shared index `shared` in `dir`, if it can be read.
+fn read_shared(dir: &Path, format: ObjectFormat, shared: &ObjectId) -> Option<Vec<IndexEntry>> {
+    let bytes = std::fs::read(dir.join(split::shared_name(shared))).ok()?;
+    Index::parse(format, &bytes).ok().map(|i| i.entries)
+}
+
+/// Whether two entries are the same record, ignoring the stored name-length hint.
+fn same_entry(a: &IndexEntry, b: &IndexEntry) -> bool {
+    let mut a = a.clone();
+    let mut b = b.clone();
+    a.flags = a.flags.with_name_length(a.path.len());
+    b.flags = b.flags.with_name_length(b.path.len());
+    a == b
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2136,7 +2391,8 @@ mod tests {
             entries: vec![blob_entry("abcd")],
             extensions: vec![IndexExtension::new(*b"link", vec![0; 20])],
         };
-        let bytes = index.to_bytes(ObjectFormat::Sha1);
+        let link = &index.extensions[0];
+        let bytes = index.serialize(&index.entries, &[link], ObjectFormat::Sha1);
         let err = Index::parse(ObjectFormat::Sha1, &bytes).unwrap_err();
         assert!(matches!(err, Error::NotImplemented { what } if what.contains("split index")));
 
@@ -2144,9 +2400,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("index");
         std::fs::write(&path, &bytes).unwrap();
+        // `load` reads the split index, so a missing shared file is an I/O error, not a refusal.
         let err = Index::load(&path, ObjectFormat::Sha1).unwrap_err();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert!(matches!(err, Error::NotImplemented { what } if what.contains("split index")));
+        assert!(matches!(err, Error::IoAtPath { .. }));
     }
 
     /// A v4 file as git writes it: each path is the number of bytes to drop from the previous path

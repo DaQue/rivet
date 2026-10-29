@@ -11305,6 +11305,129 @@ s_blame_rename_merge() {
     v blame -s moved.txt
 }
 
+# The index header's version byte, into the transcript.
+iver() { echo "index version: $(od -An -tu1 -j7 -N1 "$(g rev-parse --git-dir)/index" 2>&1 | tr -d ' ')" >>"$TRANSCRIPT"; }
+# Move the index file aside so the next write starts a new one.
+noindex() { mv "$(g rev-parse --git-dir)/index" "$(g rev-parse --git-dir)/index.old"; }
+
+s_index_version() {
+    v init -q repo; cd repo
+    mkdir -p d/e d/ee d/f
+    for n in aaa aab aac abc b; do echo "$n" >d/e/$n; done
+    echo x >d/ee/long_shared_prefix_name_one; echo y >d/ee/long_shared_prefix_name_two
+    echo z >d/f/g; echo top >top
+    # a new index starts at index.version, an existing one keeps its version
+    v add d/e/aaa; iver
+    v config index.version 4
+    v add d; iver
+    v ls-files -s; v status --short
+    echo more >>d/e/aab; v add d/e/aab; iver
+    v config --unset index.version
+    echo more >>d/e/aac; v add -u; iver
+    v ls-files -s
+    tick; v commit -q -m one; iver
+    v ls-files -s; v status --short
+    echo new >newfile; v add newfile; tick; v commit -q -m two
+    # conflicts in a v4 index
+    v checkout -q -b side; echo s >top; v add top; tick; v commit -q -m side
+    v checkout -q main; echo m >top; v add top; tick; v commit -q -m main
+    v merge side; iver
+    v ls-files -s -u; v status --short
+    echo r >top; v add top; tick; v commit -q -m merged; iver
+    v ls-files -s
+    v reset -q --hard HEAD~1; iver
+    v checkout -q side; iver; v ls-files -s
+    v rm -q d/e/aaa; iver; v mv top moved; iver; v ls-files -s
+    # fresh indexes
+    v checkout -q -f main
+    noindex; v add .; iver
+    v config index.version 3
+    noindex; v add .; iver
+    v config index.version 2
+    noindex; v add .; iver
+    v config index.version 4
+    noindex; v add .; iver
+    v config --unset index.version
+    v config feature.manyFiles true
+    noindex; v add .; iver
+    v config index.version 2
+    noindex; v add .; iver
+    v ls-files -s | head -3
+    v write-tree
+}
+
+# How many shared index files the repository holds, into the transcript.
+nshared() { echo "sharedindex files: $(ls "$(g rev-parse --git-dir)" | grep -c '^sharedindex\.')" >>"$TRANSCRIPT"; }
+# Whether the index file carries a link extension (it is split), into the transcript.
+issplit() { echo "split: $(grep -c link "$(g rev-parse --git-dir)/index")" >>"$TRANSCRIPT"; }
+
+s_split_index() {
+    v init -q repo; cd repo
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo "file $i" >f$i; done
+    mkdir sub; echo s1 >sub/a; echo s2 >sub/b
+    # rivet creates the split index itself
+    v config core.splitIndex true
+    v add f1 f2 f3 f4 f5 f6 sub; issplit; nshared
+    v ls-files -s; v status --short
+    # replace, add and delete entries on top of the shared index
+    echo more >>f1; v add f1; issplit; nshared
+    v add f7; v rm -q --cached f2; v add sub/a; issplit; nshared
+    vg ls-files -s; vg status --short; vg fsck --strict --no-dangling
+    tick; v commit -q -m one; issplit; nshared
+    v ls-files -s; v status --short
+    v ls-files -s -- sub
+    # real git wrote this split index; rivet reads it, updates it and keeps it split
+    g update-index --split-index
+    g add f8; echo changed >f3; g add f3; g rm -q --cached f4
+    issplit; nshared
+    v ls-files -s; v status --short
+    v add f9; v rm -q --cached f5; echo again >>f8; v add f8; issplit
+    vg ls-files -s; vg status --short; vg fsck --strict --no-dangling
+    tick; v commit -q -m two
+    v ls-files -s; v status --short
+    # a conflict inside a split index
+    v checkout -q -b side; echo s >f1; v add f1; tick; v commit -q -m side
+    v checkout -q main; echo m >f1; v add f1; tick; v commit -q -m main2
+    v merge side; issplit
+    v ls-files -s -u; v status --short
+    vg ls-files -s -u; vg status --short
+    echo r >f1; v add f1; tick; v commit -q -m merged; issplit
+    v ls-files -s
+    # too many changes rewrite the shared index
+    v config splitIndex.maxPercentChange 0
+    echo z >>f9; v add f9; issplit; nshared
+    vg ls-files -s
+    v config --unset splitIndex.maxPercentChange
+    # the config turns splitting off again and the index becomes a plain one
+    v config core.splitIndex false
+    echo y >>f9; v add f9; issplit
+    v ls-files -s; v status --short
+    vg fsck --strict --no-dangling
+    # update-index: the format options
+    v update-index --show-index-version
+    v update-index --index-version 4; iver; v update-index --show-index-version
+    v update-index --index-version 2; iver; v update-index --show-index-version
+    v update-index --index-version 5
+    v update-index --index-version x
+    v update-index --index-version
+    v update-index --index-version=3 --show-index-version; iver
+    v update-index --split-index; issplit
+    v update-index --split-index; issplit
+    v ls-files -s
+    v config core.splitIndex true
+    v update-index --no-split-index; issplit
+    v config core.splitIndex false
+    v update-index --split-index; issplit
+    v config --unset core.splitIndex
+    v update-index --split-index --no-split-index; issplit
+    v update-index --no-split-index; issplit
+    v update-index
+    v update-index --bogus
+    v update-index -h
+    v ls-files -s; vg fsck --strict --no-dangling
+    v write-tree
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

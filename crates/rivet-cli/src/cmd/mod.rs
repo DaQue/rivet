@@ -75,6 +75,7 @@ pub mod stash;
 pub mod submodule;
 pub mod symbolicref;
 pub mod tag;
+pub mod updateindex;
 pub mod updateref;
 pub mod worktree;
 
@@ -183,6 +184,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::MkTree(args) => mktree::run_mktree(&global, &args),
         Commands::NameRev(args) => namerev::run_name_rev(&global, &args),
         Commands::Rerere(args) => rerere::run_rerere(&global, &args),
+        Commands::UpdateIndex(args) => updateindex::run_update_index(&global, &args),
     }
 }
 

@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 336 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 338 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-29, gate: 301 tests / 0 failed, 336 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-29, gate: 305 tests / 0 failed, 338 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -15,7 +15,7 @@ only the first two are defects.
 
 The command or subsystem is absent; it either fails at the argument parser or refuses by name.
 
-* **Split index** — an index carrying the `link` extension (`core.splitIndex=true`, `git update-index --split-index`) is refused by name (`a split index (the `link` extension) is not implemented yet`, exit 128); `sharedindex.*` is never read. Index v4 (`index.version=4`, `feature.manyFiles`) is read, but rivet writes v2/v3 back, so `index.version` is not preserved by a rivet write.
+* **Split index** — read (`link` extension merged with `sharedindex.<hash>`, deletions, replacements, additions) and written (`core.splitIndex`, `splitIndex.maxPercentChange`, `update-index --[no-]split-index`; `s_split_index`, which has git read what rivet wrote and the reverse). Not done: `splitIndex.sharedIndexExpire` and cleaning up old `sharedindex.*` files, and rivet's choice of when to write a new shared index is a simplification of git's (additions only, against `maxPercentChange`). Index v4 is read and written, and `index.version` (2 to 4) / `feature.manyFiles` pick the version of a new index (`s_index_version`); git's `index.version` warning for an out-of-range value and its fatal for a non-numeric one are not reproduced.
 * **Partial clone** — promisor/partial clones are not implemented: no filtered transfer, no lazy
   fetch of missing objects. `clone --filter=blob:none|tree:<n>|blob:limit=<n>[kmg]` is accepted only
   where git itself ignores the filter (a local path, or a `file://` URL whose repository does not set
@@ -211,6 +211,7 @@ The command works for the common case; the listed options or edge cases are miss
 * **`mktree`** — a mode with a sign or wider than 32 bits is refused by name (`mktree: a negative mode is not implemented`, `mktree: a mode wider than 32 bits is not implemented`, exit 128; `mktree_refusals.rs`), because git's `strtoul` reading of such a mode wraps. Leading whitespace and `+` before a mode are accepted, as in git. 
 * **`rerere`** — `status`, `remaining`, `diff`, `gc`, `clear`, `forget` and the hook that `merge` (also `--squash`, `--continue`), `cherry-pick`, `revert`, `rebase` and `commit` run are byte-compatible with git's `rr-cache` and `MERGE_RR` (`s_rerere`, variants included). Not done: `forget` only sees paths that are still conflicted in the index — git also restores them from the resolve-undo (`REUC`) extension after `git add`, which rivet neither writes nor consults; the `conflict-marker-size` attribute and per-path `merge=` drivers are ignored (marker width 7, the built-in text merge); `am --3way`, `stash apply/pop` and `checkout -m` do not run rerere; `gc.rerereResolved`/`gc.rerereUnresolved` accept an integer number of days, `now` or `never` only, not git's date expressions.
 * **`blame -n`/`--show-number`** — the flag is not parsed (clap rejects it as an unknown argument, exit 2).
+* **`update-index`** — only `--index-version`, `--show-index-version` and `--[no-]split-index` exist. Every other option (`--refresh`, `--add`, `--remove`, `--cacheinfo`, `--assume-unchanged`, `--skip-worktree`, `--stdin`, `--index-info`, paths, …) is refused by name (`update-index: --<opt> is not implemented`, exit 128; `update_index_refusals.rs`). `add -N` writes an entry for the empty blob without the intent-to-add bit, so it never forces a v3 index as git does.
 
 ## 3. Deliberate divergences
 
