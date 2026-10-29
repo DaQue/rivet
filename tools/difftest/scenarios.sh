@@ -11821,6 +11821,150 @@ s_attributes_sparse() {
     v diff
 }
 
+# blame -n/--show-number, --since and -S <revs-file>.
+s_blame_flags() {
+    v init -q repo; cd repo
+    seq 1 12 | sed 's/^/line /' >f; v add f; tick; v commit -q -m c1
+    sed -i '3s/.*/changed three/' f; tick; v commit -q -a -m c2
+    sed -i '1i new top' f; tick; v commit -q -a -m c3
+    v checkout -q -b side
+    sed -i '8s/.*/side eight/' f; tick; v commit -q -a -m side1
+    v checkout -q main
+    sed -i '6s/.*/main six/' f; tick; v commit -q -a -m c4
+    tick; v merge -q --no-edit side >/dev/null
+    sed -i '$a tail' f; tick; v commit -q -a -m c5
+    git mv f g 2>/dev/null || v mv f g
+    tick; v commit -q -m rename
+    sed -i '2s/.*/second/' g; tick; v commit -q -a -m c6
+    v blame g
+    v blame -n g
+    v blame --show-number g
+    v blame -n -s g
+    v blame -n -l g
+    v blame -n -f g
+    v blame -n -f -s g
+    v blame -nfs g
+    v blame -n -e g
+    v blame -n -L 2,4 g
+    v blame -n -L 9,+3 g
+    v blame -n -p g
+    v blame -n --line-porcelain -L 1,2 g
+    v blame -n --incremental -L 1,3 g
+    v blame -n HEAD~1 g
+    v blame -n HEAD~2 f
+    v blame -n -w g
+    echo uncommitted >>g
+    v blame -n g
+    sed -i '$d' g
+    # --since: commits older than the date are boundaries
+    v blame --since=1700000130 g
+    v blame --since=1700000130 -n g
+    v blame --since=1700000130 -f -e g
+    v blame --since=1700000130 -p -L 1,6 g
+    v blame --since=1700000130 --incremental -L 1,6 g
+    v blame --since=1699999000 g
+    v blame --since=1800000000 g
+    v blame --since 1700000130 -s g
+    v blame --since=2023-11-14 g
+    v blame --since=garbage g
+    v blame --after=1700000130 -L 3,5 g
+    v blame --since=1700000250 HEAD~3 f
+    # -S: the graph comes from a file
+    g rev-list --parents HEAD >revs
+    v blame -S revs g
+    v blame -n -S revs g
+    c3=$(g rev-parse HEAD~6)
+    sed "s/^\($c3\) .*/\1/" revs >revs.cut
+    v blame -S revs.cut g
+    v blame -S revs.cut -n -f g
+    v blame -S revs.cut -p -L 2,3 g
+    printf '# comment\n\nnot a commit line\n%s\n' "$(sed -n 2p revs)" >revs.bad
+    v blame -S revs.bad g
+    v blame -S missing-file g
+    : >revs.empty
+    v blame -S revs.empty g
+    v blame -S revs.cut --since=1700000130 g
+}
+
+# blame -L :<funcname>, with git's default function-line rule and a configured diff driver.
+s_blame_funcname() {
+    v init -q repo; cd repo
+    cat >f.c <<'EOF'
+#include <stdio.h>
+
+int foo(int a) {
+    return a;
+}
+
+/* comment */
+
+int bar(void)
+{
+    int x = 1;
+
+    return x;
+}
+static void baz(void) { }
+int tail_noend(void)
+{
+    last
+EOF
+    cat >g.txt <<'EOF'
+alpha
+  indented one
+beta start
+  indented two
+== section ==
+gamma
+  indented three
+== other ==
+delta
+EOF
+    v add -A; tick; v commit -q -m one
+    sed -i 's/return a;/return a + 1;/;s/int x = 1;/int x = 2;/' f.c; tick; v commit -q -a -m two
+    sed -i '1i // top' f.c; tick; v commit -q -a -m three
+    for r in ':foo' ':bar' ':baz' ':tail' ':nomatch' ':^int' ':int' ':return' ':#include' ':.' ':foo,+2' ':b' ':ba.' ':\(foo\|bar\)' ':[[:alpha:]]*foo' ':static' '^:bar' '^:foo'; do
+        v blame -L "$r" f.c
+        v blame -n -s -L "$r" f.c
+    done
+    v blame -L :foo -L :bar f.c
+    v blame -L :bar -L :foo f.c
+    v blame -L :foo -L ^:foo f.c
+    v blame -L 1,2 -L :bar f.c
+    v blame -L :bar -L 1,2 f.c
+    v blame -L :foo -L :foo f.c
+    v blame -p -L :bar f.c
+    v blame -L 2,:bar f.c
+    v blame -L :foo,:bar f.c
+    # a configured driver decides what a function line is
+    printf '*.txt diff=sect\n' >.gitattributes
+    v add .gitattributes; tick; v commit -q -m attrs
+    v blame -L :alpha g.txt
+    v blame -L :gamma g.txt
+    v blame -L :section g.txt
+    g config diff.sect.xfuncname '^==.*==$'
+    v blame -L :section g.txt
+    v blame -L :other g.txt
+    v blame -L :alpha g.txt
+    v blame -L ':==' g.txt
+    g config diff.sect.xfuncname '^[a-z]+
+!^beta'
+    v blame -L :beta g.txt
+    v blame -L :gamma g.txt
+    v blame -L :a g.txt
+    g config --unset diff.sect.xfuncname
+    g config diff.sect.funcname '^[a-z]'
+    v blame -L :gamma g.txt
+    v blame -L :d g.txt
+    g config --unset diff.sect.funcname
+    printf '*.txt diff=nosuchdriver\n' >.gitattributes
+    v blame -L :gamma g.txt
+    printf '*.txt -diff\n' >.gitattributes
+    v blame -L :gamma g.txt
+    printf '*.txt diff\n' >.gitattributes
+    v blame -L :gamma g.txt
+}
+
 # The commit-graph and multi-pack-index files as they are now, into the transcript.
 graphfiles() {
     local gd; gd=$(g rev-parse --git-dir)

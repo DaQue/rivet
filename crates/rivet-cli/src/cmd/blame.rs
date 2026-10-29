@@ -9,8 +9,11 @@
 //! scoring run of lines that the diff aligns (`find_copy_in_blob`), with git's thresholds
 //! (20 and 40 alphanumeric characters by default).
 //!
-//! Not implemented: `--since`, `-S`, `--contents`, `--reverse`,
-//! function-name `-L` ranges, `-M`/`-C` while the work tree differs from the commit.
+//! `--since=<date>` cuts the walk at commits older than the date (they are blamed as boundary
+//! commits), `-S <revs-file>` replaces the parents of the commits it lists.
+//!
+//! Not implemented: `--contents`, `--reverse`, `-M`/`-C` while the work tree differs from the
+//! commit.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
@@ -46,6 +49,19 @@ pub struct BlameArgs {
     /// Show the full object name.
     #[arg(short = 'l')]
     pub long: bool,
+
+    /// Show the line number the line has in the commit it is blamed on.
+    #[arg(short = 'n', long = "show-number")]
+    pub show_number: bool,
+
+    /// Do not follow history past commits older than this date.
+    #[arg(long = "since", value_name = "DATE", alias = "after")]
+    pub since: Option<String>,
+
+    /// Read the commit graph from this file (lines of `<commit> <parent>...`) instead of the
+    /// repository.
+    #[arg(short = 'S', value_name = "REVS-FILE")]
+    pub revs_file: Option<String>,
 
     /// Show the file name of each line's origin.
     #[arg(short = 'f', long = "show-name")]
@@ -151,6 +167,132 @@ fn search_line(pattern: &str, lines: &[&[u8]], from: usize) -> Result<usize, Ran
         .position(|line| regex.is_match(line, false))
         .map(|found| from + found)
         .ok_or_else(|| fatal("No match"))
+}
+
+/// Which lines of a file start a function, for `-L :<funcname>`.
+enum FuncLines {
+    /// Git's default: a line that starts with a letter, `_` or `$`.
+    Default,
+    /// A `diff.<driver>.xfuncname` / `funcname` list: the first pattern that matches decides, and a
+    /// `!`-negated one rejects the line.
+    Patterns(Vec<(super::regex::Regex, bool)>),
+}
+
+impl FuncLines {
+    fn is_function(&self, line: &[u8]) -> bool {
+        match self {
+            FuncLines::Default => line
+                .first()
+                .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_' || *c == b'$'),
+            FuncLines::Patterns(patterns) => {
+                for (regex, negate) in patterns {
+                    if regex.is_match(line, false) {
+                        return !negate;
+                    }
+                }
+                false
+            }
+        }
+    }
+}
+
+/// The `diff=<driver>` of `path` (or the default) as a function-line matcher. A built-in driver
+/// git ships patterns for, and a driver with no pattern configured, are refused or defaulted the
+/// way git would act on them.
+fn func_lines(repository: &Repository, path: &[u8]) -> Result<FuncLines, String> {
+    const BUILTIN: [&str; 26] = [
+        "ada", "bash", "bibtex", "cpp", "csharp", "css", "dts", "elixir", "fortran", "fountain",
+        "golang", "html", "ini", "java", "kotlin", "markdown", "matlab", "objc", "pascal", "perl",
+        "php", "python", "ruby", "rust", "scheme", "tex",
+    ];
+    let Ok(worktree) = repository.worktree() else {
+        return Ok(FuncLines::Default);
+    };
+    let Ok(stack) = worktree.attr_stack(BStr::new(path)) else {
+        return Ok(FuncLines::Default);
+    };
+    let rivet_core::convert::Attr::Value(driver) = stack.lookup(BStr::new(path), b"diff") else {
+        return Ok(FuncLines::Default);
+    };
+    let name = String::from_utf8_lossy(&driver).into_owned();
+    let configured = |suffix: &str| {
+        repository
+            .config_value(BStr::new(format!("diff.{name}.{suffix}").as_bytes()))
+            .ok()
+            .flatten()
+    };
+    let (text, extended) = match (configured("xfuncname"), configured("funcname")) {
+        (Some(text), _) => (text, true),
+        (None, Some(text)) => (text, false),
+        (None, None) if BUILTIN.contains(&name.as_str()) => {
+            return Err(format!(
+                "blame: -L :<funcname> with the built-in `diff={name}` function patterns is not implemented"
+            ));
+        }
+        (None, None) => return Ok(FuncLines::Default),
+    };
+    let mut patterns = Vec::new();
+    let lines: Vec<&[u8]> = text.split(|b| *b == b'\n').collect();
+    if let Some(last) = lines.last().filter(|last| last.starts_with(b"!")) {
+        return Err(format!(
+            "Last expression must not be negated: {}",
+            String::from_utf8_lossy(last)
+        ));
+    }
+    for line in lines {
+        let (negate, body) = match line.strip_prefix(b"!") {
+            Some(body) => (true, body),
+            None => (false, line),
+        };
+        let regex = super::regex::Regex::new(body, extended, false)
+            .map_err(|error| format!("invalid regular expression: {error}"))?;
+        patterns.push((regex, negate));
+    }
+    Ok(FuncLines::Patterns(patterns))
+}
+
+/// `-L :<regex>` and `-L ^:<regex>`: from the first function line matching the expression to the
+/// line before the next function line.
+fn parse_funcname_range(
+    text: &str,
+    lines: &[&[u8]],
+    anchor: usize,
+    funcs: &FuncLines,
+) -> Result<(usize, usize), RangeError> {
+    let (body, from) = match text.strip_prefix('^') {
+        Some(rest) => (&rest[1..], 1),
+        None => (&text[1..], anchor),
+    };
+    // The expression ends at the first colon a backslash does not escape.
+    let mut end = 0;
+    let bytes = body.as_bytes();
+    while end < bytes.len() && bytes[end] != b':' {
+        end += if bytes[end] == b'\\' && end + 1 < bytes.len() {
+            2
+        } else {
+            1
+        };
+    }
+    let pattern = &body[..end];
+    if pattern.is_empty() {
+        return Err(RangeError::Usage);
+    }
+    let total = lines.len();
+    let from = from.clamp(1, total.max(1));
+    let fatal = |why: String| {
+        RangeError::Fatal(format!(
+            "-L parameter '{pattern}' starting at line {from}: {why}"
+        ))
+    };
+    let regex = super::regex::Regex::new(pattern.as_bytes(), false, false)
+        .map_err(|error| RangeError::Fatal(format!("-L parameter '{pattern}': {error}")))?;
+    let start = (from - 1..total)
+        .find(|&i| regex.is_match(lines[i], false) && funcs.is_function(lines[i]))
+        .ok_or_else(|| fatal("no match".to_string()))?;
+    let end = (start + 1..total)
+        .find(|&i| funcs.is_function(lines[i]))
+        .unwrap_or(total);
+    Ok((start + 1, end))
 }
 
 /// `-L` ranges that involve a regular expression (`/re/`, `^/re/`, `<start>,/re/`, `/re/,<end>`);
@@ -299,6 +441,14 @@ struct Blamer<'r> {
     trees: HashMap<ObjectId, Rc<TreeMap>>,
     tip: ObjectId,
     tip_tree: ObjectId,
+    /// `--since`: commits committed before this are not followed.
+    since: Option<i64>,
+    /// The current time, the date of the work tree's stand-in commit.
+    now: i64,
+    /// `-S`: parents that replace the real ones.
+    grafts: HashMap<ObjectId, Vec<ObjectId>>,
+    /// Commits the walk may not pass blame through (older than `since`, and their ancestors).
+    uninteresting: HashSet<ObjectId>,
     final_entries: Vec<Entry>,
     /// The entries in the order their suspects were settled (before `coalesce`).
     guilty: Vec<Entry>,
@@ -385,6 +535,38 @@ impl<'r> Blamer<'r> {
             current = entry.oid;
         }
         Ok(None)
+    }
+
+    /// The parents of `commit`, as `-S` may have rewritten them.
+    fn parents_of(&self, commit: ObjectId) -> Result<Vec<ObjectId>> {
+        match self.grafts.get(&commit) {
+            Some(parents) => Ok(parents.clone()),
+            None => Ok(self.repo.commit_parents(commit)?),
+        }
+    }
+
+    /// Whether blame stops at `commit`: it is older than `--since` or below a commit that is.
+    fn is_cut(&mut self, commit: Option<ObjectId>) -> Result<bool> {
+        let Some(oid) = commit else {
+            // The work tree's stand-in commit is dated now.
+            return Ok(self.since.is_some_and(|since| self.now < since));
+        };
+        if self.uninteresting.contains(&oid) {
+            return Ok(true);
+        }
+        let Some(since) = self.since else {
+            return Ok(false);
+        };
+        if self.commit_date(oid)? >= since {
+            return Ok(false);
+        }
+        let mut stack = vec![oid];
+        while let Some(next) = stack.pop() {
+            if self.uninteresting.insert(next) {
+                stack.extend(self.parents_of(next)?);
+            }
+        }
+        Ok(true)
     }
 
     fn commit_date(&mut self, commit: ObjectId) -> Result<i64> {
@@ -694,7 +876,7 @@ impl<'r> Blamer<'r> {
     fn pass_blame(&mut self, origin: usize) -> Result<()> {
         let commit = self.origins[origin].commit;
         let parents = match commit {
-            Some(oid) => self.repo.commit_parents(oid)?,
+            Some(oid) => self.parents_of(oid)?,
             None => vec![self.tip],
         };
         if parents.is_empty() {
@@ -796,8 +978,17 @@ impl<'r> Blamer<'r> {
         Ok(())
     }
 
+    /// `pass_blame` unless the walk was cut at this commit, which then stays blamed (a boundary).
+    fn pass_or_cut(&mut self, origin: usize) -> Result<()> {
+        if self.is_cut(self.origins[origin].commit)? {
+            self.origins[origin].boundary = true;
+            return Ok(());
+        }
+        self.pass_blame(origin)
+    }
+
     fn assign_blame(&mut self, first: usize) -> Result<()> {
-        self.pass_blame(first)?;
+        self.pass_or_cut(first)?;
         let entries = std::mem::take(&mut self.origins[first].suspects);
         self.guilty.extend(entries.iter().cloned());
         self.final_entries.extend(entries);
@@ -812,7 +1003,7 @@ impl<'r> Blamer<'r> {
                 if self.origins[origin].suspects.is_empty() {
                     continue;
                 }
-                self.pass_blame(origin)?;
+                self.pass_or_cut(origin)?;
                 let entries = std::mem::take(&mut self.origins[origin].suspects);
                 self.guilty.extend(entries.iter().cloned());
                 self.final_entries.extend(entries);
@@ -886,6 +1077,15 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
         .read_typed(&committed_blob, ObjectKind::Blob)?
         .into_data();
 
+    // An unparsable date is "now" to git's approxidate, which cuts the walk at once.
+    let now = rivet_core::object::commit::parse_git_date(BStr::new(b"now"))
+        .map(|(when, _)| when)
+        .unwrap_or(0);
+    let since = args
+        .since
+        .as_ref()
+        .map(|text| rivet_core::ops::parse_approxidate(text).unwrap_or(now));
+
     // Without a revision the work tree's version is blamed, so uncommitted lines show up.
     let (content, top_is_worktree) = if rev.is_none() {
         let cleaned = repository
@@ -893,7 +1093,9 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
             .read_file_cleaned(BStr::new(&path[..]), &mut || committed.contains(&b'\r'));
         match cleaned {
             Ok(data) => {
-                let changed = data != committed;
+                // A cut date after now makes git stop at its stand-in work tree commit, even
+                // when the file is unchanged.
+                let changed = data != committed || since.is_some_and(|since| now < since);
                 (data, changed)
             }
             // A conversion git would run and rivet cannot is reported as what it is.
@@ -934,11 +1136,23 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
         .map(|line| line.content.strip_suffix(b"\n").unwrap_or(line.content))
         .collect();
     let mut anchor = 1;
+    let mut funcs: Option<FuncLines> = None;
     for range in &args.ranges {
-        if range.starts_with(':') || range.starts_with("^:") || range.contains(":/") {
-            anyhow::bail!("blame: function-name -L ranges are not implemented");
-        }
-        let parsed = if range.contains('/') {
+        let parsed = if range.starts_with(':') || range.starts_with("^:") {
+            let funcs = match &funcs {
+                Some(funcs) => funcs,
+                None => match func_lines(&repository, &path) {
+                    Ok(found) => funcs.insert(found),
+                    Err(message) => {
+                        eprintln!("fatal: {message}");
+                        return Ok(128);
+                    }
+                },
+            };
+            parse_funcname_range(range, &text_lines, anchor, funcs)
+        } else if range.contains(':') {
+            Err(RangeError::Usage)
+        } else if range.contains('/') {
             parse_regex_range(range, &text_lines, anchor, &file)
         } else {
             parse_range(range, total, &file).map_err(|error| RangeError::Fatal(error.to_string()))
@@ -970,6 +1184,43 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
     line_starts.push(offset);
     let final_data = content.clone();
 
+    let mut grafts: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
+    if let Some(revs_file) = &args.revs_file {
+        let text = match std::fs::read(revs_file) {
+            Ok(text) => text,
+            Err(error) => {
+                let reason = match error.kind() {
+                    std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
+                    _ => error.to_string(),
+                };
+                eprintln!("fatal: reading graft file '{revs_file}' failed: {reason}");
+                return Ok(128);
+            }
+        };
+        let width = repository.format().hex_len();
+        for line in text.split(|b| *b == b'\n') {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            if line.is_empty() || line[0] == b'#' {
+                continue;
+            }
+            if (line.len() + 1) % (width + 1) != 0 {
+                eprintln!("error: bad graft data: {}", String::from_utf8_lossy(line));
+                continue;
+            }
+            let ids: Option<Vec<ObjectId>> = line
+                .split(|b| *b == b' ')
+                .map(|hex| ObjectId::from_hex(repository.format(), BStr::new(hex)).ok())
+                .collect();
+            match ids {
+                Some(mut ids) if !ids.is_empty() => {
+                    let commit = ids.remove(0);
+                    grafts.insert(commit, ids);
+                }
+                _ => eprintln!("error: bad graft data: {}", String::from_utf8_lossy(line)),
+            }
+        }
+    }
+
     let mut blamer = Blamer {
         repo: &repository,
         final_data,
@@ -984,6 +1235,10 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
         trees: HashMap::new(),
         tip,
         tip_tree,
+        since,
+        now,
+        grafts,
+        uninteresting: HashSet::new(),
         final_entries: Vec::new(),
         guilty: Vec::new(),
         options,
@@ -1124,6 +1379,15 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
             .map(|&i| origin_of(i).path.len())
             .max()
             .unwrap_or(0);
+        // The widest original line number any shown run reaches.
+        let orig_width = blamer
+            .final_entries
+            .iter()
+            .map(|e| e.s_lno + e.num)
+            .max()
+            .unwrap_or(0)
+            .to_string()
+            .len();
         for &i in &shown {
             let origin = origin_of(i);
             let sha = match origin.commit {
@@ -1135,6 +1399,7 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
                         hex[..abbrev].to_string()
                     }
                 }
+                None if origin.boundary => format!("^{}", "0".repeat(abbrev - 1)),
                 None => "0".repeat(abbrev),
             };
             out.extend_from_slice(sha.as_bytes());
@@ -1142,6 +1407,11 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
                 out.push(b' ');
                 out.extend_from_slice(&origin.path);
                 out.extend_from_slice(&vec![b' '; file_width - origin.path.len()]);
+            }
+            if args.show_number {
+                let entry = &blamer.final_entries[line_entry[i].expect("every line is blamed")];
+                let original = entry.s_lno + (i - entry.lno) + 1;
+                out.extend_from_slice(format!(" {original:>orig_width$}").as_bytes());
             }
             out.push(b' ');
             if !args.suppress {

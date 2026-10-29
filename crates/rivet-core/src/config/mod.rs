@@ -529,34 +529,33 @@ impl Config {
                 let mut out: Vec<u8> = Vec::new();
                 let mut vi = 0usize;
                 let mut quoted = false;
-                if value_bytes[0] == b'"' {
-                    quoted = true;
-                    vi = 1;
-                }
                 while vi < value_bytes.len() {
                     let b = value_bytes[vi];
-                    if quoted {
-                        if b == b'"' {
-                            break;
-                        }
-                        if b == b'\\' && vi + 1 < value_bytes.len() {
-                            let c = value_bytes[vi + 1];
-                            match c {
-                                b'n' => out.push(b'\n'),
-                                b't' => out.push(b'\t'),
-                                b'b' => out.push(0x08),
-                                b'\\' => out.push(b'\\'),
-                                b'"' => out.push(b'"'),
-                                _ => out.push(c),
+                    if b == b'\\' && vi + 1 < value_bytes.len() {
+                        let c = value_bytes[vi + 1];
+                        match c {
+                            b'n' => out.push(b'\n'),
+                            b't' => out.push(b'\t'),
+                            b'b' => out.push(0x08),
+                            b'\\' => out.push(b'\\'),
+                            b'"' => out.push(b'"'),
+                            // Git rejects any other escape; keep the text as written.
+                            _ if !quoted => {
+                                out.push(b);
+                                out.push(c);
                             }
-                            vi += 2;
-                            continue;
+                            _ => out.push(c),
                         }
-                        out.push(b);
+                        vi += 2;
+                        continue;
+                    }
+                    if b == b'"' {
+                        // Quotes toggle anywhere in a value, and are not part of it.
+                        quoted = !quoted;
                         vi += 1;
                         continue;
                     }
-                    if b == b' ' || b == b'\t' {
+                    if !quoted && (b == b' ' || b == b'\t') {
                         let rest = &value_bytes[vi..];
                         if rest.len() >= 2 && (rest[1] == b'#' || rest[1] == b';') {
                             break;
