@@ -1468,24 +1468,24 @@ s_fsck_verify_pack() {
     tick; seq 1 400 | sed 's/^200$/changed/' >big; echo extra >small; g add .; g commit -qm two
     tick; seq 1 400 | sed 's/^100$/other/;s/^200$/changed/' >big; g commit -qam three
     g repack -adq --depth=10 --window=10
-    v fsck
-    v fsck --strict
+    vs fsck
+    vs fsck --strict
     v verify-pack .git/objects/pack/*.idx
     v verify-pack --verbose .git/objects/pack/*.idx
     v verify-pack -s .git/objects/pack/*.idx
     echo orphan | g hash-object -w --stdin >/dev/null
     g commit-tree -m orphan HEAD^{tree} >/dev/null
-    v fsck
-    v fsck --unreachable --no-reflogs
-    v fsck --root
-    v fsck --no-dangling
+    vs fsck
+    vs fsck --unreachable --no-reflogs
+    vs fsck --root
+    vs fsck --no-dangling
 }
 
 s_fsck_missing() {
     g init -q repo; cd repo
     echo a >a; mkdir d; echo b >d/b; g add .; g commit -qm one
     blob=$(g rev-parse HEAD:d/b); rm .git/objects/${blob:0:2}/${blob:2}
-    v fsck
+    vs fsck
 }
 
 s_cross_read() {
@@ -1648,7 +1648,7 @@ s_packed_refs_stale() {
     refs_state
     v branch -a
     v for-each-ref
-    v fsck
+    vs fsck
     g branch b1 keep; g branch b2 keep; g branch b3 keep
     (g pack-refs --all)
     v branch -D b1 b2 b3
@@ -1755,7 +1755,7 @@ s_sha256() {
     v ls-tree -r HEAD
     v branch side; v switch -q side; tick; echo s >s; v add s; v commit -q -m side
     v switch -q main; v merge side
-    v fsck
+    vs fsck
     v diff HEAD~1 HEAD --stat
 }
 
@@ -2688,7 +2688,7 @@ s_gc() {
     v gc
     DROP_OUT='^size-pack' v count-objects -v
     objset
-    v fsck
+    vs fsck
     v log --oneline --all
     g for-each-ref
     cat .git/packed-refs
@@ -2699,7 +2699,7 @@ s_gc() {
     tick; v gc --no-prune
     DROP_OUT='^size-pack' v count-objects -v
     objset
-    v fsck
+    vs fsck
     g show-ref
     v status
     v log --oneline
@@ -2729,11 +2729,11 @@ s_gc_prune() {
     DROP_OUT='^size-pack' v count-objects -v
     g cat-file -e "$old" 2>&1; echo "old exists: $?"
     g cat-file -e "$late" 2>&1; echo "late exists: $?"
-    v fsck
+    vs fsck
     objset
     v gc --prune=now
     DROP_OUT='^size-pack' v count-objects -v
-    v fsck
+    vs fsck
     objset
     echo x | g hash-object -w --stdin >/dev/null
     v gc --prune=3.days.ago
@@ -2761,11 +2761,11 @@ s_gc_reflog() {
     v reflog main
     DROP_OUT='^size-pack' v count-objects -v
     objset
-    v fsck
+    vs fsck
     v gc --prune=now
     DROP_OUT='^size-pack' v count-objects -v
     objset
-    v fsck
+    vs fsck
     git config gc.reflogExpire never
     git config gc.reflogExpireUnreachable never
     at $((NOW0 - 1 * day)); echo 6 >>f; v commit -q -a -m six
@@ -2827,7 +2827,7 @@ s_gc_cruft() {
     # default: unreachable objects go to a cruft pack, the reflogs are expired first
     v gc --prune=$CUT
     cruftshape; packshape; allobjects
-    v fsck
+    vs fsck
     DROP_OUT='^size-pack' v count-objects -v
     # nothing changed: the same cruft pack again
     v gc --prune=$CUT
@@ -2839,7 +2839,7 @@ s_gc_cruft() {
     g branch resurrected "$pick"
     v gc --prune=$CUT
     cruftshape; packshape; allobjects
-    v fsck
+    vs fsck
     v log --oneline resurrected
     # the other direction: --no-cruft explodes the cruft pack into loose objects again
     g branch -D resurrected -q
@@ -2847,13 +2847,13 @@ s_gc_cruft() {
     v gc --no-cruft --prune=$CUT
     age_unreachable "$NEW"
     cruftshape; allobjects
-    v fsck
+    vs fsck
     # and back, then everything goes
     v gc --cruft --prune=$CUT
     cruftshape; allobjects
     v gc --cruft --prune=now
     cruftshape; allobjects
-    v fsck
+    vs fsck
     v log --oneline
 }
 
@@ -2885,7 +2885,7 @@ s_gc_cruft_expire() {
     tg=$(g fsck --unreachable --no-reflogs --no-progress 2>/dev/null | awk '$2 == "tag" { print $3 }'); [ -n "$tg" ] && age "$tg" "$MID"
     v gc --prune=$CUT
     cruftshape; packshape; allobjects
-    v fsck
+    vs fsck
     # a later cutoff expires the middle-aged ones; what the newest still reaches stays
     v gc --prune=2026-10-15T00:00:00Z
     cruftshape; allobjects
@@ -2911,7 +2911,7 @@ s_gc_cruft_expire() {
     g config gc.cruftPacks true
     v gc --no-cruft
     cruftshape; allobjects
-    v fsck
+    vs fsck
 }
 
 s_gc_after_cruft() {
@@ -2930,11 +2930,11 @@ s_gc_after_cruft() {
     # Young unreachable objects stay in a cruft pack, as in git.
     DROP_OUT='^size-pack' v count-objects -v
     objset
-    v fsck
+    vs fsck
     v gc --prune=now
     DROP_OUT='^size-pack' v count-objects -v
     objset
-    v fsck
+    vs fsck
     v log --oneline
 }
 
@@ -3238,7 +3238,7 @@ s_gc_delta() {
     tick; echo more >>big.txt; v commit -q -a -m again
     v gc
     packshape
-    v fsck
+    vs fsck
     DROP_OUT='^size-pack' v count-objects -v
     objset >>"$TRANSCRIPT"
 }
@@ -3272,7 +3272,7 @@ s_gc_delta_shapes() {
     v switch -q topic; tick; echo topic >>lib/a/f1.txt; v commit -q -a -m topic; v switch -q main
     v gc
     packshape
-    v fsck
+    vs fsck
     v log --oneline --all | head -3
 }
 
@@ -6331,7 +6331,7 @@ s_pack_refs() {
     v pack-refs --all --no-prune
     v pack-refs --all
     refs_on_disk
-    v fsck
+    vs fsck
     v gc
     refs_on_disk
 }
@@ -6371,7 +6371,7 @@ s_repack() {
     packshape; allobjects
     v repack -a -d
     packshape; allobjects
-    v fsck
+    vs fsck
     v count-objects -v
     # unreachable objects of a replaced pack: dropped, loosened (-A) or kept (-k)
     tick; echo x >x; v add x; v commit -q -m x
@@ -6394,7 +6394,7 @@ s_repack() {
     packshape; allobjects
     v repack -a -d -f
     packshape
-    v fsck
+    vs fsck
 }
 
 # repack -A with unreachable objects spread over several packs and loose objects; .keep packs.
@@ -6415,7 +6415,7 @@ s_repack_keep_multi() {
     packshape; allobjects
     v repack -A -d
     packshape; allobjects
-    v fsck
+    vs fsck
     # a .keep pack stays and its objects are not repacked
     seq 1 50 >g1; v add g1; v commit -q -m g1
     v repack -q -d
@@ -6646,7 +6646,7 @@ s_worktree_linked() {
     v log --oneline -3
     cd ../wt
     v log --oneline -3
-    v fsck
+    vs fsck
 }
 
 # What `worktree` leaves in the administrative directories.
@@ -6827,12 +6827,12 @@ s_worktree_gc_keeps() {
     (cd ../e && tick && echo y >y.txt && v add y.txt && v commit -q -m "only on e")
     (cd ../e && v checkout -q --detach main)
     v gc --prune=now
-    (cd ../d && v fsck && v status -sb && v log --oneline)
+    (cd ../d && vs fsck && v status -sb && v log --oneline)
     (cd ../d && v diff --cached)
     (cd ../e && v reflog)
     v count-objects
     v repack -a -d -q
-    (cd ../d && v fsck && v diff --cached)
+    (cd ../d && vs fsck && v diff --cached)
     v worktree prune
 }
 
@@ -7138,7 +7138,7 @@ s_worktree_repair() {
     (cd ../a2 && v worktree repair ../c2 && v worktree list)
     wt_snap
     wt_gitfiles ../a2 ../b2 ../c2
-    v fsck
+    vs fsck
 }
 
 # Moving the main repository breaks every `.git` file; repairing from it restores them.
@@ -7164,7 +7164,7 @@ s_worktree_repair_main() {
     wt_snap
     wt_gitfiles ../a2 ../b
     (cd ../a2 && v status -sb)
-    v fsck
+    vs fsck
 }
 
 # A superproject whose submodules are all registered in `.gitmodules` but not yet in `.git/config`:
@@ -7323,7 +7323,7 @@ s_submodule_add() {
     v submodule status
     v ls-files -s
     sed "s#$ROOT#<ROOT>#g" .gitmodules >>"$TRANSCRIPT"
-    v fsck
+    vs fsck
     rm -f inplace/.git/index
 }
 
@@ -8731,7 +8731,7 @@ s_rebase_root() {
     v reflog
     cat .git/ORIG_HEAD
     ls .git/rebase-merge
-    v fsck
+    vs fsck
     v switch -q main
     v rebase --root -q
     echo "rc=$?"
@@ -8792,7 +8792,7 @@ s_rebase_root_i() {
     v reflog
     cat .git/ORIG_HEAD
     ls .git/rebase-merge
-    v fsck
+    vs fsck
     # Reword the root itself, drop a middle commit.
     v reset -q --hard orig
     SEQ='1s/^pick/reword/;2d' GIT_SEQUENCE_EDITOR="$PWD/../seq.sh" GIT_EDITOR="$PWD/../msg.sh" v rebase -i --root
@@ -10182,7 +10182,7 @@ s_deep_delta_chain() {
         printf 'E\n\n'
     done | g fast-import --depth=200 --quiet
     g reset -q --hard
-    v fsck
+    vs fsck
     v log --oneline
     v rev-list --count HEAD
     v cat-file -s HEAD:f
@@ -10275,7 +10275,7 @@ EOF2
     echo "repack -d rc=$?"
     v cat-file -t "$junk"
     v count-objects -v
-    v fsck
+    vs fsck
     ls .git/objects/pack | sed 's/pack-[0-9a-f]*/pack-X/' | sort | uniq -c
 }
 
@@ -10366,7 +10366,7 @@ s_alternates() {
     v count-objects
     echo c >c; g add c; tick; g commit -qm three
     v log --oneline
-    v fsck
+    vs fsck
     cd ../cl2
     v log --oneline
     v status
@@ -10400,10 +10400,10 @@ s_shallow() {
     v blame f5
     v describe --always
     v status
-    v fsck
+    vs fsck
     echo 6 >f6; g add f6; tick; g commit -qm c6
     v log --oneline
-    v fsck
+    vs fsck
 }
 
 s_malformed_ident() {
@@ -10426,7 +10426,7 @@ s_malformed_ident() {
     v rev-list --count HEAD
     v show -s --format='%an <%ae> %at' HEAD~1
     v show -s --format='%an <%ae>' HEAD~3
-    v fsck
+    vs fsck
 }
 
 # A8 remainder: an identity line with no `<email>` or no dated `+zone` is not rendered as if the
@@ -10457,7 +10457,7 @@ s_malformed_ident_render() {
     v log --format='%h|%ad|%at' --date=raw
     v log --format='%h|%ad' --date=short
     v show -s --format='%an|%ae|%ad|%aI' HEAD~2
-    v fsck
+    vs fsck
 }
 
 # `feature.manyFiles` / `index.version=4` make git write the prefix-compressed v4 index; rivet must read
@@ -10485,7 +10485,7 @@ s_index_v4() {
     tick; v commit -qam two
     v log --oneline
     v ls-files -s
-    v fsck
+    vs fsck
 }
 
 # Criss-cross history built by real git: the merge bases of main and side are x1 and y1, whose
@@ -10522,7 +10522,7 @@ s_merge_criss_cross() {
     v ls-files -s
     cat f
     v log --oneline
-    v fsck
+    vs fsck
 }
 
 s_merge_criss_cross_conflict() {
@@ -10671,7 +10671,7 @@ s_update_ref() {
     v for-each-ref
     v reflog show refs/heads/c
     v reflog show HEAD
-    v fsck
+    vs fsck
 }
 
 s_commit_tree() {
@@ -10743,7 +10743,7 @@ b' commit-tree $T
     O=$(g commit-tree $T -p $P -m final)
     v cat-file -p $O
     v cat-file -t $O
-    v fsck
+    vs fsck
     v for-each-ref
     v rev-parse HEAD
     # bytes that are not UTF-8: the same warning, the same bytes
@@ -10832,7 +10832,7 @@ s_mktree() {
     # the output is a real tree
     O=$(printf '100644 blob %s\tq\n' "$B" | g mktree)
     v cat-file -p "$O"
-    v fsck
+    vs fsck
     # duplicates are kept, in input order; modes are written as given
     vin "100644 blob $B${T}a
 100644 blob $C${T}a
@@ -11099,7 +11099,7 @@ $H$H
     v name-rev --refs=v1 --refs
     # nothing moved
     v for-each-ref
-    v fsck
+    vs fsck
 }
 
 case "${1:-}" in
