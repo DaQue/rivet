@@ -571,7 +571,11 @@ impl Repository {
             }
         };
 
-        let odb = Odb::open(&common_dir, format)?;
+        let mut odb = Odb::open(&common_dir, format)?;
+        odb.disable_accelerators(
+            config.get_bool(BStr::new(b"core.commitGraph"))? == Some(false),
+            config.get_bool(BStr::new(b"core.multiPackIndex"))? == Some(false),
+        );
         let refs = RefStore::open_linked(&git_dir, &common_dir, format)?;
         let index_path = git_dir.join("index");
         let index = if index_path.exists() {

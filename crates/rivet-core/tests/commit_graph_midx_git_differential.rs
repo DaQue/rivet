@@ -364,3 +364,163 @@ fn the_odb_uses_the_files_only_while_they_can_be_trusted() {
     assert!(!odb.contains(&head));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn incremental_multi_pack_index_chain_finds_every_object() {
+    if !have_git() {
+        return;
+    }
+    let dir = temp_dir("midx-chain");
+    build(&dir);
+    git(&dir, &["repack", "-q", "-a", "-d"]);
+    git(&dir, &["multi-pack-index", "write", "--incremental"]);
+    std::fs::write(dir.join("extra"), "extra\n").unwrap();
+    git(&dir, &["add", "extra"]);
+    git(&dir, &["commit", "-q", "-m", "extra"]);
+    git(&dir, &["repack", "-q", "-d"]);
+    git(&dir, &["prune"]);
+    git(&dir, &["multi-pack-index", "write", "--incremental"]);
+    let pack_dir = dir.join(".git/objects/pack");
+    let chain = std::fs::read_to_string(pack_dir.join("multi-pack-index.d/multi-pack-index-chain"))
+        .unwrap();
+    assert_eq!(chain.lines().count(), 2, "two layers");
+    assert!(!pack_dir.join("multi-pack-index").exists());
+
+    let midx = MultiPackIndex::open(&pack_dir, ObjectFormat::Sha1).expect("chain");
+    assert_eq!(midx.all_pack_names().len(), 2);
+    let listed: Vec<ObjectId> = git(
+        &dir,
+        &[
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check=%(objectname)",
+        ],
+    )
+    .lines()
+    .map(|l| ObjectId::from_hex(ObjectFormat::Sha1, l.as_bytes().into()).unwrap())
+    .collect();
+    assert_eq!(midx.len(), listed.len());
+    let mut by_pack = std::collections::HashSet::new();
+    for oid in &listed {
+        let (name, offset) = midx.lookup(oid).unwrap_or_else(|| panic!("{oid} missing"));
+        assert!(pack_dir.join(name).is_file(), "{name}");
+        assert!(offset >= 12);
+        by_pack.insert(name.to_string());
+    }
+    assert_eq!(by_pack.len(), 2, "objects come from both layers' packs");
+    // The Odb, which uses the chain, still reads every object.
+    let odb = Odb::open(&dir.join(".git"), ObjectFormat::Sha1).unwrap();
+    assert!(odb.multi_pack_index().is_some());
+    for oid in &listed {
+        assert!(odb.contains(oid));
+    }
+    // Damage to any layer drops the whole chain.
+    let layer = chain.lines().next().unwrap();
+    let path = pack_dir.join(format!("multi-pack-index.d/multi-pack-index-{layer}.midx"));
+    let mut bytes = std::fs::read(&path).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 1;
+    let _ = std::fs::remove_file(&path);
+    std::fs::write(&path, bytes).unwrap();
+    assert!(MultiPackIndex::open(&pack_dir, ObjectFormat::Sha1).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_trailer_that_is_not_the_hash_of_the_body_makes_the_files_untrusted() {
+    if !have_git() {
+        return;
+    }
+    let dir = temp_dir("trailer");
+    build(&dir);
+    git(&dir, &["repack", "-q", "-a", "-d"]);
+    git(&dir, &["multi-pack-index", "write"]);
+    git(&dir, &["commit-graph", "write", "--reachable"]);
+    let objects = dir.join(".git/objects");
+    assert!(CommitGraph::open(&objects, ObjectFormat::Sha1).is_some());
+    assert!(MultiPackIndex::open(&objects.join("pack"), ObjectFormat::Sha1).is_some());
+    for path in [
+        objects.join("info/commit-graph"),
+        objects.join("pack/multi-pack-index"),
+    ] {
+        // A change in the middle of the file with a trailer that still says the old hash.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let at = bytes.len() / 2;
+        bytes[at] ^= 0x80;
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, bytes).unwrap();
+    }
+    assert!(CommitGraph::open(&objects, ObjectFormat::Sha1).is_none());
+    assert!(MultiPackIndex::open(&objects.join("pack"), ObjectFormat::Sha1).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_config_turns_the_commit_graph_and_the_multi_pack_index_off() {
+    if !have_git() {
+        return;
+    }
+    let dir = temp_dir("config");
+    build(&dir);
+    git(&dir, &["repack", "-q", "-a", "-d"]);
+    git(&dir, &["multi-pack-index", "write"]);
+    git(&dir, &["commit-graph", "write", "--reachable"]);
+    let open = || rivet_core::Repository::open_or_discover(&dir).unwrap();
+    {
+        let repository = open();
+        assert!(repository.odb().commit_graph().is_some());
+        assert!(repository.odb().multi_pack_index().is_some());
+    }
+    git(&dir, &["config", "core.commitGraph", "false"]);
+    {
+        let repository = open();
+        assert!(repository.odb().commit_graph().is_none());
+        assert!(repository.odb().multi_pack_index().is_some());
+    }
+    git(&dir, &["config", "core.multiPackIndex", "false"]);
+    git(&dir, &["config", "core.commitGraph", "true"]);
+    {
+        let repository = open();
+        assert!(repository.odb().commit_graph().is_some());
+        assert!(repository.odb().multi_pack_index().is_none());
+        // Without the index every pack is searched on its own, and every object is still found.
+        let head = git(&dir, &["rev-parse", "HEAD"]);
+        let oid = ObjectId::from_hex(ObjectFormat::Sha1, head.trim().as_bytes().into()).unwrap();
+        assert!(repository.odb().contains(&oid));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn is_ancestor_with_generation_pruning_agrees_with_git() {
+    if !have_git() {
+        return;
+    }
+    let dir = temp_dir("ancestor");
+    build(&dir);
+    git(&dir, &["commit-graph", "write", "--reachable"]);
+    let repository = rivet_core::Repository::open_or_discover(&dir).unwrap();
+    assert!(repository.odb().commit_graph().is_some());
+    let commits = all_commits(&dir);
+    assert!(commits.len() > 10);
+    for a in &commits {
+        for b in &commits {
+            let status = Command::new("git")
+                .current_dir(&dir)
+                .args([
+                    "merge-base",
+                    "--is-ancestor",
+                    &a.to_string(),
+                    &b.to_string(),
+                ])
+                .status()
+                .unwrap();
+            assert_eq!(
+                repository.is_ancestor(*a, *b).unwrap(),
+                status.success(),
+                "{a} {b}"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

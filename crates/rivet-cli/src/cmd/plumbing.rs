@@ -1622,6 +1622,47 @@ pub fn run_fsck(global: &GlobalArgs, args: &FsckArgs) -> Result<i32> {
         no_reflogs: args.no_reflogs,
     };
     let report = rivet_core::fsck::fsck(&repository, &options)?;
+    // The commit-graph and multi-pack-index files are checked unless the config turns them off.
+    let enabled = |key: &str| {
+        repository
+            .config()
+            .get_bool(bstr::BStr::new(key.as_bytes()))
+            .ok()
+            .flatten()
+            != Some(false)
+    };
+    let objects = repository.odb().objects_dir().to_path_buf();
+    let graph = if enabled("core.commitGraph") {
+        rivet_core::commit_graph::verify(&objects, repository.format(), repository.odb())
+    } else {
+        None
+    };
+    let display_dir = {
+        let pack = objects.join("pack");
+        std::env::current_dir()
+            .ok()
+            .and_then(|cwd| {
+                pack.strip_prefix(cwd)
+                    .ok()
+                    .map(std::path::Path::to_path_buf)
+            })
+            .unwrap_or(pack)
+    };
+    // `--connectivity-only` skips the pack-level checks, the multi-pack-index among them.
+    let midx = if enabled("core.multiPackIndex") && !args.connectivity_only {
+        rivet_core::midx::verify(
+            &objects.join("pack"),
+            repository.format(),
+            &display_dir.join("multi-pack-index").display().to_string(),
+        )
+    } else {
+        None
+    };
+    if let Some(graph) = &graph {
+        for line in &graph.load_errors {
+            eprintln!("{line}");
+        }
+    }
     let name = |kind: rivet_core::ObjectKind| match kind {
         rivet_core::ObjectKind::Commit => "commit",
         rivet_core::ObjectKind::Tree => "tree",
@@ -1663,7 +1704,27 @@ pub fn run_fsck(global: &GlobalArgs, args: &FsckArgs) -> Result<i32> {
             std::fs::write(base.join(dir).join(oid.to_string()), contents)?;
         }
     }
-    Ok(report.status as i32)
+    let mut status = report.status as i32;
+    // Git verifies the multi-pack-index before the commit-graph.
+    if let Some(midx) = &midx {
+        for line in &midx.lines {
+            eprintln!("{line}");
+        }
+        status = if midx.status >= 128 {
+            midx.status
+        } else {
+            status | midx.status
+        };
+    }
+    if let Some(graph) = &graph
+        && graph.is_damaged()
+    {
+        for line in graph.load_errors.iter().chain(&graph.findings) {
+            eprintln!("{line}");
+        }
+        status |= 16;
+    }
+    Ok(status)
 }
 
 /// A path as the listing commands print it: C-quoted when newline-terminated, raw under `-z`.

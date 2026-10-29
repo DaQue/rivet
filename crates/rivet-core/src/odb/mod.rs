@@ -277,11 +277,17 @@ impl Odb {
         }
         // The multi-pack-index only counts when every pack it names is here; otherwise it would
         // vouch for objects that are gone.
-        let midx = crate::midx::MultiPackIndex::open(&pack_dir, format)
-            .filter(|m| m.pack_names().iter().all(|n| pack_names.contains(n)));
+        let midx = crate::midx::MultiPackIndex::open(&pack_dir, format).filter(|m| {
+            m.all_pack_names()
+                .iter()
+                .all(|n| pack_names.iter().any(|p| p == n))
+        });
         let covered = pack_names
             .iter()
-            .map(|n| midx.as_ref().is_some_and(|m| m.pack_names().contains(n)))
+            .map(|n| {
+                midx.as_ref()
+                    .is_some_and(|m| m.all_pack_names().contains(&n.as_str()))
+            })
             .collect();
         let commit_graph = crate::commit_graph::CommitGraph::open(objects_dir, format);
 
@@ -317,6 +323,21 @@ impl Odb {
             covered,
             commit_graph,
         })
+    }
+
+    /// Stop using the commit-graph and/or the multi-pack-index (`core.commitGraph=false`,
+    /// `core.multiPackIndex=false`), in this database and in its alternates.
+    pub fn disable_accelerators(&mut self, commit_graph: bool, multi_pack_index: bool) {
+        if commit_graph {
+            self.commit_graph = None;
+        }
+        if multi_pack_index {
+            self.midx = None;
+            self.covered = vec![false; self.pack_names.len()];
+        }
+        for alternate in &mut self.alternates {
+            alternate.disable_accelerators(commit_graph, multi_pack_index);
+        }
     }
 
     /// Phase 10 — the `objects` directory this database is over.

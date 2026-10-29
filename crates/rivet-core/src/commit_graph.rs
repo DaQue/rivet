@@ -46,6 +46,18 @@ pub struct CommitGraph {
     layers: Vec<Layer>,
 }
 
+/// Whether the file's trailer is the hash of everything before it.
+fn checksum_matches(data: &[u8], format: ObjectFormat) -> bool {
+    let Some(body) = data.len().checked_sub(format.len()) else {
+        return false;
+    };
+    let mut hasher = format.hasher();
+    hasher.update(&data[..body]);
+    hasher
+        .finish()
+        .is_ok_and(|sum| sum.as_bytes() == &data[body..])
+}
+
 fn be32(data: &[u8], at: usize) -> Option<u32> {
     data.get(at..at + 4)
         .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
@@ -173,9 +185,22 @@ impl CommitGraph {
     /// chain in `info/commit-graphs/commit-graph-chain`. `None` when there is none or when it
     /// does not hold together.
     pub fn open(objects: &Path, format: ObjectFormat) -> Option<Self> {
+        Self::open_with(objects, format, true)
+    }
+
+    /// [`CommitGraph::open`] without the trailer check, for `fsck`, which reports a bad checksum
+    /// and still looks at what the file says.
+    pub(crate) fn open_unchecked(objects: &Path, format: ObjectFormat) -> Option<Self> {
+        Self::open_with(objects, format, false)
+    }
+
+    fn open_with(objects: &Path, format: ObjectFormat, check: bool) -> Option<Self> {
         let info = objects.join("info");
         if let Ok(data) = std::fs::read(info.join("commit-graph")) {
             // A single file stands alone; a damaged one is not replaced by a chain.
+            if check && !checksum_matches(&data, format) {
+                return None;
+            }
             let layer = Layer::parse(data, format, 0, 0)?;
             return Some(Self {
                 format,
@@ -195,7 +220,11 @@ impl CommitGraph {
             let path = info
                 .join("commit-graphs")
                 .join(format!("graph-{}.graph", line.to_ascii_lowercase()));
-            let layer = Layer::parse(std::fs::read(path).ok()?, format, base, layers.len())?;
+            let data = std::fs::read(path).ok()?;
+            if check && !checksum_matches(&data, format) {
+                return None;
+            }
+            let layer = Layer::parse(data, format, base, layers.len())?;
             base += layer.count;
             layers.push(layer);
         }
@@ -288,4 +317,202 @@ impl CommitGraph {
         let row = layer.commits + at * (hash_len + 16);
         Some(be32(&layer.data, row + hash_len + 8)? >> 2)
     }
+}
+
+/// What `fsck` has to say about the repository's `commit-graph` file.
+#[derive(Debug, Default)]
+pub struct GraphVerification {
+    /// Why the file does not load. Git prints these once for `fsck` itself and once more for the
+    /// `commit-graph verify` it runs, so the caller prints them twice.
+    pub load_errors: Vec<String>,
+    /// What only `commit-graph verify` finds in a file that loads.
+    pub findings: Vec<String>,
+}
+
+impl GraphVerification {
+    /// Whether anything was wrong.
+    pub fn is_damaged(&self) -> bool {
+        !self.load_errors.is_empty() || !self.findings.is_empty()
+    }
+}
+
+/// The messages git's loader gives for a file it refuses (empty when it loads).
+fn load_errors(data: &[u8], format: ObjectFormat) -> Vec<String> {
+    let hash_len = format.len();
+    // Header, four chunk table entries, the fanout and the trailer: git's `GRAPH_MIN_SIZE`.
+    if data.len() < 8 + 4 * 12 + 1024 + hash_len {
+        return vec!["error: commit-graph file is too small".to_string()];
+    }
+    let signature = be32(data, 0).unwrap_or(0);
+    if signature != 0x4347_5048 {
+        return vec![format!(
+            "error: commit-graph signature {signature:X} does not match signature {:X}",
+            0x4347_5048u32
+        )];
+    }
+    if data[4] != 1 {
+        return vec![format!(
+            "error: commit-graph version {:X} does not match version {:X}",
+            data[4], 1
+        )];
+    }
+    let hash_version = match format {
+        ObjectFormat::Sha1 => 1u8,
+        ObjectFormat::Sha256 => 2,
+    };
+    if data[5] != hash_version {
+        return vec![format!(
+            "error: commit-graph hash version {:X} does not match version {:X}",
+            data[5], hash_version
+        )];
+    }
+    let chunks = usize::from(data[6]);
+    let limit = (data.len() - hash_len) as u64;
+    let mut found: Vec<([u8; 4], u64, u64)> = Vec::new();
+    for i in 0..chunks {
+        let entry = 8 + i * 12;
+        let (Some(id), Some(offset), Some(next)) = (
+            be32(data, entry),
+            be64(data, entry + 4),
+            be64(data, entry + 16),
+        ) else {
+            return vec!["error: commit-graph file is too small".to_string()];
+        };
+        if id == 0 {
+            return vec!["error: terminating chunk id appears earlier than expected".to_string()];
+        }
+        if next < offset || next > limit {
+            return vec![format!(
+                "error: improper chunk offset(s) {offset:x} and {next:x}"
+            )];
+        }
+        found.push((id.to_be_bytes(), offset, next));
+    }
+    let last = 8 + chunks * 12;
+    if let Some(id) = be32(data, last).filter(|id| *id != 0) {
+        return vec![format!("error: final chunk has non-zero id {id:x}")];
+    }
+    let chunk = |name: &[u8; 4]| {
+        found
+            .iter()
+            .find(|(id, _, _)| id == name)
+            .map(|(_, start, end)| (*start as usize, *end as usize))
+    };
+    let Some((start, end)) = chunk(b"OIDF").filter(|(s, e)| e - s == 1024) else {
+        return vec![
+            "error: commit-graph required OID fanout chunk missing or corrupted".to_string(),
+        ];
+    };
+    let mut errors = Vec::new();
+    let mut previous = 0u32;
+    let mut count = 0usize;
+    for i in 0..256 {
+        let value = be32(data, start + i * 4).unwrap_or(0);
+        if value < previous {
+            errors.push("error: commit-graph fanout values out of order".to_string());
+            break;
+        }
+        previous = value;
+        count = value as usize;
+    }
+    let _ = end;
+    if !errors.is_empty() {
+        errors
+            .push("error: commit-graph required OID fanout chunk missing or corrupted".to_string());
+        return errors;
+    }
+    if !chunk(b"OIDL").is_some_and(|(s, e)| e - s == count * hash_len) {
+        return vec![
+            "error: commit-graph required OID lookup chunk missing or corrupted".to_string(),
+        ];
+    }
+    if !chunk(b"CDAT").is_some_and(|(s, e)| e - s == count * (hash_len + 16)) {
+        return vec![
+            "error: commit-graph required commit data chunk missing or corrupted".to_string(),
+        ];
+    }
+    Vec::new()
+}
+
+/// `fsck`'s look at `objects/info/commit-graph`: `None` when there is no single graph file.
+/// A split chain is not verified.
+pub fn verify(
+    objects: &Path,
+    format: ObjectFormat,
+    odb: &crate::odb::Odb,
+) -> Option<GraphVerification> {
+    let data = std::fs::read(objects.join("info").join("commit-graph")).ok()?;
+    let load_errors = load_errors(&data, format);
+    if !load_errors.is_empty() {
+        return Some(GraphVerification {
+            load_errors,
+            findings: Vec::new(),
+        });
+    }
+    let mut findings = Vec::new();
+    if !checksum_matches(&data, format) {
+        findings
+            .push("the commit-graph file has incorrect checksum and is likely corrupt".to_string());
+    }
+    let Some(graph) = CommitGraph::open_unchecked(objects, format) else {
+        return Some(GraphVerification {
+            load_errors: Vec::new(),
+            findings,
+        });
+    };
+    for position in 0..graph.len() {
+        let Some(oid) = graph.oid_at_global(position) else {
+            continue;
+        };
+        let Some(recorded) = graph.commit(&oid) else {
+            continue;
+        };
+        let object = odb.read_typed(&oid, crate::object::ObjectKind::Commit).ok();
+        let actual = object
+            .as_ref()
+            .and_then(|object| crate::object::Commit::parse(format, object.data()).ok());
+        let Some(actual) = actual else {
+            findings.push(format!("error: Could not read {oid}"));
+            findings.push(format!(
+                "failed to parse commit {oid} from object database for commit-graph"
+            ));
+            continue;
+        };
+        if recorded.tree != actual.tree {
+            findings.push(format!(
+                "root tree OID for commit {oid} in commit-graph is {} != {}",
+                recorded.tree, actual.tree
+            ));
+        }
+        if recorded.commit_time != actual.committer.when {
+            findings.push(format!(
+                "commit date for commit {oid} in commit-graph is {} != {}",
+                recorded.commit_time, actual.committer.when
+            ));
+        }
+        let mut theirs = actual.parents.iter();
+        for parent in &recorded.parents {
+            match theirs.next() {
+                None => {
+                    findings.push(format!(
+                        "commit-graph parent list for commit {oid} is too long"
+                    ));
+                    break;
+                }
+                Some(expected) if expected != parent => findings.push(format!(
+                    "commit-graph parent for {oid} is {parent} != {expected}"
+                )),
+                Some(_) => {}
+            }
+        }
+        if theirs.next().is_some() {
+            findings.push(format!(
+                "commit-graph parent list for commit {oid} terminates early"
+            ));
+        }
+    }
+    Some(GraphVerification {
+        load_errors: Vec::new(),
+        findings,
+    })
 }

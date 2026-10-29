@@ -643,6 +643,14 @@ impl Repository {
     /// Whether `ancestor` is reachable from `descendant` (a commit is its own ancestor), as
     /// `git merge-base --is-ancestor` answers it.
     pub fn is_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> Result<bool> {
+        // With a commit-graph, a commit whose generation number is below the candidate's cannot
+        // have the candidate behind it (parents always have strictly smaller numbers), so the
+        // walk does not go there. Zero means "not computed" and prunes nothing.
+        let floor = self
+            .odb()
+            .commit_graph()
+            .and_then(|graph| graph.generation(&ancestor))
+            .filter(|generation| *generation > 0);
         let mut seen = std::collections::HashSet::new();
         let mut queue = std::collections::VecDeque::from([descendant]);
         while let Some(oid) = queue.pop_front() {
@@ -650,6 +658,16 @@ impl Repository {
                 return Ok(true);
             }
             if !seen.insert(oid) {
+                continue;
+            }
+            if let Some(floor) = floor
+                && let Some(generation) = self
+                    .odb()
+                    .commit_graph()
+                    .and_then(|graph| graph.generation(&oid))
+                && generation > 0
+                && generation < floor
+            {
                 continue;
             }
             for parent in self.commit_parents(oid)? {

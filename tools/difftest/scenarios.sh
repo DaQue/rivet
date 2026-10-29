@@ -11965,6 +11965,72 @@ EOF
     v blame -L :gamma g.txt
 }
 
+# Flip one bit of a file (a byte offset), or cut a file, to damage a commit-graph / multi-pack-index.
+flipbit() {
+    local f=$1 off=$2 b
+    b=$(od -An -tu1 -j"$off" -N1 "$f" | tr -d ' ')
+    printf "\\x$(printf %02x $((b ^ 1)))" | dd of="$f" bs=1 seek="$off" conv=notrunc 2>/dev/null
+}
+
+# fsck on a repository whose commit-graph and multi-pack-index git wrote and the bytes were then
+# edited: the same findings, the same exit codes. The files are only ever read.
+s_commit_graph_damage() {
+    g init -q repo; cd repo
+    for i in 1 2 3 4 5 6; do echo "$i" >"f$i"; g add "f$i"; tick; g commit -qm "c$i"; done
+    g checkout -q -b side HEAD~3; echo s >s; g add s; tick; g commit -qm side
+    g checkout -q main; tick; g merge -q --no-edit side >/dev/null
+    g commit-graph write --reachable
+    g repack -q -d
+    g multi-pack-index write
+    local cg=.git/objects/info/commit-graph mi=.git/objects/pack/multi-pack-index
+    chmod u+w $cg $mi
+    cp $cg cg.orig; cp $mi mi.orig
+    local cgsize misize
+    cgsize=$(stat -c %s $cg); misize=$(stat -c %s $mi)
+    restore() { cp cg.orig $cg; cp mi.orig $mi; chmod u+w $cg $mi; }
+    v fsck
+    # the commit-graph
+    flipbit $cg $((cgsize - 1)); v fsck; restore
+    flipbit $cg 4; v fsck; restore
+    flipbit $cg 0; v fsck; restore
+    flipbit $cg 5; v fsck; restore
+    flipbit $cg 6; v fsck; restore
+    flipbit $cg 7; v fsck; restore
+    flipbit $cg 8; v fsck; restore
+    flipbit $cg 15; v fsck; restore
+    flipbit $cg 20; v fsck; restore
+    flipbit $cg 100; v fsck; restore
+    flipbit $cg $((0x4e4 + 3)); v fsck; restore
+    flipbit $cg $((0x4e4 + 36 * 5 + 2)); v fsck; restore
+    truncate -s 20 $cg; v fsck; restore
+    : >$cg; v fsck; restore
+    truncate -s $((cgsize - 30)) $cg; v fsck; restore
+    truncate -s 1000 $cg; v fsck; restore
+    # the multi-pack-index
+    flipbit $mi $((misize - 1)); v fsck; restore
+    flipbit $mi 0; v fsck; restore
+    flipbit $mi 4; v fsck; restore
+    flipbit $mi 5; v fsck; restore
+    flipbit $mi 6; v fsck; restore
+    flipbit $mi 7; v fsck; restore
+    flipbit $mi 12; v fsck; restore
+    flipbit $mi 19; v fsck; restore
+    truncate -s 20 $mi; v fsck; restore
+    : >$mi; v fsck; restore
+    truncate -s $((misize - 30)) $mi; v fsck; restore
+    # both damaged
+    flipbit $cg $((cgsize - 1)); flipbit $mi $((misize - 1)); v fsck; v fsck --connectivity-only; restore
+    # the config turns the checks (and the use of the files) off
+    flipbit $cg $((cgsize - 1)); flipbit $mi $((misize - 1))
+    v config core.commitGraph false; v fsck
+    v config core.commitGraph true; v config core.multiPackIndex false; v fsck
+    v config core.commitGraph false; v fsck
+    v config --unset core.commitGraph; v config --unset core.multiPackIndex
+    restore
+    v fsck
+    v log --oneline --graph --all
+}
+
 # The commit-graph and multi-pack-index files as they are now, into the transcript.
 graphfiles() {
     local gd; gd=$(g rev-parse --git-dir)
