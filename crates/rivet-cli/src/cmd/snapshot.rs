@@ -752,6 +752,7 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
         eprintln!("fatal: Exiting because of an unresolved conflict.");
         return Ok(128);
     }
+    super::rerere::rerere_hook(&mut repository)?;
 
     // `pre-commit` runs before anything decides whether there is something to commit.
     if !args.no_verify && commit_hook(&repository, "pre-commit", &[], None).is_some_and(|c| c != 0)
@@ -1846,6 +1847,7 @@ pub fn run_reset(global: &GlobalArgs, args: &ResetArgs) -> Result<i32> {
     let reason = format!("reset: moving to {commit_spec}");
     repository.move_head(target, bstr::BStr::new(reason.as_bytes()))?;
     rivet_core::clear_merge_state(&git_dir)?;
+    super::rerere::remove_merge_rr(&git_dir);
     super::branching::save_merge_autostash(&repository)?;
 
     if !global.quiet {

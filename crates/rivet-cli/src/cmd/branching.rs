@@ -421,6 +421,14 @@ pub struct MergeArgs {
     /// Do not stash local changes (overrides `merge.autoStash`).
     #[arg(long = "no-autostash")]
     pub no_autostash: bool,
+
+    /// Stage resolutions `rerere` replays.
+    #[arg(long = "rerere-autoupdate", overrides_with = "no_rerere_autoupdate")]
+    pub rerere_autoupdate: bool,
+
+    /// Leave resolutions `rerere` replays unstaged.
+    #[arg(long = "no-rerere-autoupdate", overrides_with = "rerere_autoupdate")]
+    pub no_rerere_autoupdate: bool,
 }
 
 /// Phase 6 — list, create, rename and delete branches.
@@ -1088,6 +1096,11 @@ pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
 pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
     let mut repository = super::open(global)?;
     let git_dir = repository.git_dir().to_path_buf();
+    super::rerere::set_autoupdate_flag(match (args.rerere_autoupdate, args.no_rerere_autoupdate) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    });
 
     if args.abort {
         if !rivet_core::merge_in_progress(&git_dir) {
@@ -1100,6 +1113,7 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
         let result = rivet_core::abort_merge(&worktree, &mut index, repository.odb(), &git_dir);
         *repository.index_mut() = index;
         result?;
+        super::rerere::remove_merge_rr(&git_dir);
         // `merge --abort` is `reset --merge`, and Git logs it as such.
         if let Some(head) = repository.head()?.oid() {
             let who = repository.committer_signature()?;
@@ -1118,6 +1132,7 @@ pub fn run_merge(global: &GlobalArgs, args: &MergeArgs) -> Result<i32> {
     }
     if args.quit {
         rivet_core::clear_merge_state(&git_dir)?;
+        super::rerere::remove_merge_rr(&git_dir);
         save_merge_autostash(&repository)?;
         return Ok(0);
     }
@@ -2421,6 +2436,7 @@ pub fn merge_commit(
         let path = git_dir.join("MERGE_MSG");
         std::fs::write(&path, &merge_msg)
             .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", path.display()))?;
+        super::rerere::rerere_hook(repository)?;
         println!("Automatic merge failed; fix conflicts and then commit the result.");
         return Ok(1);
     }
@@ -2465,6 +2481,7 @@ pub fn merge_commit(
         )
         .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", mode_path.display()))?;
         if !conflicted.is_empty() {
+            super::rerere::rerere_hook(repository)?;
             println!("Automatic merge failed; fix conflicts and then commit the result.");
             if let Some(stash) = stashed {
                 let path = git_dir.join("MERGE_AUTOSTASH");

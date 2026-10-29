@@ -99,6 +99,11 @@ state_of() {
         for f in ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE SQUASH_MSG CHERRY_PICK_HEAD REVERT_HEAD FETCH_HEAD packed-refs config; do
             [ -f "$gd/$f" ] && { echo "## $f"; cat "$gd/$f"; }
         done
+        [ -f "$gd/MERGE_RR" ] && { echo "## MERGE_RR"; tr '\0' '@' <"$gd/MERGE_RR"; echo; }
+        if [ -d "$gd/rr-cache" ]; then
+            echo "## rr-cache"
+            (cd "$gd" && find rr-cache -type f | sort | while read -r f; do echo "$f $(sha1sum <"$f" | cut -c1-12)"; done)
+        fi
         echo "## fsck"; g fsck --strict --no-progress 2>&1 | grep -v '^dangling tree' | sort; echo "fsck exit ${PIPESTATUS[0]}"
     )
 }

@@ -66,6 +66,7 @@ pub mod rebase;
 pub mod reflog;
 pub mod regex;
 pub mod remote;
+pub mod rerere;
 pub mod sequencer;
 pub mod setup;
 pub mod snapshot;
@@ -181,6 +182,7 @@ pub fn dispatch(cli: Cli) -> Result<i32> {
         Commands::DiffTree(args) => difftree::run_diff_tree(&global, &args),
         Commands::MkTree(args) => mktree::run_mktree(&global, &args),
         Commands::NameRev(args) => namerev::run_name_rev(&global, &args),
+        Commands::Rerere(args) => rerere::run_rerere(&global, &args),
     }
 }
 

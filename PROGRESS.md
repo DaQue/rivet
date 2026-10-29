@@ -2039,3 +2039,9 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Harness: `state_of()` in `tools/difftest/lib.sh` now sorts `git fsck` output and takes the exit code from `fsck` (`PIPESTATUS[0]`), removing the readdir-order flake seen in `s_commit_tree`.
 * Gate: fmt, clippy `-D warnings` and `doc` clean; `cargo test --workspace` 298 passed / 0 failed / 0 ignored; `scenarios.sh` 334 PASS / `failures: 0`.
 * Left undone: `name-rev --all` and the multi-ref-on-a-tag-object choice (refused by name, in `GAPS.md`); UNIT 2 (`rerere`) is the next session's.
+
+## Block 16 — C12 (`rerere`)
+* `rivet-cli/src/cmd/rerere.rs` (new): `rerere` with `status`, `remaining`, `diff`, `gc`, `clear`, `forget` and `--[no-]rerere-autoupdate`, plus the hook other commands run. `rr-cache/<id>/{preimage,postimage,thisimage}[.N]` and `MERGE_RR` are byte-identical to git's, including variants. The hook runs on `merge` (also `--squash`), `cherry-pick`, `revert`, `rebase` conflicts and on `commit`, `merge`/`cherry-pick`/`revert`/`rebase --continue`. `merge --abort`/`--quit`, `reset`, `cherry-pick`/`revert --abort` and `rebase --abort` remove `MERGE_RR`. `rerere.enabled` (unset means "if rr-cache exists") and `rerere.autoUpdate` are honoured.
+* Proof: scenario `s_rerere` (about 190 commands against real git; stdout, stderr, exit codes, and an `rr-cache`/`MERGE_RR` dump in `state_of` and `rrdump`). It fails on `3054640` because the command does not exist there. Rust tests in `rerere.rs` pin git's conflict id.
+* Left undone (in `GAPS.md`): `forget` after `git add` (needs resolve-undo), `conflict-marker-size`, merge drivers, `am --3way`/`stash`/`checkout -m`.
+* Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 301 passed / 0 failed / 0 ignored; `scenarios.sh` 335 PASS, `failures: 0`.

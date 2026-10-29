@@ -3609,6 +3609,9 @@ s_rebase_conflict() {
     printf 'f\nresolved\n' >f
     v status
     v rebase --continue
+    printf 'a\nb\nRES\nd\ne\n' >f; printf '1\n2\nGRES\n4\n5\n' >g
+    v add f g
+    v rebase --continue
     v log --oneline
     v reflog
     v status
@@ -11100,6 +11103,170 @@ $H$H
     # nothing moved
     v for-each-ref
     vs fsck
+}
+
+# The rr-cache files and MERGE_RR as they are right now, into the transcript.
+rrdump() {
+    echo "\$ rrdump" >>"$TRANSCRIPT"
+    (cd "$(g rev-parse --git-dir)" && find rr-cache MERGE_RR -type f 2>/dev/null | sort | while read -r f; do echo "$f $(sha1sum <"$f" | cut -c1-12) $(tr '\0' '@' <"$f" | head -c 150 | tr '\n' '~')"; done) >>"$TRANSCRIPT"
+}
+
+s_rerere() {
+    v init -q repo; cd repo
+    # Disabled and without an rr-cache directory, every subcommand is silent.
+    v rerere; v rerere status; v rerere remaining; v rerere diff; v rerere gc; v rerere clear
+    v config rerere.enabled true
+    printf 'a\nb\nc\nd\ne\n' >f; printf '1\n2\n3\n4\n5\n' >g
+    v add f g; tick; v commit -q -m base
+    base=$(g rev-parse HEAD)
+    v checkout -q -b side
+    printf 'a\nb\nSIDE\nd\ne\n' >f; printf '1\n2\nS\n4\n5\n' >g
+    v add f g; tick; v commit -q -m side
+    v checkout -q -b side2 "$base"
+    printf 'a\nb\nSIDE\nD\ne\n' >f
+    v add f; tick; v commit -q -m side2
+    v checkout -q -b main2 "$base"
+    printf 'a\nb\nMAIN\nD\ne\n' >f
+    v add f; tick; v commit -q -m main2
+    v checkout -q main
+    printf 'a\nb\nMAIN\nd\ne\n' >f; printf '1\n2\nM\n4\n5\n' >g
+    v add f g; tick; v commit -q -m main
+    mainpre=$(g rev-parse HEAD)
+    # nothing is conflicted yet
+    v rerere; v rerere status; v rerere remaining; v rerere diff
+    v merge side
+    v rerere status; v rerere remaining; v rerere diff
+    v rerere
+    rrdump
+    v rerere status
+    # hand-resolve f in the work tree: rerere records it before the path is staged
+    printf 'a\nb\nRES\nd\ne\n' >f
+    v rerere; v rerere status; v rerere remaining
+    rrdump
+    printf '1\n2\nGRES\n4\n5\n' >g
+    v add f g
+    tick; v commit -q -m merged      # records g's resolution
+    rrdump
+    v rerere status; v rerere remaining
+    merged=$(g rev-parse HEAD)
+    # the same conflicts again: both are replayed, the index stays conflicted
+    v reset -q --hard "$mainpre"
+    v merge side
+    v rerere status; v rerere remaining; v rerere diff
+    v hash-object f g; v ls-files -s
+    rrdump
+    v merge --abort
+    # --rerere-autoupdate stages what it replays
+    v merge --rerere-autoupdate side
+    v status --short; v ls-files -s; v rerere remaining
+    tick; v commit -q -m again
+    v reset -q --hard "$mainpre"
+    v config rerere.autoUpdate true
+    v merge side
+    v status --short
+    v reset -q --hard "$mainpre"
+    v merge --no-rerere-autoupdate side
+    v status --short
+    v reset -q --hard "$mainpre"
+    v config rerere.autoUpdate false
+    v merge --rerere-autoupdate side
+    v status --short
+    v reset -q --hard "$mainpre"
+    v config --unset rerere.autoUpdate
+    # a conflict with the same hunks whose context breaks the replay gets a variant of its own
+    v checkout -q main2
+    m2=$(g rev-parse HEAD)
+    v merge side2
+    v rerere status; v rerere remaining
+    printf 'a\nb\nVAR\nD\ne\n' >f
+    v add f; tick; v commit -q -m merged2
+    v reset -q --hard "$m2"
+    v merge side2
+    v rerere status; v hash-object f
+    rrdump
+    v merge --abort
+    # cherry-pick, revert and rebase run rerere on their conflicts too
+    v checkout -q -b cp "$mainpre"
+    v cherry-pick side
+    v rerere status
+    rrdump
+    v cherry-pick --abort
+    v cherry-pick --rerere-autoupdate side
+    v status --short
+    v cherry-pick --abort
+    v checkout -q -b rb side
+    v rebase "$mainpre"
+    v rerere status; v status --short
+    v rebase --abort
+    v rebase --rerere-autoupdate "$mainpre"
+    v status --short
+    v rebase --continue
+    v log --oneline
+    v checkout -q -B fg "$mainpre"
+    # forget: the resolution is dropped and the preimage refreshed
+    v merge side
+    v rerere forget f
+    v rerere status; v rerere diff
+    v rerere forget f
+    v rerere forget nosuch
+    v rerere forget
+    v rerere status
+    v merge --abort
+    # a disabled setting turns everything off, a bad flag prints usage
+    v config rerere.enabled false
+    v checkout -q -b off "$mainpre"
+    v merge side
+    v rerere status
+    v merge --abort
+    v config rerere.enabled true
+    v rerere --bogus
+    v rerere bogus
+    v rerere -h
+    v rerere status extra
+    v rerere --no-rerere-autoupdate status
+    # gc keeps fresh entries and prunes old ones; clear drops unresolved preimages
+    v rerere gc
+    find .git/rr-cache -name 'preimage*' -o -name 'postimage*' | sort | head -0
+    for d in .git/rr-cache/*/; do touch -d '2001-01-01' "$d"preimage; done
+    v rerere gc
+    ls .git/rr-cache | wc -l >>"$TRANSCRIPT"
+    touch -d '2001-01-01' .git/rr-cache/*/postimage* 2>/dev/null
+    v rerere gc
+    ls .git/rr-cache | wc -l >>"$TRANSCRIPT"
+    v checkout -q -B cl "$mainpre"
+    v merge side
+    rrdump
+    v rerere clear
+    v rerere status
+    rrdump
+    v merge --abort
+    v checkout -q -B fin "$m2"
+    v merge side2
+    printf 'a\nb\nEND\nD\ne\n' >f
+    v rerere
+    rrdump
+    v merge --abort
+    # `merge --continue`, `cherry-pick --continue` and a conflicting `revert` record resolutions too
+    v checkout -q -B cc "$mainpre"
+    v merge side
+    printf 'a\nb\nCONT\nd\ne\n' >f; printf '1\n2\nCONTG\n4\n5\n' >g
+    v add f g
+    tick; v merge --continue
+    rrdump
+    v checkout -q -B cp2 "$mainpre"
+    v cherry-pick side
+    printf 'a\nb\nCONT\nd\ne\n' >f; printf '1\n2\nCONTG\n4\n5\n' >g
+    v add f g
+    tick; v cherry-pick --continue
+    rrdump
+    printf 'a1\nb\nCONT\nd\ne\n' >f; v add f; tick; v commit -q -m c1
+    printf 'a2\nb\nCONT\nd\ne\n' >f; v add f; tick; v commit -q -m c2
+    v revert HEAD~1
+    rrdump
+    printf 'aR\nb\nCONT\nd\ne\n' >f; v add f
+    tick; v revert --continue
+    rrdump
+    v log --oneline
 }
 
 case "${1:-}" in

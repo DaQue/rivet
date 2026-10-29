@@ -48,6 +48,14 @@ pub struct RebaseArgs {
     #[arg(value_name = "UPSTREAM")]
     pub upstream: Option<String>,
 
+    /// Stage resolutions `rerere` replays.
+    #[arg(long = "rerere-autoupdate", overrides_with = "no_rerere_autoupdate")]
+    pub rerere_autoupdate: bool,
+
+    /// Leave resolutions `rerere` replays unstaged.
+    #[arg(long = "no-rerere-autoupdate", overrides_with = "rerere_autoupdate")]
+    pub no_rerere_autoupdate: bool,
+
     /// The branch to rebase (default: the current one); it is switched to first.
     #[arg(value_name = "BRANCH")]
     pub branch: Option<String>,
@@ -282,6 +290,11 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
     }
     let mut repository = super::open(global)?;
     let dir = rebase_dir(&repository);
+    super::rerere::set_autoupdate_flag(match (args.rerere_autoupdate, args.no_rerere_autoupdate) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    });
     if args.keep_base {
         for (given, other) in [(args.onto.is_some(), "--onto"), (args.root, "--root")] {
             if given {
@@ -873,6 +886,7 @@ fn abort(repository: &mut Repository, dir: &Path) -> Result<i32> {
     let orig = ObjectId::from_hex(repository.format(), BStr::new(orig.as_bytes()))?;
     let tree = repository.commit_tree(orig)?;
     repository.reset_hard_to_tree(tree)?;
+    super::rerere::remove_merge_rr(repository.git_dir());
     if let Some(branch) = head_name.strip_prefix("refs/heads/") {
         let name = RefName::from_bytes(format!("refs/heads/{branch}").as_bytes())?;
         let reason = format!("{} (abort): returning to {head_name}", action());
@@ -902,6 +916,7 @@ fn continue_rebase(global: &GlobalArgs, repository: &mut Repository, dir: &Path)
         println!("You must edit all merge conflicts and then\nmark them as resolved using git add");
         return Ok(1);
     }
+    super::rerere::rerere_hook(repository)?;
     if !read_state(dir, "amend").is_empty() {
         // Stopped by `edit`: staged changes amend the commit, anything else just goes on.
         let mut options = rivet_core::StatusOptions::new();
@@ -1273,6 +1288,7 @@ fn run_todo(global: &GlobalArgs, repository: &mut Repository, dir: &Path) -> Res
             eprintln!(
                 "hint: Disable this message with \"git config set advice.mergeConflict false\""
             );
+            super::rerere::rerere_hook(repository)?;
             if cmd.is_fixup() {
                 eprintln!(
                     "You can amend the commit now, with\n\n  git commit --amend \n\nOnce you are satisfied with your changes, run\n\n  git rebase --continue"

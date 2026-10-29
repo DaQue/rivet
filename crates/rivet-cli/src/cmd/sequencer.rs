@@ -39,6 +39,14 @@ pub struct CherryPickArgs {
     /// Commit the resolved conflict and finish the operation.
     #[arg(long = "continue")]
     pub continue_pick: bool,
+
+    /// Stage resolutions `rerere` replays.
+    #[arg(long = "rerere-autoupdate", overrides_with = "no_rerere_autoupdate")]
+    pub rerere_autoupdate: bool,
+
+    /// Leave resolutions `rerere` replays unstaged.
+    #[arg(long = "no-rerere-autoupdate", overrides_with = "rerere_autoupdate")]
+    pub no_rerere_autoupdate: bool,
 }
 
 /// Arguments to `rivet revert`.
@@ -64,6 +72,14 @@ pub struct RevertArgs {
     /// Commit the resolved conflict and finish the operation.
     #[arg(long = "continue")]
     pub continue_revert: bool,
+
+    /// Stage resolutions `rerere` replays.
+    #[arg(long = "rerere-autoupdate", overrides_with = "no_rerere_autoupdate")]
+    pub rerere_autoupdate: bool,
+
+    /// Leave resolutions `rerere` replays unstaged.
+    #[arg(long = "no-rerere-autoupdate", overrides_with = "rerere_autoupdate")]
+    pub no_rerere_autoupdate: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -112,6 +128,11 @@ struct Settings {
 ///   state (or untouched, for an empty result).
 /// * `128` — a fatal error: nothing to continue, merge commits, a refused sequence.
 pub fn run_cherry_pick(global: &GlobalArgs, args: &CherryPickArgs) -> Result<i32> {
+    super::rerere::set_autoupdate_flag(match (args.rerere_autoupdate, args.no_rerere_autoupdate) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    });
     run(
         global,
         Op::Pick,
@@ -129,6 +150,11 @@ pub fn run_revert(global: &GlobalArgs, args: &RevertArgs) -> Result<i32> {
     if interactive && !args.no_edit && !args.abort && !args.continue_revert {
         anyhow::bail!("revert: starting an editor is not supported; pass --no-edit");
     }
+    super::rerere::set_autoupdate_flag(match (args.rerere_autoupdate, args.no_rerere_autoupdate) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    });
     run(
         global,
         Op::Revert,
@@ -468,6 +494,7 @@ fn apply_one(
             eprintln!("hint: run \"git {name} --abort\".");
         }
         eprintln!("hint: Disable this message with \"git config set advice.mergeConflict false\"");
+        super::rerere::rerere_hook(repository)?;
         return Ok(1);
     }
 
@@ -629,6 +656,7 @@ fn do_abort(repository: &mut Repository, op: Op) -> Result<i32> {
     let Some(head) = repository.head()?.oid() else {
         anyhow::bail!("cannot abort on an unborn branch");
     };
+    super::rerere::remove_merge_rr(&git_dir);
     let worktree = repository.worktree()?.clone();
     let mut index = std::mem::take(repository.index_mut());
     let result = rivet_core::merge::restore_to_commit(
@@ -676,6 +704,7 @@ fn do_continue(repository: &mut Repository, settings: &Settings) -> Result<i32> 
         eprintln!("fatal: Exiting because of an unresolved conflict.");
         return Ok(128);
     }
+    super::rerere::rerere_hook(repository)?;
     let Some(head) = repository.head()?.oid() else {
         anyhow::bail!("cannot continue on an unborn branch");
     };

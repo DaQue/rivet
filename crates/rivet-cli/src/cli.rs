@@ -41,8 +41,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crate::cmd::{
     am, apply, archive, attr, bisect, blame, branching, bundle, cherry, clean, committree,
     difftree, format_patch, grep, history, hook, ignore, lsremote, maintenance, mktree, mv,
-    namerev, notes, packrefs, plumbing, query, rebase, reflog, remote, sequencer, setup, snapshot,
-    sparse, stash, submodule, symbolicref, tag, updateref, worktree,
+    namerev, notes, packrefs, plumbing, query, rebase, reflog, remote, rerere, sequencer, setup,
+    snapshot, sparse, stash, submodule, symbolicref, tag, updateref, worktree,
 };
 
 /// The `rivet` command line.
@@ -352,6 +352,10 @@ pub enum Commands {
     /// Find symbolic names for given revs.
     #[command(name = "name-rev", disable_help_flag = true)]
     NameRev(namerev::NameRevArgs),
+
+    /// Reuse recorded resolution of conflicted merges.
+    #[command(name = "rerere", disable_help_flag = true)]
+    Rerere(rerere::RerereArgs),
 }
 
 /// The object format a repository is created with, or expects.
