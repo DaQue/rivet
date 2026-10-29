@@ -350,6 +350,27 @@ impl Repository {
         config.write(&path)
     }
 
+    /// Record `index.sparse` in `config.worktree` (`--sparse-index` / `--no-sparse-index`).
+    pub fn write_sparse_index_setting(&mut self, on: bool) -> Result<()> {
+        let path = self.worktree_config_path();
+        let mut config = if path.is_file() {
+            Config::load(&path)?
+        } else {
+            Config::new()
+        };
+        config.set(
+            BStr::new("index.sparse"),
+            if on { &b"true"[..] } else { &b"false"[..] },
+        )?;
+        config.write(&path)?;
+        // The in-memory configuration must agree before the index is written in the new shape.
+        self.config_mut().set(
+            BStr::new("index.sparse"),
+            if on { b"true" } else { b"false" },
+        )?;
+        Ok(())
+    }
+
     /// Replace the pattern file with `lines`.
     pub fn write_sparse_patterns(&self, lines: &[BString]) -> Result<()> {
         let path = self.sparse_pattern_path();

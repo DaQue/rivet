@@ -123,7 +123,7 @@ run_scenario() {
         export GIT_CONFIG_GLOBAL=$ROOT.gitconfig
         # Git's own post-command maintenance (it can repack, write a multi-pack-index or a cruft pack in
         # the middle of a scenario) is switched off: the scenarios drive every repack themselves.
-        printf '[init]\n\tdefaultBranch = main\n[advice]\n\tdetachedHead = true\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n' >"$GIT_CONFIG_GLOBAL"
+        printf '[init]\n\tdefaultBranch = main\n[advice]\n\tdetachedHead = true\n\tsparseIndexExpanded = false\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n' >"$GIT_CONFIG_GLOBAL"
         TRANSCRIPT=$base/$IMPL.transcript
         : >"$TRANSCRIPT"
         export GIT_AUTHOR_DATE="1700000000 +0100" GIT_COMMITTER_DATE="1700000000 +0100"

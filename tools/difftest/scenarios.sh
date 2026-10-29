@@ -11529,6 +11529,53 @@ s_merge_criss_cross_markers() {
     v fsck --no-dangling
 }
 
+s_sparse_index() {
+    v init -q repo; cd repo
+    mkdir -p a/sub b/c b/d e f/g/h
+    echo ax >a/x; echo ay >a/sub/y; echo bcy >b/c/y; echo bdz >b/d/z; echo ew >e/w; echo fghi >f/g/h/i; echo top >top; echo top2 >top2
+    v add -A; tick; v commit -q -m base
+    # rivet writes the sparse index; real git reads it
+    v sparse-checkout set --cone --sparse-index a
+    vg ls-files --sparse -s; v ls-files -s; vg ls-files -t --sparse; vg fsck --strict --no-dangling
+    v status --short; vg status --short
+    vg config --get index.sparse; v sparse-checkout list; ls
+    # commands inside the cone keep the shape
+    echo more >>a/x; echo new >a/new; v add a/x a/new; v status --short
+    vg ls-files --sparse -s
+    tick; v commit -q -m two; vg ls-files --sparse -s
+    v ls-files -s; v diff HEAD~1 --stat; v diff --cached --name-only; v log --oneline --stat
+    v rm -q a/new; v mv a/x a/y2; vg ls-files --sparse -s; v status --short
+    tick; v commit -q -m three
+    # a branch switch, a reset, a stash
+    v checkout -q -b side HEAD~1; vg ls-files --sparse -s; ls a; v status --short
+    echo s >a/s; v add a/s; tick; v commit -q -m side; vg ls-files --sparse -s
+    v checkout -q main; vg ls-files --sparse -s; v status --short
+    v reset -q --hard HEAD~1; vg ls-files --sparse -s; v status --short
+    echo wip >>a/x; v stash push -q; vg ls-files --sparse -s; v stash pop -q; v status --short
+    v checkout -q -f main
+    # widening the cone expands directories; narrowing collapses them again
+    v sparse-checkout add e f/g
+    vg ls-files --sparse -s; ls
+    v sparse-checkout set --cone b/c
+    vg ls-files --sparse -s; ls; v status --short
+    # a sparse index written by real git is read, updated and kept sparse
+    g sparse-checkout set --cone --sparse-index a e
+    vg ls-files --sparse -s
+    v ls-files -s; v status --short
+    echo gitmade >>e/w; v add e/w; v status --short; vg ls-files --sparse -s
+    tick; v commit -q -m four; v ls-files -s; vg ls-files --sparse -s
+    v diff HEAD~1; v log --oneline -3
+    # turning it off, on again, reapply and disable
+    v sparse-checkout set --cone --no-sparse-index a e; vg ls-files --sparse -s; vg config --get index.sparse
+    v sparse-checkout reapply --sparse-index; vg ls-files --sparse -s
+    v sparse-checkout init --cone --no-sparse-index; vg ls-files --sparse -s
+    v sparse-checkout set --sparse-index a; vg ls-files --sparse -s; v sparse-checkout list
+    v sparse-checkout disable; vg ls-files --sparse -s; vg config --get index.sparse; ls; v status --short
+    v sparse-checkout init --cone --sparse-index; vg ls-files --sparse -s
+    vg fsck --strict --no-dangling
+    v write-tree
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

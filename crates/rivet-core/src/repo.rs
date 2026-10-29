@@ -575,7 +575,7 @@ impl Repository {
         let refs = RefStore::open_linked(&git_dir, &common_dir, format)?;
         let index_path = git_dir.join("index");
         let index = if index_path.exists() {
-            Index::load(&index_path, format)?
+            Index::load_expanded(&index_path, format, &odb)?
         } else {
             Index::new()
         };
@@ -995,7 +995,7 @@ impl Repository {
     pub fn reload_index(&mut self) -> Result<()> {
         let path = self.git_dir.join("index");
         self.index = if path.exists() {
-            Index::load(&path, self.format)?
+            Index::load_expanded(&path, self.format, &self.odb)?
         } else {
             Index::new()
         };
@@ -1017,6 +1017,20 @@ impl Repository {
     pub fn write_index(&self) -> Result<()> {
         use crate::index::SplitMode;
         let path = self.git_dir.join("index");
+        // `index.sparse` in a cone-mode sparse checkout writes the sparse form: directories wholly
+        // outside the cone become single entries.
+        let collapsed;
+        let index = match self.sparse_index_definition() {
+            Some(sparse) => {
+                collapsed = self.index.collapse_sparse(&self.odb, &|dir: &[u8]| {
+                    let mut probe = dir.to_vec();
+                    probe.push(b'x');
+                    !sparse.includes(bstr::BStr::new(&probe))
+                })?;
+                &collapsed
+            }
+            None => &self.index,
+        };
         let split = match self.config_flag("core.splitindex") {
             Some(true) => SplitMode::Enable,
             Some(false) => SplitMode::Disable,
@@ -1032,15 +1046,25 @@ impl Repository {
         // A new index file starts at `index.version` (2 to 4), or v4 under `feature.manyFiles`;
         // an existing one keeps the version it has.
         if !path.exists()
-            && self.index.version() == crate::index::IndexVersion::V2
+            && index.version() == crate::index::IndexVersion::V2
             && let Some(version) = self.configured_index_version()
         {
-            let mut index = self.index.clone();
+            let mut index = index.clone();
             index.set_version(version);
             return index.write_with(&path, self.format, split, max_percent);
         }
         self.index
             .write_with(&path, self.format, split, max_percent)
+    }
+
+    /// The cone-mode definition when this repository writes a sparse index: `index.sparse`,
+    /// `core.sparseCheckout` and `core.sparseCheckoutCone` all on.
+    fn sparse_index_definition(&self) -> Option<crate::sparse::SparseCheckout> {
+        if self.config_flag("index.sparse") != Some(true) {
+            return None;
+        }
+        let (sparse, _) = self.sparse_checkout().ok().flatten()?;
+        sparse.is_cone().then_some(sparse)
     }
 
     fn config_flag(&self, key: &str) -> Option<bool> {

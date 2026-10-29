@@ -165,8 +165,8 @@ fn write_v4_varint(out: &mut Vec<u8>, mut value: usize) {
 /// Optional by its lowercase signature, but dropping it is not safe: the file then holds directory
 /// entries (040000) standing for whole subtrees, and treating those as files reports every path
 /// under them as deleted.
-fn refuse_sparse_index(signature: [u8; 4], allow_link: bool) -> Result<()> {
-    if signature == *b"sdir" {
+fn refuse_sparse_index(signature: [u8; 4], allow_link: bool, allow_sdir: bool) -> Result<()> {
+    if signature == *b"sdir" && !allow_sdir {
         return Err(Error::NotImplemented {
             what: "a sparse index (the `sdir` extension)",
         });
@@ -1174,6 +1174,10 @@ impl Index {
     /// [`crate::error::Error::BadIndexChecksum`] if the trailer does not match;
     /// [`crate::error::Error::CorruptIndex`] for a truncated or malformed body.
     pub fn load(path: &Path, format: ObjectFormat) -> Result<Self> {
+        Self::load_with(path, format, false)
+    }
+
+    fn load_with(path: &Path, format: ObjectFormat, allow_sdir: bool) -> Result<Self> {
         let data = match std::fs::read(path) {
             Ok(d) => d,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::new()),
@@ -1247,7 +1251,7 @@ impl Index {
                     reason: "truncated extension data",
                 });
             }
-            refuse_sparse_index(sig, true)?;
+            refuse_sparse_index(sig, true, allow_sdir)?;
             let ext_data = data[offset..offset + ext_len].to_vec();
             offset += ext_len;
             extensions.push(IndexExtension::new(sig, ext_data));
@@ -1343,7 +1347,7 @@ impl Index {
                     reason: "extension extends past end",
                 });
             }
-            refuse_sparse_index(sig, false)?;
+            refuse_sparse_index(sig, false, false)?;
             let ext_data = data[offset..offset + ext_len].to_vec();
             extensions.push(IndexExtension::new(sig, ext_data));
             offset += ext_len;
@@ -1513,6 +1517,168 @@ impl Index {
             self.serialize(&[], &exts, format),
             Some((split::shared_name(&shared), shared_bytes)),
         )
+    }
+
+    /// [`Index::load`] for an index that may be sparse (the `sdir` extension): every sparse
+    /// directory entry is replaced by the files of its tree, each marked `skip-worktree`, so the
+    /// result is the full index every command expects. `Index::load` still refuses such a file.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`Index::load`], and the object errors of reading a directory's tree.
+    pub fn load_expanded(path: &Path, format: ObjectFormat, odb: &crate::odb::Odb) -> Result<Self> {
+        let mut index = Self::load_with(path, format, true)?;
+        if index.extensions.iter().any(|e| e.signature == *b"sdir") {
+            index.expand_sparse_dirs(odb)?;
+        }
+        Ok(index)
+    }
+
+    fn expand_sparse_dirs(&mut self, odb: &crate::odb::Odb) -> Result<()> {
+        let format = odb.format();
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for entry in std::mem::take(&mut self.entries) {
+            if entry.mode != EntryMode::Tree {
+                entries.push(entry);
+                continue;
+            }
+            // A sparse directory is named with a trailing slash; the files below it are outside
+            // the checkout, hence `skip-worktree`, and have no stat data.
+            let mut stack = vec![(entry.path.clone(), entry.oid)];
+            while let Some((prefix, tree)) = stack.pop() {
+                let object = odb.read_typed(&tree, ObjectKind::Tree)?;
+                let parsed = crate::object::Tree::parse(format, object.data())?;
+                for item in parsed.iter() {
+                    let mut path = prefix.clone();
+                    path.extend_from_slice(item.name.as_slice());
+                    if item.mode == EntryMode::Tree {
+                        path.push(b'/');
+                        stack.push((path, item.oid));
+                        continue;
+                    }
+                    let mut file = IndexEntry {
+                        ctime_seconds: 0,
+                        ctime_nanos: 0,
+                        mtime_seconds: 0,
+                        mtime_nanos: 0,
+                        dev: 0,
+                        ino: 0,
+                        mode: item.mode,
+                        uid: 0,
+                        gid: 0,
+                        size: 0,
+                        oid: item.oid,
+                        flags: IndexEntryFlags::with(Stage::Normal, path.len()),
+                        extended_flags: 0,
+                        path,
+                    };
+                    file.extended_flags = IndexEntryExtendedFlags::empty()
+                        .set_skip_worktree(true)
+                        .bits();
+                    file.flags = file.flags.set_extended(true);
+                    entries.push(file);
+                }
+            }
+        }
+        entries.sort_by(compare_entries);
+        self.entries = entries;
+        // The cache tree was written for the sparse shape; it is rebuilt when needed.
+        self.extensions
+            .retain(|e| e.signature != *b"sdir" && e.signature != *b"TREE");
+        Ok(())
+    }
+
+    /// The sparse form of this index: every directory for which `outside(<dir>/)` holds and whose
+    /// files are all stage-0 `skip-worktree` entries becomes one `040000` entry naming its tree,
+    /// and the `sdir` extension marks the file. The topmost such directory wins.
+    ///
+    /// # Errors
+    ///
+    /// The object errors of writing the trees.
+    pub fn collapse_sparse(
+        &self,
+        odb: &crate::odb::Odb,
+        outside: &dyn Fn(&[u8]) -> bool,
+    ) -> Result<Self> {
+        let mut entries: Vec<IndexEntry> = Vec::with_capacity(self.entries.len());
+        let mut at = 0usize;
+        let mut collapsed_any = false;
+        while at < self.entries.len() {
+            let entry = &self.entries[at];
+            // The shallowest directory above this entry that qualifies.
+            let mut found: Option<usize> = None;
+            for (i, byte) in entry.path.iter().enumerate() {
+                if *byte != b'/' {
+                    continue;
+                }
+                let dir = &entry.path[..=i];
+                if !outside(dir) {
+                    continue;
+                }
+                let end = at
+                    + self.entries[at..]
+                        .iter()
+                        .take_while(|e| e.path.starts_with(dir))
+                        .count();
+                if self.entries[at..end]
+                    .iter()
+                    .all(|e| e.stage() == Stage::Normal && e.skip_worktree())
+                {
+                    found = Some(i);
+                    break;
+                }
+            }
+            let Some(i) = found else {
+                entries.push(entry.clone());
+                at += 1;
+                continue;
+            };
+            let dir = entry.path[..=i].to_vec();
+            let end = at
+                + self.entries[at..]
+                    .iter()
+                    .take_while(|e| e.path.starts_with(&dir))
+                    .count();
+            let mut sub = Index::new();
+            for e in &self.entries[at..end] {
+                let mut inner = e.clone();
+                inner.path = BString::from(&e.path[dir.len()..]);
+                inner.flags = inner.flags.with_name_length(inner.path.len());
+                sub.entries.push(inner);
+            }
+            let tree = IndexExt::write_tree(&sub, odb)?;
+            let mut dir_entry = IndexEntry {
+                ctime_seconds: 0,
+                ctime_nanos: 0,
+                mtime_seconds: 0,
+                mtime_nanos: 0,
+                dev: 0,
+                ino: 0,
+                mode: EntryMode::Tree,
+                uid: 0,
+                gid: 0,
+                size: 0,
+                oid: tree,
+                flags: IndexEntryFlags::with(Stage::Normal, dir.len()),
+                extended_flags: 0,
+                path: BString::from(dir),
+            };
+            dir_entry.extended_flags = IndexEntryExtendedFlags::empty()
+                .set_skip_worktree(true)
+                .bits();
+            dir_entry.flags = dir_entry.flags.set_extended(true);
+            entries.push(dir_entry);
+            collapsed_any = true;
+            at = end;
+        }
+        let mut out = self.clone();
+        out.entries = entries;
+        out.extensions.retain(|e| e.signature != *b"TREE");
+        if collapsed_any {
+            out.extensions
+                .push(IndexExtension::new(*b"sdir", Vec::new()));
+        }
+        Ok(out)
     }
 
     /// Merge the shared index named by a `link` extension into the entries read from the main file.

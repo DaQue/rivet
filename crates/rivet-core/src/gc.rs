@@ -207,7 +207,7 @@ pub(crate) fn other_worktree_roots(repo: &Repository, with_reflogs: bool) -> Res
         }
         let index_path = dir.join("index");
         if index_path.is_file() {
-            let index = crate::index::Index::load(&index_path, repo.format())?;
+            let index = crate::index::Index::load_expanded(&index_path, repo.format(), odb)?;
             for entry in index.entries() {
                 if entry.mode != crate::object::EntryMode::Commit && odb.contains(&entry.oid) {
                     roots.push(entry.oid);

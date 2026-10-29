@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 340 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 341 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-29, gate: 310 tests / 0 failed, 340 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-29, gate: 311 tests / 0 failed, 341 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -26,11 +26,16 @@ The command or subsystem is absent; it either fails at the argument parser or re
   `uploadpack.allowFilter` is read from its own repository config only, not from global config.
 * **Sparse checkout** — `sparse-checkout init`/`set`/`add`/`list`/`reapply`/`disable`/`check-rules` exist
   (cone mode and `--no-cone`, `--stdin`, `--skip-checks`; `check-rules` with `-z`, `--cone`/`--no-cone`,
-  `--rules-file`, C-quoted input and output; `clean` with `-n`/`-f`/`-v`, `s_sparse_clean`); the sparse index does not. `--sparse-index` is refused by name before anything is
-  touched, and an index that real git wrote with the `sdir` extension is refused on read
-  (`not implemented yet`), because treating its directory entries as files reports every path under
-  them as deleted (`crates/rivet-cli/tests/sparse_index.rs`). `--no-sparse-index` is accepted and
-  does nothing.
+  `--rules-file`, C-quoted input and output; `clean` with `-n`/`-f`/`-v`, `s_sparse_clean`). The sparse index works the way commands see it: a
+  file with the `sdir` extension is read by expanding each directory entry to its tree's files
+  (`skip-worktree`), and with `index.sparse` in a cone-mode checkout the index is written back sparse
+  (directories wholly outside the cone as one `040000` entry); `--[no-]sparse-index` set
+  `index.sparse` (`--sparse-index` alone implies cone mode, as in git) (`s_sparse_index`). Not done: a
+  sparse index is expanded in memory on every command, never operated on sparsely, so there is no
+  speed-up and git's `advice.sparseIndexExpanded` hint is never printed; the raw `Index::load` and
+  `Index::parse` still refuse `sdir` by name (only `Repository` expands); a directory holding an unmerged
+  entry stays expanded in the file; `rivet config --get` does not read `config.worktree` (where `index.sparse` and
+  `core.sparseCheckout*` live), so it reports them unset.
   In cone mode `set`/`add` take command-line paths relative to the current directory (`..` resolved,
   `outside repository` refused) and `--stdin` lines relative to the root; `--no-cone` from a
   subdirectory is refused as in git. `ls-files --sparse` is accepted (the index is never sparse, so it

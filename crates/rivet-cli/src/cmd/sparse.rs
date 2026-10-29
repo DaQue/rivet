@@ -53,7 +53,7 @@ struct Options {
     cone: Option<bool>,
     stdin: bool,
     skip_checks: bool,
-    sparse_index: bool,
+    sparse_index: Option<bool>,
     rest: Vec<String>,
 }
 
@@ -70,8 +70,8 @@ fn parse_options(args: &[String], allowed: &[&str]) -> std::result::Result<Optio
             "--" => only_paths = true,
             "--cone" if allowed.contains(&"cone") => options.cone = Some(true),
             "--no-cone" if allowed.contains(&"cone") => options.cone = Some(false),
-            "--no-sparse-index" if allowed.contains(&"cone") => {}
-            "--sparse-index" if allowed.contains(&"cone") => options.sparse_index = true,
+            "--no-sparse-index" if allowed.contains(&"cone") => options.sparse_index = Some(false),
+            "--sparse-index" if allowed.contains(&"cone") => options.sparse_index = Some(true),
             "--stdin" if allowed.contains(&"stdin") => options.stdin = true,
             "--skip-checks" if allowed.contains(&"skip-checks") => options.skip_checks = true,
             other => {
@@ -89,7 +89,7 @@ fn parse_options(args: &[String], allowed: &[&str]) -> std::result::Result<Optio
 ///
 /// # Caveats
 ///
-/// The sparse index (`--sparse-index`) is not implemented. In cone mode, paths given
+/// In cone mode, paths given
 /// on the command line to `set` and `add` are relative to the current directory and those read from
 /// `--stdin` to the work tree root; free-form patterns need the top-level directory.
 pub fn run_sparse_checkout(global: &GlobalArgs, args: &SparseArgs) -> Result<i32> {
@@ -122,20 +122,19 @@ pub fn run_sparse_checkout(global: &GlobalArgs, args: &SparseArgs) -> Result<i32
             return Ok(129);
         }
     };
-    if options.sparse_index {
-        // Refused before anything is touched: a full index under `index.sparse=true` would not be
-        // the index git writes.
-        anyhow::bail!("sparse-checkout {sub} --sparse-index is not implemented");
-    }
     let mut repository = super::open(global)?;
-    match sub.as_str() {
+    let code = match sub.as_str() {
         "list" => list(&repository),
         "init" => init(&mut repository, &options),
         "set" => set(&mut repository, &options, false),
         "add" => set(&mut repository, &options, true),
         "reapply" => reapply(&mut repository, &options),
         _ => disable(&mut repository),
+    }?;
+    if code == 0 && options.sparse_index.is_some() {
+        repository.write_index()?;
     }
+    Ok(code)
 }
 
 const CHECK_RULES_USAGE: &str = "usage: git sparse-checkout check-rules [-z] [--skip-checks][--[no-]cone] [--rules-file <file>]\n\n    -z                    terminate input and output files by a NUL character\n    --[no-]cone           when used with --rules-file interpret patterns as cone mode patterns\n    --[no-]rules-file <file>\n                          use patterns in <file> instead of the current ones.\n\n";
@@ -513,12 +512,23 @@ fn list(repository: &Repository) -> Result<i32> {
     Ok(0)
 }
 
+/// Apply `--[no-]sparse-index`: record `index.sparse` and rewrite the index in the shape it asks
+/// for (the index is rewritten after the checkout is applied, even when no file moved).
+fn set_sparse_index(repository: &mut Repository, options: &Options) -> Result<()> {
+    if let Some(on) = options.sparse_index {
+        repository.write_sparse_index_setting(on)?;
+    }
+    Ok(())
+}
+
 fn init(repository: &mut Repository, options: &Options) -> Result<i32> {
     let cone = match options.cone {
         Some(cone) => cone,
+        None if options.sparse_index == Some(true) => true,
         None => current_cone(repository)?,
     };
     repository.write_sparse_settings(true, cone, false)?;
+    set_sparse_index(repository, options)?;
     if !repository.sparse_patterns_exist() {
         repository.write_sparse_patterns(&cone_patterns(&BTreeSet::new()))?;
     }
@@ -533,6 +543,7 @@ fn reapply(repository: &mut Repository, options: &Options) -> Result<i32> {
     if let Some(cone) = options.cone {
         repository.write_sparse_settings(true, cone, false)?;
     }
+    set_sparse_index(repository, options)?;
     apply(repository)
 }
 
@@ -630,12 +641,14 @@ fn set(repository: &mut Repository, options: &Options, add: bool) -> Result<i32>
     }
     let cone = match options.cone {
         Some(cone) => cone,
+        None if options.sparse_index == Some(true) => true,
         None => current_cone(repository)?,
     };
     let prefix = cwd_prefix(repository)?;
     // Git switches the configuration on before it looks at the paths, so a refused path leaves
     // sparse checkout enabled without a pattern file (and a refused `--no-cone` in cone-less mode).
     repository.write_sparse_settings(true, cone, false)?;
+    set_sparse_index(repository, options)?;
     if !cone && !prefix.is_empty() {
         eprintln!("fatal: please run from the toplevel directory in non-cone mode");
         return Ok(128);
