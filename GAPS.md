@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 333 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 334 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-28, gate: 298 tests / 0 failed, 333 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-29, gate: 298 tests / 0 failed, 334 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -208,7 +208,7 @@ The command works for the common case; the listed options or edge cases are miss
 * **`update-ref --stdin`** — the `symref-update`, `symref-create`, `symref-delete` and `symref-verify` commands are refused by name (`not implemented: update-ref --stdin symref-…`, exit 128; `update_ref_refusals.rs`); `-0`/`--batch-updates` is not accepted. A `delete` releases its lock just before the removal, which takes the lock itself, so a concurrent writer can slip in between.
 * **`commit-tree`** — `-S`/`--gpg-sign` and a non-UTF-8 `i18n.commitEncoding` (git adds an `encoding` header) are refused by name (`commit-tree: signing (-S) is not supported`, exit 128; `commit_tree_refusals.rs`). Relative date words in `GIT_AUTHOR_DATE` (`2.days.ago`) are rejected as `invalid date format`, as `parse_git_date` does not read them.
 * **`diff-tree`** — `-c`/`--cc`, `--stdin`, `-M`/`-C`, `--numstat`, `--patch-with-raw`, `--patch-with-stat` and `--full-index` are refused by name (`diff-tree: <option> is not implemented`, exit 128; `diff_tree_refusals.rs`). `-p` of a symlink replaced by a regular file (or the reverse) prints one modification with mode lines where git prints a deletion and an addition; this is in the shared unified formatter, so `diff` has it too. `--first-parent` is accepted and changes nothing, as in git 2.x without `-m`.
-* **`mktree`** — a mode with a sign or wider than 32 bits is refused by name (`mktree: a negative mode is not implemented`, `mktree: a mode wider than 32 bits is not implemented`, exit 128; `mktree_refusals.rs`), because git's `strtoul` reading of such a mode wraps. Leading whitespace and `+` before a mode are accepted, as in git. `name-rev` is still absent (C11's second half).
+* **`mktree`** — a mode with a sign or wider than 32 bits is refused by name (`mktree: a negative mode is not implemented`, `mktree: a mode wider than 32 bits is not implemented`, exit 128; `mktree_refusals.rs`), because git's `strtoul` reading of such a mode wraps. Leading whitespace and `+` before a mode are accepted, as in git. 
 
 ## 3. Deliberate divergences
 
@@ -234,3 +234,4 @@ deleted in the commit that fixes it. A15 is not in the queue yet.
 If a command refuses with `not implemented`, that is this list, not a crash. Anything else —
 a panic, a wrong result, a hang — is a bug worth an issue with the command line and the
 repository state that produced it.
+* **`name-rev`** — `--all` is refused by name (`name-rev: --all is not implemented`; git lists commits in its in-memory object-table order). When several refs point at the same non-commit object (a tag object), git's choice among them depends on a binary search in its tip table; that case is refused by name instead of guessed. The commit-date cutoff optimisation is not reproduced (it does not change a name unless dates are badly skewed).

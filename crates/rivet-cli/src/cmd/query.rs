@@ -1600,7 +1600,7 @@ pub(super) fn describe_commit(
 }
 
 /// One name `name-rev` has found for a commit.
-struct RevName {
+pub(super) struct RevName {
     /// The tip's name, or the tip's name with the merge steps (`v1^2`) taken so far.
     tip: String,
     taggerdate: i64,
@@ -1611,68 +1611,74 @@ struct RevName {
     from_tag: bool,
 }
 
+impl RevName {
+    /// The name as `name-rev` prints it: `tip`, `tip~N`, or `tip^0` for a peeled tag.
+    pub(super) fn text(&self) -> String {
+        let stripped = self.tip.strip_suffix("^0").unwrap_or(&self.tip);
+        if self.generation == 0 {
+            self.tip.clone()
+        } else {
+            format!("{stripped}~{}", self.generation)
+        }
+    }
+}
+
 /// What `name-rev` charges for going through a merge's second (or later) parent.
 const MERGE_TRAVERSAL_WEIGHT: u64 = 65535;
 
-/// `git describe --contains`: `name-rev --tags --no-undefined [--always]` for one commit.
-fn contains_name(
+/// A ref `name-rev` starts naming from.
+pub(super) struct NameTip {
+    short: String,
+    commit: ObjectId,
+    taggerdate: i64,
+    from_tag: bool,
+    deref: bool,
+}
+
+/// The tip for a ref called `short`, or `None` when the ref does not peel to a commit.
+pub(super) fn name_tip(
     repository: &Repository,
-    target: ObjectId,
-    args: &DescribeArgs,
-) -> Result<Described> {
-    struct Tip {
-        short: String,
-        commit: ObjectId,
-        taggerdate: i64,
-        from_tag: bool,
-        deref: bool,
-    }
-    let mut tips: Vec<Tip> = Vec::new();
-    for (refname, oid) in refs_sorted(repository)? {
-        let is_tag = refname.starts_with("refs/tags/");
-        if !args.all && !is_tag {
-            continue;
-        }
-        let short = if args.all {
-            // Branches lose `refs/heads/`, everything else only `refs/`.
-            refname
-                .strip_prefix("refs/heads/")
-                .or_else(|| refname.strip_prefix("refs/"))
-                .unwrap_or(&refname)
-                .to_string()
-        } else {
-            refname.trim_start_matches("refs/tags/").to_string()
-        };
-        let object = repository.odb().read(&oid)?;
-        let (taggerdate, deref) = if object.kind() == ObjectKind::Tag {
-            (
-                Tag::parse(repository.format(), object.data())?.tagger.when,
-                true,
-            )
-        } else {
-            (0, false)
-        };
-        let Ok(commit) = repository.refs().peel_oid(oid, repository.odb()) else {
-            continue;
-        };
-        let Ok(commit_object) = repository.odb().read_typed(&commit, ObjectKind::Commit) else {
-            continue;
-        };
-        let taggerdate = if deref {
-            taggerdate
-        } else {
-            Commit::parse(repository.format(), commit_object.data())?
-                .committer
-                .when
-        };
-        tips.push(Tip {
-            short,
-            commit,
-            taggerdate,
-            from_tag: is_tag,
-            deref,
-        });
-    }
+    short: String,
+    from_tag: bool,
+    oid: ObjectId,
+) -> Result<Option<NameTip>> {
+    let object = repository.odb().read(&oid)?;
+    let (taggerdate, deref) = if object.kind() == ObjectKind::Tag {
+        (
+            Tag::parse(repository.format(), object.data())?.tagger.when,
+            true,
+        )
+    } else {
+        (0, false)
+    };
+    let Ok(commit) = repository.refs().peel_oid(oid, repository.odb()) else {
+        return Ok(None);
+    };
+    let Ok(commit_object) = repository.odb().read_typed(&commit, ObjectKind::Commit) else {
+        return Ok(None);
+    };
+    let taggerdate = if deref {
+        taggerdate
+    } else {
+        Commit::parse(repository.format(), commit_object.data())?
+            .committer
+            .when
+    };
+    Ok(Some(NameTip {
+        short,
+        commit,
+        taggerdate,
+        from_tag,
+        deref,
+    }))
+}
+
+/// Name every commit reachable from `tips` the way `git name-rev` does: tags before other refs,
+/// older before newer, and a name replaces an older one only when it is better.
+pub(super) fn name_commits(
+    repository: &Repository,
+    mut tips: Vec<NameTip>,
+) -> Result<HashMap<ObjectId, RevName>> {
     // Tags before other refs, older before newer (a stable sort keeps the name order within ties).
     tips.sort_by(|a, b| {
         b.from_tag
@@ -1755,15 +1761,38 @@ fn contains_name(
             }
         }
     }
-    match names.get(&target) {
-        Some(name) => {
-            let stripped = name.tip.strip_suffix("^0").unwrap_or(&name.tip);
-            Ok(Described::Name(if name.generation == 0 {
-                name.tip.clone()
-            } else {
-                format!("{stripped}~{}", name.generation)
-            }))
+    Ok(names)
+}
+
+/// `git describe --contains`: `name-rev --tags --no-undefined [--always]` for one commit.
+fn contains_name(
+    repository: &Repository,
+    target: ObjectId,
+    args: &DescribeArgs,
+) -> Result<Described> {
+    let mut tips: Vec<NameTip> = Vec::new();
+    for (refname, oid) in refs_sorted(repository)? {
+        let is_tag = refname.starts_with("refs/tags/");
+        if !args.all && !is_tag {
+            continue;
         }
+        let short = if args.all {
+            // Branches lose `refs/heads/`, everything else only `refs/`.
+            refname
+                .strip_prefix("refs/heads/")
+                .or_else(|| refname.strip_prefix("refs/"))
+                .unwrap_or(&refname)
+                .to_string()
+        } else {
+            refname.trim_start_matches("refs/tags/").to_string()
+        };
+        if let Some(tip) = name_tip(repository, short, is_tag, oid)? {
+            tips.push(tip);
+        }
+    }
+    let names = name_commits(repository, tips)?;
+    match names.get(&target) {
+        Some(name) => Ok(Described::Name(name.text())),
         None if args.always => Ok(Described::Name(super::history::abbrev(
             repository, &target, false,
         ))),

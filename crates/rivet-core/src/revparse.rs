@@ -169,8 +169,8 @@ fn resolve_base(format: ObjectFormat, refs: &RefStore, odb: &Odb, base: &BStr) -
     // Git tries ref names before abbreviated ids, so a branch called `cafe` or `facade` wins over
     // an object whose id happens to start with those digits.
     let abbreviation = hex && base.len() >= 4;
-    if let Some(name) = dwim_ref(refs, base) {
-        if abbreviation && short_candidates(odb, base)?.len() == 1 {
+    if let Some((name, found)) = dwim_ref(refs, base) {
+        if found > 1 || (abbreviation && short_candidates(odb, base)?.len() == 1) {
             eprintln!("warning: refname '{base}' is ambiguous.");
         }
         return refs.resolve_oid(&name);
@@ -277,7 +277,7 @@ fn short_date(secs: i64) -> String {
 /// Finds the ref a short name abbreviates, in Git's order: the literal name first, then the
 /// namespaces a short name usually abbreviates. A full ref name that exists must win over any
 /// tagged name of the same text.
-fn dwim_ref(refs: &RefStore, base: &BStr) -> Option<RefName> {
+fn dwim_ref(refs: &RefStore, base: &BStr) -> Option<(RefName, usize)> {
     let mut candidates = vec![base.to_owned()];
     for prefix in ["refs/", "refs/tags/", "refs/heads/", "refs/remotes/"] {
         let mut name = BString::from(prefix);
@@ -289,10 +289,13 @@ fn dwim_ref(refs: &RefStore, base: &BStr) -> Option<RefName> {
     remote_head.extend_from_slice(b"/HEAD");
     candidates.push(remote_head);
 
-    candidates.into_iter().find_map(|candidate| {
+    // Every candidate is probed: Git warns when more than one namespace has the name.
+    let mut found = candidates.into_iter().filter_map(|candidate| {
         let name = RefName::from_bytes(&candidate).ok()?;
         refs.read(&name).is_ok().then_some(name)
-    })
+    });
+    let first = found.next()?;
+    Some((first, 1 + found.count()))
 }
 
 /// The branch (or detached id) `n` checkouts ago, from `checkout: moving from X to Y` entries in
@@ -357,7 +360,7 @@ fn resolve_reflog(refs: &RefStore, base: &BStr) -> Result<Option<ObjectId>> {
             None => prefix.to_owned(),
         };
         match dwim_ref(refs, BStr::new(&typed)) {
-            Some(name) => (typed, name),
+            Some((name, _)) => (typed, name),
             None => return Ok(None),
         }
     };

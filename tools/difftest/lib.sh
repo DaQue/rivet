@@ -99,7 +99,7 @@ state_of() {
         for f in ORIG_HEAD MERGE_HEAD MERGE_MSG MERGE_MODE SQUASH_MSG CHERRY_PICK_HEAD REVERT_HEAD FETCH_HEAD packed-refs config; do
             [ -f "$gd/$f" ] && { echo "## $f"; cat "$gd/$f"; }
         done
-        echo "## fsck"; g fsck --strict --no-progress 2>&1 | grep -v '^dangling tree'; echo "fsck exit $?"
+        echo "## fsck"; g fsck --strict --no-progress 2>&1 | grep -v '^dangling tree' | sort; echo "fsck exit ${PIPESTATUS[0]}"
     )
 }
 

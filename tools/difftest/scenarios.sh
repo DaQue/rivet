@@ -10981,6 +10981,127 @@ s_mktree() {
     v for-each-ref
 }
 
+s_name_rev() {
+    v init -q repo; cd repo
+    echo a >f; v add f; tick; v commit -q -m a
+    echo b >f; v add f; tick; v commit -q -m b
+    v tag light
+    tick; v tag -a -m t v1
+    echo c >f; v add f; tick; v commit -q -m c
+    main=$(g rev-parse --abbrev-ref HEAD)
+    v checkout -q -b side light
+    echo s >s; v add s; tick; v commit -q -m s1
+    v checkout -q "$main"
+    tick; v merge -q --no-ff -m m side
+    echo d >f; v add f; tick; v commit -q -m d
+    v branch other HEAD~1
+    v update-ref refs/remotes/origin/main HEAD~2
+    v tag v2 HEAD~2
+    tick; v tag -a -m obj treetag 'HEAD^{tree}'
+    tick; v tag -a -m x v3
+    v tag heads/other other
+    H=$(g rev-parse HEAD); P=$(g rev-parse HEAD~2); M=$(g rev-parse HEAD~1); S=$(g rev-parse 'HEAD~1^2')
+    TREE=$(g rev-parse 'HEAD^{tree}')
+    # plain naming of heads, merges, parents of merges and of the second parent
+    for rev in HEAD HEAD~1 HEAD~2 HEAD~3 'HEAD~1^2' 'HEAD~1^2~1' HEAD~4 HEAD~5 v1 v2 v3 light main side other \
+        heads/other origin/main "$H" "$P" "${P%??????????????}" 'HEAD^{tree}' "$TREE" treetag 'v1^{commit}' nosuch; do
+        v name-rev $rev
+        v name-rev --name-only $rev
+        v name-rev --tags $rev
+        v name-rev --tags --name-only $rev
+        v name-rev --no-undefined $rev
+        v name-rev --no-undefined --tags $rev
+        v name-rev --no-undefined --always --tags $rev
+        v name-rev --always --tags --name-only $rev
+        v name-rev --undefined --no-undefined --always $rev
+    done
+    v name-rev HEAD HEAD~1 'HEAD~1^2' nosuch v1 "$TREE"
+    v name-rev --tags --name-only HEAD HEAD~2 nosuch v1
+    v name-rev HEAD HEAD
+    v name-rev --no-undefined --tags HEAD~1 HEAD
+    # --refs and --exclude: subpath matching, abbreviation, repetition, --no- forms
+    for o in "--refs=refs/tags/v2" "--refs=refs/tags/v*" "--refs=v2" "--refs=tags/v2" "--refs=oth*" \
+        "--refs=refs/heads/other" "--refs=heads/other" "--refs=refs/remotes/*" "--refs=origin/main" \
+        "--refs=main" "--refs=nomatch" "--refs=v2 --refs=refs/tags/v*" "--refs=refs/tags/v* --refs=v2" \
+        "--refs=oth* --refs=refs/tags/v2" "--refs=refs/tags/v2 --refs=oth*" "--tags --refs=refs/tags/v2" \
+        "--name-only --refs=refs/tags/v2" "--refs v2" "--exclude v2" "--exclude=v2" "--exclude=refs/tags/v2" \
+        "--exclude=refs/tags/v2 --exclude=refs/remotes/*" "--exclude=refs/tags/v2 --tags" \
+        "--exclude=v2 --no-exclude --tags" "--refs=v1 --no-refs" "--refs=v1 --refs=v2 --no-refs --no-tags" \
+        "--exclude=v* --tags" "--refs=v* --exclude=v3" "--exclude=heads/*" "--tags --name-only --refs=heads/other" \
+        "--tags --name-only --exclude=v2"; do
+        for rev in HEAD HEAD~1 HEAD~2 HEAD~3 'HEAD~1^2'; do
+            v name-rev $o $rev
+        done
+    done
+    v name-rev '--refs=[vo]*' HEAD~2 HEAD~1
+    v name-rev --refs='v?' HEAD~2
+    v name-rev --refs='refs/*/v2' HEAD~2
+    v name-rev --exclude='*' HEAD~2
+    v name-rev --refs= HEAD
+    v name-rev --exclude= HEAD
+    # --annotate-stdin
+    vin "see $H and $P.
+none
+$TREE
+a${H}b $M $S
+$H$H
+" name-rev --annotate-stdin
+    vin "see $H and $P.
+none
+$TREE
+a${H}b $M $S
+$H$H
+" name-rev --annotate-stdin --name-only
+    vin "see $H $P $M" name-rev --annotate-stdin --tags
+    vin "see $H $P $M" name-rev --annotate-stdin --tags --name-only
+    vin "see $H $P $M
+" name-rev --annotate-stdin --tags --no-undefined --always
+    vin "see $H $P $M
+" name-rev --annotate-stdin --refs=v1 --no-undefined
+    vin "$(printf '%s' "$H" | tr a-f A-F) ${H%?}" name-rev --annotate-stdin
+    vin "$(printf 'x\r\n%s\r\n' "$H")" name-rev --annotate-stdin
+    vin "$(printf 'x\r\n%s\r\ny\r\n' "$H")" name-rev --annotate-stdin
+    vin "$(printf '%s' "$H" | sed 's/[a-f]/\U&/')" name-rev --annotate-stdin
+    vin "$(printf '%s' "$H" | sed 's/[a-f]*$/\U&/')" name-rev --annotate-stdin
+    vin '' name-rev --annotate-stdin
+    vin "
+" name-rev --annotate-stdin
+    vin "see $H
+" name-rev --stdin
+    vin "see $H
+" name-rev --annotate-stdin --no-annotate-stdin
+    vin "see $H
+" name-rev --annotate-stdin HEAD
+    vin "see $H
+" name-rev --annotate-stdin --
+    # usage errors, abbreviations of options, the rest
+    v name-rev
+    v name-rev --
+    v name-rev -- HEAD
+    v name-rev --all HEAD
+    v name-rev --bogus
+    v name-rev -x HEAD
+    v name-rev -h
+    v name-rev --refs
+    v name-rev --exclude
+    v name-rev --name-only=3 HEAD
+    v name-rev --no-refs=3 HEAD
+    v name-rev --tag HEAD
+    v name-rev --na HEAD
+    v name-rev --name HEAD
+    v name-rev --un HEAD
+    v name-rev --no-un HEAD
+    v name-rev --no-n HEAD
+    v name-rev --al HEAD
+    v name-rev --alw HEAD
+    v name-rev --annotate HEAD
+    v name-rev --all --no-all HEAD
+    v name-rev --refs=v1 --refs
+    # nothing moved
+    v for-each-ref
+    v fsck
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
