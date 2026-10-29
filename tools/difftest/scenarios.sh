@@ -11428,6 +11428,199 @@ s_split_index() {
     v write-tree
 }
 
+# update-index: the options that change what the index holds. Real git reads every index rivet
+# writes (vg) and rivet reads the indexes real git writes (g setup, then v).
+s_update_index() {
+    v init -q repo; cd repo
+    echo a >a; echo b >b; mkdir d; echo c >d/c; echo e >e
+    v update-index a
+    v update-index --add a b d/c
+    v ls-files -s; vg fsck --strict --no-dangling
+    v update-index --add a b
+    v update-index --add --verbose e
+    v update-index --add -- e
+    tick; v commit -q -m one
+    echo a2 >a; chmod +x b; rm d/c
+    v update-index --refresh
+    v update-index -q --refresh
+    v update-index --really-refresh
+    v update-index --remove d/c
+    v update-index --remove nope
+    v update-index nope
+    v update-index --add nope
+    v update-index --add d
+    v update-index --add --verbose a nope b
+    v ls-files -s; v status --short
+    # chmod, in both spellings
+    v update-index --chmod=+x a
+    v update-index --chmod=-x a
+    v update-index --chmod +x a
+    v update-index --chmod=+z a
+    v update-index --chmod
+    v update-index --chmod=+x --verbose b
+    v update-index --chmod=-x --verbose b
+    v update-index --chmod=+x nope
+    v ls-files -s; vg ls-files -s
+    # force-remove, info-only, replace
+    echo f >f
+    v update-index --verbose --force-remove a
+    echo io >io; v update-index --info-only --add io
+    v ls-files -s; vg cat-file -t "$(g hash-object io)"
+    v update-index --force-remove io; v update-index --add f
+    echo g >g; v update-index --verbose --add g
+    mkdir sub; echo s >sub/s; v update-index --add sub/s
+    v update-index --add sub
+    echo t >t; v update-index --add t; rm t; mkdir t; echo u >t/u
+    v update-index --add t/u
+    v update-index --add --replace t/u
+    v ls-files -s
+    rm t/u; rmdir t; echo t2 >t
+    v update-index --add t
+    v update-index --add --replace t
+    v ls-files -s; vg fsck --strict --no-dangling
+    # the assume-unchanged and skip-worktree bits
+    v update-index --assume-unchanged e
+    vg ls-files -v
+    v update-index --assume-unchanged nope
+    v update-index --skip-worktree nope
+    v update-index --skip-worktree f
+    vg ls-files -v; iver
+    v update-index --no-skip-worktree f
+    v update-index --no-assume-unchanged e
+    vg ls-files -v; iver
+    v update-index --assume-unchanged --skip-worktree f
+    vg ls-files -v
+    v update-index --no-assume-unchanged f
+    echo e2 >e; v update-index --assume-unchanged e
+    v update-index --refresh
+    v update-index --really-refresh
+    vg ls-files -v
+    v update-index e
+    vg ls-files -v
+    v status --short
+    # paths relative to the current directory, and refused ones
+    (cd sub && v update-index --add --verbose s ../a && v update-index --add ../../outside && v update-index --add /nowhere)
+    v update-index --add .git/config
+    v update-index --add ../zz
+    v update-index --add d/
+    # --cacheinfo, in all of its spellings
+    h=e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+    v update-index --cacheinfo 100644,$h,z1
+    v update-index --add --cacheinfo 100644,$h,z1
+    v update-index --add --cacheinfo 100644 $h z2
+    v update-index --add --cacheinfo 100755,$h,z3 --cacheinfo 120000,$h,z4
+    v update-index --add --cacheinfo 100645,e69de29bb2d1d6434b8b29ae775ad8c2e48c5390,z5
+    v update-index --add --cacheinfo 100644,xx,z7
+    v update-index --add --cacheinfo 100644,$h
+    v update-index --add --cacheinfo
+    v update-index --cacheinfo 100644 e69
+    v update-index --add --cacheinfo 100644,$h,/abs
+    v update-index --add --cacheinfo 100644,$h,a/../b
+    v update-index --add --cacheinfo 100644,$h,z1/below
+    v update-index --add --replace --cacheinfo 100644,$h,z1/below
+    v update-index --add --cacheinfo 100644,$h,z1
+    v update-index --add --replace --cacheinfo 100644,$h,z1
+    v update-index --add --verbose --cacheinfo 100644,$h,z8
+    v ls-files -s; vg ls-files -s; vg fsck --strict --no-dangling
+    # git writes cacheinfo entries without stat data; --refresh fills in the ones that match
+    g update-index --add --cacheinfo 100644,"$(g hash-object f)",f9
+    cp f f9
+    v update-index --refresh
+    vg ls-files -s f9
+    # --index-info
+    printf '100644 %s\tnew1\n' $h | v update-index --index-info
+    printf '100644 %s 0\tnew2\n' $h | v update-index --index-info
+    printf '100644 blob %s\tnew3\n' $h | v update-index --index-info
+    printf '0 0000000000000000000000000000000000000000\tnew2\n' | v update-index --index-info
+    printf '100644 %s 2\tnew4\n100644 %s 3\tnew4\n' $h $h | v update-index --index-info
+    printf '100644 %s 3\tnew5\n100644 %s 1\tnew5\n' $h $h | v update-index --index-info
+    printf '100644 %s\tnew6\n' $h | v update-index -z --index-info
+    printf '100644 %s\tnew7\0' $h | v update-index -z --index-info
+    printf '100644 %s\t"q\\"r"\n' $h | v update-index --index-info
+    printf '100644 %s\t"q\\"r\n' $h | v update-index --index-info
+    printf 'garbage\n' | v update-index --index-info
+    printf '0000 %s\tzz\n' $h | v update-index --index-info
+    printf '100644 %s\t../zz\n' $h | v update-index --index-info
+    printf '100644 %s\t.git/zz\n' $h | v update-index --index-info
+    printf '100644 %sXX\tbad\n' $h | v update-index --index-info
+    printf '100644 %s\tlast' $h | v update-index --index-info
+    printf '' | v update-index --index-info
+    v ls-files -s; vg ls-files -s; vg fsck --strict --no-dangling
+    vg write-tree
+    # stages and the unmerged refusal of --refresh
+    v update-index --refresh
+    v update-index --unmerged --refresh
+    v update-index -q --refresh
+    echo n4 >new4; v update-index --add new4
+    v ls-files -s new4; v ls-files -s -u
+    # --stdin
+    printf 'a\nb\n' | v update-index --stdin
+    printf 'x1\n' >x1; printf 'x1\n' | v update-index --stdin
+    printf 'x1\n' | v update-index --add --stdin
+    printf '"x\\ty"\n' | v update-index --add --stdin
+    printf 'x1\0a\0' | v update-index --add -z --stdin
+    printf 'a\r\nx1\r\n' | v update-index --add --stdin
+    printf -- '--add\nx1\n' | v update-index --stdin
+    printf '"unterminated\n' | v update-index --add --stdin
+    printf 'nope\n' | v update-index --remove --stdin
+    printf 'x1\nnope\nx1\n' | v update-index --remove --verbose --stdin
+    v ls-files -s; vg fsck --strict --no-dangling
+    # a path in a symlinked directory, a symlink and a submodule
+    ln -s sub ln; echo l >sub/l
+    v update-index --add ln/l
+    v update-index --add --verbose ln
+    git init -q mod; (cd mod && echo m >m && g add m && tick && g commit -q -m m)
+    v update-index --add mod
+    vg ls-files -s ln mod
+    v update-index --refresh
+    (cd mod && echo m2 >m && g add m && tick && g commit -q -m m2)
+    v update-index --refresh
+    v update-index --ignore-submodules --refresh
+    v update-index --add mod
+    vg ls-files -s mod
+    v update-index --verbose --remove mod/nope
+    # --clear-resolve-undo, --force-write-index and the refusals
+    v update-index --clear-resolve-undo
+    v update-index --force-write-index
+    v update-index --verbose
+    v update-index --ignore-missing --refresh
+    v update-index --no-verbose --no-add --no-remove --no-replace --no-info-only
+    v update-index --bogus
+    v update-index -h
+    vg fsck --strict --no-dangling
+    vg status --short
+    find mod/.git -name index -delete
+}
+
+# add -N: the intent-to-add bit, a version 3 index, and what each command makes of such an entry.
+s_add_intent_to_add() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    echo n >n; echo m >m
+    v add -N n m
+    iver
+    v ls-files -s; vg ls-files -s; vg fsck --strict --no-dangling
+    v status --short; v status
+    v diff; v diff --stat; v diff --name-status; v diff --cached
+    v write-tree; vg write-tree
+    v commit -q -m two
+    v update-index --refresh
+    echo more >>n
+    v update-index --refresh
+    v add -N a
+    echo a2 >>a; v add -N a
+    v ls-files -s
+    v add n
+    iver
+    v ls-files -s; v status --short
+    v add -N nonexistent
+    echo z >z; v add -N z; v reset -q z; v status --short; iver
+    v add -N z; v rm -q --cached z; v ls-files -s; v status --short
+    v add -N z; tick; v commit -q -a -m three
+    v ls-files -s; v show --stat --format=%s HEAD; v status --short
+    vg fsck --strict --no-dangling
+}
+
 # The commit-graph and multi-pack-index files as they are now, into the transcript.
 graphfiles() {
     local gd; gd=$(g rev-parse --git-dir)

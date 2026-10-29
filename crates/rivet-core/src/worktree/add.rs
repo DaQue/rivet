@@ -403,14 +403,23 @@ pub fn add_paths(
             if entry.is_gitlink() {
                 continue;
             }
+            // `add -N` of a path the index already tracks changes nothing.
+            if options.intent_to_add {
+                continue;
+            }
             // Already current: Git writes nothing, and rewriting the stat data alone would make
-            // the index look different from Git's for an operation that changed nothing.
-            if !options.intent_to_add && stat.is_unchanged(entry, index_mtime) {
+            // the index look different from Git's for an operation that changed nothing. An
+            // intent-to-add entry holds no content yet, so it is never current.
+            if !entry.is_intent_to_add() && stat.is_unchanged(entry, index_mtime) {
                 continue;
             }
         }
 
         let oid = if options.intent_to_add {
+            // Git stores the empty blob so that the entry names an object that exists.
+            if !options.dry_run {
+                odb.write_raw(ObjectKind::Blob, b"")?;
+            }
             empty_blob
         } else if options.dry_run {
             worktree.hash_file_with(BStr::new(&path), &mut || {
@@ -430,7 +439,7 @@ pub fn add_paths(
         };
 
         if !options.dry_run {
-            let entry = build_index_entry(
+            let mut entry = build_index_entry(
                 worktree.format(),
                 BStr::new(&path),
                 oid,
@@ -438,6 +447,10 @@ pub fn add_paths(
                 stat.mode,
                 Stage::Normal,
             );
+            if options.intent_to_add {
+                entry.extended_flags |= crate::index::INTENT_TO_ADD;
+                entry.flags = entry.flags.set_extended(true);
+            }
             if index.stages(BStr::new(&path)).len() > 1 {
                 // `add` during a merge is the resolution operation: every stage is dropped and a
                 // single stage-0 entry replaces them.

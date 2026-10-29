@@ -190,6 +190,9 @@ fn refuse_sparse_index(signature: [u8; 4], allow_link: bool, allow_sdir: bool) -
 /// absence is an empty index rather than an error.
 pub const INDEX_FILE: &str = "index";
 
+/// The intent-to-add bit of an entry's extended flags word.
+pub const INTENT_TO_ADD: u16 = 0x2000;
+
 /// Phase 3 — the four bytes an index file begins with.
 pub const DIRC_MAGIC: &[u8; 4] = b"DIRC";
 
@@ -955,6 +958,12 @@ impl IndexEntry {
     pub fn skip_worktree(&self) -> bool {
         self.flags.is_extended()
             && IndexEntryExtendedFlags::from_bits(self.extended_flags).skip_worktree()
+    }
+
+    /// Whether the entry is an intent-to-add placeholder (`git add -N`): tracked, carrying the empty
+    /// blob's id, and not part of any tree built from the index.
+    pub fn is_intent_to_add(&self) -> bool {
+        self.flags.is_extended() && self.extended_flags & INTENT_TO_ADD != 0
     }
 
     /// Phase 3 — whether the entry's mode says it is a symlink.
@@ -2380,6 +2389,39 @@ mod tests {
             IndexEntryExtendedFlags::from_bits(0x4001).extended_mode_bits(),
             0x0001
         );
+    }
+
+    #[test]
+    fn intent_to_add_needs_the_extended_word_and_its_bit() {
+        let mut entry = IndexEntry {
+            ctime_seconds: 0,
+            ctime_nanos: 0,
+            mtime_seconds: 0,
+            mtime_nanos: 0,
+            dev: 0,
+            ino: 0,
+            mode: EntryMode::Blob,
+            uid: 0,
+            gid: 0,
+            size: 0,
+            oid: ObjectId::from_bytes(ObjectFormat::Sha1, &[0; 20]).unwrap(),
+            flags: IndexEntryFlags::with(Stage::Normal, 1),
+            extended_flags: INTENT_TO_ADD,
+            path: BString::from("a"),
+        };
+        // The bit alone means nothing while the entry carries no extended word.
+        assert!(!entry.is_intent_to_add());
+        entry.flags = entry.flags.set_extended(true);
+        assert!(entry.is_intent_to_add());
+        entry.extended_flags = IndexEntryExtendedFlags::empty()
+            .set_skip_worktree(true)
+            .bits();
+        assert!(!entry.is_intent_to_add() && entry.skip_worktree());
+        // An index holding such an entry is written as version 3.
+        entry.extended_flags = INTENT_TO_ADD;
+        let mut index = Index::new();
+        index.insert(entry);
+        assert_eq!(index.to_bytes(ObjectFormat::Sha1)[7], 3);
     }
 
     #[test]

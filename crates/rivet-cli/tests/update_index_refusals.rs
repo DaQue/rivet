@@ -1,5 +1,7 @@
-//! `update-index` implements only the index-format options; every other option is refused by name
-//! and leaves the index file untouched. The implemented part is the scenarios `s_split_index` and
+//! `update-index` implements the entry options (`--add`, `--remove`, `--refresh`, `--cacheinfo`,
+//! `--index-info`, `--stdin`, `--chmod`, the assume-unchanged and skip-worktree bits) and the
+//! index-format options; the options that remain are refused by name and leave the index file
+//! untouched. The implemented part is the scenarios `s_update_index`, `s_split_index` and
 //! `s_index_version`.
 
 use std::path::Path;
@@ -27,11 +29,16 @@ fn unimplemented_options_are_refused_by_name_and_leave_the_index_alone() {
     let before = std::fs::read(dir.join(".git/index")).unwrap();
 
     for option in [
-        "--refresh",
-        "--add",
-        "--cacheinfo",
-        "--assume-unchanged",
-        "--stdin",
+        "--unresolve",
+        "--again",
+        "-g",
+        "--untracked-cache",
+        "--no-untracked-cache",
+        "--test-untracked-cache",
+        "--force-untracked-cache",
+        "--fsmonitor",
+        "--fsmonitor-valid",
+        "--no-fsmonitor-valid",
     ] {
         let out = run(&dir, &["update-index", option]);
         assert_eq!(out.status.code(), Some(128), "{option}");
@@ -42,6 +49,20 @@ fn unimplemented_options_are_refused_by_name_and_leave_the_index_alone() {
             "{option}: {err}"
         );
     }
+    assert_eq!(std::fs::read(dir.join(".git/index")).unwrap(), before);
+
+    // A sparse-directory entry (mode 040000) is refused rather than turned into a gitlink.
+    let out = run(
+        &dir,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "040000,e69de29bb2d1d6434b8b29ae775ad8c2e48c5391,dir",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(128));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("sparse directory entries"));
     assert_eq!(std::fs::read(dir.join(".git/index")).unwrap(), before);
     let _ = std::fs::remove_dir_all(&dir);
 }

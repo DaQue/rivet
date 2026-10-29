@@ -407,6 +407,10 @@ pub fn staged_changes(
             conflicted.insert(entry.path.clone());
             continue;
         }
+        // An intent-to-add entry has no staged content: `HEAD` against the index sees no path.
+        if entry.is_intent_to_add() {
+            continue;
+        }
         match tracked.remove(&entry.path) {
             None => out.push(StatusEntry {
                 path: entry.path.clone(),
@@ -573,6 +577,21 @@ pub fn unstaged_changes(
             });
             continue;
         };
+
+        // An intent-to-add entry is a promise of content: the file is a new one, whatever it holds.
+        if entry.is_intent_to_add() {
+            out.push(StatusEntry {
+                path: entry.path.clone(),
+                kind: ChangeKind::Added,
+                old_oid: None,
+                new_oid: Some(worktree.hash_file_with(BStr::new(&entry.path), &mut || {
+                    crate::worktree::add::index_blob_has_cr(index, odb, BStr::new(&entry.path))
+                })?),
+                old_mode: None,
+                new_mode: Some(data.mode),
+            });
+            continue;
+        }
 
         // A stat match is only trustworthy when it is not racy: an entry written in the same
         // timestamp tick as the index could have been modified again without the mtime moving.

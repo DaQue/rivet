@@ -1783,6 +1783,10 @@ pub(crate) fn write_tree_of(odb: &Odb, index: &crate::index::Index) -> Result<Ob
                 path: entry.path.clone(),
             });
         }
+        // `git add -N` records the path without its content; no tree contains it.
+        if entry.is_intent_to_add() {
+            continue;
+        }
         let components: Vec<BString> = entry
             .path
             .split(|b| *b == b'/')
