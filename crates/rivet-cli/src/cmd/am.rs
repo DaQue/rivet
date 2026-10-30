@@ -9,7 +9,10 @@
 //! (Git's directory name for it) with the remaining messages; `--continue` commits what was fixed
 //! up by hand, `--skip` drops the patch and `--abort` restores the branch.
 //!
-//! Not implemented: `--3way`, `--signoff`, `--keep`, `--directory`, `--whitespace`, scissors,
+//! `--3way` falls back, when a patch does not apply, to merging the post-image of the blobs named on
+//! its `index` lines into the current tree, as git does; the conflict is then stopped like any other.
+//!
+//! Not implemented: `--signoff`, `--keep`, `--directory`, `--whitespace`, scissors,
 //! mailbox formats other than plain mbox, RFC 2047 encoded headers.
 
 use std::io::Read as _;
@@ -45,6 +48,22 @@ pub struct AmArgs {
     /// Do not run the `applypatch-msg` and `pre-applypatch` hooks.
     #[arg(short = 'n', long = "no-verify")]
     pub no_verify: bool,
+
+    /// When a patch does not apply, merge it with the blobs its `index` lines name.
+    #[arg(short = '3', long = "3way", overrides_with = "no_three_way")]
+    pub three_way: bool,
+
+    /// Do not fall back on a three-way merge.
+    #[arg(long = "no-3way", overrides_with = "three_way")]
+    pub no_three_way: bool,
+
+    /// Stage the files `rerere` resolves from a recorded resolution.
+    #[arg(long = "rerere-autoupdate", overrides_with = "no_rerere_autoupdate")]
+    pub rerere_autoupdate: bool,
+
+    /// Leave the files `rerere` resolves unstaged.
+    #[arg(long = "no-rerere-autoupdate", overrides_with = "rerere_autoupdate")]
+    pub no_rerere_autoupdate: bool,
 }
 
 fn dir_of(repository: &Repository) -> PathBuf {
@@ -253,6 +272,11 @@ fn hints(with_show: bool) {
 pub fn run_am(global: &GlobalArgs, args: &AmArgs) -> Result<i32> {
     let mut repository = super::open(global)?;
     let dir = dir_of(&repository);
+    super::rerere::set_autoupdate_flag(match (args.rerere_autoupdate, args.no_rerere_autoupdate) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    });
     let controls = [args.continue_am, args.skip, args.abort]
         .iter()
         .filter(|on| **on)
@@ -266,9 +290,11 @@ pub fn run_am(global: &GlobalArgs, args: &AmArgs) -> Result<i32> {
             return Ok(128);
         }
         if args.abort {
+            super::rerere::rerere_clear(&repository)?;
             return abort(&mut repository, &dir);
         }
         if args.skip {
+            super::rerere::rerere_clear(&repository)?;
             let head = repository.head()?.oid();
             if let Some(head) = head {
                 let tree = repository.commit_tree(head)?;
@@ -343,6 +369,16 @@ pub fn run_am(global: &GlobalArgs, args: &AmArgs) -> Result<i32> {
     }
     write(&dir, "next", "1\n")?;
     write(&dir, "last", &format!("{}\n", messages.len()))?;
+    let configured = repository
+        .config_value(BStr::new("am.threeway"))?
+        .is_some_and(|v| {
+            matches!(
+                v.to_ascii_lowercase().as_slice(),
+                b"true" | b"yes" | b"on" | b"1"
+            )
+        });
+    let three_way = args.three_way || (configured && !args.no_three_way);
+    write(&dir, "threeway", if three_way { "t\n" } else { "f\n" })?;
     run_patches(global, &mut repository, &dir, args.no_verify)
 }
 
@@ -437,6 +473,15 @@ fn run_patches(
                     eprintln!("{line}");
                 }
             }
+            Err(lines) if read(dir, "threeway") == "t" => {
+                // The direct attempt's diagnostics are not shown when the merge may still work.
+                drop(lines);
+                if let Some(code) =
+                    fall_back_threeway(global, repository, &patches, &message.subject, &number)?
+                {
+                    return Ok(code);
+                }
+            }
             Err(lines) => {
                 for line in lines {
                     eprintln!("{line}");
@@ -461,6 +506,85 @@ fn run_patches(
     }
     let _ = std::fs::remove_dir_all(dir);
     Ok(0)
+}
+
+/// Git's `fall_back_threeway`: rebuild the blobs the patch started from, apply the patch to them,
+/// and merge the result into the current tree. `Some(code)` means the run stopped (the message is
+/// out already), `None` that the merge was clean and the patch can be committed.
+fn fall_back_threeway(
+    global: &GlobalArgs,
+    repository: &mut Repository,
+    patches: &[super::patch::FilePatch],
+    subject: &str,
+    number: &str,
+) -> Result<Option<i32>> {
+    let stop = |lines: Vec<String>| {
+        for line in lines {
+            eprintln!("{line}");
+        }
+        hints(true);
+        println!("Patch failed at {number} {subject}");
+        Ok(Some(128))
+    };
+    let ancestor = match super::patch::build_ancestor(repository, patches) {
+        Ok(ancestor) => ancestor,
+        Err(lines) => return stop(lines),
+    };
+    if !global.quiet {
+        println!("Using index info to reconstruct a base tree...");
+        for line in ancestor.changed_lines(repository) {
+            println!("{line}");
+        }
+    }
+    let their_tree = match ancestor.apply_patches(repository, patches) {
+        Ok(tree) => tree,
+        Err(mut lines) => {
+            lines.push(
+                "error: Did you hand edit your patch?\nIt does not apply to blobs recorded in its index."
+                    .to_string(),
+            );
+            return stop(lines);
+        }
+    };
+    let base_tree = ancestor.base_tree(repository)?;
+    if !global.quiet {
+        println!("Falling back to patching base and 3-way merge...");
+    }
+    let mut options = rivet_core::MergeOptions::new();
+    options.find_renames = super::renames_enabled(repository, "merge.renames");
+    options.labels = (BString::from("HEAD"), BString::from(subject));
+    options.base_label = BString::from("constructed merge base");
+    if let Some(style) = super::config_conflict_style(repository) {
+        options.conflict_style = style;
+    }
+    let result = match repository.merge_trees_into_worktree(Some(base_tree), their_tree, &options) {
+        Ok(result) => result,
+        Err(error) => {
+            let code = super::branching::report_checkout_refusal(error, "merge")?;
+            hints(true);
+            println!("Patch failed at {number} {subject}");
+            return Ok(Some(if code == 1 { 128 } else { code }));
+        }
+    };
+    let ours_tree = repository.head_tree_oid()?.unwrap_or(base_tree);
+    let auto_merged = if global.quiet {
+        Vec::new()
+    } else {
+        super::branching::cleanly_content_merged_trees(
+            repository,
+            Some(base_tree),
+            ours_tree,
+            their_tree,
+            &result,
+        )?
+    };
+    let conflicted = super::branching::print_merge_report(&result, subject, &auto_merged);
+    if conflicted.is_empty() {
+        return Ok(None);
+    }
+    super::rerere::rerere_hook(repository)?;
+    eprintln!("error: Failed to merge in the changes.");
+    stop(Vec::new())
 }
 
 fn tz_text(minutes: i32) -> String {
@@ -502,6 +626,15 @@ fn resume(
     no_verify: bool,
 ) -> Result<i32> {
     let subject = read(dir, "msg");
+    if repository.index().has_conflicts() {
+        println!("Applying: {subject}");
+        println!(
+            "You still have unmerged paths in your index.\nYou should 'git add' each file with resolved conflicts to mark them as such.\nYou might run `git rm` on a file to accept \"deleted by them\" for it."
+        );
+        hints(false);
+        return Ok(128);
+    }
+    super::rerere::rerere_hook(repository)?;
     let tree = repository.write_tree()?;
     let head_tree = repository.head_tree_oid()?;
     if head_tree == Some(tree) {

@@ -472,6 +472,7 @@ pub(super) fn apply_autostash(repository: &mut Repository, stash: ObjectId) -> R
         "Updated upstream",
         "Stashed changes",
         "Stash base",
+        true,
     )? {
         super::stash::autostash_store(repository, stash, "autostash")?;
         eprintln!(

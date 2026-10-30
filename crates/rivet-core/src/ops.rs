@@ -447,6 +447,8 @@ impl Repository {
                 index.insert(entry);
             }
         }
+        // A branch switch is an `unpack_trees` in git, which drops what was resolved before.
+        index.clear_resolve_undo();
         index.sort();
         self.write_index()
     }
@@ -816,6 +818,77 @@ impl Repository {
         self.merge_base_tree_into_worktree(base_tree, theirs, options)
     }
 
+    /// Refuse, by name, the `merge` and `conflict-marker-size` attributes where git would act on
+    /// them: a three-way content merge of a path that has a merge driver, `-merge`, `merge=binary`
+    /// or `merge=union`, or a content conflict whose markers git would write at another width.
+    fn refuse_merge_attributes(
+        &self,
+        base_tree: Option<ObjectId>,
+        ours_tree: ObjectId,
+        theirs_tree: ObjectId,
+        result: &crate::merge::TreeMerge,
+    ) -> Result<()> {
+        use crate::convert::Attr;
+        let mut maps: Option<[std::collections::BTreeMap<BString, (EntryMode, ObjectId)>; 3]> =
+            None;
+        for merged in &result.paths {
+            let path = BStr::new(&merged.path[..]);
+            let stack = self.worktree()?.attr_stack(path)?;
+            let merge = stack.lookup(path, b"merge");
+            let size = stack.lookup(path, b"conflict-marker-size");
+            // A name that is neither built in nor configured is merged as text, with a warning.
+            let default_merge = matches!(&merge, Attr::Unspecified | Attr::Set)
+                || matches!(&merge, Attr::Value(v) if v == "text")
+                || matches!(&merge, Attr::Value(v)
+                    if v != "binary"
+                        && v != "union"
+                        && self
+                            .config_value(BStr::new(&format!("merge.{}.driver", v.to_str_lossy())))?
+                            .is_none());
+            let default_size =
+                matches!(&size, Attr::Unspecified) || matches!(&size, Attr::Value(v) if v == "7");
+            let conflicted = merged.kind == Some(crate::merge::ConflictKind::Content);
+            let refuse = |what: String| {
+                Error::Message(format!(
+                    "{}: {what} is not supported by rivet; refusing to merge the path the way git would not have",
+                    path.to_str_lossy()
+                ))
+            };
+            if conflicted && !default_size {
+                return Err(refuse(format!(
+                    "the `conflict-marker-size={}` attribute",
+                    size.render().to_str_lossy()
+                )));
+            }
+            if default_merge {
+                continue;
+            }
+            let [base, ours, theirs] = maps.get_or_insert_with(|| {
+                let load = |tree: Option<ObjectId>| {
+                    tree.and_then(|t| flatten_tree(self.odb(), t).ok())
+                        .unwrap_or_default()
+                };
+                [
+                    load(base_tree),
+                    load(Some(ours_tree)),
+                    load(Some(theirs_tree)),
+                ]
+            });
+            let side = |map: &std::collections::BTreeMap<BString, (EntryMode, ObjectId)>| {
+                map.get(&merged.path).map(|(_, oid)| *oid)
+            };
+            let (b, o, t) = (side(base), side(ours), side(theirs));
+            if o.is_some() && t.is_some() && o != t && o != b && t != b {
+                let what = match &merge {
+                    Attr::Unset => "the `-merge` attribute".to_string(),
+                    other => format!("the `merge={}` attribute", other.render().to_str_lossy()),
+                };
+                return Err(refuse(what));
+            }
+        }
+        Ok(())
+    }
+
     /// As [`Repository::merge_into_worktree`], with the base given as a tree: a criss-cross
     /// merge's virtual base is a tree no commit records.
     pub fn merge_base_tree_into_worktree(
@@ -824,13 +897,24 @@ impl Repository {
         theirs: ObjectId,
         options: &crate::merge::MergeOptions,
     ) -> Result<crate::merge::TreeMerge> {
+        let theirs_tree = self.commit_tree(theirs)?;
+        self.merge_trees_into_worktree(base_tree, theirs_tree, options)
+    }
+
+    /// As [`Repository::merge_base_tree_into_worktree`], with both the base and the other side
+    /// given as trees: `am --3way` merges a tree no commit records.
+    pub fn merge_trees_into_worktree(
+        &mut self,
+        base_tree: Option<ObjectId>,
+        theirs_tree: ObjectId,
+        options: &crate::merge::MergeOptions,
+    ) -> Result<crate::merge::TreeMerge> {
         let root = self.worktree()?.require_root("merge")?.to_path_buf();
         let ours_commit = self
             .head()?
             .oid()
             .ok_or_else(|| Error::Message("cannot merge into an unborn branch".to_string()))?;
         let ours_tree = self.commit_tree(ours_commit)?;
-        let theirs_tree = self.commit_tree(theirs)?;
         let mut result =
             crate::merge::merge_trees(self.odb(), base_tree, ours_tree, theirs_tree, options)?;
         let ours_map = flatten_tree(self.odb(), ours_tree)?;
@@ -838,6 +922,7 @@ impl Repository {
             let ours = ours_map.get(&p.path).map(|(_, oid)| *oid);
             p.kind.is_some() || ours != p.result
         });
+        self.refuse_merge_attributes(base_tree, ours_tree, theirs_tree, &result)?;
 
         // Safety first: nothing the merge writes may hold work the user has not committed.
         let mut dirty = Vec::new();
@@ -912,6 +997,8 @@ impl Repository {
         let mut index = std::mem::take(self.index_mut());
         crate::merge::tree::update_index_after_merge(&mut index, self.odb(), &result)?;
         crate::merge::write_conflict_stages(&mut index, &result.conflicts)?;
+        // Git builds the merged index afresh, so nothing resolved earlier can be undone.
+        index.clear_resolve_undo();
         index.sort();
         *self.index_mut() = index;
         crate::merge::write_merged_worktree(

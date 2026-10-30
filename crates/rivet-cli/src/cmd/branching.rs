@@ -2652,11 +2652,22 @@ fn cleanly_content_merged(
     theirs: ObjectId,
     result: &rivet_core::TreeMerge,
 ) -> Result<Vec<BString>> {
+    let our_tree = repository.commit_tree(ours)?;
+    let their_tree = repository.commit_tree(theirs)?;
+    cleanly_content_merged_trees(repository, base_tree, our_tree, their_tree, result)
+}
+
+/// [`cleanly_content_merged`] for sides given as trees.
+pub(super) fn cleanly_content_merged_trees(
+    repository: &Repository,
+    base_tree: Option<ObjectId>,
+    our_tree: ObjectId,
+    their_tree: ObjectId,
+    result: &rivet_core::TreeMerge,
+) -> Result<Vec<BString>> {
     let Some(base_tree) = base_tree else {
         return Ok(Vec::new());
     };
-    let our_tree = repository.commit_tree(ours)?;
-    let their_tree = repository.commit_tree(theirs)?;
     let mut out = Vec::new();
     for path in &result.paths {
         if path.kind.is_some() || path.result.is_none() {

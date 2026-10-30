@@ -297,6 +297,10 @@ pub struct LsFilesArgs {
     #[arg(short = 'u', long = "unmerged")]
     pub unmerged: bool,
 
+    /// Show the resolve-undo information: the conflict stages of paths resolved since.
+    #[arg(long = "resolve-undo")]
+    pub resolve_undo: bool,
+
     /// Print the mode, the id and the stage before each path.
     #[arg(short = 's', long = "stage")]
     pub stage: bool,
@@ -1093,7 +1097,9 @@ pub fn run_ls_files(global: &GlobalArgs, args: &LsFilesArgs) -> Result<i32> {
     // Git's default is `--cached`, and `-o` on its own means "only the untracked ones".
     let mut listed_cached = false;
 
-    if args.cached || !(args.others || args.ignored || args.deleted || args.modified) {
+    if args.cached
+        || !(args.others || args.ignored || args.deleted || args.modified || args.resolve_undo)
+    {
         listed_cached = true;
         for entry in repository.index().entries() {
             if !matches(&entry.path) {
@@ -1133,6 +1139,22 @@ pub fn run_ls_files(global: &GlobalArgs, args: &LsFilesArgs) -> Result<i32> {
             let deleted = entry.kind == rivet_core::worktree::ChangeKind::Deleted;
             if (args.deleted && deleted) || (args.modified && !deleted) {
                 out.write_all(&shown(&entry.path, separator))?;
+                write!(out, "{separator}")?;
+            }
+        }
+    }
+
+    if args.resolve_undo {
+        for record in repository.index().resolve_undo(format) {
+            if !matches(&record.path) {
+                continue;
+            }
+            for stage in 0..3 {
+                let Some(oid) = record.oids[stage] else {
+                    continue;
+                };
+                write!(out, "{:o} {oid} {}\t", record.modes[stage], stage + 1)?;
+                out.write_all(&shown(&record.path, separator))?;
                 write!(out, "{separator}")?;
             }
         }

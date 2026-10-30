@@ -90,6 +90,7 @@ state_of() {
         echo "## HEAD"; cat "$(g rev-parse --git-dir)/HEAD" 2>&1
         echo "## refs"; g for-each-ref --format='%(refname) %(objectname) %(symref)' 2>&1
         echo "## index"; g ls-files -s 2>&1
+        echo "## resolve-undo"; g ls-files --resolve-undo 2>&1
         echo "## status"; g status --porcelain=v1 --untracked-files=all 2>&1
         echo "## worktree"; find . -path ./.git -prune -o -path ./objects -prune -o -path ./hooks -prune -o -path ./info/refs -prune -o -type f -print | sort | while read -r f; do if [ "$f" = ./config ]; then h=$(sed "s#$ROOT#<ROOT>#g" "$f" | sha1sum | cut -c1-12); else h=$(sha1sum <"$f" | cut -c1-12); fi; echo "$f $h $(stat -c %a "$f")"; done
         local gd; gd=$(g rev-parse --git-dir)

@@ -31,8 +31,7 @@ pub struct UpdateIndexArgs {
 }
 
 /// Every long option of git's `update-index` that this command does not implement.
-const REFUSED: [&str; 14] = [
-    "unresolve",
+const REFUSED: [&str; 13] = [
     "again",
     "untracked-cache",
     "no-untracked-cache",
@@ -219,6 +218,17 @@ fn run(global: &GlobalArgs, args: &[String]) -> std::result::Result<i32, Exit> {
             "assume-unchanged" => s.mark_valid = if negated { Some(false) } else { Some(true) },
             "skip-worktree" => s.mark_skip = if negated { Some(false) } else { Some(true) },
             "stdin" if !negated => read_stdin = true,
+            "unresolve" if !negated => {
+                // Every word after the option is a path to put back into its conflicted state.
+                s.require_root()?;
+                while i < args.len() {
+                    let path = s.prefix_path(args[i].as_bytes())?;
+                    i += 1;
+                    if s.index.unmerge_path(BStr::new(&path), s.format) {
+                        s.touch();
+                    }
+                }
+            }
             "refresh" | "really-refresh" if !negated => {
                 s.refresh(base == "really-refresh")?;
             }

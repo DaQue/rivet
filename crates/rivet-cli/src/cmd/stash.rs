@@ -958,6 +958,9 @@ fn apply(
             Ok(result) => {
                 conflicted = !super::branching::print_merge_report(&result, "Stashed changes", &[])
                     .is_empty();
+                if conflicted {
+                    super::rerere::rerere_hook(repository)?;
+                }
             }
             Err(error) => {
                 let code = super::branching::report_checkout_refusal(error, "merge")?;
@@ -1237,7 +1240,7 @@ pub(super) fn autostash_apply(
     ours: &str,
     base_label: &str,
 ) -> Result<bool> {
-    let conflicted = autostash_merge(repository, stash, base, ours, "local", base_label)?;
+    let conflicted = autostash_merge(repository, stash, base, ours, "local", base_label, false)?;
     if !conflicted {
         remove_entry(repository, 0)?;
     }
@@ -1253,6 +1256,7 @@ pub(super) fn autostash_merge(
     ours: &str,
     theirs: &str,
     base_label: &str,
+    keep_merge_rr: bool,
 ) -> Result<bool> {
     let mut options = rivet_core::MergeOptions::new();
     options.find_renames = super::renames_enabled(repository, "merge.renames");
@@ -1264,6 +1268,7 @@ pub(super) fn autostash_merge(
     let index_before = repository.write_tree()?;
     let result = repository.merge_into_worktree(Some(base), stash, &options)?;
     if !result.conflicts.is_empty() {
+        super::rerere::rerere_hook_autostash(repository, keep_merge_rr)?;
         return Ok(true);
     }
     // The changes come back unstaged: the index goes back to what it was, plus the files the

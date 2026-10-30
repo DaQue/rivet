@@ -10,7 +10,7 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use anyhow::Result;
 use bstr::{BStr, BString, ByteSlice};
@@ -107,6 +107,26 @@ fn is_enabled(repository: &Repository) -> bool {
 
 fn os(bytes: &[u8]) -> &OsStr {
     OsStr::from_bytes(bytes)
+}
+
+/// Set while the hook runs for an autostash, whose rerere run git does not announce.
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// [`rerere_hook`] as the stash apply behind `checkout -m`, `switch -m` and `rebase --autostash`
+/// runs it: nothing is announced, but the preimages and any replayed resolution are done. Git
+/// leaves `MERGE_RR` empty after a rebase and removes it after a checkout (`keep_file`).
+pub fn rerere_hook_autostash(repository: &mut Repository, keep_file: bool) -> Result<()> {
+    QUIET.store(true, Ordering::Relaxed);
+    let result = rerere_hook(repository);
+    QUIET.store(false, Ordering::Relaxed);
+    if keep_file {
+        if is_enabled(repository) {
+            let _ = std::fs::write(repository.git_dir().join("MERGE_RR"), b"");
+        }
+    } else {
+        remove_merge_rr(repository.git_dir());
+    }
+    result
 }
 
 /// Remove `MERGE_RR`, the way git's `remove_merge_branch_state` does.
@@ -408,7 +428,9 @@ impl Rerere {
             options.pathspec = BString::default();
             for path in &update {
                 repository.add(std::slice::from_ref(path), &options)?;
-                eprintln!("Staged '{}' using previous resolution.", path);
+                if !QUIET.load(Ordering::Relaxed) {
+                    eprintln!("Staged '{}' using previous resolution.", path);
+                }
             }
         }
         self.write_rr()
@@ -425,7 +447,9 @@ impl Rerere {
             let _ = std::fs::copy(self.root.join(os(path)), &postimage);
             let flags = self.flags(&id) | POSTIMAGE;
             self.set_flags(&id, flags);
-            eprintln!("Recorded resolution for '{path}'.");
+            if !QUIET.load(Ordering::Relaxed) {
+                eprintln!("Recorded resolution for '{path}'.");
+            }
             self.rr.insert(path.clone(), None);
             return Ok(());
         }
@@ -450,7 +474,9 @@ impl Rerere {
             if self.autoupdate {
                 update.push(path.clone());
             } else {
-                eprintln!("Resolved '{path}' using previous resolution.");
+                if !QUIET.load(Ordering::Relaxed) {
+                    eprintln!("Resolved '{path}' using previous resolution.");
+                }
             }
             self.rr.insert(path.clone(), None);
             return Ok(());
@@ -473,7 +499,9 @@ impl Rerere {
             flags &= !POSTIMAGE;
         }
         self.set_flags(&id, flags | PREIMAGE);
-        eprintln!("Recorded preimage for '{path}'");
+        if !QUIET.load(Ordering::Relaxed) {
+            eprintln!("Recorded preimage for '{path}'");
+        }
         self.rr.insert(path.clone(), Some(id));
         Ok(())
     }
@@ -823,6 +851,11 @@ fn clear(repository: &Repository, autoupdate: AutoUpdate) -> Result<()> {
     Ok(())
 }
 
+/// `git rerere clear` as `am --skip` and `am --abort` run it: forget the unresolved conflicts.
+pub fn rerere_clear(repository: &Repository) -> Result<()> {
+    clear(repository, AutoUpdate::Config)
+}
+
 fn remaining(repository: &Repository, autoupdate: AutoUpdate) -> Result<()> {
     let Some(mut state) = Rerere::setup(repository, autoupdate)? else {
         return Ok(());
@@ -998,6 +1031,30 @@ fn forget(repository: &mut Repository, specs: &[&str]) -> Result<i32> {
     let mut patterns: Vec<BString> = Vec::new();
     for spec in specs {
         patterns.push(super::worktree_path(repository, Path::new(spec), "rerere")?);
+    }
+    // Paths already staged are put back into their conflicted state, in memory only, from the
+    // resolve-undo extension.
+    let format = repository.format();
+    let resolved: Vec<BString> = repository
+        .index()
+        .resolve_undo(format)
+        .into_iter()
+        .map(|r| r.path)
+        .filter(|p| {
+            patterns.is_empty()
+                || patterns
+                    .iter()
+                    .any(|q| rivet_core::ops::pathspec_matches(p.as_bstr(), q.as_bstr()))
+        })
+        .collect();
+    for path in &resolved {
+        let staged = repository
+            .index()
+            .entry(path.as_bstr())
+            .is_some_and(|e| e.stage() == Stage::Normal);
+        if staged {
+            repository.index_mut().unmerge_path(path.as_bstr(), format);
+        }
     }
     let conflicts = state.find_conflict(repository);
     for path in conflicts {

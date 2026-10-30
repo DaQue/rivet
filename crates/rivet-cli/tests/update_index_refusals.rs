@@ -29,7 +29,6 @@ fn unimplemented_options_are_refused_by_name_and_leave_the_index_alone() {
     let before = std::fs::read(dir.join(".git/index")).unwrap();
 
     for option in [
-        "--unresolve",
         "--again",
         "-g",
         "--untracked-cache",

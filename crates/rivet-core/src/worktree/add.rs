@@ -602,8 +602,10 @@ pub fn rm_paths(
                             path
                         )));
                     }
-                } else if stat_cache.stat(worktree, BStr::new(&path))?.is_some() {
-                    // Present on disk: only the index's content may be thrown away. Deleting a
+                } else if stages.iter().any(|e| e.stage() == Stage::Normal)
+                    && stat_cache.stat(worktree, BStr::new(&path))?.is_some()
+                {
+                    // An unmerged path is removed without the check, as in git. Present on disk: only the index's content may be thrown away. Deleting a
                     // file whose work tree content differs from stage 0 would lose work that
                     // neither the index nor any commit holds.
                     let staged_oid = stages

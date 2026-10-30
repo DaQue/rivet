@@ -12179,6 +12179,223 @@ s_sparse_index() {
     v write-tree
 }
 
+s_resolve_undo() {
+    v init -q repo; cd repo
+    printf 'a\nb\nc\n' >f; printf '1\n2\n3\n' >g; printf 'x\n' >h; printf 'k\n' >k
+    v add f g h k; tick; v commit -q -m base
+    v checkout -q -b side
+    printf 'a\nb\nS\n' >f; printf '1\n2\nS\n' >g; v rm -q h; printf 'k2\n' >k
+    v add f g k; tick; v commit -q -m side
+    v checkout -q main
+    printf 'a\nb\nM\n' >f; printf '1\n2\nM\n' >g; printf 'x2\n' >h; printf 'k3\n' >k
+    v add f g h k; tick; v commit -q -m main
+    v merge side
+    v ls-files --resolve-undo; v ls-files -u
+    # a stage-0 entry replacing the stages records them; so does removing the path
+    printf 'a\nb\nR\n' >f; v add f
+    v ls-files --resolve-undo; vg ls-files --resolve-undo
+    v rm -q g
+    v ls-files --resolve-undo; v ls-files -s
+    v add h
+    v ls-files --resolve-undo
+    v update-index --cacheinfo 100644,"$(g hash-object -w k)",k
+    v ls-files --resolve-undo; vg ls-files --resolve-undo -z
+    v ls-files --resolve-undo f h; v ls-files --resolve-undo nothing
+    # --unresolve puts the stages back and drops the record; a path without a record is left alone
+    v update-index --unresolve f; v ls-files -s; v ls-files --resolve-undo
+    v update-index --unresolve nosuch f
+    v ls-files -s f
+    printf 'a\nb\nR2\n' >f; v add f
+    v ls-files --resolve-undo
+    v update-index --unresolve h g k; v ls-files -s; v ls-files --resolve-undo
+    v add k h; v rm -q --cached f 2>&1; v ls-files --resolve-undo
+    # the record survives a commit and is dropped by --clear-resolve-undo
+    v add f g; v ls-files --resolve-undo
+    tick; v commit -q -m merged
+    v ls-files --resolve-undo; vg ls-files --resolve-undo
+    v update-index --clear-resolve-undo; v ls-files --resolve-undo
+    # a reset, a checkout and a new merge forget it
+    v reset -q --hard HEAD~1
+    v merge side
+    printf 'a\nb\nR\n' >f; v add f; v ls-files --resolve-undo
+    v reset -q --hard; v ls-files --resolve-undo
+    v merge side
+    printf 'a\nb\nR\n' >f; v add f; v ls-files --resolve-undo
+    v merge --abort; v ls-files --resolve-undo
+    v merge side
+    printf 'a\nb\nR\n' >f; printf '1\n2\nR\n' >g; printf 'x3\n' >h; printf 'k4\n' >k; v add f g h k; v ls-files --resolve-undo
+    v checkout -q side; v ls-files --resolve-undo; v status --short
+    # a record written by real git is read, kept across a rivet write and put back
+    g reset -q --hard; g checkout -q main; g reset -q --hard HEAD~1
+    g merge side >/dev/null 2>&1; printf 'a\nb\nR\n' >f; g add f
+    v ls-files --resolve-undo; v update-index --refresh; v ls-files --resolve-undo
+    v update-index --unresolve f; v ls-files -s; vg ls-files --resolve-undo
+    vg fsck --strict --no-dangling
+}
+
+s_rerere_forget_staged() {
+    v init -q repo; cd repo
+    v config rerere.enabled true
+    printf 'a\nb\nc\nd\ne\n' >f; printf '1\n2\n3\n4\n5\n' >g
+    v add f g; tick; v commit -q -m base
+    v checkout -q -b side
+    printf 'a\nb\nSIDE\nd\ne\n' >f; printf '1\n2\nS\n4\n5\n' >g
+    v add f g; tick; v commit -q -m side
+    v checkout -q main
+    printf 'a\nb\nMAIN\nd\ne\n' >f; printf '1\n2\nM\n4\n5\n' >g
+    v add f g; tick; v commit -q -m main
+    v merge side
+    printf 'a\nb\nRES\nd\ne\n' >f; printf '1\n2\nGRES\n4\n5\n' >g
+    v rerere; v rerere status
+    v add f g
+    v ls-files --resolve-undo; v rerere status; v rerere remaining
+    rrdump
+    # forget works on staged paths because the stages come back from the resolve-undo record
+    v rerere forget f
+    v ls-files -s; v ls-files --resolve-undo; v rerere status
+    rrdump
+    v rerere forget nosuch
+    v rerere forget g
+    rrdump
+    v rerere status; v rerere remaining
+    v status --short; v ls-files -s
+    # forgotten resolutions are not replayed
+    v reset -q --hard; v merge side
+    v rerere status; v diff
+}
+
+s_rerere_stash() {
+    v init -q repo; cd repo
+    v config rerere.enabled true
+    printf 'a\nb\nc\nd\ne\n' >f; printf '1\n2\n3\n' >g
+    v add f g; tick; v commit -q -m base
+    v checkout -q -b w; printf 'a\nb\nW\nd\ne\n' >f; v add f; tick; v commit -q -m w
+    v checkout -q main; printf 'a\nb\nM\nd\ne\n' >f; v add f; tick; v commit -q -m main
+    # nothing is recorded yet: a conflicting stash apply leaves a preimage and MERGE_RR
+    v checkout -q main~1; printf 'a\nb\nW\nd\ne\n' >f; v stash push -q; v checkout -q main
+    v stash apply; v rerere status; v rerere remaining; v hash-object f; v status --short
+    rrdump
+    # resolved by hand, recorded by the next rerere run
+    printf 'a\nb\nRES\nd\ne\n' >f; v rerere; v add f; v rerere status
+    rrdump
+    v reset -q --hard
+    # the same conflict again is replayed by apply and by pop, and --index does not matter
+    v stash apply; v rerere status; v hash-object f; v status --short; v ls-files -s
+    v reset -q --hard
+    v stash pop; v hash-object f; v stash list; v status --short
+    rrdump
+    v reset -q --hard
+    # rerere.autoUpdate stages the replayed file
+    v config rerere.autoUpdate true
+    v stash apply; v status --short; v ls-files -s
+    v reset -q --hard; v config --unset rerere.autoUpdate
+    # a different conflict is recorded under its own id
+    v checkout -q main~1; printf 'a\nb\nX\nd\ne\n' >f; v stash push -q; v checkout -q main
+    v stash apply; v rerere status; v hash-object f
+    rrdump
+    v reset -q --hard
+    # checkout -m (autostash) goes through the same hook
+    v checkout -q main~1; printf 'a\nb\nW\nd\ne\n' >f
+    v checkout -m main; v hash-object f; v status --short; v rerere status
+    rrdump
+    v reset -q --hard
+    v checkout -q main~1; printf 'a\nb\nY\nd\ne\n' >f
+    v switch -m main; v hash-object f; v status --short; v rerere status
+    rrdump
+    v reset -q --hard
+    # rebase --autostash
+    v checkout -q -b rb main~1; printf 'a\nb\nW\nd\ne\n' >f
+    v rebase --autostash main; v hash-object f; v status --short; v rerere status
+    rrdump
+    vg fsck --strict --no-dangling
+}
+
+s_am_3way() {
+    v init -q repo; cd repo
+    seq 1 20 >f; seq 1 5 >g; printf 'keep\n' >k
+    v add f g k; tick; v commit -q -m base
+    base=$(g rev-parse HEAD)
+    # w: a one-line edit of f, an edit of g, a new file, and the removal of k
+    v checkout -q -b w
+    sed -i 's/^15$/fifteen/' f; tick; v commit -q -am w1
+    sed -i 's/^3$/three/' g; printf 'new\n' >n; v add n; v rm -q k; tick; v commit -q -am w2
+    v checkout -q main
+    g format-patch -q -2 w --stdout >../series.patch
+    g format-patch -q -1 w~1 --stdout >../one.patch
+    g format-patch -q -1 w --stdout >../two.patch
+    # applies directly: no fallback output
+    v am -3 ../one.patch; v log --format=%s -2; v reset -q --hard "$base"
+    # the context moved: plain am fails, -3 merges cleanly
+    sed -i 's/^13$/thirteen/' f; tick; v commit -q -am main1
+    v am ../one.patch; v status --short; v am --abort
+    v am -3 ../one.patch; v log --format=%s -3; v status --short; v show --stat --format=%s HEAD
+    vg fsck --no-dangling
+    v reset -q --hard HEAD~1
+    v am -q -3 ../one.patch; v log --format=%s -1; v reset -q --hard HEAD~1
+    # a conflict stops the series; the files and the index are the merge's
+    sed -i 's/^14$/fourteen/' f; tick; v commit -q -am main2
+    v am -3 ../one.patch; v status --short; v ls-files -s; v hash-object f
+    seq 1 20 | sed 's/^15$/RESOLVED/' >f; v add f
+    v am --continue; v log --format=%s -3; v status --short
+    # --skip and --abort
+    v reset -q --hard "$base"; sed -i 's/^13$/thirteen/;s/^14$/fourteen/' f; tick; v commit -q -am main3
+    v am -3 ../series.patch; v am --skip; v status --short; v log --format=%s -2
+    v reset -q --hard main3 2>/dev/null; v reset -q --hard HEAD
+    v am -3 ../series.patch; v am --abort; v status --short; v log --format=%s -1
+    # the second patch of a series conflicts (modify/delete, add and modify)
+    v reset -q --hard "$base"; sed -i 's/^3$/THREE/' g; printf 'changed\n' >k; tick; v commit -q -am main4
+    v am -3 ../series.patch; v status --short; v ls-files -s; v hash-object g k
+    v am --abort
+    # without a usable index line, or with a hand-edited patch, the fallback stops by name
+    sed '/^index /d' ../one.patch >../noindex.patch
+    v am -3 ../noindex.patch; v status --short; v am --abort
+    sed 's/^index [0-9a-f]*\.\./index deadbee../' ../one.patch >../noblob.patch
+    v am -3 ../noblob.patch; v am --abort
+    sed 's/^ 14$/ 99/' ../one.patch >../edited.patch
+    v am -3 ../edited.patch; v status --short; v am --abort
+    # am.threeWay, --no-3way
+    v reset -q --hard "$base"; sed -i 's/^13$/thirteen/;s/^14$/fourteen/' f; tick; v commit -q -am main5
+    v config am.threeWay true
+    v am ../one.patch; v status --short; v am --abort
+    v am --no-3way ../one.patch; v am --abort
+    v config --unset am.threeWay
+    vg fsck --no-dangling
+}
+
+s_am_3way_rerere() {
+    v init -q repo; cd repo
+    v config rerere.enabled true
+    seq 1 20 >f
+    v add f; tick; v commit -q -m base
+    base=$(g rev-parse HEAD)
+    v checkout -q -b w
+    sed -i 's/^15$/fifteen/' f; tick; v commit -q -am w1
+    v checkout -q main
+    g format-patch -q -1 w --stdout >../w.patch
+    sed -i 's/^13$/thirteen/;s/^14$/fourteen/' f; tick; v commit -q -am main
+    mainc=$(g rev-parse HEAD)
+    v am -3 ../w.patch; v rerere status; v rerere remaining
+    rrdump
+    seq 1 20 | sed 's/^15$/RES/' >f
+    v am --continue; v rerere status
+    v add f
+    v am --continue; v rerere status
+    rrdump
+    v log --format=%s -3
+    # the same conflict again is replayed
+    v reset -q --hard "$mainc"
+    v am -3 ../w.patch; v rerere status; v hash-object f; v status --short; v ls-files -s
+    v am --abort
+    v am -3 --rerere-autoupdate ../w.patch; v status --short; v ls-files -s
+    v am --abort
+    v config rerere.autoUpdate true
+    v am -3 ../w.patch; v status --short
+    v am --abort
+    v am -3 --no-rerere-autoupdate ../w.patch; v status --short
+    v am --abort
+    vg fsck --no-dangling
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

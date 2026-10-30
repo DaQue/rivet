@@ -98,7 +98,10 @@ use crate::error::{Error, Result};
 use crate::hash::{ObjectFormat, ObjectId};
 use crate::object::{EntryMode, ObjectKind, hash_object};
 
+mod resolve_undo;
 mod split;
+
+pub use resolve_undo::ResolveUndoEntry;
 
 /// The largest path length the 12-bit name-length field can express, and therefore the longest
 /// path `parse` and `to_bytes` accept. Longer names are refused rather than truncated: a saturated
@@ -1989,7 +1992,9 @@ impl Index {
             let e = &self.entries[i];
             if e.path == path && e.stage() == stage {
                 self.invalidate_cache_tree();
-                return Some(self.entries.swap_remove(i));
+                let removed = self.entries.swap_remove(i);
+                self.record_resolve_undo(std::slice::from_ref(&removed));
+                return Some(removed);
             }
             i += 1;
         }
@@ -2230,6 +2235,7 @@ impl IndexExt for Index {
         self.entries = kept;
         if !removed.is_empty() {
             self.invalidate_cache_tree();
+            self.record_resolve_undo(&removed);
         }
         removed
     }

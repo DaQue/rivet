@@ -334,6 +334,14 @@ pub fn fsck(repo: &Repository, options: &FsckOptions) -> Result<FsckReport> {
             }
         }
     }
+    // The blobs a resolve-undo record remembers are reachable too.
+    for record in repo.index().resolve_undo(repo.format()) {
+        for oid in record.oids.iter().flatten() {
+            if let Some(kind) = kinds.get(oid) {
+                roots.push((*oid, *kind));
+            }
+        }
+    }
 
     // The other work trees keep their detached `HEAD`, their index and their `HEAD` log alive.
     for oid in crate::gc::other_worktree_roots(repo, !options.no_reflogs)? {

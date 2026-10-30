@@ -1185,3 +1185,161 @@ fn write_pending(
     }
     Ok(())
 }
+
+/// Git's fake ancestor for `am --3way`: the blobs the patches' `index` lines name, at the paths the
+/// patches start from.
+pub struct Ancestor {
+    /// Path to (mode, id, content), in path order.
+    entries: std::collections::BTreeMap<Vec<u8>, (EntryMode, ObjectId, Vec<u8>)>,
+}
+
+fn entry_mode(mode: u32) -> EntryMode {
+    EntryMode::from_bytes(format!("{mode:o}").as_bytes()).unwrap_or(EntryMode::Blob)
+}
+
+/// Build the fake ancestor of `patches`; `Err` carries git's two lines when an `index` line is
+/// missing, abbreviated beyond recognition or names a blob the repository lacks.
+pub fn build_ancestor(
+    repository: &Repository,
+    patches: &[FilePatch],
+) -> std::result::Result<Ancestor, Vec<String>> {
+    let odb = repository.odb();
+    let format = odb.format();
+    let mut entries = std::collections::BTreeMap::new();
+    for patch in patches {
+        if patch.is_new {
+            continue;
+        }
+        let Some(path) = patch.old_path.as_ref().or(patch.new_path.as_ref()) else {
+            continue;
+        };
+        let lacking = || {
+            vec![
+                format!(
+                    "error: sha1 information is lacking or useless ({}).",
+                    String::from_utf8_lossy(path)
+                ),
+                "error: could not build fake ancestor".to_string(),
+            ]
+        };
+        let hex = patch.old_oid.as_deref().ok_or_else(lacking)?;
+        if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(lacking());
+        }
+        let even = hex.len() & !1;
+        let prefix =
+            ObjectId::from_hex_prefix(format, BStr::new(&hex[..even])).map_err(|_| lacking())?;
+        let oid = odb.resolve_prefix(&prefix).map_err(|_| lacking())?;
+        let object = odb
+            .read_typed(&oid, ObjectKind::Blob)
+            .map_err(|_| lacking())?;
+        let mode = entry_mode(patch.old_mode.or(patch.new_mode).unwrap_or(0o100644));
+        entries.insert(path.clone(), (mode, oid, object.into_data()));
+    }
+    Ok(Ancestor { entries })
+}
+
+impl Ancestor {
+    /// The `M\t<path>` / `D\t<path>` lines for the ancestor's files that differ from the work tree.
+    pub fn changed_lines(&self, repository: &Repository) -> Vec<String> {
+        let mut lines = Vec::new();
+        let Ok(worktree) = repository.worktree() else {
+            return lines;
+        };
+        for (path, (_, oid, _)) in &self.entries {
+            let path_ref = BStr::new(&path[..]);
+            let letter = match worktree.stat(path_ref) {
+                Ok(None) => 'D',
+                Ok(Some(_)) if worktree.hash_file(path_ref).is_ok_and(|h| h == *oid) => continue,
+                _ => 'M',
+            };
+            lines.push(format!("{letter}\t{}", String::from_utf8_lossy(path)));
+        }
+        lines
+    }
+
+    fn tree(
+        repository: &Repository,
+        entries: &std::collections::BTreeMap<Vec<u8>, (EntryMode, ObjectId)>,
+    ) -> rivet_core::Result<ObjectId> {
+        use rivet_core::IndexExt;
+        let mut index = rivet_core::Index::new();
+        for (path, (mode, oid)) in entries {
+            index.insert(rivet_core::ops::make_index_entry(
+                BStr::new(&path[..]),
+                *mode,
+                *oid,
+                None,
+            ));
+        }
+        index.sort();
+        index.write_tree(repository.odb())
+    }
+
+    /// The tree of the ancestor itself.
+    pub fn base_tree(&self, repository: &Repository) -> rivet_core::Result<ObjectId> {
+        let entries = self
+            .entries
+            .iter()
+            .map(|(path, (mode, oid, _))| (path.clone(), (*mode, *oid)))
+            .collect();
+        Self::tree(repository, &entries)
+    }
+
+    /// Apply `patches` to the ancestor and write the tree that results; `Err` carries the
+    /// diagnostics when a patch does not fit the blob its `index` line names.
+    pub fn apply_patches(
+        &self,
+        repository: &Repository,
+        patches: &[FilePatch],
+    ) -> std::result::Result<ObjectId, Vec<String>> {
+        let odb = repository.odb();
+        let mut theirs: std::collections::BTreeMap<Vec<u8>, (EntryMode, ObjectId)> = self
+            .entries
+            .iter()
+            .map(|(path, (mode, oid, _))| (path.clone(), (*mode, *oid)))
+            .collect();
+        for patch in patches {
+            let old = patch.old_path.as_ref().or(patch.new_path.as_ref());
+            let (pre, old_mode): (&[u8], Option<EntryMode>) = match old {
+                Some(path) if !patch.is_new => match self.entries.get(path) {
+                    Some((mode, _, data)) => (data, Some(*mode)),
+                    None => (&[], None),
+                },
+                _ => (&[], None),
+            };
+            if patch.binary {
+                return Err(vec!["error: binary patches are not supported".to_string()]);
+            }
+            let (post, failures) = apply_hunks_collect(pre, &patch.hunks, false, false, false);
+            if let Some(failure) = failures.first() {
+                let name = String::from_utf8_lossy(old.map_or(&b""[..], |p| p));
+                return Err(vec![
+                    format!("error: patch failed: {name}:{}", failure.line),
+                    format!("error: {name}: patch does not apply"),
+                ]);
+            }
+            if (patch.rename || patch.is_delete)
+                && let Some(path) = &patch.old_path
+            {
+                theirs.remove(path);
+            }
+            if patch.is_delete {
+                continue;
+            }
+            let Some(path) = patch.new_path.as_ref().or(patch.old_path.as_ref()) else {
+                continue;
+            };
+            let mode = patch
+                .new_mode
+                .map(entry_mode)
+                .or(old_mode)
+                .unwrap_or(EntryMode::Blob);
+            let oid = odb
+                .write_raw(ObjectKind::Blob, &post)
+                .map_err(|e| vec![format!("error: {e}")])?;
+            theirs.insert(path.clone(), (mode, oid));
+        }
+        Self::tree(repository, &theirs).map_err(|e| vec![format!("error: {e}")])
+    }
+}
