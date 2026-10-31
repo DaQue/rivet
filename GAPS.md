@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 361 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 362 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 332 tests / 0 failed, 361 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 332 tests / 0 failed, 362 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -144,7 +144,7 @@ The command works for the common case; the listed options or edge cases are miss
   `--max-pack-size`, `--max-cruft-size`, `--expire-to`, `--keep-largest-pack`,
   `gc.bigPackThreshold`; `repack -k` over several packs lists unreachable objects in a
   different order from git.
-* **`bisect`** — `start --first-parent`, `--reset-when-found` and path arguments are refused.
+* **`bisect`** — `start --first-parent`, path arguments to `start` (commits that leave the paths alone are never tested; a merge identical to one parent follows only that parent) and `--reset-when-found[=original|found]` on `start` and `run` are compared with git, by hand and with `run` (`s_bisect_flags`: `BISECT_FIRST_PARENT`, `BISECT_NAMES`, `BISECT_RESET_WHEN_FOUND`, `Bisecting: -1 revisions left`, `No testable commit found` ending the bisection, a silent reset to the start or to the commit found, and the `BISECT_TERMS` file git leaves after a hand-driven finish). Not matched: a path that selects only part of a merge's history is simplified like git's default only for the cases in the scenario (no `--full-history`, no parent rewriting across non-merge commits), and `bisect run` leaves `BISECT_RESET_WHEN_FOUND` behind when the run stops before finding.
   `visualize`/`view` run `log` over the bad commit and `^` each good one, with git's quirk that
   `--bisect` is appended after the caller's words (`s_bisect_visualize`); the `gitk` form (a display
   and `gitk` on `PATH`) and a first argument that is not an option are refused by name

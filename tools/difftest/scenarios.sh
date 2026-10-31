@@ -6565,6 +6565,71 @@ s_bisect_run() {
     v bisect reset
 }
 
+# bisect start --first-parent / path arguments / --reset-when-found, with run and by hand.
+s_bisect_flags() {
+    v init -q repo; cd repo
+    printf '#!/bin/sh\ntest $(wc -l < f) -lt 3\n' >../tf.sh; chmod +x ../tf.sh
+    printf '#!/bin/sh\ntest ! -e bug\n' >../tbug.sh; chmod +x ../tbug.sh
+    local c=0
+    mk() { c=$((c + 1)); echo "$2" >>$1; v add $1; tick; v commit -q -m "c$c $1"; }
+    mk f 1; mk g 1; mk g 2; mk f 2; mk g 3; mk g 4; mk f 3; mk g 5; mk g 6; mk f 4; mk g 7; mk g 8
+    mkdir sub; echo s >sub/x; v add sub; tick; v commit -q -m "c13 sub"
+    state() { { ls .git | grep '^BISECT_' | tr '\n' ' '; echo; cat .git/BISECT_NAMES 2>/dev/null; } >>"$TRANSCRIPT"; }
+    local head; head=$(g rev-parse --abbrev-ref HEAD)
+    # path arguments
+    v bisect start HEAD HEAD~12 -- f; state
+    v bisect run ../tf.sh; v bisect log; v bisect reset
+    v bisect start HEAD HEAD~12 -- f; v bisect good; v bisect bad; v bisect good; v bisect log; v bisect reset
+    v bisect start HEAD HEAD~12 -- f g; v bisect run ../tf.sh; v bisect reset
+    v bisect start HEAD HEAD~12 -- sub; state; v bisect log; v bisect reset
+    v bisect start HEAD HEAD~12 -- nosuch; state; v bisect next; v bisect reset
+    v bisect start HEAD~1 HEAD~12 -- f; v bisect next; v bisect reset
+    v bisect start -- f; v bisect bad HEAD; v bisect good HEAD~12; v bisect run ../tf.sh; v bisect reset
+    v bisect start --term-old=old --term-new=new HEAD HEAD~12 -- f; v bisect old; v bisect log; v bisect reset
+    # --reset-when-found
+    v checkout -q -b work
+    v bisect start --reset-when-found HEAD HEAD~12; state; v bisect run ../tf.sh; state; g rev-parse --abbrev-ref HEAD >>"$TRANSCRIPT"; v status --short
+    v bisect start --reset-when-found=found HEAD HEAD~12; v bisect run ../tf.sh; state; g rev-parse --abbrev-ref HEAD >>"$TRANSCRIPT"; v log --oneline -1
+    v checkout -q work
+    v bisect start --reset-when-found=original HEAD HEAD~12; v bisect run ../tf.sh; state; g rev-parse --abbrev-ref HEAD >>"$TRANSCRIPT"
+    v bisect start HEAD HEAD~12; v bisect run --reset-when-found ../tf.sh; state; g rev-parse --abbrev-ref HEAD >>"$TRANSCRIPT"
+    v bisect start HEAD HEAD~12; v bisect run --reset-when-found=found ../tf.sh; state; g rev-parse --abbrev-ref HEAD >>"$TRANSCRIPT"
+    v checkout -q work
+    v bisect start HEAD HEAD~12; v bisect run --reset-when-found=nothing ../tf.sh; v bisect run --reset-when-found; v bisect reset
+    v bisect start --reset-when-found=nothing HEAD HEAD~12; state
+    v bisect start --reset-when-found --no-checkout HEAD HEAD~12; state
+    v bisect start --no-checkout --reset-when-found=found HEAD HEAD~12; state
+    v bisect start --no-checkout HEAD HEAD~12; v bisect run --reset-when-found ../tf.sh; state; v bisect reset
+    v bisect start --reset-when-found HEAD HEAD~12 -- f; v bisect run ../tf.sh; state
+    # by hand: the reset comes with the last answer
+    v bisect start --reset-when-found HEAD HEAD~12; v bisect good; v bisect bad; v bisect good; v bisect bad; v bisect good; state
+    g rev-parse --abbrev-ref HEAD >>"$TRANSCRIPT"
+    v bisect start --reset-when-found=found HEAD HEAD~12; v bisect good; v bisect bad; v bisect good; v bisect bad; v bisect good; state
+    v log --oneline -1
+    v checkout -q work
+    # --first-parent over a merge
+    cd ..; v init -q repo2; cd repo2
+    local d=0
+    mk2() { d=$((d + 1)); echo "$d" >>$1; v add $1; tick; v commit -q -m "m$d $1"; }
+    mk2 a; mk2 a; mk2 a
+    local main; main=$(g rev-parse --abbrev-ref HEAD)
+    v checkout -q -b side
+    mk2 s; echo bug >bug; v add bug; tick; v commit -q -m "s bug"; mk2 s; mk2 s
+    v checkout -q "$main"
+    mk2 a; mk2 a
+    tick; v merge -q --no-ff -m merge side
+    mk2 a; mk2 a
+    v bisect start HEAD HEAD~7; state; v bisect run ../tbug.sh; v bisect log; v bisect reset
+    v bisect start --first-parent HEAD HEAD~7; state; v bisect run ../tbug.sh; v bisect log; v bisect reset
+    v bisect start --first-parent; v bisect bad HEAD; v bisect good HEAD~7; state; v bisect log; v bisect run ../tbug.sh; v bisect reset
+    v bisect start --first-parent HEAD HEAD~7; v bisect good; v bisect bad; v bisect next; v bisect log; v bisect reset
+    v bisect start --first-parent HEAD HEAD~7 -- a; v bisect run ../tbug.sh; v bisect reset
+    v bisect start --first-parent HEAD HEAD~7 -- bug; v bisect run ../tbug.sh; v bisect reset
+    v bisect start HEAD HEAD~7 -- bug; v bisect run ../tbug.sh; v bisect reset
+    v bisect start HEAD HEAD~7 -- s; v bisect run ../tbug.sh; v bisect reset
+    v bisect start --first-parent --reset-when-found=found HEAD HEAD~7; v bisect run ../tbug.sh; state; v log --oneline -1
+}
+
 s_bisect_visualize() {
     bisect_repo
     unset DISPLAY SESSIONNAME MSYSTEM SECURITYSESSIONID

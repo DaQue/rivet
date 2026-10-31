@@ -10,15 +10,20 @@
 //! reaches, the first one that splits the range in half is taken, and otherwise the one closest
 //! to half. Skipped commits move the pick to a pseudo-random other commit, with Git's generator.
 //!
-//! Not implemented, and refused by name: `--first-parent`, `--reset-when-found`, path arguments
-//! to `start` (which need history simplification), and the `gitk` / external-command forms of
+//! `start --first-parent` walks first parents only (`BISECT_FIRST_PARENT`), path arguments limit the
+//! search to the commits that change those paths (the others carry weight but are never tested,
+//! as git's TREESAME commits; a merge identical to one parent follows only that parent), and
+//! `--reset-when-found[=original|found]` (`BISECT_RESET_WHEN_FOUND`, also on `run`) resets once
+//! the first bad commit is reported.
+//!
+//! Not implemented, and refused by name: the `gitk` / external-command forms of
 //! `visualize`/`view`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
-use bstr::BStr;
+use bstr::{BStr, BString};
 use rivet_core::revwalk::{WalkOptions, walk_oids};
 use rivet_core::{ObjectId, RefName, RefTarget, Repository};
 
@@ -194,6 +199,7 @@ fn clean_state(repository: &Repository) -> Result<()> {
         "BISECT_RUN",
         "BISECT_TERMS",
         "BISECT_FIRST_PARENT",
+        "BISECT_RESET_WHEN_FOUND",
         "BISECT_HEAD",
     ] {
         let _ = std::fs::remove_file(git_file(repository, name));
@@ -396,6 +402,8 @@ fn start_impl(global: &GlobalArgs, args: &[String], auto: bool) -> Result<i32> {
     };
     let mut custom_terms = false;
     let mut no_checkout = false;
+    let mut first_parent = false;
+    let mut reset_when_found: Option<String> = None;
     let mut revs: Vec<String> = Vec::new();
     let mut paths: Vec<String> = Vec::new();
     let mut iter = args.iter().peekable();
@@ -408,9 +416,15 @@ fn start_impl(global: &GlobalArgs, args: &[String], auto: bool) -> Result<i32> {
         match arg.as_str() {
             "--" => after_dashes = true,
             "--no-checkout" => no_checkout = true,
-            "--first-parent" => anyhow::bail!("bisect: --first-parent is not implemented"),
-            a if a.starts_with("--reset-when-found") => {
-                anyhow::bail!("bisect: --reset-when-found is not implemented")
+            "--first-parent" => first_parent = true,
+            "--reset-when-found" => reset_when_found = Some("original".to_string()),
+            a if a.starts_with("--reset-when-found=") => {
+                let value = &a["--reset-when-found=".len()..];
+                if !matches!(value, "original" | "found") {
+                    eprintln!("error: invalid value for '--reset-when-found': '{value}'");
+                    return Ok(1);
+                }
+                reset_when_found = Some(value.to_string());
             }
             "--term-good" | "--term-old" => {
                 let Some(value) = iter.next() else {
@@ -456,8 +470,11 @@ fn start_impl(global: &GlobalArgs, args: &[String], auto: bool) -> Result<i32> {
             }
         }
     }
-    if !paths.is_empty() {
-        anyhow::bail!("bisect: path arguments to start are not implemented");
+    if reset_when_found.is_some() && no_checkout {
+        eprintln!(
+            "error: options '--reset-when-found' and '--no-checkout' cannot be used together"
+        );
+        return Ok(1);
     }
     if terms.bad == terms.good && custom_terms {
         eprintln!("error: please use two different terms");
@@ -496,6 +513,11 @@ fn start_impl(global: &GlobalArgs, args: &[String], auto: bool) -> Result<i32> {
                 start_text,
                 head_oid,
                 auto,
+                StartExtras {
+                    first_parent,
+                    reset_when_found,
+                    paths,
+                },
             );
         }
         start_text
@@ -516,7 +538,19 @@ fn start_impl(global: &GlobalArgs, args: &[String], auto: bool) -> Result<i32> {
         start_head,
         head_oid,
         auto,
+        StartExtras {
+            first_parent,
+            reset_when_found,
+            paths,
+        },
     )
+}
+
+/// What `start` was asked for beyond the revisions.
+struct StartExtras {
+    first_parent: bool,
+    reset_when_found: Option<String>,
+    paths: Vec<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -530,6 +564,7 @@ fn finish_start(
     start_head: String,
     head_oid: ObjectId,
     auto: bool,
+    extras: StartExtras,
 ) -> Result<i32> {
     let repository = super::open(global)?;
     let head_oid = if no_checkout {
@@ -542,7 +577,23 @@ fn finish_start(
         git_file(&repository, "BISECT_START"),
         format!("{start_head}\n"),
     )?;
-    std::fs::write(git_file(&repository, "BISECT_NAMES"), "\n")?;
+    let names = if extras.paths.is_empty() {
+        String::new()
+    } else {
+        let mut words = vec!["--".to_string()];
+        words.extend(extras.paths.iter().cloned());
+        quote_args(&words)
+    };
+    std::fs::write(git_file(&repository, "BISECT_NAMES"), format!("{names}\n"))?;
+    if extras.first_parent {
+        std::fs::write(git_file(&repository, "BISECT_FIRST_PARENT"), "")?;
+    }
+    if let Some(value) = &extras.reset_when_found {
+        std::fs::write(
+            git_file(&repository, "BISECT_RESET_WHEN_FOUND"),
+            format!("{value}\n"),
+        )?;
+    }
     if no_checkout {
         std::fs::write(
             git_file(&repository, "BISECT_HEAD"),
@@ -564,7 +615,15 @@ fn finish_start(
         &format!("git bisect start{}\n", quote_args(args)),
     )?;
     drop(repository);
-    if auto { auto_next(global) } else { Ok(0) }
+    if !auto {
+        return Ok(0);
+    }
+    let code = auto_next(global)?;
+    if code == 4 {
+        // Nothing to test (a path argument that selects nothing): the bisection is not kept.
+        clean_state(&super::open(global)?)?;
+    }
+    Ok(code)
 }
 
 fn bisect_reset(global: &GlobalArgs, args: &[String]) -> Result<i32> {
@@ -845,13 +904,23 @@ fn bisect_next(global: &GlobalArgs, repository: &Repository, terms: &Terms) -> R
     }
 
     let odb = repository.odb();
+    let first_parent = git_file(repository, "BISECT_FIRST_PARENT").exists();
     let mut options = WalkOptions::new();
+    options.first_parent(first_parent);
     for good in &known.good {
         options.exclude(*good);
     }
     let newest_first = walk_oids(odb, &[bad], &options)?;
     let all_mode = !known.skipped.is_empty();
-    let found = find_bisection(repository, &newest_first, all_mode)?;
+    // The path arguments `start` was given: what follows the `--` in `BISECT_NAMES`.
+    let names = unquote(&read_file(repository, "BISECT_NAMES"));
+    let paths: Vec<BString> = names
+        .iter()
+        .skip_while(|word| word.as_str() != "--")
+        .skip(1)
+        .map(|word| BString::from(word.as_bytes()))
+        .collect();
+    let found = find_bisection(repository, &newest_first, all_mode, first_parent, &paths)?;
 
     // Skipped commits are taken out of the candidates.
     let mut tried: Vec<ObjectId> = Vec::new();
@@ -884,6 +953,10 @@ fn bisect_next(global: &GlobalArgs, repository: &Repository, terms: &Terms) -> R
         }
     }
 
+    if found.all == 0 && !newest_first.is_empty() {
+        eprintln!("No testable commit found.\nMaybe you started with bad path arguments?");
+        return Ok(4);
+    }
     let Some(&chosen) = candidates.first() else {
         if let Some(code) = only_skipped(repository, &tried, None, terms)? {
             return Ok(code);
@@ -891,10 +964,6 @@ fn bisect_next(global: &GlobalArgs, repository: &Repository, terms: &Terms) -> R
         println!("{bad} was both '{}' and '{}'", terms.good, terms.bad);
         return Ok(FAILED);
     };
-    if found.all == 0 {
-        eprintln!("No testable commit found.\nMaybe you started with bad path arguments?");
-        return Ok(4);
-    }
 
     if chosen == bad {
         if let Some(code) = only_skipped(repository, &tried, Some(bad), terms)? {
@@ -910,10 +979,11 @@ fn bisect_next(global: &GlobalArgs, repository: &Repository, terms: &Terms) -> R
             ),
         )?;
         show_diff_tree(global, repository, bad)?;
-        return Ok(0);
+        return reset_if_asked(global, repository, bad);
     }
 
-    let left = found.all - found.reaches - 1;
+    // Git prints this signed: a range whose one testable commit is the answer gives -1.
+    let left = found.all as i64 - found.reaches as i64 - 1;
     let steps = estimate_steps(found.all);
     println!(
         "Bisecting: {left} revision{} left to test after this (roughly {steps} step{})",
@@ -1075,11 +1145,67 @@ struct Bisection {
     all: usize,
 }
 
+/// The entries of `commit`'s tree that `paths` select: two commits with equal state leave the
+/// paths alone between them.
+fn path_state(
+    repository: &Repository,
+    commit: ObjectId,
+    paths: &[BString],
+) -> Result<std::collections::BTreeMap<BString, (rivet_core::object::EntryMode, ObjectId)>> {
+    let tree = repository.commit_tree(commit)?;
+    let mut state = rivet_core::ops::flatten_tree(repository.odb(), tree)?;
+    state.retain(|path, _| {
+        paths.iter().any(|spec| {
+            rivet_core::ops::pathspec_matches(BStr::new(&path[..]), BStr::new(&spec[..]))
+        })
+    });
+    Ok(state)
+}
+
+/// Set when a step reported the first bad commit, for `run` to notice even after a
+/// `--reset-when-found` has taken the log away.
+static FOUND_FIRST_BAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// With `--reset-when-found` in force, `bisect reset` (to the start, or to the commit found).
+fn reset_if_asked(global: &GlobalArgs, repository: &Repository, _found: ObjectId) -> Result<i32> {
+    FOUND_FIRST_BAD.store(true, std::sync::atomic::Ordering::SeqCst);
+    let value = read_file(repository, "BISECT_RESET_WHEN_FOUND");
+    let target = match value.trim() {
+        "" => return Ok(0),
+        // Git names the bad ref, not the id, and the HEAD reflog shows it.
+        "found" => format!("refs/bisect/{}", Terms::read(repository).bad),
+        _ => read_file(repository, "BISECT_START").trim().to_string(),
+    };
+    // Unlike `bisect reset`, this says nothing about where it went.
+    if !target.is_empty() {
+        let code = checkout_quiet(global, &target)?;
+        if code != 0 {
+            eprintln!(
+                "error: could not check out original HEAD '{target}'. Try 'git bisect reset <commit>'."
+            );
+            return Ok(1);
+        }
+    }
+    let repository = super::open(global)?;
+    let terms = Terms::read(&repository);
+    clean_state(&repository)?;
+    // Git's own bookkeeping leaves the terms file behind after a hand-driven finish.
+    if !RUNNING.load(std::sync::atomic::Ordering::SeqCst) {
+        write_terms(&repository, &terms.bad, &terms.good)?;
+    }
+    Ok(0)
+}
+
+/// Whether `bisect run` is the one driving the steps.
+static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Git's `find_bisection` over the range `newest_first` (the output of `rev-list <bad> ^<good>...`).
 fn find_bisection(
     repository: &Repository,
     newest_first: &[ObjectId],
     keep_all: bool,
+    first_parent: bool,
+    paths: &[BString],
 ) -> Result<Bisection> {
     let list: Vec<ObjectId> = newest_first.iter().rev().copied().collect();
     let nr = list.len();
@@ -1092,32 +1218,56 @@ fn find_bisection(
     }
     let index: HashMap<ObjectId, usize> = list.iter().enumerate().map(|(i, o)| (*o, i)).collect();
     let mut parents: Vec<Vec<usize>> = Vec::with_capacity(nr);
-    for oid in &list {
+    // Commits that leave the paths alone (git's TREESAME) are counted for nothing and never tested.
+    let mut treesame: Vec<bool> = vec![false; nr];
+    for (at, oid) in list.iter().enumerate() {
         let all_parents = repository.commit_parents(*oid)?;
-        parents.push(
-            all_parents
-                .iter()
-                .filter_map(|p| index.get(p).copied())
-                .collect(),
-        );
+        let edges: &[ObjectId] = if first_parent {
+            &all_parents[..all_parents.len().min(1)]
+        } else {
+            &all_parents
+        };
+        let mut kept: Vec<usize> = edges.iter().filter_map(|p| index.get(p).copied()).collect();
+        if !paths.is_empty() {
+            let own = path_state(repository, *oid, paths)?;
+            let mut same_as = None;
+            for (nth, parent) in edges.iter().enumerate() {
+                if path_state(repository, *parent, paths)? == own {
+                    same_as = Some(nth);
+                    break;
+                }
+            }
+            if edges.is_empty() {
+                treesame[at] = own.is_empty();
+            } else if let Some(nth) = same_as {
+                // Identical to a parent: only that side of a merge is followed.
+                treesame[at] = true;
+                kept = index.get(&edges[nth]).copied().into_iter().collect();
+            }
+        }
+        parents.push(kept);
     }
+    let nr_all = nr;
+    let nr = treesame.iter().filter(|same| !**same).count();
 
-    let mut weights: Vec<i64> = vec![0; nr];
+    let mut weights: Vec<i64> = vec![0; nr_all];
     let mut counted = 0usize;
     for (i, p) in parents.iter().enumerate() {
         match p.len() {
             0 => {
-                weights[i] = 1;
+                weights[i] = i64::from(!treesame[i]);
                 counted += 1;
             }
             1 => weights[i] = -1,
             _ => weights[i] = -2,
         }
     }
-    let halfway = |weight: i64| -> bool { matches!(2 * weight - nr as i64, -1..=1) };
+    let halfway = |at: usize, weight: i64| -> bool {
+        !treesame[at] && matches!(2 * weight - nr as i64, -1..=1)
+    };
 
     // Merges first: their reach is counted the slow way.
-    for i in 0..nr {
+    for i in 0..nr_all {
         if weights[i] != -2 {
             continue;
         }
@@ -1128,8 +1278,8 @@ fn find_bisection(
                 stack.extend(parents[c].iter().copied());
             }
         }
-        weights[i] = seen.len() as i64;
-        if !keep_all && halfway(weights[i]) {
+        weights[i] = seen.iter().filter(|c| !treesame[**c]).count() as i64;
+        if !keep_all && halfway(i, weights[i]) {
             return Ok(Bisection {
                 candidates: vec![list[i]],
                 reaches: weights[i] as usize,
@@ -1139,19 +1289,19 @@ fn find_bisection(
         counted += 1;
     }
     // The rest follow from a parent whose reach is known.
-    while counted < nr {
+    while counted < nr_all {
         let mut progressed = false;
-        for i in 0..nr {
+        for i in 0..nr_all {
             if weights[i] >= 0 {
                 continue;
             }
             let Some(q) = parents[i].iter().copied().find(|q| weights[*q] >= 0) else {
                 continue;
             };
-            weights[i] = weights[q] + 1;
+            weights[i] = weights[q] + i64::from(!treesame[i]);
             counted += 1;
             progressed = true;
-            if !keep_all && halfway(weights[i]) {
+            if !keep_all && halfway(i, weights[i]) {
                 return Ok(Bisection {
                     candidates: vec![list[i]],
                     reaches: weights[i] as usize,
@@ -1169,6 +1319,9 @@ fn find_bisection(
         let mut best = 0usize;
         let mut best_distance = -1i64;
         for (i, w) in weights.iter().enumerate() {
+            if treesame[i] {
+                continue;
+            }
             let d = distance(*w);
             if d > best_distance {
                 best = i;
@@ -1181,7 +1334,7 @@ fn find_bisection(
             all: nr,
         });
     }
-    let mut sorted: Vec<usize> = (0..nr).collect();
+    let mut sorted: Vec<usize> = (0..nr_all).filter(|i| !treesame[*i]).collect();
     sorted.sort_by(|a, b| {
         distance(weights[*b])
             .cmp(&distance(weights[*a]))
@@ -1219,14 +1372,13 @@ fn show_diff_tree(global: &GlobalArgs, repository: &Repository, commit: ObjectId
     )?;
     let parents = repository.commit_parents(commit)?;
     let new_tree = repository.commit_tree(commit)?;
-    if parents.len() <= 1 {
-        let old_tree = match parents.first() {
-            Some(parent) => Some(repository.commit_tree(*parent)?),
-            None => None,
-        };
-        println!();
-        super::print_diffstat(repository, old_tree, new_tree)?;
-    }
+    // A merge is summarised against its first parent.
+    let old_tree = match parents.first() {
+        Some(parent) => Some(repository.commit_tree(*parent)?),
+        None => None,
+    };
+    println!();
+    super::print_diffstat(repository, old_tree, new_tree)?;
     Ok(())
 }
 
@@ -1271,15 +1423,42 @@ fn bisect_run(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         eprintln!("error: 'git bisect run' failed: no command provided.");
         return Ok(1);
     }
-    if args[0].starts_with("--reset-when-found") {
-        anyhow::bail!("bisect: --reset-when-found is not implemented");
+    let mut args = args;
+    let mut reset: Option<String> = None;
+    if args[0] == "--reset-when-found" {
+        reset = Some("original".to_string());
+        args = &args[1..];
+    } else if let Some(value) = args[0].strip_prefix("--reset-when-found=") {
+        if !matches!(value, "original" | "found") {
+            eprintln!("error: invalid value for '--reset-when-found': '{value}'");
+            return Ok(1);
+        }
+        reset = Some(value.to_string());
+        args = &args[1..];
+    }
+    if args.is_empty() {
+        eprintln!("error: bisect run failed: no command provided.");
+        return Ok(1);
     }
     {
         let repository = super::open(global)?;
         if !started(&repository) {
             return Ok(1);
         }
+        if let Some(value) = &reset {
+            if git_file(&repository, "BISECT_HEAD").exists() {
+                eprintln!(
+                    "error: options '--reset-when-found' and '--no-checkout' cannot be used together"
+                );
+                return Ok(1);
+            }
+            std::fs::write(
+                git_file(&repository, "BISECT_RESET_WHEN_FOUND"),
+                format!("{value}\n"),
+            )?;
+        }
     }
+    RUNNING.store(true, std::sync::atomic::Ordering::SeqCst);
     loop {
         let repository = super::open(global)?;
         let terms = Terms::read(&repository);
@@ -1322,7 +1501,8 @@ fn bisect_run(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         let done = log
             .lines()
             .last()
-            .is_some_and(|l| l.starts_with("# first "));
+            .is_some_and(|l| l.starts_with("# first "))
+            || FOUND_FIRST_BAD.load(std::sync::atomic::Ordering::SeqCst);
         if done {
             println!("bisect found first '{}' commit", terms.bad);
             return Ok(0);

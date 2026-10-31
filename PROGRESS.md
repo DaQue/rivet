@@ -2167,3 +2167,10 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * `-p` stays refused by name (`fatal: \`stash push -p\` is not supported by rivet`, same for `save`): the existing hunk picker was not worth the budget; recorded in GAPS.md.
 * Proof: scenario `s_stash_staged` (about 25 cases with apply/--index/pop/show; fails on the parent), `stash_patch_refusal.rs`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 332 passed / 0 failed / 0 ignored; `scenarios.sh` 361 PASS, `failures: 0`.
+
+### Unit 14 — `bisect start --first-parent`, path arguments, `--reset-when-found`
+* `find_bisection` takes `first_parent` and `paths`: the walk follows first parents only, and a commit whose path-limited tree equals a parent's is git's TREESAME (carries weight, is never tested and is not counted in `all`; a TREESAME merge follows only that parent). `halfway` ignores TREESAME commits as git's does, so `left` can be -1 and is printed signed.
+* `--reset-when-found[=original|found]` writes `BISECT_RESET_WHEN_FOUND`; the first-bad report then checks out the start (or `refs/bisect/<bad>`) silently and cleans the state; `run --reset-when-found` sets it for the run (`FOUND_FIRST_BAD` tells `run` it is done even though the log is gone). Errors exit 1: `invalid value for '--reset-when-found'`, `options '--reset-when-found' and '--no-checkout' cannot be used together`.
+* A `start` that finds nothing to test (bad path arguments) drops its state; the first-bad report of a merge prints the stat against its first parent.
+* Proof: scenario `s_bisect_flags` (about 120 commands, fails on the parent), `s_bisect_basic`/`s_bisect_run` unchanged.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 332 passed / 0 failed / 0 ignored; `scenarios.sh` 362 PASS, `failures: 0`.
