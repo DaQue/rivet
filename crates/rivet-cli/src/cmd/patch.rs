@@ -11,9 +11,9 @@
 //! * `\ No newline at end of file` decides whether the result ends in a newline.
 //! * A patch is applied to every file or to none.
 //!
-//! A binary patch applies only when its `index` line has full ids and the post-image blob is in
-//! the object database; the data of a `GIT binary patch`, whitespace fixing and fuzz are not
-//! implemented and are refused.
+//! A binary patch applies only when its `index` line has full ids; the post-image comes from the
+//! object database when the blob is there, else from the `literal`/`delta` block of a `GIT binary
+//! patch`. Whitespace fixing and fuzz are not implemented and are refused.
 
 use anyhow::{Result, bail};
 
@@ -30,6 +30,15 @@ pub struct Hunk {
     /// The hunk exactly as the patch has it (`@@` line to the last line, `\ No newline`
     /// markers included, every line newline-terminated): what a `.rej` file repeats.
     pub raw: Vec<u8>,
+}
+
+/// One block of a `GIT binary patch`: a `literal` (the whole file) or a `delta` (against the
+/// pre-image), zlib-compressed, with the size it inflates to.
+#[derive(Clone, Debug)]
+pub struct BinaryBlock {
+    pub delta: bool,
+    pub size: usize,
+    pub data: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -51,8 +60,213 @@ pub struct FilePatch {
     /// A binary patch: `Binary files … differ` (no data) or `GIT binary patch` (`binary_data`).
     pub binary: bool,
     pub binary_data: bool,
+    /// The blocks of a `GIT binary patch`: forward, then (optionally) reverse.
+    pub binary_blocks: Vec<BinaryBlock>,
     pub lines_added: usize,
     pub lines_deleted: usize,
+}
+
+/// One line of git's base85 data: a length character (`A`-`Z` is 1-26, `a`-`z` 27-52), then five
+/// characters per four bytes.
+fn base85_line(line: &[u8]) -> Option<Vec<u8>> {
+    const ALPHABET: &[u8] =
+        b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~";
+    let (&first, rest) = line.split_first()?;
+    let len = match first {
+        b'A'..=b'Z' => usize::from(first - b'A') + 1,
+        b'a'..=b'z' => usize::from(first - b'a') + 27,
+        _ => return None,
+    };
+    if rest.len() != len.div_ceil(4) * 5 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(len.div_ceil(4) * 4);
+    for group in rest.chunks(5) {
+        let mut acc: u64 = 0;
+        for c in group {
+            let digit = ALPHABET.iter().position(|a| a == c)?;
+            acc = acc * 85 + digit as u64;
+        }
+        out.extend_from_slice(&u32::try_from(acc).ok()?.to_be_bytes());
+    }
+    out.truncate(len);
+    Some(out)
+}
+
+/// Inflate a zlib stream (RFC 1950/1951); `None` when it is damaged.
+fn zlib_inflate(data: &[u8]) -> Option<Vec<u8>> {
+    struct Bits<'a> {
+        data: &'a [u8],
+        pos: usize,
+        bit: u32,
+    }
+    impl Bits<'_> {
+        fn take(&mut self, count: u32) -> Option<u32> {
+            let mut value = 0;
+            for n in 0..count {
+                let byte = *self.data.get(self.pos)?;
+                value |= u32::from((byte >> self.bit) & 1) << n;
+                self.bit += 1;
+                if self.bit == 8 {
+                    self.bit = 0;
+                    self.pos += 1;
+                }
+            }
+            Some(value)
+        }
+    }
+    struct Table {
+        counts: [u16; 16],
+        symbols: Vec<u16>,
+    }
+    impl Table {
+        fn new(lengths: &[u8]) -> Table {
+            let mut counts = [0u16; 16];
+            for &l in lengths {
+                counts[usize::from(l)] += 1;
+            }
+            let mut offsets = [0u16; 16];
+            for l in 1..15 {
+                offsets[l + 1] = offsets[l] + counts[l];
+            }
+            let mut symbols = vec![0u16; lengths.len()];
+            for (symbol, &l) in lengths.iter().enumerate() {
+                if l != 0 {
+                    symbols[usize::from(offsets[usize::from(l)])] = symbol as u16;
+                    offsets[usize::from(l)] += 1;
+                }
+            }
+            Table { counts, symbols }
+        }
+        fn decode(&self, bits: &mut Bits) -> Option<usize> {
+            let (mut code, mut first, mut index) = (0i32, 0i32, 0i32);
+            for len in 1..16 {
+                code |= bits.take(1)? as i32;
+                let count = i32::from(self.counts[len]);
+                if code - count < first {
+                    return self
+                        .symbols
+                        .get(usize::try_from(index + (code - first)).ok()?)
+                        .map(|s| usize::from(*s));
+                }
+                index += count;
+                first += count;
+                first <<= 1;
+                code <<= 1;
+            }
+            None
+        }
+    }
+    const LEN_BASE: [u16; 29] = [
+        3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115,
+        131, 163, 195, 227, 258,
+    ];
+    const LEN_EXTRA: [u8; 29] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+    ];
+    const DIST_BASE: [u16; 30] = [
+        1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+        2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
+    ];
+    const DIST_EXTRA: [u8; 30] = [
+        0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12,
+        13, 13,
+    ];
+    if data.len() < 2
+        || data[0] & 0x0f != 8
+        || (u32::from(data[0]) * 256 + u32::from(data[1])) % 31 != 0
+    {
+        return None;
+    }
+    let mut bits = Bits {
+        data,
+        pos: 2,
+        bit: 0,
+    };
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        let last = bits.take(1)?;
+        match bits.take(2)? {
+            0 => {
+                if bits.bit != 0 {
+                    bits.bit = 0;
+                    bits.pos += 1;
+                }
+                let head = data.get(bits.pos..bits.pos + 4)?;
+                let len = usize::from(u16::from_le_bytes([head[0], head[1]]));
+                if u16::from_le_bytes([head[2], head[3]]) != !(len as u16) {
+                    return None;
+                }
+                out.extend_from_slice(data.get(bits.pos + 4..bits.pos + 4 + len)?);
+                bits.pos += 4 + len;
+            }
+            kind @ (1 | 2) => {
+                let (lit, dist) = if kind == 1 {
+                    let mut lengths = [8u8; 288];
+                    lengths[144..256].fill(9);
+                    lengths[256..280].fill(7);
+                    (Table::new(&lengths), Table::new(&[5u8; 30]))
+                } else {
+                    let nlen = bits.take(5)? as usize + 257;
+                    let ndist = bits.take(5)? as usize + 1;
+                    let ncode = bits.take(4)? as usize + 4;
+                    const ORDER: [usize; 19] = [
+                        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+                    ];
+                    let mut lengths = [0u8; 19];
+                    for &slot in ORDER.iter().take(ncode) {
+                        lengths[slot] = bits.take(3)? as u8;
+                    }
+                    let code_table = Table::new(&lengths);
+                    let mut all = Vec::with_capacity(nlen + ndist);
+                    while all.len() < nlen + ndist {
+                        let symbol = code_table.decode(&mut bits)?;
+                        if symbol < 16 {
+                            all.push(symbol as u8);
+                            continue;
+                        }
+                        let (value, repeat) = match symbol {
+                            16 => (*all.last()?, 3 + bits.take(2)?),
+                            17 => (0, 3 + bits.take(3)?),
+                            _ => (0, 11 + bits.take(7)?),
+                        };
+                        for _ in 0..repeat {
+                            all.push(value);
+                        }
+                    }
+                    if all.len() != nlen + ndist {
+                        return None;
+                    }
+                    (Table::new(&all[..nlen]), Table::new(&all[nlen..]))
+                };
+                loop {
+                    let symbol = lit.decode(&mut bits)?;
+                    if symbol < 256 {
+                        out.push(symbol as u8);
+                    } else if symbol == 256 {
+                        break;
+                    } else {
+                        let symbol = symbol - 257;
+                        let len = usize::from(*LEN_BASE.get(symbol)?)
+                            + bits.take(u32::from(LEN_EXTRA[symbol]))? as usize;
+                        let d = dist.decode(&mut bits)?;
+                        let distance = usize::from(*DIST_BASE.get(d)?)
+                            + bits.take(u32::from(DIST_EXTRA[d]))? as usize;
+                        if distance > out.len() {
+                            return None;
+                        }
+                        for _ in 0..len {
+                            out.push(out[out.len() - distance]);
+                        }
+                    }
+                }
+            }
+            _ => return None,
+        }
+        if last == 1 {
+            return Some(out);
+        }
+    }
 }
 
 fn unquote(name: &[u8]) -> Vec<u8> {
@@ -239,16 +453,43 @@ pub fn parse(text: &[u8], strip_n: usize) -> Result<Vec<FilePatch>> {
                     patch.binary_data = true;
                     i += 1;
                     // Two blocks (forward, reverse), each ended by a blank line.
-                    let mut blanks = 0;
                     while i < lines.len() && !lines[i].starts_with(b"diff --git ") {
-                        if lines[i].is_empty() {
-                            blanks += 1;
-                            if blanks == 2 {
-                                i += 1;
-                                break;
+                        let head = lines[i];
+                        let (delta, count) = if let Some(n) = head.strip_prefix(b"literal ") {
+                            (false, n)
+                        } else if let Some(n) = head.strip_prefix(b"delta ") {
+                            (true, n)
+                        } else {
+                            break;
+                        };
+                        let Some(size) = std::str::from_utf8(count)
+                            .ok()
+                            .and_then(|n| n.parse::<usize>().ok())
+                        else {
+                            bail!(
+                                "corrupt binary patch at line {}: {}",
+                                i + 1,
+                                String::from_utf8_lossy(head)
+                            );
+                        };
+                        i += 1;
+                        let mut data = Vec::new();
+                        while i < lines.len() && !lines[i].is_empty() {
+                            match base85_line(lines[i]) {
+                                Some(bytes) => data.extend(bytes),
+                                None => bail!(
+                                    "corrupt binary patch at line {}: {}",
+                                    i + 1,
+                                    String::from_utf8_lossy(lines[i])
+                                ),
                             }
+                            i += 1;
                         }
                         i += 1;
+                        patch.binary_blocks.push(BinaryBlock { delta, size, data });
+                        if patch.binary_blocks.len() == 2 {
+                            break;
+                        }
                     }
                     break;
                 } else if l.starts_with(b"Binary files ") {
@@ -1040,9 +1281,6 @@ fn binary_result(
     .into_owned();
     let does_not_apply =
         |first: String| vec![first, format!("error: {name}: patch does not apply")];
-    if patch.binary_data {
-        return Err(vec!["error: binary patches are not supported".to_string()]);
-    }
     let format = repository.odb().format();
     let (pre, post) = if reverse {
         (&patch.new_oid, &patch.old_oid)
@@ -1070,14 +1308,72 @@ fn binary_result(
     if post == ObjectId::zero(format) {
         return Ok(Vec::new());
     }
-    match repository.odb().read_typed(&post, ObjectKind::Blob) {
-        Ok(object) => Ok(object.into_data()),
-        Err(_) => Err(vec![
+    if let Ok(object) = repository.odb().read_typed(&post, ObjectKind::Blob) {
+        return Ok(object.into_data());
+    }
+    if !patch.binary_data {
+        return Err(vec![
             format!("error: missing binary patch data for '{name}'"),
             format!("error: binary patch does not apply to '{name}'"),
             format!("error: {name}: patch does not apply"),
-        ]),
+        ]);
     }
+    let block = if reverse {
+        match patch.binary_blocks.get(1) {
+            Some(block) => block,
+            None => {
+                return Err(vec![
+                    format!(
+                        "error: cannot reverse-apply a binary patch without the reverse hunk to '{}'",
+                        String::from_utf8_lossy(
+                            patch
+                                .new_path
+                                .as_ref()
+                                .or(patch.old_path.as_ref())
+                                .map_or(&b""[..], |n| n)
+                        )
+                    ),
+                    format!("error: {name}: patch does not apply"),
+                ]);
+            }
+        }
+    } else {
+        match patch.binary_blocks.first() {
+            Some(block) => block,
+            None => {
+                return Err(vec![
+                    format!("error: missing binary patch data for '{name}'"),
+                    format!("error: binary patch does not apply to '{name}'"),
+                    format!("error: {name}: patch does not apply"),
+                ]);
+            }
+        }
+    };
+    let fail = || {
+        vec![
+            format!("error: binary patch does not apply to '{name}'"),
+            format!("error: {name}: patch does not apply"),
+        ]
+    };
+    let inflated = zlib_inflate(&block.data)
+        .filter(|data| data.len() == block.size)
+        .ok_or_else(fail)?;
+    let result = if block.delta {
+        rivet_core::pack::delta::apply_delta(current, &inflated).map_err(|_| fail())?
+    } else {
+        inflated
+    };
+    let (actual, _) = rivet_core::object::hash_object(format, ObjectKind::Blob, &result)
+        .map_err(|e| vec![format!("error: {e}")])?;
+    if actual != post {
+        return Err(vec![
+            format!(
+                "error: binary patch to '{name}' creates incorrect result (expecting {post}, got {actual})"
+            ),
+            format!("error: {name}: patch does not apply"),
+        ]);
+    }
+    Ok(result)
 }
 
 type Pending = std::collections::BTreeMap<Vec<u8>, Option<(Vec<u8>, EntryMode)>>;
@@ -1341,5 +1637,44 @@ impl Ancestor {
             theirs.insert(path.clone(), (mode, oid));
         }
         Self::tree(repository, &theirs).map_err(|e| vec![format!("error: {e}")])
+    }
+}
+
+#[cfg(test)]
+mod binary_tests {
+    use super::{base85_line, zlib_inflate};
+
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn base85_decodes_git_lines_and_rejects_bad_ones() {
+        // `E` is five bytes: the second group of four is cut after one byte.
+        assert_eq!(base85_line(b"EVPa!sWdHyG").as_deref(), Some(&b"abcde"[..]));
+        // A width that does not fit the length character, a stray space, a byte outside the
+        // alphabet and a length character that is not a letter are all refused.
+        assert_eq!(base85_line(b"EVPa!sWdHy"), None);
+        assert_eq!(base85_line(b"EVPa!sWd Hy"), None);
+        assert_eq!(base85_line(b"EVPa!sWdHy\""), None);
+        assert_eq!(base85_line(b"5VPa!sWdHyG"), None);
+    }
+
+    #[test]
+    fn inflate_reads_stored_and_fixed_blocks_and_refuses_damage() {
+        assert_eq!(
+            zlib_inflate(&unhex("7801010300fcff616263024d0127")).as_deref(),
+            Some(&b"abc"[..])
+        );
+        let packed = unhex("78dacb48cdc9c957c8c020cbf38b725200a38a0af9");
+        assert_eq!(
+            zlib_inflate(&packed).as_deref(),
+            Some(&b"hello hello hello hello world"[..])
+        );
+        assert_eq!(zlib_inflate(&packed[..6]), None);
+        assert_eq!(zlib_inflate(b"\x00\x00"), None);
     }
 }

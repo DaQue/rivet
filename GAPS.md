@@ -5,7 +5,7 @@ against the real `git` binary by the differential suite in `tools/difftest/scena
 (currently 363 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 336 tests / 0 failed, 363 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 338 tests / 0 failed, 363 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -129,8 +129,10 @@ The command works for the common case; the listed options or edge cases are miss
   `--break` over a binary file that matches is refused by name (git drops or keeps the notice depending on
   its worker threads; Rust test `grep_break_refuses_binary`). `--threads=<n>` / `--no-threads` are validated like git's and
   otherwise ignored (`s_grep_threads`). No `-P`, `--and`/`--or`/`--not`, `--no-index`.
-* **`apply`** — `GIT binary patch` (from `diff --binary`) is not decoded; no fuzz, symlink
-  patches, whitespace options or `--reject` together with `--3way`.
+* **`apply`** — `GIT binary patch` (`diff --binary`, literal and delta blocks) is decoded, with `-R`
+  taking the reverse block; a *damaged* data block is refused with a plain message where git prints
+  `corrupt binary patch at <file>:<line>` and carries on. `am --3way` still refuses binary patches. No
+  fuzz, symlink patches, whitespace options or `--reject` together with `--3way`.
 * **`format-patch` / `am`** — `--cover-letter` (`0000-cover-letter.patch`: shortlog wrapped at 72 columns,
   the range's diffstat and summary, numbering `0/N`), `--thread[=shallow|deep]`, `--no-thread` and `--in-reply-to`
   (`Message-ID`, `In-Reply-To`, `References`; a deep thread lists every earlier message), and RFC 2047 encoding of

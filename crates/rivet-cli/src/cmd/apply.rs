@@ -2,8 +2,8 @@
 //!
 //! The patch comes from the named files or standard input. It is applied to every file or to
 //! none. `--stat`, `--numstat` and `--summary` print and leave the tree alone unless `--apply` is
-//! given. `--3way` and `--reject` are supported; whitespace handling and the data of a `GIT binary
-//! patch` are not, and are refused rather than ignored.
+//! given. `--3way` and `--reject` are supported, and so is the data of a `GIT binary patch`;
+//! whitespace handling is not, and is refused rather than ignored.
 
 use std::io::{Read as _, Write as _};
 use std::path::PathBuf;

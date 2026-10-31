@@ -4073,6 +4073,46 @@ s_apply_binary() {
     v apply ../foreign.patch
     v apply --reject ../foreign.patch
     v status --short
+    # GIT binary patch data (diff --binary): a literal block and a delta block, whose post-image
+    # blobs this repository has never seen
+    cd ..
+    g init -q src; cd src
+    (seq 1 3000; printf '\000tail') >big.dat; printf '\000\001abc' >small.dat; printf '\000gone' >gone2.dat
+    g add .; g commit -q -m base
+    (seq 1 1500; echo changed; seq 1502 3000; printf '\000tail') >big.dat; printf '\000\002xyz!\377' >small.dat
+    printf '\000made' >made.dat; g rm -q -f gone2.dat; g add -A
+    g diff --cached --binary >../data.patch
+    g diff --cached --binary -R >../data-r.patch
+    g diff --cached >../nodata.patch
+    cd ..
+    v init -q dst; cd dst
+    (seq 1 3000; printf '\000tail') >big.dat; printf '\000\001abc' >small.dat; printf '\000gone' >gone2.dat
+    v add .; v commit -q -m base
+    v apply --stat --numstat --summary ../data.patch
+    v apply --check ../data.patch
+    v apply ../data.patch
+    v status --short
+    od -An -c small.dat; cksum big.dat made.dat
+    g reset -q --hard; g clean -fdq
+    v apply --index ../data.patch
+    v status --short
+    v ls-files -s
+    g reset -q --hard; g clean -fdq
+    v apply --cached ../data.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # the pre-image is not what the patch was made against
+    printf '\000zzz' >small.dat
+    v apply ../data.patch
+    g checkout -q -- small.dat
+    # a patch that carries no data and no usable blob
+    v apply ../nodata.patch
+    # am takes a mailbox that holds one
+    g reset -q --hard; g clean -fdq
+    { echo "From 1111111111111111111111111111111111111111 Mon Sep 17 00:00:00 2001"; echo "From: A U Thor <author@example.com>"; echo "Date: Tue, 14 Nov 2023 22:13:20 +0000"; echo "Subject: [PATCH] binary"; echo; echo "body"; echo "---"; cat ../data.patch; echo "-- "; echo "2.40.0"; echo; } >../bin.mbox
+    v am ../bin.mbox
+    v log --stat --format=%s
+    v status --short
 }
 
 s_apply_three_way() {
