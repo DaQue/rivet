@@ -78,8 +78,8 @@ fn subpath_matches(path: &str, pattern: &str) -> Option<usize> {
 ///
 /// # Caveats
 ///
-/// * **`--all` is refused by name**: Git lists every commit in its in-memory object table order,
-///   which is not reproduced here.
+/// * **`--all` lists the commits in Git's object table order**, which is the slot order of a
+///   hash table filled in the order Git parses things (see [`ObjectTable`]).
 /// * Names are computed without Git's commit-date cutoff; the cutoff is an optimisation that does
 ///   not change a name unless commit dates are badly skewed.
 pub fn run_name_rev(global: &GlobalArgs, args: &NameRevArgs) -> Result<i32> {
@@ -181,10 +181,6 @@ pub fn run_name_rev(global: &GlobalArgs, args: &NameRevArgs) -> Result<i32> {
         eprint!("{USAGE}");
         return Ok(129);
     }
-    if options.all {
-        bail!("name-rev: --all is not implemented");
-    }
-
     let repository = super::open(global)?;
     if options.deprecated_stdin {
         eprintln!(
@@ -192,6 +188,31 @@ pub fn run_name_rev(global: &GlobalArgs, args: &NameRevArgs) -> Result<i32> {
         );
     }
     let names = name_all(&repository, &options)?;
+
+    if options.all {
+        let mut out = Vec::new();
+        for oid in table_order(&repository, &options)? {
+            let prefix = if options.name_only {
+                String::new()
+            } else {
+                format!("{oid} ")
+            };
+            let line = match names.name_of(&oid)? {
+                Some(name) => name,
+                None if !options.no_undefined => "undefined".to_string(),
+                None if options.always => super::history::abbrev(&repository, &oid, false),
+                None => {
+                    write_stdout(&out)?;
+                    write_stdout(prefix.as_bytes())?;
+                    eprintln!("fatal: cannot describe '{oid}'");
+                    return Ok(128);
+                }
+            };
+            out.extend_from_slice(format!("{prefix}{line}\n").as_bytes());
+        }
+        write_stdout(&out)?;
+        return Ok(0);
+    }
 
     if options.stdin {
         let mut input = Vec::new();
@@ -243,6 +264,213 @@ pub fn run_name_rev(global: &GlobalArgs, args: &NameRevArgs) -> Result<i32> {
         write_stdout(format!("{prefix}{line}\n").as_bytes())?;
     }
     Ok(0)
+}
+
+/// Git's table of every object it has looked at, reduced to what decides the order `name-rev
+/// --all` prints: open addressing over the first four bytes of the id (read little-endian), linear
+/// probing, doubled when `nr * 2 >= size - 1`, a rehash in slot order, and a hit found away from its
+/// first slot swapped back into that slot.
+struct ObjectTable {
+    slots: Vec<Option<ObjectId>>,
+    count: usize,
+}
+
+impl ObjectTable {
+    fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            count: 0,
+        }
+    }
+
+    fn first_slot(oid: &ObjectId, size: usize) -> usize {
+        let bytes = oid.as_bytes();
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize & (size - 1)
+    }
+
+    fn place(slots: &mut [Option<ObjectId>], oid: ObjectId) {
+        let size = slots.len();
+        let mut at = Self::first_slot(&oid, size);
+        while slots[at].is_some() {
+            at = (at + 1) % size;
+        }
+        slots[at] = Some(oid);
+    }
+
+    /// `lookup_object` (swapping a displaced hit forward), else `create_object`.
+    fn touch(&mut self, oid: ObjectId) {
+        let size = self.slots.len();
+        if size > 0 {
+            let first = Self::first_slot(&oid, size);
+            let mut at = first;
+            while let Some(found) = &self.slots[at] {
+                if *found == oid {
+                    self.slots.swap(at, first);
+                    return;
+                }
+                at = (at + 1) % size;
+            }
+        }
+        if size.saturating_sub(1) <= self.count * 2 {
+            let grown = if size < 32 { 32 } else { size * 2 };
+            let mut slots = vec![None; grown];
+            for old in self.slots.drain(..).flatten() {
+                Self::place(&mut slots, old);
+            }
+            self.slots = slots;
+        }
+        Self::place(&mut self.slots, oid);
+        self.count += 1;
+    }
+}
+
+/// The commits Git has in its object table after `name-rev` has read every ref and walked the
+/// history from the ones that name things, in table order: what `--all` prints.
+///
+/// The table is filled the way Git fills it: each ref is parsed whether or not a filter keeps it
+/// (a commit takes its tree and its parents with it; an annotated tag takes its target, looked up
+/// twice), and then the tips, tags first and oldest first, are walked depth first (first parent first),
+/// parsing each parent the first time it is met.
+fn table_order(repository: &Repository, options: &Options) -> Result<Vec<ObjectId>> {
+    struct Facts {
+        tree: ObjectId,
+        parents: Vec<ObjectId>,
+        date: i64,
+    }
+    let odb = repository.odb();
+    let facts_of = |oid: &ObjectId| -> Result<Facts> {
+        let object = odb.read_typed(oid, ObjectKind::Commit)?;
+        let commit = rivet_core::object::Commit::parse(repository.format(), object.data())?;
+        Ok(Facts {
+            tree: commit.tree,
+            parents: odb.visible_parents(oid, &commit),
+            date: commit.committer.when,
+        })
+    };
+    let mut table = ObjectTable::new();
+    // Everything the table holds as a commit, parsed or only named as somebody's parent.
+    let mut commits: HashSet<ObjectId> = HashSet::new();
+    let mut facts: HashMap<ObjectId, Facts> = HashMap::new();
+    let mut tips: Vec<(bool, i64, ObjectId)> = Vec::new();
+    let parse_commit = |oid: &ObjectId,
+                        table: &mut ObjectTable,
+                        commits: &mut HashSet<ObjectId>,
+                        facts: &mut HashMap<ObjectId, Facts>|
+     -> Result<()> {
+        if let std::collections::hash_map::Entry::Vacant(entry) = facts.entry(*oid) {
+            let parsed = facts_of(oid)?;
+            table.touch(parsed.tree);
+            for parent in &parsed.parents {
+                table.touch(*parent);
+                commits.insert(*parent);
+            }
+            entry.insert(parsed);
+        }
+        Ok(())
+    };
+    let tag_target = |oid: &ObjectId| -> Result<ObjectId> {
+        let object = odb.read_typed(oid, ObjectKind::Tag)?;
+        Ok(rivet_core::object::Tag::parse(repository.format(), object.data())?.object)
+    };
+    for (refname, oid) in refs_sorted(repository)? {
+        let is_tag = refname.starts_with("refs/tags/");
+        // `parse_object` on the ref, whatever the filters say: a commit takes its tree and
+        // parents, a tag only its target (created, not parsed).
+        table.touch(oid);
+        let kind = odb.read(&oid)?.kind();
+        match kind {
+            ObjectKind::Commit => {
+                commits.insert(oid);
+                parse_commit(&oid, &mut table, &mut commits, &mut facts)?;
+            }
+            ObjectKind::Tag => {
+                let target = tag_target(&oid)?;
+                table.touch(target);
+                if odb.read(&target)?.kind() == ObjectKind::Commit {
+                    commits.insert(target);
+                }
+            }
+            _ => {}
+        }
+        if !keeps(options, &refname) {
+            continue;
+        }
+        // The tags are peeled one by one, each target parsed in turn.
+        let mut current = oid;
+        let mut current_kind = kind;
+        let mut tagger_date = None;
+        while current_kind == ObjectKind::Tag {
+            let object = odb.read_typed(&current, ObjectKind::Tag)?;
+            let tag = rivet_core::object::Tag::parse(repository.format(), object.data())?;
+            tagger_date.get_or_insert(tag.tagger.when);
+            table.touch(tag.object);
+            current = tag.object;
+            current_kind = odb.read(&current)?.kind();
+            match current_kind {
+                ObjectKind::Commit => {
+                    commits.insert(current);
+                    parse_commit(&current, &mut table, &mut commits, &mut facts)?;
+                }
+                ObjectKind::Tag => {
+                    let next = tag_target(&current)?;
+                    table.touch(next);
+                    if odb.read(&next)?.kind() == ObjectKind::Commit {
+                        commits.insert(next);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if current_kind != ObjectKind::Commit {
+            continue;
+        }
+        let date = tagger_date.unwrap_or(facts[&current].date);
+        tips.push((is_tag, date, current));
+    }
+    // Tags before everything else, then the older first; equal keys stay in ref order.
+    tips.sort_by_key(|(is_tag, date, _)| (!*is_tag, *date));
+    let mut named: HashSet<ObjectId> = HashSet::new();
+    for (_, _, tip) in tips {
+        let mut stack = vec![tip];
+        named.insert(tip);
+        while let Some(commit) = stack.pop() {
+            let parents = facts[&commit].parents.clone();
+            let mut fresh = Vec::new();
+            for parent in parents {
+                parse_commit(&parent, &mut table, &mut commits, &mut facts)?;
+                if named.insert(parent) {
+                    fresh.push(parent);
+                }
+            }
+            // The first parent is walked first.
+            stack.extend(fresh.into_iter().rev());
+        }
+    }
+    Ok(table
+        .slots
+        .into_iter()
+        .flatten()
+        .filter(|oid| commits.contains(oid))
+        .collect())
+}
+
+/// Whether `--tags`, `--exclude` and `--refs` leave `refname` in.
+fn keeps(options: &Options, refname: &str) -> bool {
+    if options.tags_only && !refname.starts_with("refs/tags/") {
+        return false;
+    }
+    if options
+        .exclude
+        .iter()
+        .any(|pattern| subpath_matches(refname, pattern).is_some())
+    {
+        return false;
+    }
+    options.refs.is_empty()
+        || options
+            .refs
+            .iter()
+            .any(|pattern| subpath_matches(refname, pattern).is_some())
 }
 
 /// What the refs that survive the filters name.
@@ -379,5 +607,53 @@ fn write_stdout(bytes: &[u8]) -> Result<()> {
     match stdout.write_all(bytes).and_then(|_| stdout.flush()) {
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         other => other.map_err(Into::into),
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::ObjectTable;
+    use rivet_core::{ObjectFormat, ObjectId};
+
+    /// An id whose first four bytes, read little-endian, are `low` (so its first slot in a table
+    /// of 32 is `low % 32`) and whose remaining bytes tell ids apart.
+    fn id(low: u32, tail: u8) -> ObjectId {
+        let mut bytes = [tail; 20];
+        bytes[..4].copy_from_slice(&low.to_le_bytes());
+        ObjectId::from_bytes(ObjectFormat::Sha1, &bytes).unwrap()
+    }
+
+    fn order(table: &ObjectTable) -> Vec<ObjectId> {
+        table.slots.iter().flatten().copied().collect()
+    }
+
+    #[test]
+    fn collisions_probe_forward_wrap_and_a_displaced_hit_moves_back() {
+        let (a, b, c) = (id(5, 1), id(5, 2), id(31, 3));
+        let mut table = ObjectTable::new();
+        for oid in [a, b, c] {
+            table.touch(oid);
+        }
+        assert_eq!(table.slots.len(), 32);
+        assert_eq!(order(&table), vec![a, b, c]);
+        // Looking `b` up again finds it one slot away from where it hashes and swaps it forward.
+        table.touch(b);
+        assert_eq!(order(&table), vec![b, a, c]);
+        // A second id for the last slot wraps around to the front.
+        let d = id(63, 4);
+        table.touch(d);
+        assert_eq!(order(&table), vec![d, b, a, c]);
+    }
+
+    #[test]
+    fn the_table_doubles_when_half_full_and_rehashes_in_slot_order() {
+        let mut table = ObjectTable::new();
+        let ids: Vec<ObjectId> = (0..17u32).map(|n| id(n * 3, n as u8)).collect();
+        for oid in &ids {
+            table.touch(*oid);
+        }
+        // 16 objects fit in 32 slots; the 17th finds `size - 1 <= 2 * count` and doubles it.
+        assert_eq!(table.slots.len(), 64);
+        assert_eq!(order(&table), ids);
     }
 }

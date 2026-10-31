@@ -2224,3 +2224,13 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Found, not fixed: `checkout -b <new>` on an unmerged index prints `M\t<path>` lines (git prints nothing).
 * Proof: `s_checkout_needs_merge` (checkout/switch in all forms over four conflicted paths, partial resolution, a cherry-pick in progress; fails on the parent).
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 339 passed / 0 failed / 0 ignored; `scenarios.sh` 369 PASS, `failures: 0`.
+
+### Unit 22 — `name-rev --all`
+* Git prints the commits of its in-memory object table in slot order. The table is open addressing over the first four bytes of the id read little-endian, linear probing, doubled when `size - 1 <= 2 * count` (rehash in slot order), and a lookup that hits away from its first slot swaps the object back there. `ObjectTable` in `namerev.rs` is that table; `table_order` fills it the way git does (prototyped in Python against 100+ random repositories before it was written in Rust):
+  * every ref is parsed whatever the filters say: a commit adds its tree and its parents (created, not parsed), an annotated tag adds its target;
+  * for the refs the filters keep, tags are peeled (the target is looked up a second time and a commit parsed); tips are ordered tags first, oldest first (tagger date for annotated tags), then walked depth first with the **first parent first**, each parent parsed the first time it is met;
+  * the output is every object the table holds as a commit, parsed or merely named as somebody's parent (hence the `undefined` lines for commits no kept tip reaches).
+* The first-parent-first walk was the one detail that random histories did not decide (both orders agreed on 60 of them); `--refs=refs/tags/a*` over a merge-heavy history did.
+* Found while writing the scenario (not rivet's fault): git's `merge --no-ff` with a dirty, unrelated work tree file leaves a dangling commit; the scenario commits before merging.
+* Proof: `s_name_rev_all` (a small history, then 50 more commits with side branches and tags; plain, `--name-only`, `--tags`, `--refs`, `--exclude`, `--no-undefined`, `--always`, no matching ref, `--all HEAD` and `--annotate-stdin` refusals; fails on the parent: `--all` refused), Rust tests `collisions_probe_forward_wrap_and_a_displaced_hit_moves_back` and `the_table_doubles_when_half_full_and_rehashes_in_slot_order`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 341 passed / 0 failed / 0 ignored; `scenarios.sh` 370 PASS, `failures: 0`.

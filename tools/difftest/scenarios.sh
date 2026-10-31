@@ -11974,6 +11974,63 @@ s_mktree() {
     v for-each-ref
 }
 
+# `name-rev --all`: every commit git has looked at, in the order of its in-memory object table
+# (the slot order of a hash table filled as git parses refs and walks history).
+s_name_rev_all() {
+    v init -q repo; cd repo
+    echo a >f; v add f; tick; v commit -q -m root
+    v name-rev --all
+    for i in 1 2 3 4 5 6; do echo "m$i" >>f; v commit -q -a -m "main $i"; tick; done
+    v tag light
+    tick; v tag -a -m t v1
+    v name-rev --all
+    # side branches, merges and an octopus
+    for b in one two three; do
+        v switch -q -c $b main
+        for i in 1 2 3; do echo "$b $i" >"$b$i"; v add "$b$i"; tick; v commit -q -m "$b $i"; done
+    done
+    v switch -q main
+    tick; v merge -q --no-ff -m "merge one" one
+    tick; v merge -q --no-ff -m "merge two" two
+    echo more >>f; v commit -q -a -m "after merges"; tick
+    v switch -q three; echo late >late; v add late; tick; v commit -q -m late
+    v switch -q main
+    tick; v merge -q --no-ff -m "merge three" three
+    v tag -a -m "second" v2 HEAD~1
+    tick; v tag -a -m "tag of a tag" v2tag v2
+    tick; v tag -a -m obj treetag 'HEAD^{tree}'
+    v update-ref refs/remotes/origin/main HEAD~2
+    v update-ref refs/remotes/origin/two two
+    echo wip >>f; v stash -q
+    v name-rev --all
+    v name-rev --all --name-only
+    v name-rev --all --tags
+    v name-rev --all --tags --name-only
+    v name-rev --all --refs='refs/heads/t*'
+    v name-rev --all --refs=refs/tags/v1
+    v name-rev --all --exclude='refs/heads/*'
+    v name-rev --all --exclude='*' --no-undefined
+    v name-rev --all --no-undefined --always
+    v name-rev --all --always --name-only
+    v name-rev --all --refs=nomatch
+    v name-rev --all --refs=nomatch --no-undefined
+    v name-rev --all HEAD
+    v name-rev --all --annotate-stdin
+    # a longer history, so that the table grows more than once and slots collide
+    v switch -q main
+    for i in $(seq 1 50); do
+        echo "n$i" >>f
+        v commit -q -a -m "n $i"; tick
+        if [ $((i % 7)) = 0 ]; then v switch -q -c side$i; echo "s$i" >s$i; v add s$i; tick; v commit -q -m "s $i"; v switch -q main; tick; v merge -q --no-ff -m "merge s$i" side$i; fi
+        if [ $((i % 11)) = 0 ]; then v tag "t$i"; fi
+        if [ $((i % 13)) = 0 ]; then tick; v tag -a -m "a$i" "a$i"; fi
+    done
+    v name-rev --all
+    v name-rev --all --tags --name-only
+    v name-rev --all --refs='refs/tags/a*'
+    v name-rev --all --exclude='refs/tags/t*' --exclude='refs/heads/side*'
+}
+
 s_name_rev() {
     v init -q repo; cd repo
     echo a >f; v add f; tick; v commit -q -m a
