@@ -780,6 +780,10 @@ fn widen_index_lines(
                 && let Some(file) = diff
                     .files
                     .iter()
+                    .flat_map(|file| match &file.split {
+                        Some(split) => vec![&split.0, &split.1],
+                        None => vec![file],
+                    })
                     .find(|file| matches(&file.old_oid, old) && matches(&file.new_oid, new))
             {
                 out.extend_from_slice(

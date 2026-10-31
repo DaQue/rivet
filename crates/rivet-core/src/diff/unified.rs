@@ -574,7 +574,12 @@ pub fn format_unified(
     };
     let zeros = "0000000";
 
-    for file in &diff.files {
+    // A symlink swapped with a regular file prints as the deletion followed by the addition.
+    let files = diff.files.iter().flat_map(|file| match &file.split {
+        Some(split) => vec![&split.0, &split.1],
+        None => vec![file],
+    });
+    for file in files {
         let path = file.path();
         let mode = file.new_mode.or(file.old_mode);
 

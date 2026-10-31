@@ -2155,3 +2155,9 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Option rules taken from git, not from the brief: `-M<n>`/`-C<n>` read `50%` as a percentage and bare digits as a fraction (`5` = `50` = 50%, `05` = 5%); a later `-M` turns copy detection off again; `--find-copies-harder` forces it on at the end; errors read `invalid argument to find-renames` / `find-copies`.
 * Proof: scenario `s_diff_tree_renames` (about 290 invocations, fails on the parent), Rust test `scores_are_percentages_or_the_digits_of_a_fraction`, `diff_tree_refusals.rs` now lists `-c --cc` only.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 331 passed / 0 failed / 0 ignored; `scenarios.sh` 359 PASS, `failures: 0`.
+
+### Unit 12 — symlink ↔ regular file in patches
+* Only the patch format differs in git (`--raw`/`--stat`/`--numstat`/`--name-status`/`--summary` keep one `T` entry), so the fix is in the unified formatter's input: `FileDiff` got `split: Option<Box<(deletion, addition)>>`, filled by `assemble_bytes` (the tail every producer shares: `blob_diff`, `entry_diff`, the index and work tree diffs) when exactly one side is a symlink; `format_unified` prints the two halves. The formatter itself has no object database, so it could not rebuild the halves (a binary side, a context window) from the merged hunks. `diff-tree --full-index` widens the halves' index lines too.
+* The brief named `diff-index`; rivet has no such command (nor `diff --raw`/`-p`), so the scenario drives `diff`, `diff --cached`, `diff-tree`, `show` and `log -p`.
+* Proof: scenario `s_diff_mode_swap` (both directions, a binary side, a nested path, a mode-only change beside them, work tree and index variants; fails on the parent).
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 331 passed / 0 failed / 0 ignored; `scenarios.sh` 360 PASS, `failures: 0`.

@@ -100,6 +100,10 @@ pub struct FileDiff {
     pub algorithm: crate::diff::DiffAlgorithm,
     /// For a detected rename, the similarity percentage (100 for an exact rename).
     pub similarity: Option<u32>,
+    /// For a path that is a symlink on one side and a regular file on the other: the deletion of
+    /// the old side and the addition of the new one, which is how a patch spells that change.
+    /// Everything else reads the entry itself (`T` in `--raw`, one line in `--stat`).
+    pub split: Option<Box<(FileDiff, FileDiff)>>,
 }
 
 impl FileDiff {
@@ -344,6 +348,7 @@ pub fn blob_diff(
             is_deleted,
             algorithm: options.algorithm,
             similarity: None,
+            split: None,
         });
     }
 
@@ -394,6 +399,17 @@ fn assemble_bytes(
         compute_hunks(old_data, new_data, options)?
     };
 
+    // A symlink replaced by a regular file (or the reverse) is a deletion and an addition in a patch.
+    let split = match (old, new) {
+        (Some(from), Some(to)) if (from.1 == EntryMode::Link) != (to.1 == EntryMode::Link) => {
+            Some(Box::new((
+                assemble_bytes(path, Some(from), None, old_data, &[], options)?,
+                assemble_bytes(path, None, Some(to), &[], new_data, options)?,
+            )))
+        }
+        _ => None,
+    };
+
     Ok(FileDiff {
         old_path: if is_new {
             None
@@ -415,6 +431,7 @@ fn assemble_bytes(
         is_deleted,
         algorithm: options.algorithm,
         similarity: None,
+        split,
     })
 }
 

@@ -11121,6 +11121,39 @@ s_diff_tree_renames() {
     STDIN_FILE=.git/stdin.txt v diff-tree --stdin -r -C --name-status
 }
 
+# A path that is a symlink on one side and a regular file on the other: -p prints a deletion and an
+# addition (git), the other formats one entry.
+s_diff_mode_swap() {
+    v init -q repo; cd repo
+    echo target >t; echo content >f; ln -s t l1; echo line >r1; printf 'bin\0ary\n' >b1
+    mkdir d; ln -s ../t d/s1
+    v add .; tick; v commit -q -m one
+    rm l1; echo "now a file" >l1; rm r1; ln -s t r1; chmod +x f
+    rm b1; ln -s t b1; rm d/s1; echo "plain" >d/s1
+    v add -A; tick; v commit -q -m two
+    for o in "" "--stat" "--name-status" "--name-only" "-U0" "--no-abbrev"; do
+        v diff $o HEAD~1 HEAD
+    done
+    for o in "-r -p" "-r --raw" "-r --stat" "-r --numstat" "-r --name-status" "-r --patch-with-stat" "-r --patch-with-raw --full-index"; do
+        v diff-tree $o HEAD
+    done
+    v diff-tree -r -p HEAD~1 HEAD
+    v diff-tree -r -p HEAD HEAD~1
+    v diff --cached HEAD~1
+    v diff --cached --stat HEAD~1
+    # the work tree against the index: replaced on disk, not staged
+    rm l1; ln -s t l1; rm r1; echo regular >r1
+    v diff
+    v diff --stat
+    v diff --name-status
+    v diff HEAD
+    v add -A; tick; v commit -q -m three
+    v diff HEAD~1 HEAD
+    v log -p -2 --format=%s
+    v show --format=%s HEAD
+    v show --format=%s HEAD~1
+}
+
 s_mktree() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c
