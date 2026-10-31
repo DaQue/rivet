@@ -84,6 +84,33 @@ fn span_counts(data: &[u8]) -> HashMap<u64, u64> {
     counts
 }
 
+type SpanCache = HashMap<ObjectId, (u64, HashMap<u64, u64>)>;
+
+/// The score of two blobs already in `cache`, or `None` when their sizes alone rule a pair out.
+fn inexact_score(
+    cache: &SpanCache,
+    source: &ObjectId,
+    destination: &ObjectId,
+    minimum: u64,
+) -> Option<u64> {
+    let (source_size, source_spans) = &cache[source];
+    let (destination_size, destination_spans) = &cache[destination];
+    let max_size = (*source_size).max(*destination_size);
+    let min_size = (*source_size).min(*destination_size);
+    if max_size == 0 {
+        return None;
+    }
+    let delta = max_size - min_size;
+    if max_size * MAX_SCORE.saturating_sub(minimum) < delta * MAX_SCORE {
+        return None;
+    }
+    let copied: u64 = source_spans
+        .iter()
+        .filter_map(|(hash, count)| destination_spans.get(hash).map(|d| (*count).min(*d)))
+        .sum();
+    Some(copied * MAX_SCORE / max_size)
+}
+
 fn basename(path: &[u8]) -> &[u8] {
     path.rsplit(|b| *b == b'/').next().unwrap_or(path)
 }
@@ -94,6 +121,17 @@ pub fn pair_renames(
     sources: &[RenameSide],
     destinations: &[RenameSide],
     odb: &Odb,
+) -> Result<Vec<RenamePair>> {
+    pair_renames_at(sources, destinations, odb, MINIMUM_SCORE)
+}
+
+/// As [`pair_renames`], with the similarity a pair needs given on Git's scale ([`MAX_SCORE`] is
+/// 100%): `-M<n>` / `--find-renames=<n>`.
+pub fn pair_renames_at(
+    sources: &[RenameSide],
+    destinations: &[RenameSide],
+    odb: &Odb,
+    minimum: u64,
 ) -> Result<Vec<RenamePair>> {
     let mut pairs: Vec<RenamePair> = Vec::new();
     if sources.is_empty() || destinations.is_empty() {
@@ -166,23 +204,10 @@ pub fn pair_renames(
             }
             load(&source.oid, &mut cache)?;
             load(&destination.oid, &mut cache)?;
-            let (source_size, source_spans) = &cache[&source.oid];
-            let (destination_size, destination_spans) = &cache[&destination.oid];
-            let max_size = (*source_size).max(*destination_size);
-            let min_size = (*source_size).min(*destination_size);
-            if max_size == 0 {
+            let Some(score) = inexact_score(&cache, &source.oid, &destination.oid, minimum) else {
                 continue;
-            }
-            let delta = max_size - min_size;
-            if max_size * (MAX_SCORE - MINIMUM_SCORE) < delta * MAX_SCORE {
-                continue;
-            }
-            let copied: u64 = source_spans
-                .iter()
-                .filter_map(|(hash, count)| destination_spans.get(hash).map(|d| (*count).min(*d)))
-                .sum();
-            let score = copied * MAX_SCORE / max_size;
-            if score >= MINIMUM_SCORE {
+            };
+            if score >= minimum {
                 let name_score = (basename(&source.path) == basename(&destination.path)) as u8;
                 candidates.push((score, name_score, d, s));
             }
@@ -207,6 +232,68 @@ pub fn pair_renames(
         });
     }
     pairs.sort_by_key(|p| p.destination);
+    Ok(pairs)
+}
+
+/// Pair each destination with its best source, a source being free to serve several destinations
+/// (`-C`): the highest score wins, then a source with the destination's file name, then the
+/// first. Returns at most one pair per destination, in destination order, and nothing when the
+/// problem is larger than Git's rename limit.
+pub fn pair_copies(
+    sources: &[RenameSide],
+    destinations: &[RenameSide],
+    odb: &Odb,
+    minimum: u64,
+) -> Result<Vec<RenamePair>> {
+    let mut pairs = Vec::new();
+    if sources.is_empty()
+        || destinations.is_empty()
+        || sources.len().saturating_mul(destinations.len()) > RENAME_LIMIT * RENAME_LIMIT
+    {
+        return Ok(pairs);
+    }
+    let mut cache: SpanCache = HashMap::new();
+    let load = |oid: &ObjectId, cache: &mut SpanCache| -> Result<()> {
+        if !cache.contains_key(oid) {
+            let data = odb
+                .read_typed(oid, crate::object::ObjectKind::Blob)?
+                .into_data();
+            cache.insert(*oid, (data.len() as u64, span_counts(&data)));
+        }
+        Ok(())
+    };
+    for (d, destination) in destinations.iter().enumerate() {
+        if !is_regular_kind(destination.mode) {
+            continue;
+        }
+        let mut best: Option<(u64, u8, usize)> = None;
+        for (s, source) in sources.iter().enumerate() {
+            if !is_regular_kind(source.mode) || !same_kind(source.mode, destination.mode) {
+                continue;
+            }
+            let score = if source.oid == destination.oid {
+                MAX_SCORE
+            } else {
+                load(&source.oid, &mut cache)?;
+                load(&destination.oid, &mut cache)?;
+                match inexact_score(&cache, &source.oid, &destination.oid, minimum) {
+                    Some(score) if score >= minimum => score,
+                    _ => continue,
+                }
+            };
+            let name = (basename(&source.path) == basename(&destination.path)) as u8;
+            if best.is_none_or(|(top, top_name, _)| (score, name) > (top, top_name)) {
+                best = Some((score, name, s));
+            }
+        }
+        if let Some((score, _, source)) = best {
+            pairs.push(RenamePair {
+                source,
+                destination: d,
+                score,
+            });
+        }
+    }
     Ok(pairs)
 }
 

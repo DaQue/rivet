@@ -1,5 +1,5 @@
 //! `diff-tree` refuses the options it does not implement by name and prints nothing. Git would
-//! print combined diffs or detect renames, so there is no differential
+//! print combined diffs, so there is no differential
 //! scenario for the refusal; the rest of `diff-tree` is the scenario `s_diff_tree`.
 
 use std::path::Path;
@@ -29,7 +29,7 @@ fn unimplemented_options_are_refused_by_name_and_print_nothing() {
     assert!(run(&dir, &["add", "a"]).status.success());
     assert!(run(&dir, &["commit", "-q", "-m", "one"]).status.success());
 
-    for option in ["-c", "--cc", "-M", "-C", "--find-copies-harder"] {
+    for option in ["-c", "--cc"] {
         let out = run(&dir, &["diff-tree", "-r", "--root", option, "HEAD"]);
         assert_eq!(out.status.code(), Some(128), "{option}");
         assert!(out.stdout.is_empty(), "{option}: stdout must stay empty");

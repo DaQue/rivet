@@ -11069,6 +11069,58 @@ $TWO
 " diff-tree -r --stdin HEAD
 }
 
+# diff-tree -M / -C / --find-copies-harder, scores and thresholds, against git.
+s_diff_tree_renames() {
+    v init -q repo; cd repo
+    mkdir dir
+    seq 1 20 | sed 's/^/alpha line /' >a.txt
+    seq 1 24 | sed 's/^/beta line /' >b.txt
+    seq 1 16 | sed 's/^/same line /' >same.txt
+    seq 1 18 | sed 's/^/mod line /' >m.txt
+    seq 1 14 | sed 's/^/gone line /' >d.txt
+    seq 1 10 | sed 's/^/dir line /' >dir/c.txt
+    printf 'x\n' >tiny.txt
+    ln -s a.txt link
+    v add .; tick; v commit -q -m one
+    mkdir ren cp
+    git_mv() { v mv "$1" "$2"; }
+    git_mv a.txt ren/a2.txt
+    # b: renamed with roughly a third of its lines changed
+    sed '1,6s/beta/BETA/' b.txt >b2.txt; v rm -q -f b.txt
+    # an unchanged file copied: only --find-copies-harder can see it
+    cp same.txt cp/same_copy.txt
+    # a modified file copied: -C sees the source because it is modified in the same commit
+    sed -i '2s/.*/mod line two changed/' m.txt; cp m.txt cp/m_copy.txt
+    # a deleted file that becomes two identical files: one rename, one copy
+    cp d.txt d1.txt; cp d.txt d2.txt; v rm -q -f d.txt
+    # a new file that resembles nothing
+    seq 100 120 | sed 's/^/unrelated /' >new.txt
+    # a changed symlink target copy, and a tiny file
+    cp tiny.txt tiny2.txt
+    v add -A; tick; v commit -q -m two
+    for o in "" "-M" "-M90%" "-M50%" "-M20%" "-M5" "-M100%" "--find-renames" "--find-renames=40%" "-C" "-C90%" "-C20%" \
+        "--find-copies" "--find-copies=60%" "--find-copies-harder" "--find-copies-harder -M30%" "-C --find-copies-harder" \
+        "-M --no-renames" "-M -C" "-C70% -M20%" "-C -M" "--find-copies-harder -M"; do
+        for f in "-r" "-r --name-status" "-r --name-only" "-r -z" "-r --name-status -z" "-r --stat" "-r --numstat" \
+            "-r --numstat -z" "-r -p" "-r --patch-with-raw" "-r --abbrev" "-t -r"; do
+            v diff-tree $o $f HEAD
+        done
+        v diff-tree $o HEAD~1 HEAD
+        v diff-tree $o -r HEAD HEAD~1
+        v diff-tree $o -r --name-status HEAD~1 HEAD -- cp ren
+        v diff-tree $o -r --name-status HEAD~1 HEAD -- d1.txt
+    done
+    v diff-tree -r -M --root --name-status HEAD~1
+    v diff-tree -r -C --root --name-status HEAD~1
+    v diff-tree -Mx HEAD
+    v diff-tree -Cx HEAD
+    v diff-tree --find-copies=x HEAD
+    v diff-tree --find-renames=x HEAD
+    v diff-tree -C5% -r HEAD
+    printf '%s\n%s\n' "$(g rev-parse HEAD)" "$(g rev-parse HEAD~1)" >.git/stdin.txt
+    STDIN_FILE=.git/stdin.txt v diff-tree --stdin -r -C --name-status
+}
+
 s_mktree() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c

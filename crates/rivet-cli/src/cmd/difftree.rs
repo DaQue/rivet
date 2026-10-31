@@ -37,6 +37,33 @@ struct Opts {
     patch: bool,
     nul: bool,
     abbrev: Option<Option<usize>>,
+    /// `-M`: the similarity a rename needs, on Git's scale.
+    rename_score: Option<u64>,
+    /// `-C` / `--find-copies-harder`.
+    copies: bool,
+    harder: bool,
+}
+
+/// A `-M<n>` / `-C<n>` score: `50%` is a percentage, bare digits are the digits of a fraction
+/// (`5` and `50` are both one half, `05` is five percent).
+fn parse_score(text: &str) -> Option<u64> {
+    let max = u128::from(rivet_core::diff::MAX_SCORE);
+    if let Some(percent) = text.strip_suffix('%') {
+        let (whole, fraction) = percent.split_once('.').unwrap_or((percent, ""));
+        if whole.is_empty() && fraction.is_empty() {
+            return None;
+        }
+        let digits = format!("{whole}{fraction}");
+        let value: u128 = digits.parse().ok()?;
+        let scale = 10u128.pow(fraction.len() as u32);
+        return Some((value * max / (100 * scale)) as u64);
+    }
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let value: u128 = text.parse().ok()?;
+    let scale = 10u128.pow(text.len() as u32);
+    Some((value * max / scale) as u64)
 }
 
 /// One line of raw output.
@@ -47,6 +74,9 @@ struct Rec {
     noid: Option<ObjectId>,
     status: u8,
     path: BString,
+    /// The source path of a rename or copy, and its similarity percentage.
+    old_path: Option<BString>,
+    score: Option<u32>,
 }
 
 struct Walker<'a> {
@@ -117,6 +147,8 @@ impl Walker<'_> {
                 noid: (!is_old).then_some(entry.oid),
                 status: if is_old { b'D' } else { b'A' },
                 path: path.clone(),
+                old_path: None,
+                score: None,
             });
         }
         if is_tree && self.recursive {
@@ -176,6 +208,8 @@ impl Walker<'_> {
                             noid: Some(y.oid),
                             status,
                             path: path.clone(),
+                            old_path: None,
+                            score: None,
                         });
                     }
                     if is_tree && self.recursive {
@@ -311,8 +345,49 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
             "-z" => opts.nul = true,
             "--raw" => opts.raw = true,
             "--abbrev" => opts.abbrev = Some(None),
-            "-c" | "--cc" | "-M" | "-C" | "--find-copies-harder" => {
+            "-c" | "--cc" => {
                 anyhow::bail!("diff-tree: {word} is not implemented");
+            }
+            "--no-renames" => {
+                opts.rename_score = None;
+                opts.copies = false;
+            }
+            "-M" | "--find-renames" => {
+                // A later -M leaves renames only: copy detection is switched off again.
+                opts.copies = false;
+                opts.rename_score = Some(rivet_core::diff::rename::MINIMUM_SCORE);
+            }
+            "-C" | "--find-copies" => {
+                opts.copies = true;
+                opts.rename_score
+                    .get_or_insert(rivet_core::diff::rename::MINIMUM_SCORE);
+            }
+            "--find-copies-harder" => {
+                opts.copies = true;
+                opts.harder = true;
+                opts.rename_score
+                    .get_or_insert(rivet_core::diff::rename::MINIMUM_SCORE);
+            }
+            other
+                if (other.starts_with("-M") || other.starts_with("--find-renames="))
+                    && !other.starts_with("--find-copies") =>
+            {
+                let text = other.strip_prefix("--find-renames=").unwrap_or(&other[2..]);
+                let Some(score) = parse_score(text) else {
+                    eprintln!("error: invalid argument to find-renames");
+                    return Ok(129);
+                };
+                opts.copies = false;
+                opts.rename_score = Some(score);
+            }
+            other if other.starts_with("-C") || other.starts_with("--find-copies=") => {
+                let text = other.strip_prefix("--find-copies=").unwrap_or(&other[2..]);
+                let Some(score) = parse_score(text) else {
+                    eprintln!("error: invalid argument to find-copies");
+                    return Ok(129);
+                };
+                opts.copies = true;
+                opts.rename_score = Some(score);
             }
             other if other.starts_with("--abbrev=") => {
                 let Ok(n) = other["--abbrev=".len()..].parse::<usize>() else {
@@ -326,6 +401,12 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
             }
             other => positional.push(other),
         }
+    }
+    // As in Git, `--find-copies-harder` turns copy detection on whatever else was said.
+    if opts.harder {
+        opts.copies = true;
+        opts.rename_score
+            .get_or_insert(rivet_core::diff::rename::MINIMUM_SCORE);
     }
     if positional.is_empty() && !opts.stdin {
         eprint!("{USAGE}");
@@ -428,6 +509,9 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                     out: Vec::new(),
                 };
                 walker.walk(old, Some(new), BStr::new(b""))?;
+                if opts.rename_score.is_some() {
+                    pair_records(&repository, &opts, old, &specs, &mut walker.out)?;
+                }
                 any = !walker.out.is_empty();
                 for rec in walker.out.iter().filter(|_| !opts.silent) {
                     let path = if opts.nul {
@@ -439,7 +523,9 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                         body.extend_from_slice(&path);
                     } else if opts.name_status {
                         body.push(rec.status);
+                        body.extend_from_slice(&score_digits(rec));
                         body.push(if opts.nul { b'\0' } else { b'\t' });
+                        body.extend_from_slice(&old_path_field(rec, &opts));
                         body.extend_from_slice(&path);
                     } else {
                         let mode = |mode: Option<EntryMode>| mode.map_or(0, EntryMode::to_u32);
@@ -454,7 +540,9 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                             )
                             .as_bytes(),
                         );
+                        body.extend_from_slice(&score_digits(rec));
                         body.push(if opts.nul { b'\0' } else { b'\t' });
+                        body.extend_from_slice(&old_path_field(rec, &opts));
                         body.extend_from_slice(&path);
                     }
                     body.push(end);
@@ -492,10 +580,15 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                         keep[at - 1]
                     });
                 }
+                let copied = if opts.rename_score.is_some() {
+                    pair_files(&repository, &opts, old, &specs, &mut diff)?
+                } else {
+                    Vec::new()
+                };
                 any = !diff.is_empty();
                 if any && !opts.silent {
                     if opts.numstat {
-                        for stat in &diff.stats {
+                        for (stat, file) in diff.stats.iter().zip(&diff.files) {
                             if stat.is_binary {
                                 body.extend_from_slice(b"-\t-\t");
                             } else {
@@ -503,13 +596,35 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                                     format!("{}\t{}\t", stat.added, stat.deleted).as_bytes(),
                                 );
                             }
-                            if opts.nul {
-                                body.extend_from_slice(&stat.path);
-                            } else {
-                                body.extend_from_slice(&rivet_core::ops::quote_path(
-                                    stat.path.as_bstr(),
-                                    false,
-                                ));
+                            match (&file.old_path, file.is_rename(), opts.nul) {
+                                (Some(old), true, true) => {
+                                    body.push(b'\0');
+                                    body.extend_from_slice(old);
+                                    body.push(b'\0');
+                                    body.extend_from_slice(file.path());
+                                }
+                                (Some(old), true, false) => {
+                                    let (qo, qn) = (
+                                        rivet_core::ops::quote_path(old.as_bstr(), false),
+                                        rivet_core::ops::quote_path(file.path(), false),
+                                    );
+                                    if qo.as_slice() != old.as_slice()
+                                        || qn.as_slice() != file.path()
+                                    {
+                                        body.extend_from_slice(&qo);
+                                        body.extend_from_slice(b" => ");
+                                        body.extend_from_slice(&qn);
+                                    } else {
+                                        body.extend_from_slice(&rivet_core::pprint_rename(
+                                            old,
+                                            file.path(),
+                                        ));
+                                    }
+                                }
+                                (_, _, true) => body.extend_from_slice(&stat.path),
+                                (_, _, false) => body.extend_from_slice(
+                                    &rivet_core::ops::quote_path(stat.path.as_bstr(), false),
+                                ),
                             }
                             body.push(end);
                         }
@@ -526,6 +641,9 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                         rivet_core::format_unified(&diff, format, &mut patch)?;
                         if opts.full_index {
                             patch = widen_index_lines(&patch, &diff, format);
+                        }
+                        if !copied.is_empty() {
+                            patch = name_copies(&patch, &copied);
                         }
                         body.extend_from_slice(&patch);
                     }
@@ -679,4 +797,326 @@ fn widen_index_lines(
         out.extend_from_slice(line);
     }
     out
+}
+
+/// The score digits after the status letter of a rename or copy (`R086`).
+fn score_digits(rec: &Rec) -> Vec<u8> {
+    rec.score
+        .map(|score| format!("{score:03}").into_bytes())
+        .unwrap_or_default()
+}
+
+/// The source path field before the path of a rename or copy, with its separator.
+fn old_path_field(rec: &Rec, opts: &Opts) -> Vec<u8> {
+    let Some(old) = &rec.old_path else {
+        return Vec::new();
+    };
+    let mut field = if opts.nul {
+        old.to_vec()
+    } else {
+        rivet_core::ops::quote_path(old.as_bstr(), false).to_vec()
+    };
+    field.push(if opts.nul { b'\0' } else { b'\t' });
+    field
+}
+
+/// Every blob of `tree` under `prefix`: the sources `--find-copies-harder` looks at.
+fn all_blobs(
+    repository: &Repository,
+    tree: ObjectId,
+    prefix: &[u8],
+    out: &mut Vec<rivet_core::RenameSide>,
+) -> Result<()> {
+    let data = repository
+        .odb()
+        .read_typed(&tree, ObjectKind::Tree)?
+        .into_data();
+    for entry in Tree::parse(repository.format(), &data)?.entries {
+        let mut path = prefix.to_vec();
+        path.extend_from_slice(&entry.name);
+        if entry.mode == EntryMode::Tree {
+            path.push(b'/');
+            all_blobs(repository, entry.oid, &path, out)?;
+        } else if entry.mode != EntryMode::Commit {
+            out.push(rivet_core::RenameSide {
+                path: BString::from(path),
+                oid: entry.oid,
+                mode: entry.mode,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Which source serves which destination, as `(source, destination, score, is_copy)` in
+/// destination order. `deleted` says whether a source is a deleted file (the only kind a rename
+/// may take over; any other source can only be copied from).
+fn choose_pairs(
+    repository: &Repository,
+    opts: &Opts,
+    sources: &[rivet_core::RenameSide],
+    deleted: &[bool],
+    destinations: &[rivet_core::RenameSide],
+) -> Result<Vec<(usize, usize, u64, bool)>> {
+    let minimum = opts
+        .rename_score
+        .unwrap_or(rivet_core::diff::rename::MINIMUM_SCORE);
+    let pairs = if opts.copies {
+        rivet_core::diff::pair_copies(sources, destinations, repository.odb(), minimum)?
+    } else {
+        // Renames only: the deleted files are the sources, each used once.
+        let at: Vec<usize> = (0..sources.len()).filter(|i| deleted[*i]).collect();
+        let only: Vec<rivet_core::RenameSide> = at.iter().map(|i| sources[*i].clone()).collect();
+        let mut pairs =
+            rivet_core::diff::pair_renames_at(&only, destinations, repository.odb(), minimum)?;
+        for pair in &mut pairs {
+            pair.source = at[pair.source];
+        }
+        pairs
+    };
+    // A deleted file several destinations come from is renamed to the last of them and copied
+    // to the others; a source that stays is only ever copied.
+    let mut uses = vec![0usize; sources.len()];
+    for pair in &pairs {
+        uses[pair.source] += 1;
+    }
+    let mut chosen = Vec::new();
+    for pair in pairs {
+        uses[pair.source] -= 1;
+        let copy = !deleted[pair.source] || uses[pair.source] > 0;
+        chosen.push((pair.source, pair.destination, pair.score, copy));
+    }
+    Ok(chosen)
+}
+
+/// Turn the added files of `recs` that match a deleted (or, with `-C`, modified) one into
+/// renames and copies, in place.
+fn pair_records(
+    repository: &Repository,
+    opts: &Opts,
+    old: Option<ObjectId>,
+    specs: &[BString],
+    recs: &mut Vec<Rec>,
+) -> Result<()> {
+    let mut sources: Vec<rivet_core::RenameSide> = Vec::new();
+    let mut source_rec: Vec<Option<usize>> = Vec::new();
+    let mut deleted: Vec<bool> = Vec::new();
+    let mut destinations: Vec<rivet_core::RenameSide> = Vec::new();
+    let mut destination_rec: Vec<usize> = Vec::new();
+    for (index, rec) in recs.iter().enumerate() {
+        match (rec.status, rec.ooid, rec.omode, rec.noid, rec.nmode) {
+            (b'A', _, _, Some(oid), Some(mode)) if mode != EntryMode::Tree => {
+                destinations.push(rivet_core::RenameSide {
+                    path: rec.path.clone(),
+                    oid,
+                    mode,
+                });
+                destination_rec.push(index);
+            }
+            (b'D', Some(oid), Some(mode), _, _) if mode != EntryMode::Tree => {
+                sources.push(rivet_core::RenameSide {
+                    path: rec.path.clone(),
+                    oid,
+                    mode,
+                });
+                source_rec.push(Some(index));
+                deleted.push(true);
+            }
+            (b'M' | b'T', Some(oid), Some(mode), _, _)
+                if opts.copies && mode != EntryMode::Tree =>
+            {
+                sources.push(rivet_core::RenameSide {
+                    path: rec.path.clone(),
+                    oid,
+                    mode,
+                });
+                source_rec.push(Some(index));
+                deleted.push(false);
+            }
+            _ => {}
+        }
+    }
+    if opts.harder
+        && let Some(tree) = old
+    {
+        let mut everything = Vec::new();
+        all_blobs(repository, tree, b"", &mut everything)?;
+        let known: std::collections::HashMap<BString, usize> = sources
+            .iter()
+            .enumerate()
+            .map(|(at, side)| (side.path.clone(), at))
+            .collect();
+        for side in everything {
+            let wanted = specs.is_empty()
+                || specs.iter().any(|spec| {
+                    rivet_core::ops::pathspec_matches(side.path.as_bstr(), spec.as_bstr())
+                });
+            if wanted && !known.contains_key(&side.path) {
+                sources.push(side);
+                source_rec.push(None);
+                deleted.push(false);
+            }
+        }
+    }
+    let chosen = choose_pairs(repository, opts, &sources, &deleted, &destinations)?;
+    let mut remove: Vec<usize> = Vec::new();
+    for (source, destination, score, copy) in chosen {
+        let rec = &mut recs[destination_rec[destination]];
+        rec.omode = Some(sources[source].mode);
+        rec.ooid = Some(sources[source].oid);
+        rec.old_path = Some(sources[source].path.clone());
+        rec.score = Some((score * 100 / rivet_core::diff::MAX_SCORE) as u32);
+        rec.status = if copy { b'C' } else { b'R' };
+        if !copy && let Some(at) = source_rec[source] {
+            remove.push(at);
+        }
+    }
+    remove.sort_unstable();
+    for at in remove.into_iter().rev() {
+        recs.remove(at);
+    }
+    Ok(())
+}
+
+/// The same pairing on a computed diff: renamed files become one entry with two paths, copies
+/// keep their source. Returns the paths that are copies.
+fn pair_files(
+    repository: &Repository,
+    opts: &Opts,
+    old: Option<ObjectId>,
+    specs: &[BString],
+    diff: &mut rivet_core::TreeDiff,
+) -> Result<Vec<BString>> {
+    let mut sources: Vec<rivet_core::RenameSide> = Vec::new();
+    let mut source_file: Vec<Option<usize>> = Vec::new();
+    let mut deleted: Vec<bool> = Vec::new();
+    let mut destinations: Vec<rivet_core::RenameSide> = Vec::new();
+    let mut destination_file: Vec<usize> = Vec::new();
+    for (index, file) in diff.files.iter().enumerate() {
+        if file.is_new
+            && let (Some(oid), Some(mode)) = (file.new_oid, file.new_mode)
+        {
+            destinations.push(rivet_core::RenameSide {
+                path: file.path().to_owned(),
+                oid,
+                mode,
+            });
+            destination_file.push(index);
+        } else if let (Some(oid), Some(mode)) = (file.old_oid, file.old_mode)
+            && (file.is_deleted || opts.copies)
+        {
+            sources.push(rivet_core::RenameSide {
+                path: file.path().to_owned(),
+                oid,
+                mode,
+            });
+            source_file.push(Some(index));
+            deleted.push(file.is_deleted);
+        }
+    }
+    if opts.harder
+        && let Some(tree) = old
+    {
+        let mut everything = Vec::new();
+        all_blobs(repository, tree, b"", &mut everything)?;
+        let known: std::collections::HashSet<BString> =
+            sources.iter().map(|side| side.path.clone()).collect();
+        for side in everything {
+            let wanted = specs.is_empty()
+                || specs.iter().any(|spec| {
+                    rivet_core::ops::pathspec_matches(side.path.as_bstr(), spec.as_bstr())
+                });
+            if wanted && !known.contains(&side.path) {
+                sources.push(side);
+                source_file.push(None);
+                deleted.push(false);
+            }
+        }
+    }
+    let chosen = choose_pairs(repository, opts, &sources, &deleted, &destinations)?;
+    let mut options = rivet_core::DiffOptions::new();
+    options.detect_binary = true;
+    let mut remove: Vec<usize> = Vec::new();
+    let mut copies: Vec<BString> = Vec::new();
+    for (source, destination, score, copy) in chosen {
+        let (from, to) = (&sources[source], &destinations[destination]);
+        let mut paired = rivet_core::blob_diff(
+            repository.format(),
+            BStr::new(&to.path[..]),
+            Some((from.oid, from.mode)),
+            Some((to.oid, to.mode)),
+            repository.odb(),
+            &options,
+        )?;
+        paired.old_path = Some(from.path.clone());
+        paired.new_path = Some(to.path.clone());
+        paired.is_new = false;
+        paired.is_deleted = false;
+        paired.similarity = Some((score * 100 / rivet_core::diff::MAX_SCORE) as u32);
+        diff.files[destination_file[destination]] = paired;
+        if copy {
+            copies.push(to.path.clone());
+        } else if let Some(at) = source_file[source] {
+            remove.push(at);
+        }
+    }
+    remove.sort_unstable();
+    for at in remove.into_iter().rev() {
+        diff.files.remove(at);
+    }
+    diff.stats = diff.files.iter().map(rivet_core::FileDiff::stat).collect();
+    Ok(copies)
+}
+
+/// A patch's `rename from` / `rename to` headers of the files in `copies`, spelled `copy from` /
+/// `copy to` (the formatter knows only renames).
+fn name_copies(patch: &[u8], copies: &[BString]) -> Vec<u8> {
+    let targets: Vec<Vec<u8>> = copies
+        .iter()
+        .map(|path| {
+            let mut line = b"rename to ".to_vec();
+            line.extend_from_slice(&rivet_core::ops::quote_path(path.as_bstr(), false));
+            line.push(b'\n');
+            line
+        })
+        .collect();
+    let lines: Vec<&[u8]> = patch.split_inclusive(|b| *b == b'\n').collect();
+    let mut out = Vec::with_capacity(patch.len());
+    for (at, line) in lines.iter().enumerate() {
+        let is_copy_to = targets.iter().any(|target| target == line);
+        let is_copy_from = line.starts_with(b"rename from ")
+            && lines
+                .get(at + 1)
+                .is_some_and(|next| targets.iter().any(|target| target == next));
+        if is_copy_to {
+            out.extend_from_slice(b"copy to ");
+            out.extend_from_slice(&line[b"rename to ".len()..]);
+        } else if is_copy_from {
+            out.extend_from_slice(b"copy from ");
+            out.extend_from_slice(&line[b"rename from ".len()..]);
+        } else {
+            out.extend_from_slice(line);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_score;
+
+    #[test]
+    fn scores_are_percentages_or_the_digits_of_a_fraction() {
+        let max = rivet_core::diff::MAX_SCORE;
+        assert_eq!(parse_score("50%"), Some(max / 2));
+        assert_eq!(parse_score("5"), Some(max / 2));
+        assert_eq!(parse_score("50"), Some(max / 2));
+        assert_eq!(parse_score("05"), Some(max / 20));
+        assert_eq!(parse_score("100%"), Some(max));
+        assert_eq!(parse_score("0%"), Some(0));
+        assert_eq!(parse_score("12.5%"), Some(max * 125 / 1000));
+        for bad in ["", "%", "x", "5x", "-1", "1%%"] {
+            assert_eq!(parse_score(bad), None, "{bad:?}");
+        }
+    }
 }

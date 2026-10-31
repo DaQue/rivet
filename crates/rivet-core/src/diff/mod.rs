@@ -59,7 +59,10 @@ pub mod xdiff;
 pub use myers::{
     DiffLine, Edit, histogram_diff, line_count, myers_diff, needs_newline_marker, split_lines,
 };
-pub use rename::{RenamePair, RenameSide, detect_renames, pair_renames, pprint_rename};
+pub use rename::{
+    MAX_SCORE, RenamePair, RenameSide, detect_renames, pair_copies, pair_renames, pair_renames_at,
+    pprint_rename,
+};
 pub use tree::{FileDiff, TreeDiff, blob_diff, entry_diff, index_diff, tree_diff, work_tree_diff};
 pub use unified::{
     DiffStat, Hunk, HunkLine, LineKind, change_letter, format_name_status, format_stat,
