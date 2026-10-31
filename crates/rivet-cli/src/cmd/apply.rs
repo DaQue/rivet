@@ -3,7 +3,8 @@
 //! The patch comes from the named files or standard input. It is applied to every file or to
 //! none. `--stat`, `--numstat` and `--summary` print and leave the tree alone unless `--apply` is
 //! given. `--3way` and `--reject` are supported, and so is the data of a `GIT binary patch`;
-//! whitespace handling is not, and is refused rather than ignored.
+//! whitespace handling is not, and is refused rather than ignored. `-C<n>` gives up context lines
+//! like git does.
 
 use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
@@ -43,6 +44,10 @@ pub struct ApplyArgs {
     /// Accept patches with zero lines of context.
     #[arg(long = "unidiff-zero")]
     pub unidiff_zero: bool,
+
+    /// Ensure at least this many lines of context match before and after each change.
+    #[arg(short = 'C', value_name = "N")]
+    pub context: Option<usize>,
 
     /// Show a diffstat instead of applying.
     #[arg(long = "stat")]
@@ -126,6 +131,7 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
         cached: args.cached,
         check: args.check,
         unidiff_zero: args.unidiff_zero,
+        min_context: args.context,
         reject: args.reject,
         three_way: args.three_way,
     };

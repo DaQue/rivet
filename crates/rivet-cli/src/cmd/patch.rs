@@ -448,6 +448,17 @@ pub fn parse(text: &[u8], strip_n: usize) -> Result<Vec<FilePatch>> {
                         patch.old_oid = Some(old.to_string());
                         patch.new_oid = Some(new.to_string());
                     }
+                    // `index <old>..<new> <mode>`: the mode of a file that stays as it is.
+                    if let Some(mode) = text
+                        .split(' ')
+                        .nth(1)
+                        .and_then(|m| u32::from_str_radix(m.trim(), 8).ok())
+                        && patch.old_mode.is_none()
+                        && patch.new_mode.is_none()
+                    {
+                        patch.old_mode = Some(mode);
+                        patch.new_mode = Some(mode);
+                    }
                 } else if l.starts_with(b"GIT binary patch") {
                     patch.binary = true;
                     patch.binary_data = true;
@@ -654,6 +665,8 @@ pub fn apply_hunks_collect(
     reverse: bool,
     unidiff_zero: bool,
     keep_going: bool,
+    min_context: usize,
+    notes: &mut Vec<String>,
 ) -> (Vec<u8>, Vec<HunkFailure>) {
     let mut content = split_content(data);
     let mut drift: isize = 0;
@@ -661,13 +674,13 @@ pub fn apply_hunks_collect(
     for (number, hunk) in hunks.iter().enumerate() {
         // Pre- and post-image of the hunk (swapped when reversing).
         let (pre_kind, post_kind) = if reverse { (b'+', b'-') } else { (b'-', b'+') };
-        let pre: Vec<&[u8]> = hunk
+        let pre_all: Vec<&[u8]> = hunk
             .lines
             .iter()
             .filter(|(k, _)| *k == b' ' || *k == pre_kind)
             .map(|(_, l)| l.as_slice())
             .collect();
-        let post: Vec<Vec<u8>> = hunk
+        let post_all: Vec<Vec<u8>> = hunk
             .lines
             .iter()
             .filter(|(k, _)| *k == b' ' || *k == post_kind)
@@ -678,64 +691,89 @@ pub fn apply_hunks_collect(
         } else {
             (hunk.old_start, hunk.new_no_newline, hunk.old_no_newline)
         };
-        let trailing = hunk
+        let leading_all = hunk.lines.iter().take_while(|(k, _)| *k == b' ').count();
+        let trailing_all = hunk
             .lines
             .iter()
             .rev()
             .take_while(|(k, _)| *k == b' ')
             .count();
-        let match_beginning = !unidiff_zero && (old_start == 0 || old_start == 1);
-        let match_end = !unidiff_zero && trailing == 0;
-        let expected = if pre.is_empty() {
+        let mut match_beginning = old_start == 0 || (old_start == 1 && !unidiff_zero);
+        let mut match_end = !unidiff_zero && trailing_all == 0;
+        let expected = if pre_all.is_empty() {
             // A pure addition: after line `old_start` (0 means the very start).
             old_start as isize
         } else {
             old_start as isize - 1
         };
-        let wanted = (expected + drift).max(0) as usize;
-        let fits = |at: usize| -> bool {
-            if at + pre.len() > content.lines.len() {
-                return false;
-            }
-            if match_beginning && at != 0 {
-                return false;
-            }
-            if match_end && at + pre.len() != content.lines.len() {
-                return false;
-            }
-            for (k, line) in pre.iter().enumerate() {
-                if content.lines[at + k] != *line {
+        // Context lines given up one at a time (`-C<n>`), as git's `apply_one_fragment` does.
+        let (mut leading, mut trailing) = (leading_all, trailing_all);
+        let mut found: Option<(usize, usize)> = None;
+        loop {
+            let (cut_front, cut_back) = (leading_all - leading, trailing_all - trailing);
+            let pre = &pre_all[cut_front..pre_all.len() - cut_back];
+            let wanted = (expected + drift - cut_front as isize).max(0) as usize;
+            let fits = |at: usize| -> bool {
+                if at + pre.len() > content.lines.len() {
                     return false;
                 }
+                if match_beginning && at != 0 {
+                    return false;
+                }
+                if match_end && at + pre.len() != content.lines.len() {
+                    return false;
+                }
+                for (k, line) in pre.iter().enumerate() {
+                    if content.lines[at + k] != *line {
+                        return false;
+                    }
+                }
+                // The pre-image's last line must agree about its newline.
+                if cut_back == 0
+                    && at + pre.len() == content.lines.len()
+                    && !pre.is_empty()
+                    && old_no_newline == content.trailing_newline
+                {
+                    return false;
+                }
+                true
+            };
+            let max = content.lines.len() + 1;
+            for distance in 0..=max {
+                if distance <= wanted && fits(wanted - distance) {
+                    found = Some((wanted - distance, pre.len()));
+                    break;
+                }
+                if distance > 0
+                    && wanted + distance <= content.lines.len()
+                    && fits(wanted + distance)
+                {
+                    found = Some((wanted + distance, pre.len()));
+                    break;
+                }
             }
-            // The pre-image's last line must agree about its newline.
-            if at + pre.len() == content.lines.len()
-                && !pre.is_empty()
-                && old_no_newline == content.trailing_newline
-            {
-                return false;
-            }
-            true
-        };
-        let mut found: Option<usize> = None;
-        let max = content.lines.len() + 1;
-        for distance in 0..=max {
-            if distance <= wanted && fits(wanted - distance) {
-                found = Some(wanted - distance);
+            if found.is_some() || (leading <= min_context && trailing <= min_context) {
                 break;
             }
-            if distance > 0 && wanted + distance <= content.lines.len() && fits(wanted + distance) {
-                found = Some(wanted + distance);
-                break;
+            if match_beginning || match_end {
+                match_beginning = false;
+                match_end = false;
+                continue;
+            }
+            if leading >= trailing {
+                leading -= 1;
+            }
+            if trailing > leading {
+                trailing -= 1;
             }
         }
-        let Some(at) = found else {
+        let Some((at, pre_len)) = found else {
             let mut searched = Vec::new();
-            for line in &pre {
+            for line in &pre_all {
                 searched.extend_from_slice(line);
                 searched.push(b'\n');
             }
-            if old_no_newline && !pre.is_empty() {
+            if old_no_newline && !pre_all.is_empty() {
                 searched.pop();
             }
             failures.push(HunkFailure {
@@ -748,10 +786,22 @@ pub fn apply_hunks_collect(
             }
             break;
         };
-        drift = at as isize - expected;
-        let ends_here = at + pre.len() == content.lines.len();
-        content.lines.splice(at..at + pre.len(), post);
-        if ends_here {
+        let (cut_front, cut_back) = (leading_all - leading, trailing_all - trailing);
+        if (leading, trailing) != (leading_all, trailing_all) {
+            notes.push(format!(
+                "Context reduced to ({leading}/{trailing}) to apply fragment at {}",
+                at + 1
+            ));
+        }
+        drift = at as isize - (expected - cut_front as isize);
+        let ends_here = at + pre_len == content.lines.len();
+        content.lines.splice(
+            at..at + pre_len,
+            post_all[cut_front..post_all.len() - cut_back]
+                .iter()
+                .cloned(),
+        );
+        if ends_here && cut_back == 0 {
             content.trailing_newline = !new_no_newline;
         }
     }
@@ -769,6 +819,8 @@ pub struct ApplyOptions {
     /// Check that the patches apply and change nothing.
     pub check: bool,
     pub unidiff_zero: bool,
+    /// `-C<n>`: the fewest context lines a hunk may be reduced to (`None`: never reduce).
+    pub min_context: Option<usize>,
     /// Keep going after a hunk that does not fit: write it to `<path>.rej` (`--reject`).
     pub reject: bool,
     /// Merge the patch into the current content when it does not apply by content (`--3way`).
@@ -929,6 +981,16 @@ pub fn apply_to_repo(
             (None, Some(data)) => (data, EntryMode::Blob),
             (None, None) => (Vec::new(), EntryMode::Blob),
         };
+        if let (Some(expected), Some((_, (_, actual)))) = (old_mode, &source)
+            && !is_new
+            && (actual.to_u32() ^ expected) & 0o170000 != 0
+        {
+            errors.push(format!(
+                "error: {}: wrong type",
+                show(source.as_ref().map_or(&target[..], |s| &s.0[..]))
+            ));
+            continue;
+        }
         let mut merged: Option<ThreeWayMerge> = None;
         let mut direct = None;
         if patch.binary {
@@ -968,6 +1030,7 @@ pub fn apply_to_repo(
                 }
             }
         }
+        let mut notes = Vec::new();
         let (result, failures) = if let Some(done) = &merged {
             (done.data.clone(), Vec::new())
         } else if let Some(done) = direct {
@@ -979,8 +1042,12 @@ pub fn apply_to_repo(
                 options.reverse,
                 options.unidiff_zero,
                 options.reject,
+                options.min_context.unwrap_or(usize::MAX),
+                &mut notes,
             )
         };
+        warnings.extend(notes.iter().cloned());
+        errors.extend(notes);
         let shown_name = show(source.as_ref().map(|s| s.0.as_slice()).unwrap_or(&target));
         if !options.reject && !failures.is_empty() {
             errors.push(format!(
@@ -1056,13 +1123,7 @@ pub fn apply_to_repo(
         let mode = match new_mode {
             Some(0o100755) => EntryMode::BlobExecutable,
             Some(0o100644) => EntryMode::Blob,
-            Some(0o120000) => {
-                errors.push(format!(
-                    "error: {}: symbolic links are not supported",
-                    show(&target)
-                ));
-                continue;
-            }
+            Some(0o120000) => EntryMode::Link,
             _ => base_mode,
         };
         if patch.rename
@@ -1139,7 +1200,10 @@ pub fn apply_to_repo(
             Err(errors)
         };
     }
-    if errors.iter().any(|line| !line.starts_with("warning:")) {
+    if errors
+        .iter()
+        .any(|line| !line.starts_with("warning:") && !line.starts_with("Context reduced to"))
+    {
         return Err(errors);
     }
     if options.check {
@@ -1220,6 +1284,8 @@ fn three_way_merge(
         options.reverse,
         options.unidiff_zero,
         false,
+        options.min_context.unwrap_or(usize::MAX),
+        &mut Vec::new(),
     );
     if let Some(failure) = failures.first() {
         let (old_path, new_path) = if options.reverse {
@@ -1422,15 +1488,28 @@ fn write_pending(
                     if let Some(parent) = full.parent() {
                         std::fs::create_dir_all(parent).map_err(|e| fail(&e))?;
                     }
-                    std::fs::write(&full, data).map_err(|e| fail(&e))?;
+                    use std::os::unix::ffi::OsStrExt as _;
                     use std::os::unix::fs::PermissionsExt as _;
-                    let bits = if *mode == EntryMode::BlobExecutable {
-                        0o755
+                    if *mode == EntryMode::Link {
+                        let _ = std::fs::remove_file(&full);
+                        std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(data), &full)
+                            .map_err(|e| fail(&e))?;
                     } else {
-                        0o644
-                    };
-                    std::fs::set_permissions(&full, std::fs::Permissions::from_mode(bits))
-                        .map_err(|e| fail(&e))?;
+                        // A symlink in the way is replaced, not written through.
+                        if std::fs::symlink_metadata(&full)
+                            .is_ok_and(|meta| meta.file_type().is_symlink())
+                        {
+                            let _ = std::fs::remove_file(&full);
+                        }
+                        std::fs::write(&full, data).map_err(|e| fail(&e))?;
+                        let bits = if *mode == EntryMode::BlobExecutable {
+                            0o755
+                        } else {
+                            0o644
+                        };
+                        std::fs::set_permissions(&full, std::fs::Permissions::from_mode(bits))
+                            .map_err(|e| fail(&e))?;
+                    }
                     stat = repository
                         .worktree()
                         .and_then(|w| w.stat(path_ref))
@@ -1607,7 +1686,15 @@ impl Ancestor {
             if patch.binary {
                 return Err(vec!["error: binary patches are not supported".to_string()]);
             }
-            let (post, failures) = apply_hunks_collect(pre, &patch.hunks, false, false, false);
+            let (post, failures) = apply_hunks_collect(
+                pre,
+                &patch.hunks,
+                false,
+                false,
+                false,
+                usize::MAX,
+                &mut Vec::new(),
+            );
             if let Some(failure) = failures.first() {
                 let name = String::from_utf8_lossy(old.map_or(&b""[..], |p| p));
                 return Err(vec![
@@ -1676,5 +1763,42 @@ mod binary_tests {
         );
         assert_eq!(zlib_inflate(&packed[..6]), None);
         assert_eq!(zlib_inflate(b"\x00\x00"), None);
+    }
+}
+
+#[cfg(test)]
+mod fuzz_tests {
+    use super::{apply_hunks_collect, parse};
+
+    const PATCH: &[u8] = b"--- a/f\n+++ b/f\n@@ -2,5 +2,5 @@\n 2\n 3\n-4\n+four\n 5\n 6\n";
+
+    fn run(data: &[u8], min_context: usize) -> (Vec<u8>, usize, Vec<String>) {
+        let patches = parse(PATCH, 1).unwrap();
+        let mut notes = Vec::new();
+        let (out, failures) = apply_hunks_collect(
+            data,
+            &patches[0].hunks,
+            false,
+            false,
+            false,
+            min_context,
+            &mut notes,
+        );
+        (out, failures.len(), notes)
+    }
+
+    #[test]
+    fn context_is_given_up_only_down_to_the_requested_amount() {
+        let drifted = b"1\nx\n3\n4\n5\ny\n7\n";
+        // Never reducing (git's default) or reducing to 2 lines still needs every line.
+        assert_eq!(run(drifted, usize::MAX).1, 1);
+        assert_eq!(run(drifted, 2).1, 1);
+        // One line either side is enough: the drifted outer lines are dropped.
+        let (out, failed, notes) = run(drifted, 1);
+        assert_eq!(failed, 0);
+        assert_eq!(out, b"1\nx\n3\nfour\n5\ny\n7\n");
+        assert_eq!(notes, ["Context reduced to (1/1) to apply fragment at 3"]);
+        // A change that is not there fails however much context is given up.
+        assert_eq!(run(b"1\n2\n3\nzzz\n5\n6\n", 0).1, 1);
     }
 }

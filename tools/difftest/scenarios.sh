@@ -4115,6 +4115,90 @@ s_apply_binary() {
     v status --short
 }
 
+s_apply_fuzz() {
+    g init -q src; cd src
+    seq 1 20 >f; seq 1 6 >g.txt; ln -s target l; ln -s gone-link gl; echo reg >typ
+    g add .; g commit -q -m base
+    # three lines of context, a change in the middle, one at the start, one at the end
+    sed -i 's/^10$/ten/' f; sed -i 's/^1$/one/' g.txt; sed -i 's/^6$/six/' g.txt
+    g diff >../ctx.patch
+    g diff -U0 >../zero.patch
+    g checkout -q -- .
+    # symlinks: create, delete, retarget, and a regular file becoming one (and back)
+    ln -s a/b/deep newl; rm gl; rm l; ln -s other l; rm typ; ln -s was-reg typ
+    g add -A; g diff --cached >../links.patch; g diff --cached -R >../links-r.patch
+    g reset -q --hard; g clean -fdq
+    cd ..
+    v init -q dst; cd dst
+    seq 1 20 >f; seq 1 6 >g.txt; ln -s target l; ln -s gone-link gl; echo reg >typ
+    v add .; v commit -q -m base
+    # context that drifted: lines next to the change differ
+    sed -i 's/^9$/nine/' f; sed -i 's/^11$/eleven/' f
+    v apply --check ../ctx.patch
+    v apply --check -C2 ../ctx.patch
+    v apply --check -C1 ../ctx.patch
+    v apply -C1 ../ctx.patch
+    v diff
+    g checkout -q -- .
+    sed -i 's/^8$/eight/; s/^12$/twelve/' f
+    v apply --check -C1 ../ctx.patch
+    v apply --check -C3 ../ctx.patch
+    v apply -C2 ../ctx.patch
+    v diff
+    g checkout -q -- .
+    # the change itself is gone: no amount of fuzz helps
+    sed -i 's/^10$/zzz/' f
+    v apply -C0 ../ctx.patch
+    v apply -C1 ../ctx.patch
+    v apply --reject -C1 ../ctx.patch
+    v status --short
+    g checkout -q -- .; g clean -fdq
+    # patches with no context
+    v apply --check ../zero.patch
+    v apply --unidiff-zero --check ../zero.patch
+    v apply --unidiff-zero ../zero.patch
+    v diff --stat
+    g checkout -q -- .
+    v apply --unidiff-zero -R ../zero.patch
+    v apply --unidiff-zero --index ../zero.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # lines moved: the hunk is found at an offset, with and without fuzz
+    sed -i '1i extra\nlines' f
+    v apply ../ctx.patch
+    v apply -C1 ../ctx.patch
+    v diff --stat
+    g checkout -q -- .
+    # symlink patches
+    v apply --stat --numstat --summary ../links.patch
+    v apply --check ../links.patch
+    v apply ../links.patch
+    v status --short
+    ls -l newl l typ | sed 's/.* \([^ ]* -> .*\)/\1/'
+    g reset -q --hard; g clean -fdq
+    v apply --index ../links.patch
+    v status --short
+    v ls-files -s
+    g reset -q --hard; g clean -fdq
+    v apply --cached ../links.patch
+    v status --short
+    v ls-files -s
+    g reset -q --hard; g clean -fdq
+    v apply -R ../links-r.patch
+    v status --short
+    g reset -q --hard; g clean -fdq
+    # symlink patches that do not fit
+    rm l; echo not-a-link >l
+    v apply ../links.patch
+    g checkout -q -- .
+    ln -sf different l
+    v apply ../links.patch
+    g reset -q --hard
+    ln -s there newl
+    v apply ../links.patch
+    v status --short
+}
+
 s_apply_three_way() {
     v init -q repo; cd repo
     seq 1 20 >a.txt; seq 1 10 >b.txt; seq 1 12 >c.txt; seq 1 8 >d.txt; seq 1 9 >gone.txt; seq 1 15 >mv.txt
