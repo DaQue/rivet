@@ -2277,3 +2277,10 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Chosen over the other "found on the way" item (`rivet config` lower-casing section headers) because that one needs a new field on the public `ConfigEntry`, which the API freeze forbids; still open.
 * Proof: scenario `s_ident_crud_reflog` (fails on the parent).
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 343 passed / 0 failed / 0 ignored; `scenarios.sh` 376 PASS, `failures: 0`.
+
+### Unit 29 — config edits keep comments and header spelling
+* GAPS.md ("Found on the way", split index): `rivet config` wrote `[splitIndex]` back as `[splitindex]`; in fact `Config::to_bytes` rebuilt the whole file from entries, so comments and blank lines went too.
+* `Config` keeps the file text around each entry in private fields (no public API change); `set`/`add`/`remove`/`remove_section` edit only their lines as `git config` does: replaced value is a fresh line in the key's typed spelling, new key after the section's last key, new section after the closing comments, `--unset` keeps comments and headers, `--remove-section` takes the section's comments, a section emptied by an unset loses its header under git's conditions. Two `///` caveats that said comments are not preserved were corrected.
+* Found, not fixed: line continuation (`k = one\` + ` two`) is parsed wrongly (leading instead of trailing backslashes); an emptied section followed by an empty duplicate header (`[a] x=1 [a]`) is not removed like git.
+* Proof: scenario `s_config_preserve` (fails on the parent), Rust tests `tests/config_preserve.rs`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 347 passed / 0 failed / 0 ignored; `scenarios.sh` 377 PASS, `failures: 0`.

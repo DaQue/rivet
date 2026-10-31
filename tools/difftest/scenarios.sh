@@ -13681,6 +13681,45 @@ s_am_3way_rerere() {
     vg fsck --no-dangling
 }
 
+# A config edit touches only the lines it changes: comments, blank lines, the spelling of section
+# headers and of the other keys, and the trailing comment on a line nobody rewrote all stay.
+s_config_preserve() {
+    v init -q repo; cd repo
+    cfg() { printf '# top\n[splitIndex]\n\t# c\n\tsharedIndexExpire = now   # trailing\n\n[Core]\n\tFoo = 1\n\tbar = 2\n# between\n[remote "o"]\n\turl = x\n\turl = y\n# tail\n' >.git/config; }
+    show() { { echo "== config file"; cat -A .git/config; } >>"$TRANSCRIPT"; }
+    step() { cfg; v config "$@"; show; }
+    step splitindex.sharedindexexpire never
+    step core.baz 3
+    step core.Foo 9
+    step core.newKey 9
+    step --add remote.o.url z
+    step --unset core.bar
+    step --unset core.foo
+    step --unset-all remote.o.url
+    step --unset splitindex.sharedindexexpire
+    step --remove-section Core
+    step --remove-section remote.o
+    step --remove-section splitIndex
+    step new.k v
+    step x.y.z 1
+    # a section the removal empties loses its header (and the blank lines around the key) only
+    # when nothing else stands in it and the next section is another one
+    emptied() { printf "$1" >.git/config; shift; v config "$@"; show; }
+    emptied '[a]\n\tx = 1\n[b]\n\ty = 1\n' --unset a.x
+    emptied '[a]\n\tx = 1\n\tx = 2\n[b]\n\ty = 1\n' --unset-all a.x
+    emptied '[a]\n\t# c\n\tx = 1\n[b]\n\ty = 1\n' --unset a.x
+    emptied '[a]\n\n\tx = 1 # c\n\n\n[b]\n\ty = 1\n' --unset a.x
+    emptied '[b]\n\ty = 1\n[a]\n\tx = 1\n\n' --unset a.x
+    emptied '[a]\n\tz = 1\n\tx = 1\n[b]\n\ty = 1\n' --unset a.x
+    emptied '[a]\n\tx = 1\n[a]\n\ty = 1\n' --unset a.x
+    emptied '[a]\n\tx = 1\n[a]\n\tx = 2\n[b]\n\tq=1\n' --unset-all a.x
+    emptied '[a]\n\tx = 1\n# t\n' --unset a.x
+    # a file with no final newline
+    printf '[a]\n\tk = one\n\tj = 1' >.git/config
+    v config a.m 2; show
+    v config --unset a.k; show
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

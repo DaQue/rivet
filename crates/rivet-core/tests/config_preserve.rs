@@ -1,0 +1,59 @@
+//! A read-modify-write of a config file touches only the lines it changes (what `git config` does).
+
+use bstr::{BStr, ByteSlice};
+use rivet_core::config::Config;
+
+const FILE: &[u8] = b"# top\n[splitIndex]\n\t# c\n\tsharedIndexExpire = now   # trailing\n\n[Core]\n\tFoo = 1\n\tbar = 2\n# between\n[remote \"o\"]\n\turl = x\n# tail\n";
+
+fn edit(f: impl FnOnce(&mut Config)) -> String {
+    let mut cfg = Config::parse(FILE).unwrap();
+    f(&mut cfg);
+    cfg.to_bytes().to_str().unwrap().to_owned()
+}
+
+#[test]
+fn an_unchanged_file_round_trips_byte_for_byte() {
+    assert_eq!(Config::parse(FILE).unwrap().to_bytes(), FILE);
+}
+
+#[test]
+fn replacing_a_value_rewrites_only_its_line() {
+    let out = edit(|c| {
+        c.set(BStr::new("splitindex.sharedindexexpire"), b"never")
+            .unwrap()
+    });
+    assert_eq!(
+        out,
+        String::from_utf8_lossy(FILE).replace(
+            "sharedIndexExpire = now   # trailing",
+            "sharedindexexpire = never"
+        )
+    );
+}
+
+#[test]
+fn a_new_key_goes_after_its_sections_last_key_and_a_new_section_after_the_tail() {
+    let out = edit(|c| c.set(BStr::new("core.baz"), b"3").unwrap());
+    assert!(out.contains("\tbar = 2\n\tbaz = 3\n# between\n"), "{out}");
+    let out = edit(|c| c.set(BStr::new("new.k"), b"v").unwrap());
+    assert!(out.ends_with("# tail\n[new]\n\tk = v\n"), "{out}");
+}
+
+#[test]
+fn unset_keeps_headers_and_comments_and_remove_section_takes_the_section_with_its_comments() {
+    let mut cfg = Config::parse(FILE).unwrap();
+    assert!(cfg.remove(BStr::new("remote.o.url")).unwrap());
+    let out = cfg.to_bytes();
+    assert!(
+        out.ends_with(b"[remote \"o\"]\n# tail\n"),
+        "{}",
+        out.as_bstr()
+    );
+
+    let mut cfg = Config::parse(FILE).unwrap();
+    assert!(cfg.remove_section(BStr::new("core"), None));
+    assert_eq!(
+        cfg.to_bytes().as_bstr(),
+        "# top\n[splitIndex]\n\t# c\n\tsharedIndexExpire = now   # trailing\n\n[remote \"o\"]\n\turl = x\n# tail\n"
+    );
+}

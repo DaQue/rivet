@@ -251,18 +251,67 @@ pub struct ConfigOrigin {
 ///   subsection is compared byte-for-byte.
 /// * **Order is preserved across a read-modify-write.** A caller that sets one key and writes the
 ///   file back gets the other entries in their original order, which is what keeps a config file
-///   from being churned into a diff on every command. Comments are *not* preserved — see
-///   [`Config::to_bytes`].
+///   from being churned into a diff on every command. Comments, blank lines and the spelling of
+///   headers survive an edit that does not touch them — see [`Config::to_bytes`].
 /// * **Only one file.** Includes are not followed and other config files are not merged; see the
 ///   module caveats. A caller composing the four Git config levels does so by asking each and
 ///   applying its own precedence.
 /// * **Not a cache of parsed values.** Every typed accessor parses its value on each call. That is
 ///   a handful of bytes per call and it is what keeps a `Config` handed to two callers from having
 ///   two different views of `core.filemode`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Config {
     /// Entries in file order, duplicates included.
     entries: Vec<ConfigEntry>,
+    /// One layout per entry, same index: the bytes the file had around it.
+    layouts: Vec<Layout>,
+    /// What followed the last entry in the file: comments, blank lines, empty sections.
+    tail: Layout,
+}
+
+impl PartialEq for Config {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+
+impl Eq for Config {}
+
+/// A section header as `(section, subsection)`, the way an entry carries them.
+type Header = (BString, Option<BString>);
+
+/// The file text around one entry, kept so that a read-modify-write touches only the lines it
+/// changes, as `git config` does.
+#[derive(Clone, Debug, Default)]
+struct Layout {
+    /// Comments, blank lines and section headers between the previous entry and this one, verbatim.
+    pre: Vec<u8>,
+    /// The last section header inside `pre`, if any.
+    header: Option<Header>,
+    /// Where that header's line starts inside `pre`; what comes before it ends the previous section.
+    header_off: usize,
+    /// The entry's own physical lines (continuations included), verbatim, while unchanged.
+    raw: Option<Vec<u8>>,
+}
+
+impl Layout {
+    /// Append bytes that stood before a removed section's header to the text being carried.
+    fn absorb_pre(&mut self, pre: &[u8]) {
+        self.pre.extend_from_slice(pre);
+    }
+
+    /// Put `before` (bytes that preceded a removed entry) in front of this layout.
+    fn absorb(&mut self, before: Layout) {
+        if self.header.is_some() {
+            self.header_off += before.pre.len();
+        } else {
+            self.header = before.header;
+            self.header_off = before.header_off;
+        }
+        let mut pre = before.pre;
+        pre.extend_from_slice(&self.pre);
+        self.pre = pre;
+    }
 }
 
 impl Config {
@@ -276,6 +325,8 @@ impl Config {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            layouts: Vec::new(),
+            tail: Layout::default(),
         }
     }
 
@@ -341,6 +392,12 @@ impl Config {
         let mut logical: Vec<u8> = Vec::new();
         let mut cont = false;
         let n = data.len();
+        // Layout bookkeeping: `pre_start` is where the bytes not yet claimed by an entry begin,
+        // `logical_start` where the entry being read began, `header_at` the last header line seen
+        // since `pre_start`.
+        let mut pre_start = 0usize;
+        let mut logical_start = 0usize;
+        let mut header_at: Option<usize> = None;
         while i < n {
             let start = i;
             let mut j = i;
@@ -360,6 +417,9 @@ impl Config {
             }
             if trimmed[0] == b'#' || trimmed[0] == b';' {
                 continue;
+            }
+            if !cont {
+                logical_start = start;
             }
             let mut k = 0usize;
             while k < trimmed.len() && trimmed[k] == b'\\' {
@@ -466,6 +526,7 @@ impl Config {
                         what: "section name",
                     })?;
                 section = Some((BString::from(name_str.to_ascii_lowercase()), sub));
+                header_at = Some(logical_start);
                 continue;
             }
             let sec = section.as_ref().ok_or(Error::ConfigSyntax {
@@ -570,7 +631,21 @@ impl Config {
             let entry =
                 ConfigEntry::new(sec.0.clone(), sec.1.clone(), BString::from(key_str), value);
             cfg.entries.push(entry);
+            cfg.layouts.push(Layout {
+                pre: data[pre_start..logical_start].to_vec(),
+                header: header_at.map(|_| sec.clone()),
+                header_off: header_at.map_or(0, |at| at - pre_start),
+                raw: Some(data[logical_start..i].to_vec()),
+            });
+            pre_start = i;
+            header_at = None;
         }
+        cfg.tail = Layout {
+            pre: data[pre_start..].to_vec(),
+            header: header_at.and(section),
+            header_off: header_at.map_or(0, |at| at - pre_start),
+            raw: None,
+        };
         Ok(cfg)
     }
 
@@ -578,10 +653,13 @@ impl Config {
     ///
     /// # Caveats
     ///
-    /// * **Comments and formatting are not preserved.** A read-modify-write through this loses every
-    ///   comment in the file, which is a real cost: users annotate their configs. Round-tripping
-    ///   unchanged entries in their original order is what is preserved, and a full comment-preserving
-    ///   writer is a later phase — the signature would not change, only the storage.
+    /// * **Only the edited lines change.** A parsed file keeps the comments, blank lines, headers
+    ///   and unedited entry lines around each entry, and a read-modify-write rewrites just what
+    ///   `set`, `add`, `remove` or `remove_section` touched, as `git config` does: a replaced value
+    ///   is a fresh `\tkey = value` line (its trailing comment goes), a new key follows its
+    ///   section's last key, a new section follows everything, `remove` leaves headers and comments,
+    ///   `remove_section` takes the section's header, entries and comments. A config built in memory
+    ///   is written in the canonical layout.
     /// * **The subsection is quoted if it needs to be.** A subsection containing a space, a quote or
     ///   a `#` is written `[section "a b"]` with the offending byte escaped; a subsection that is
     ///   entirely alphanumeric may be written unquoted, as Git does. Which it chooses is observable
@@ -608,13 +686,37 @@ impl Config {
         // A header is emitted once per section, the way git writes it. Repeating `[core]` before
         // every key is valid ini but is not what git produces, and any tool that regexes the file
         // (or a human reading it) expects the grouped form.
-        let mut header: Option<(&BStr, Option<&BStr>)> = None;
-        for entry in &self.entries {
+        let mut header: Option<Header> = None;
+        let ensure_newline = |out: &mut Vec<u8>| {
+            if out.last().is_some_and(|b| *b != b'\n') {
+                out.push(b'\n');
+            }
+        };
+        for (entry, layout) in self.entries.iter().zip(&self.layouts) {
             let key: &[u8] = entry.key.as_ref();
             let section: &BStr = entry.section.as_ref();
             let subsection: Option<&BStr> = entry.subsection.as_ref().map(|s| s.as_ref());
             let value: &[u8] = entry.value.as_ref();
-            if !section.is_empty() && header != Some((section, subsection)) {
+            // Text the file had before this entry stays, and so does an entry nobody changed.
+            if !layout.pre.is_empty() {
+                ensure_newline(&mut out);
+                out.extend_from_slice(&layout.pre);
+            }
+            if layout.header.is_some() {
+                header = layout.header.clone();
+            }
+            if let Some(raw) = &layout.raw {
+                ensure_newline(&mut out);
+                out.extend_from_slice(raw);
+                header = Some((entry.section.clone(), entry.subsection.clone()));
+                continue;
+            }
+            ensure_newline(&mut out);
+            let in_header = header.as_ref().is_some_and(|(s, sub)| {
+                s.eq_ignore_ascii_case(section)
+                    && sub.as_ref().map(|v| v.as_slice()) == subsection.map(|v| v.as_ref())
+            });
+            if !section.is_empty() && !in_header {
                 out.push(b'[');
                 let needs_quote = section
                     .iter()
@@ -632,8 +734,8 @@ impl Config {
                 }
                 out.push(b']');
                 out.push(b'\n');
-                header = Some((section, subsection));
             }
+            header = Some((entry.section.clone(), entry.subsection.clone()));
             // Git's own layout: a tab, the key, ` = `, the value.
             out.push(b'\t');
             out.extend_from_slice(key);
@@ -659,6 +761,10 @@ impl Config {
                 out.push(b'"');
             }
             out.push(b'\n');
+        }
+        if !self.tail.pre.is_empty() {
+            ensure_newline(&mut out);
+            out.extend_from_slice(&self.tail.pre);
         }
         out
     }
@@ -891,20 +997,47 @@ impl Config {
         let value = BString::from(value);
         // Git replaces the last occurrence (the one in effect) and, for a new key, appends it to
         // the end of the existing section rather than starting a duplicate section.
-        if let Some(entry) = self
+        if let Some(at) = self
             .entries
-            .iter_mut()
-            .rev()
-            .find(|e| e.matches(&section, subsection.as_ref().map(|v| v.as_slice()), &key))
+            .iter()
+            .rposition(|e| e.matches(&section, subsection.as_ref().map(|v| v.as_slice()), &key))
         {
+            // The line is rewritten, in the spelling of the key as typed; everything around it stays.
+            let entry = &mut self.entries[at];
             entry.value = value;
+            entry.key = key;
             entry.origin = None;
+            self.layouts[at].raw = None;
             return Ok(());
         }
-        let pos = self.section_end(&section, subsection.as_ref().map(|v| v.as_slice()));
+        self.insert_entry(section, subsection, key, value);
+        Ok(())
+    }
+
+    /// Insert a new entry after the last one of its section, or at the end.
+    fn insert_entry(
+        &mut self,
+        section: BString,
+        subsection: Option<BString>,
+        key: BString,
+        value: BString,
+    ) {
+        let sub = subsection.as_ref().map(|v| v.as_slice());
+        let known = self.entries.iter().any(|e| e.in_section(&section, sub));
+        let pos = self.section_end(&section, sub);
         self.entries
             .insert(pos, ConfigEntry::new(section, subsection, key, value));
-        Ok(())
+        // A section git has not seen is opened at the very end of the file, after any comments
+        // that close it.
+        let layout = if known {
+            Layout::default()
+        } else {
+            Layout {
+                raw: None,
+                ..std::mem::take(&mut self.tail)
+            }
+        };
+        self.layouts.insert(pos, layout);
     }
 
     /// Phase 2 — append a value to a key, keeping the existing ones.
@@ -923,10 +1056,7 @@ impl Config {
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn add(&mut self, key: &BStr, value: &[u8]) -> Result<()> {
         let (section, subsection, key) = ConfigEntry::parse_key(key)?;
-        let value = BString::from(value);
-        let pos = self.section_end(&section, subsection.as_ref().map(|v| v.as_slice()));
-        self.entries
-            .insert(pos, ConfigEntry::new(section, subsection, key, value));
+        self.insert_entry(section, subsection, key, BString::from(value));
         Ok(())
     }
 
@@ -952,10 +1082,14 @@ impl Config {
     /// [`crate::error::Error::ConfigSyntax`] for a malformed key.
     pub fn remove(&mut self, key: &BStr) -> Result<bool> {
         let (section, subsection, key) = ConfigEntry::parse_key(key)?;
-        let before = self.entries.len();
-        self.entries
-            .retain(|e| !e.matches(&section, subsection.as_ref().map(|v| v.as_slice()), &key));
-        Ok(self.entries.len() != before)
+        let mut removed = false;
+        for at in (0..self.entries.len()).rev() {
+            if self.entries[at].matches(&section, subsection.as_ref().map(|v| v.as_slice()), &key) {
+                self.remove_entry(at);
+                removed = true;
+            }
+        }
+        Ok(removed)
     }
 
     /// Phase 2 — remove a whole section, subsection included.
@@ -975,10 +1109,92 @@ impl Config {
     /// Nothing. The signature is infallible because a section name is a plain byte string, not a
     /// dotted key that needs parsing.
     pub fn remove_section(&mut self, section: &BStr, subsection: Option<&BStr>) -> bool {
-        let before = self.entries.len();
-        self.entries
-            .retain(|e| !e.in_section(section, subsection.map(|v| v.as_ref())));
-        self.entries.len() != before
+        let subsection = subsection.map(|v| v.as_ref());
+        if !self
+            .entries
+            .iter()
+            .any(|e| e.in_section(section, subsection))
+        {
+            return false;
+        }
+        // Git drops the section from its header to the next one, comments included; what stood
+        // before the header stays.
+        let entries = std::mem::take(&mut self.entries);
+        let layouts = std::mem::take(&mut self.layouts);
+        let mut carry = Layout::default();
+        let mut after_removed = false;
+        for (entry, mut layout) in entries.into_iter().zip(layouts) {
+            if entry.in_section(section, subsection) {
+                if layout.header.is_some() {
+                    layout.pre.truncate(layout.header_off);
+                    layout.header = None;
+                    carry.absorb_pre(&layout.pre);
+                }
+                after_removed = true;
+                continue;
+            }
+            if after_removed && layout.header.is_some() {
+                layout.pre.drain(..layout.header_off);
+                layout.header_off = 0;
+            }
+            after_removed = false;
+            layout.absorb(std::mem::take(&mut carry));
+            self.entries.push(entry);
+            self.layouts.push(layout);
+        }
+        if after_removed {
+            if self.tail.header.is_some() {
+                self.tail.pre.drain(..self.tail.header_off);
+                self.tail.header_off = 0;
+            } else {
+                self.tail.pre.clear();
+            }
+        }
+        self.tail.absorb(carry);
+        true
+    }
+
+    /// Remove one entry, leaving the comments and headers that stood before it in the file —
+    /// except that a section the removal empties loses its header, as in git (`maybe_remove_section`):
+    /// only blank lines between the header and the entry, and between the entry and the next
+    /// header (of another section) or the end of the file.
+    fn remove_entry(&mut self, at: usize) {
+        let blank = |b: &[u8]| b.iter().all(|c| matches!(c, b' ' | b'\t' | b'\r' | b'\n'));
+        let own: Header = (
+            self.entries[at].section.clone(),
+            self.entries[at].subsection.clone(),
+        );
+        let this = &self.layouts[at];
+        let after_header = this.pre[this.header_off..]
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(this.pre.len(), |p| this.header_off + p + 1);
+        let header_alone = this.header.is_some() && blank(&this.pre[after_header..]);
+        let next = self.layouts.get(at + 1).unwrap_or(&self.tail);
+        let next_ends_section = match &next.header {
+            Some((s, sub)) => {
+                blank(&next.pre[..next.header_off])
+                    && !(s.eq_ignore_ascii_case(&own.0) && *sub == own.1)
+            }
+            None => at + 1 == self.layouts.len() && blank(&next.pre),
+        };
+        let empties_section = header_alone && next_ends_section;
+        self.entries.remove(at);
+        let mut gone = self.layouts.remove(at);
+        if empties_section {
+            // The header goes with the blank lines on either side of the entry.
+            gone.pre.truncate(gone.header_off);
+            gone.header = None;
+            let next = self.layouts.get_mut(at).unwrap_or(&mut self.tail);
+            if next.header.is_some() {
+                next.pre.drain(..next.header_off);
+                next.header_off = 0;
+            } else {
+                next.pre.clear();
+            }
+        }
+        let next = self.layouts.get_mut(at).unwrap_or(&mut self.tail);
+        next.absorb(Layout { raw: None, ..gone });
     }
 
     /// Phase 2 — the names of every section, in file order, duplicates included.
