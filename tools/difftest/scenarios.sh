@@ -10199,6 +10199,95 @@ s_status_dirty_submodule() {
     v status -s -- sub
 }
 
+# `status --ignore-submodules[=<when>]`, `submodule.<name>.ignore` (config and .gitmodules),
+# `diff.ignoreSubmodules`, `status.submoduleSummary` and a dirty submodule nested in a submodule.
+s_submodule_status_dirty() {
+    g config --global protocol.file.allow always
+    g init -q inner; (cd inner && tick && echo 1 >i && g add i && g commit -q -m i1)
+    g init -q lib; (cd lib && tick && echo 1 >f && g add f && g commit -q -m l1 && tick && echo 2 >>f && g commit -q -a -m l2 && g submodule add -q ../inner in && tick && g commit -q -m withinner)
+    g init -q repo; cd repo
+    tick; echo t >t; g add t; g commit -q -m t1
+    g submodule add -q ../lib sub; g submodule add -q ../lib sub2
+    (cd sub && g submodule update -q --init)
+    tick; g commit -q -m subs
+    v status
+    # a dirty submodule nested in a submodule
+    echo x >sub/in/i
+    v status; v status --short; v status --porcelain
+    echo n >sub/in/new
+    v status --short
+    (cd sub/in && g checkout -q -- i); rm sub/in/new
+    v status --short
+    # a nested submodule at another commit
+    (cd sub/in && tick && echo 2 >>i && g commit -q -a -m i2)
+    v status; v status --short
+    (cd sub/in && g reset -q --hard HEAD~1)
+    # the four values
+    echo x >sub/f; echo n >sub/new; (cd sub2 && g checkout -q HEAD~1)
+    for w in all dirty untracked none; do
+        v status --ignore-submodules=$w; v status -s --ignore-submodules=$w; v status --porcelain --ignore-submodules=$w
+    done
+    v status --ignore-submodules; v status -s --ignore-submodules
+    v status --ignore-submodules=bogus
+    v status -s --ignore-submodules=all -- sub
+    # configuration: per submodule, then globally
+    g config submodule.sub.ignore untracked
+    v status -s; v status
+    g config submodule.sub.ignore dirty
+    v status -s
+    g config submodule.sub.ignore all
+    v status -s; v status
+    v status -s --ignore-submodules=none
+    g config --unset submodule.sub.ignore
+    g config submodule.sub2.ignore all
+    v status -s
+    g config --unset submodule.sub2.ignore
+    g config diff.ignoreSubmodules dirty
+    v status -s
+    g config --unset diff.ignoreSubmodules
+    # .gitmodules, and the config winning over it
+    g config -f .gitmodules submodule.sub.ignore all
+    v status -s
+    g config submodule.sub.ignore none
+    v status -s
+    g config --unset submodule.sub.ignore
+    g config -f .gitmodules --unset submodule.sub.ignore
+    # status.submoduleSummary
+    g config status.submoduleSummary true
+    v status; v status -s
+    g config status.submoduleSummary 3
+    v status
+    g config status.submoduleSummary false
+    v status
+    g config --unset status.submoduleSummary
+    # staged submodule changes
+    (cd sub && g checkout -q -- f); rm sub/new
+    (cd sub2 && g checkout -q -); (cd sub && g checkout -q HEAD~1)
+    v status; v status -s
+    g add sub; v status; v status -s; v status -s --ignore-submodules=all
+    g config status.submoduleSummary true
+    v status
+    # untracked files and unstaged changes beside the summaries, a limit, -uno, ignore=all
+    echo u >untracked; echo m >>t
+    (cd sub2 && g checkout -q HEAD~1 2>/dev/null; g checkout -q HEAD~0)
+    v status; v status -uno; v status -s
+    g config status.submoduleSummary 1
+    v status
+    v status --ignore-submodules=all
+    v status --ignore-submodules=dirty
+    g config status.submoduleSummary true
+    # submodule summary and the ignore setting
+    v submodule summary; v submodule summary --files; v submodule summary --cached
+    v submodule summary --for-status; v submodule summary --files --for-status
+    g config submodule.sub.ignore all
+    v submodule summary; v submodule summary --files; v submodule summary --cached
+    v submodule summary --for-status; v submodule summary --files --for-status
+    v status
+    g config submodule.sub.ignore dirty
+    v submodule summary --files --for-status; v submodule summary --files
+    v status
+}
+
 # `status -- <file>`: a pathspec that names a file (tracked, untracked, in a subdirectory, absent).
 s_status_file_pathspec() {
     g init -q repo; cd repo

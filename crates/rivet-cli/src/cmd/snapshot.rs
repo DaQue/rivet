@@ -258,6 +258,10 @@ pub struct StatusArgs {
     /// Print no paths, only the branch header.
     #[arg(long = "no-lock-index")]
     pub no_lock_index: bool,
+
+    /// Ignore changes to submodules: `all` (the default), `dirty`, `untracked` or `none`.
+    #[arg(long = "ignore-submodules", value_name = "WHEN", require_equals = true, num_args = 0..=1, default_missing_value = "all")]
+    pub ignore_submodules: Option<String>,
 }
 
 /// Arguments to `rivet restore`.
@@ -779,6 +783,7 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
                 ahead_behind: false,
                 column: None,
                 no_lock_index: false,
+                ignore_submodules: None,
             };
             run_status(global, &status_args)?;
             return Ok(1);
@@ -1163,13 +1168,53 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         }
         out
     };
+    let ignore_default = match &args.ignore_submodules {
+        Some(when) => {
+            if !matches!(when.as_str(), "all" | "dirty" | "untracked" | "none") {
+                eprintln!("fatal: bad --ignore-submodules argument: {when}");
+                return Ok(128);
+            }
+            Some(when.clone())
+        }
+        None => None,
+    };
+    let diff_ignore = repository
+        .config_value(BStr::new("diff.ignoreSubmodules"))
+        .ok()
+        .flatten()
+        .map(|v| String::from_utf8_lossy(&v).trim().to_ascii_lowercase());
+    let ignore_for = |path: &BStr| -> SubIgnore {
+        let when = match &ignore_default {
+            Some(when) => Some(when.clone()),
+            None => repository
+                .worktree_path()
+                .and_then(|root| super::submodule::ignore_setting(&repository, root, path))
+                .or_else(|| diff_ignore.clone()),
+        };
+        // `-uno` also leaves the untracked files of a submodule out.
+        let no_untracked = matches!(args.untracked, Some(UntrackedModeArg::No));
+        match when.as_deref() {
+            Some("all") => SubIgnore::All,
+            _ if no_untracked && !matches!(when.as_deref(), Some("dirty")) => SubIgnore::Untracked,
+            Some("dirty") => SubIgnore::Dirty,
+            Some("untracked") => SubIgnore::Untracked,
+            _ => SubIgnore::None,
+        }
+    };
+    // Only the command line option hides a staged submodule change.
+    if ignore_default.as_deref() == Some("all") {
+        status.staged.retain(|e| {
+            e.new_mode != Some(rivet_core::object::EntryMode::Commit)
+                && e.old_mode != Some(rivet_core::object::EntryMode::Commit)
+        });
+    }
     status.staged.retain(|e| e.kind != ChangeKind::Unmerged);
     status.unstaged.retain(|e| e.kind != ChangeKind::Unmerged);
     // `unstaged_changes` skips gitlinks; a submodule checked out at another commit or with a dirty
     // tree is ` M` (` m` / ` ?` when only its content differs).
     let mut moved_submodules: Vec<_> = specs
         .iter()
-        .flat_map(|spec| moved_submodules(&repository, spec))
+        .flat_map(|spec| moved_submodules(&repository, spec, &ignore_for))
         .collect();
     if let Some(filter) = &magic_filter {
         moved_submodules.retain(|s| filter.matches_file(&s.path));
@@ -1487,6 +1532,40 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         }
         wrote_section = true;
     }
+    // `status.submoduleSummary`: what changed in the submodules, as `submodule summary` shows it.
+    let summary_limit = repository
+        .config_value(BStr::new("status.submoduleSummary"))
+        .ok()
+        .flatten()
+        .and_then(|v| {
+            let text = String::from_utf8_lossy(&v).trim().to_ascii_lowercase();
+            match text.parse::<i64>() {
+                Ok(n) => Some(if n < 0 { -1 } else { n }),
+                Err(_) => rivet_core::config::parse_bool(BStr::new(text.as_bytes()))
+                    .ok()
+                    .map(|on| if on { -1 } else { 0 }),
+            }
+        })
+        .unwrap_or(0);
+    if summary_limit != 0 && args.ignore_submodules.as_deref() != Some("all") {
+        for (cached, heading) in [
+            (true, "Submodule changes to be committed:"),
+            (false, "Submodules changed but not updated:"),
+        ] {
+            let text = super::submodule::status_summary(&repository, cached, summary_limit)?;
+            if text.is_empty() {
+                continue;
+            }
+            if wrote_section {
+                println!();
+            }
+            println!("{heading}");
+            println!();
+            print!("{}", text.trim_end_matches('\n'));
+            println!();
+            wrote_section = true;
+        }
+    }
     if !status.untracked.is_empty() {
         if wrote_section {
             println!();
@@ -1529,8 +1608,12 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
             println!("no changes added to commit (use \"git add\" and/or \"git commit -a\")");
         }
     } else {
-        // Every section ends with a blank line; with changes staged there is no advice after it.
+        // Every section ends with a blank line; with changes staged there is no advice after it,
+        // only the reminder that untracked files were not looked for.
         println!();
+        if matches!(args.untracked, Some(UntrackedModeArg::No)) {
+            println!("Untracked files not listed (use -u option to show untracked files)");
+        }
     }
 
     Ok(0)
@@ -1550,11 +1633,29 @@ struct SubmoduleState {
     untracked: bool,
 }
 
+/// What `--ignore-submodules`, `submodule.<name>.ignore` or `diff.ignoreSubmodules` leaves visible.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubIgnore {
+    /// Everything.
+    None,
+    /// New commits and tracked changes, not untracked files.
+    Untracked,
+    /// New commits only.
+    Dirty,
+    /// Nothing.
+    All,
+}
+
 /// Gitlinks in the index whose checked-out submodule `HEAD` is not the recorded commit, or whose
-/// work tree is dirty.
+/// work tree is dirty, as far as `ignore` lets them show.
 ///
 /// A submodule that is not checked out, or whose `HEAD` cannot be read, is not reported, as in git.
-fn moved_submodules(repository: &rivet_core::Repository, pathspec: &[u8]) -> Vec<SubmoduleState> {
+/// A submodule nested in the submodule that is itself changed counts as modified content.
+fn moved_submodules(
+    repository: &rivet_core::Repository,
+    pathspec: &[u8],
+    ignore: &dyn Fn(&BStr) -> SubIgnore,
+) -> Vec<SubmoduleState> {
     let Some(root) = repository.worktree_path().map(std::path::Path::to_path_buf) else {
         return Vec::new();
     };
@@ -1570,6 +1671,10 @@ fn moved_submodules(repository: &rivet_core::Repository, pathspec: &[u8]) -> Vec
         {
             continue;
         }
+        let how = ignore(entry.path.as_ref());
+        if how == SubIgnore::All {
+            continue;
+        }
         let dir = root.join(bstr::ByteSlice::to_os_str_lossy(&entry.path[..]));
         if !dir.join(".git").exists() {
             continue;
@@ -1580,14 +1685,18 @@ fn moved_submodules(repository: &rivet_core::Repository, pathspec: &[u8]) -> Vec
         let Some(head) = sub.head().ok().and_then(|head| head.oid()) else {
             continue;
         };
-        let (modified, untracked) = match sub.status(&StatusOptions::new()) {
-            Ok(inner) => (
-                !inner.staged.is_empty() || !inner.unstaged.is_empty(),
-                !inner.untracked.is_empty(),
-            ),
-            Err(_) => (false, false),
-        };
         let new_commits = head != entry.oid;
+        let (mut modified, mut untracked) = (false, false);
+        if how != SubIgnore::Dirty {
+            if let Ok(inner) = sub.status(&StatusOptions::new()) {
+                modified = !inner.staged.is_empty() || !inner.unstaged.is_empty();
+                untracked = !inner.untracked.is_empty() && how != SubIgnore::Untracked;
+            }
+            // A changed submodule of the submodule: its own settings do not apply here.
+            if !modified && !moved_submodules(&sub, b"", &|_: &BStr| SubIgnore::None).is_empty() {
+                modified = true;
+            }
+        }
         if new_commits || modified || untracked {
             out.push(SubmoduleState {
                 path: entry.path.clone(),

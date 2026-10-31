@@ -1046,6 +1046,7 @@ fn print_status(global: &GlobalArgs) -> Result<()> {
         ahead_behind: false,
         column: None,
         no_lock_index: false,
+        ignore_submodules: None,
     };
     super::snapshot::run_status(global, &status_args)?;
     Ok(())

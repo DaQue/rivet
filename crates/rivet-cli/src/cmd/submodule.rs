@@ -343,6 +343,22 @@ fn display_path(prefix: &str, path: &BStr) -> String {
     String::from_utf8_lossy(&shown).into_owned()
 }
 
+/// `submodule.<name>.ignore` for the submodule at `path`: this repository's configuration wins over
+/// `.gitmodules`. `None` without a name or a setting.
+pub(super) fn ignore_setting(repository: &Repository, root: &Path, path: &BStr) -> Option<String> {
+    let gitmodules = gitmodules_config(repository, root);
+    let name = name_of(&gitmodules, path)?;
+    let from_config = repository
+        .config()
+        .get(key_of(name.as_ref(), "ignore").as_ref())
+        .ok()
+        .flatten()
+        .map(|v| v.to_owned());
+    from_config
+        .or_else(|| setting(&gitmodules, name.as_ref(), "ignore"))
+        .map(|v| String::from_utf8_lossy(&v).trim().to_ascii_lowercase())
+}
+
 /// The name of the submodule whose `path` is `path`, if `.gitmodules` has one.
 fn name_of(gitmodules: &Option<rivet_core::Config>, path: &BStr) -> Option<BString> {
     gitmodules
@@ -2373,6 +2389,7 @@ impl Side {
 fn submodule_summary(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     let mut cached = false;
     let mut files = false;
+    let mut for_status = false;
     let mut limit: i64 = -1;
     let mut rest: Vec<&String> = Vec::new();
     let mut iter = args.iter();
@@ -2380,7 +2397,7 @@ fn submodule_summary(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         match word.as_str() {
             "--cached" => cached = true,
             "--files" => files = true,
-            "--for-status" => {}
+            "--for-status" => for_status = true,
             "-n" | "--summary-limit" => match iter.next() {
                 Some(value) => match value.parse::<i64>() {
                     Ok(n) => limit = n,
@@ -2450,9 +2467,52 @@ fn submodule_summary(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     }
     let prefix = cwd_prefix(&root);
     let specs: Vec<String> = paths.iter().map(|p| from_root(&prefix, p)).collect();
+    print!(
+        "{}",
+        summary_text(
+            &repository,
+            &root,
+            &head_spec,
+            &prefix,
+            &specs,
+            (cached, files, for_status),
+            limit
+        )?
+    );
+    Ok(0)
+}
 
+/// What `status.submoduleSummary` adds to a long status: the summary of the changed gitlinks, of
+/// the index against `HEAD` (`cached`) or of the checked-out submodules against the index.
+pub(super) fn status_summary(repository: &Repository, cached: bool, limit: i64) -> Result<String> {
+    let Some(root) = repository.worktree_path().map(Path::to_path_buf) else {
+        return Ok(String::new());
+    };
+    if limit == 0 {
+        return Ok(String::new());
+    }
+    summary_text(
+        repository,
+        &root,
+        "HEAD",
+        &cwd_prefix(&root),
+        &[],
+        (cached, !cached, true),
+        limit,
+    )
+}
+
+fn summary_text(
+    repository: &Repository,
+    root: &Path,
+    head_spec: &str,
+    prefix: &str,
+    specs: &[String],
+    (cached, files, for_status): (bool, bool, bool),
+    limit: i64,
+) -> Result<String> {
     let flatten = |tree: ObjectId| rivet_core::ops::flatten_tree(repository.odb(), tree);
-    let head_files = match super::resolve_commit(&repository, &head_spec) {
+    let head_files = match super::resolve_commit(repository, head_spec) {
         Ok(commit) => flatten(repository.commit_tree(commit)?)?,
         Err(_) => std::collections::BTreeMap::new(),
     };
@@ -2488,6 +2548,14 @@ fn submodule_summary(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         {
             continue;
         }
+        // For `status`, the submodule's `ignore` setting applies: `all` hides it, `dirty` hides a
+        // comparison of the work tree.
+        if for_status
+            && let Some(ignore) = ignore_setting(repository, root, path.as_ref())
+            && (ignore == "all" || (files && ignore == "dirty"))
+        {
+            continue;
+        }
         let in_head = head_files.get(path).map(|(m, o)| Side::of(*m, *o));
         let in_index = index_files.get(path).map(|(m, o)| Side::of(*m, *o));
         let (src, dst) = if files {
@@ -2519,17 +2587,16 @@ fn submodule_summary(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             continue;
         }
         out.push_str(&summary_entry(
-            &repository,
-            &root,
-            &display_path(&prefix, path.as_ref()),
+            repository,
+            root,
+            &display_path(prefix, path.as_ref()),
             path,
             src,
             dst,
             limit,
         )?);
     }
-    print!("{out}");
-    Ok(0)
+    Ok(out)
 }
 
 /// The text `submodule summary` prints for one changed gitlink.
