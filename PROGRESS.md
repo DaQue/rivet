@@ -2161,3 +2161,9 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * The brief named `diff-index`; rivet has no such command (nor `diff --raw`/`-p`), so the scenario drives `diff`, `diff --cached`, `diff-tree`, `show` and `log -p`.
 * Proof: scenario `s_diff_mode_swap` (both directions, a binary side, a nested path, a mode-only change beside them, work tree and index variants; fails on the parent).
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 331 passed / 0 failed / 0 ignored; `scenarios.sh` 360 PASS, `failures: 0`.
+
+### Unit 13 — `stash -S/--staged`
+* `push_staged` (`stash.rs`): git's stash tree is the index tree (both the stash commit and its index commit), the staged changes are taken out of the work tree by reverse-applying `HEAD..index` with **one** line of context (found by probing: an unstaged edit two lines from the staged hunk applies, one line away fails with `patch failed: a:<hunk start>` and `Cannot remove worktree changes`, the stash staying saved), and the index is reset to `HEAD` for the selected staged paths only. With a pathspec git still stashes the whole index and reverses the whole patch in the work tree; only the index reset follows the pathspec (matched, quirk included).
+* `-p` stays refused by name (`fatal: \`stash push -p\` is not supported by rivet`, same for `save`): the existing hunk picker was not worth the budget; recorded in GAPS.md.
+* Proof: scenario `s_stash_staged` (about 25 cases with apply/--index/pop/show; fails on the parent), `stash_patch_refusal.rs`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 332 passed / 0 failed / 0 ignored; `scenarios.sh` 361 PASS, `failures: 0`.

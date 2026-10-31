@@ -106,6 +106,7 @@ struct SaveOptions {
     include_untracked: bool,
     all: bool,
     keep_index: bool,
+    staged: bool,
     quiet: bool,
     words: Vec<String>,
 }
@@ -194,6 +195,7 @@ fn parse_save(args: &[String]) -> SaveParse {
             };
             match opt {
                 "keep-index" => out.keep_index = !negated,
+                "staged" => out.staged = !negated,
                 "quiet" => out.quiet = !negated,
                 "include-untracked" => out.include_untracked = !negated,
                 "all" => out.all = !negated,
@@ -216,6 +218,7 @@ fn parse_save(args: &[String]) -> SaveParse {
             while i < cluster.len() {
                 match cluster[i] {
                     'k' => out.keep_index = true,
+                    'S' => out.staged = true,
                     'q' => out.quiet = true,
                     'u' => out.include_untracked = true,
                     'a' => out.all = true,
@@ -233,7 +236,7 @@ fn parse_save(args: &[String]) -> SaveParse {
                         }
                         break;
                     }
-                    c @ ('p' | 'S' | 'U') => return SaveParse::Unsupported(format!("-{c}")),
+                    c @ ('p' | 'U') => return SaveParse::Unsupported(format!("-{c}")),
                     c => return SaveParse::Usage(format!("error: unknown switch `{c}'\n")),
                 }
                 i += 1;
@@ -271,6 +274,18 @@ pub struct PushArgs {
     /// Leave the index as it is.
     #[arg(short = 'k', long = "keep-index")]
     pub keep_index: bool,
+
+    /// Stash only what is staged.
+    #[arg(short = 'S', long = "staged", overrides_with = "no_staged")]
+    pub staged: bool,
+
+    /// Stash the work tree as well (the default).
+    #[arg(long = "no-staged", overrides_with = "staged")]
+    pub no_staged: bool,
+
+    /// Select hunks interactively; refused by name.
+    #[arg(short = 'p', long = "patch")]
+    pub patch: bool,
 
     /// Limit the stash to these paths.
     #[arg(value_name = "PATHSPEC")]
@@ -400,6 +415,9 @@ pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
                 include_untracked: s.include_untracked,
                 all: s.all,
                 keep_index: s.keep_index,
+                staged: s.staged,
+                no_staged: false,
+                patch: false,
                 paths: Vec::new(),
             };
             push_impl(
@@ -558,6 +576,13 @@ fn push(
 }
 
 fn push_impl(quiet: bool, repository: &mut Repository, args: &PushArgs, mode: Mode) -> Result<i32> {
+    if args.patch {
+        eprintln!("fatal: `stash push -p` is not supported by rivet");
+        return Ok(128);
+    }
+    if args.staged && !args.no_staged {
+        return push_staged(quiet, repository, args, mode);
+    }
     let mut specs = Vec::new();
     for path in &args.paths {
         specs.push(super::worktree_path(repository, path, "stash")?);
@@ -727,6 +752,168 @@ fn push_impl(quiet: bool, repository: &mut Repository, args: &PushArgs, mode: Mo
         println!("Saved working directory and index state {message}");
     }
     Ok(0)
+}
+
+/// `stash push --staged`: the stash holds the index (its tree is the index tree, as in git), and
+/// the staged changes are then taken out of the work tree and the index by applying them in
+/// reverse, so the unstaged edits stay where they are.
+fn push_staged(
+    quiet: bool,
+    repository: &mut Repository,
+    args: &PushArgs,
+    mode: Mode,
+) -> Result<i32> {
+    use super::patch::{ApplyOptions, apply_to_repo, parse};
+    if args.include_untracked || args.all {
+        eprintln!("Can't use --staged and --include-untracked or --all at the same time");
+        return Ok(128);
+    }
+    let mut specs = Vec::new();
+    for path in &args.paths {
+        specs.push(super::worktree_path(repository, path, "stash")?);
+    }
+    let head = repository.head()?;
+    let Some(head_oid) = head.oid() else {
+        eprintln!("You do not have the initial commit yet");
+        return Ok(match mode {
+            Mode::Push { unborn_code } => unborn_code,
+            Mode::Create => 128,
+        });
+    };
+    if repository.index().has_conflicts() {
+        eprintln!("error: could not write index");
+        return Ok(1);
+    }
+    let head_tree = repository.commit_tree(head_oid)?;
+    let index_tree = repository.write_tree()?;
+    let full_work_tree = repository.worktree_tree()?;
+    let odb = repository.odb();
+    let head_map = rivet_core::ops::flatten_tree(odb, head_tree)?;
+    let index_map = rivet_core::ops::flatten_tree(odb, index_tree)?;
+    let work_map = rivet_core::ops::flatten_tree(odb, full_work_tree)?;
+    if let Some(spec) = specs.iter().find(|s| {
+        !index_map
+            .keys()
+            .any(|p| rivet_core::ops::pathspec_matches(BStr::new(&p[..]), BStr::new(&s[..])))
+    }) {
+        eprintln!("error: pathspec ':(prefix:0){spec}' did not match any file(s) known to git");
+        eprintln!("Did you forget to 'git add'?");
+        return Ok(128);
+    }
+    let selected = |path: &BString| matches(&specs, path);
+    let changed = head_map
+        .keys()
+        .chain(index_map.keys())
+        .filter(|p| selected(p))
+        .any(|p| head_map.get(p) != index_map.get(p) || index_map.get(p) != work_map.get(p));
+    if !changed {
+        if matches!(mode, Mode::Push { .. }) {
+            println!("No local changes to save");
+        }
+        return Ok(0);
+    }
+    // Git stashes the whole index whatever the pathspec says; the pathspec only decides which
+    // paths are reset in the index afterwards.
+    let staged_tree = index_tree;
+    if staged_tree == head_tree {
+        eprintln!("No staged changes");
+        return Ok(128);
+    }
+    // The patch that takes the staged changes out again has one line of context, as git's: an
+    // unstaged edit two lines away from a staged one still lets it apply.
+    let mut options = rivet_core::DiffOptions::new();
+    options.detect_binary = true;
+    options.context(1);
+    let diff = rivet_core::tree_diff(
+        repository.format(),
+        head_tree,
+        staged_tree,
+        repository.odb(),
+        &options,
+    )?;
+    if diff.files.iter().any(|file| {
+        file.is_binary
+            || file.old_mode == Some(rivet_core::object::EntryMode::Commit)
+            || file.new_mode == Some(rivet_core::object::EntryMode::Commit)
+    }) {
+        eprintln!("fatal: stash --staged of a binary file or a submodule is not implemented");
+        return Ok(128);
+    }
+    let mut patch = Vec::new();
+    rivet_core::format_unified(&diff, repository.format(), &mut patch)?;
+
+    let branch = match head.branch() {
+        Some(branch) => branch.short_name().to_string(),
+        None => "(no branch)".to_string(),
+    };
+    let abbreviated = super::history::abbrev(repository, &head_oid, false);
+    let subject = {
+        let object = repository.odb().read_typed(&head_oid, ObjectKind::Commit)?;
+        let commit = rivet_core::Commit::parse(repository.format(), object.data())?;
+        String::from_utf8_lossy(&pretty::subject(commit.message)).into_owned()
+    };
+    let base = format!("{branch}: {abbreviated} {subject}");
+    let message = match &args.message {
+        Some(text) => format!("On {branch}: {text}"),
+        None => format!("WIP on {base}"),
+    };
+    let index_commit = commit_object(
+        repository,
+        staged_tree,
+        &[head_oid],
+        &format!("index on {base}\n"),
+    )?;
+    let stash_commit = commit_object(repository, staged_tree, &[head_oid, index_commit], &message)?;
+    if matches!(mode, Mode::Create) {
+        println!("{stash_commit}");
+        return Ok(0);
+    }
+    record_stash(repository, stash_commit, &message)?;
+    if !quiet {
+        println!("Saved working directory and index state {message}");
+    }
+
+    let patches = parse(&patch, 1).map_err(|error| anyhow::anyhow!("{error}"))?;
+    let worktree_only = ApplyOptions {
+        reverse: true,
+        ..ApplyOptions::default()
+    };
+    if let Err(lines) = apply_to_repo(repository, &patches, worktree_only) {
+        for line in lines {
+            eprintln!("{line}");
+        }
+        eprintln!("Cannot remove worktree changes");
+        return Ok(128);
+    }
+    if !args.keep_index {
+        let paths: std::collections::BTreeSet<BString> = head_map
+            .keys()
+            .chain(index_map.keys())
+            .filter(|p| selected(p) && head_map.get(*p) != index_map.get(*p))
+            .cloned()
+            .collect();
+        let paths: Vec<BString> = paths.into_iter().collect();
+        if !paths.is_empty() {
+            repository.restore_paths(Some(head_tree), &paths, true, false, false)?;
+        }
+    }
+    Ok(0)
+}
+
+/// Push `stash_commit` on `refs/stash`, with its reflog line.
+fn record_stash(repository: &Repository, stash_commit: ObjectId, message: &str) -> Result<()> {
+    let name = stash_ref();
+    let old = repository
+        .refs()
+        .try_read(&name)?
+        .map(|_| repository.refs().resolve_oid(&name))
+        .transpose()?
+        .unwrap_or_else(|| ObjectId::zero(repository.format()));
+    repository.refs().set_direct(&name, stash_commit, None)?;
+    let who = repository.committer_signature()?;
+    let entry = ReflogEntry::new(old, stash_commit, who, BString::from(message));
+    repository.refs().append_reflog(&name, &entry)?;
+    Ok(())
 }
 
 /// The tracked paths (index or `HEAD`) the pathspecs select, as exact specs.

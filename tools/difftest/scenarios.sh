@@ -11154,6 +11154,63 @@ s_diff_mode_swap() {
     v show --format=%s HEAD~1
 }
 
+# stash push/save --staged: the stash is the index, the staged changes leave the work tree and the
+# index, the unstaged ones stay; apply/pop/--index restore it.
+s_stash_staged() {
+    local n=0
+    ss_repo() {
+        n=$((n + 1)); v init -q r$n; cd r$n
+        for f in a b c d e; do seq 1 30 | sed "s/^/$f /" >$f; done
+        echo keep >f; v add .; tick; v commit -q -m base
+        echo "a staged" >>a                  # staged only
+        echo "b unstaged" >>b                # unstaged only
+        sed -i '1s/.*/c staged top/' c; v add c   # staged top ...
+        echo "c unstaged tail" >>c           # ... and an unstaged edit far away
+        v rm -q d                            # staged deletion
+        echo new >nf; v add nf               # staged new file
+        echo more >>e; chmod +x e; v add e   # staged content and mode
+        rm f                                 # unstaged deletion
+        v add a
+        tick
+    }
+    ss_state() {
+        v status --porcelain
+        v ls-files -s
+        v stash list
+        v diff --cached --stat
+        v diff --stat
+    }
+    ss_repo; v stash push --staged; ss_state
+    v stash show -p; g cat-file -p 'stash^{tree}'; g rev-parse 'stash^{tree}' 'stash^2^{tree}'; g log -1 --format=%P%n%s stash
+    v stash apply; ss_state
+    v stash apply --index; ss_state; cd ..
+    ss_repo; v stash push -S -m "only the index"; ss_state; v stash pop --index; ss_state; v stash list; cd ..
+    ss_repo; v stash save -S; ss_state; cd ..
+    ss_repo; v stash save --staged keep this; ss_state; cd ..
+    ss_repo; v stash push -S -k; ss_state; v stash show -p; cd ..
+    ss_repo; v stash push --staged --keep-index -q; ss_state; cd ..
+    ss_repo; v stash push -S -q; ss_state; cd ..
+    ss_repo; v stash push -S -- a; ss_state; cd ..
+    ss_repo; v stash push -S -- a c; ss_state; v stash show -p; cd ..
+    ss_repo; v stash push -S -- b; ss_state; cd ..
+    ss_repo; v stash push -S -- e nf d; ss_state; cd ..
+    ss_repo; v stash push -S -- nosuch; ss_state; cd ..
+    ss_repo; v stash push -S -u; ss_state; cd ..
+    ss_repo; v stash push -S -a; ss_state; cd ..
+    ss_repo; v stash push -S --no-staged; ss_state; cd ..
+    # nothing staged, nothing at all
+    ss_repo; v reset -q; v stash push -S; ss_state; cd ..
+    ss_repo; v reset -q --hard; v stash push -S; ss_state; cd ..
+    ss_repo; v reset -q --hard; v stash push -S -- a; ss_state; cd ..
+    # unstaged edit in the same hunk as the staged one: the staged change cannot be taken out
+    ss_repo; echo "a unstaged after staged" >>a; v stash push -S; ss_state; v stash list; cd ..
+    # an unstaged edit next to the staged one (one line of context apart) and two lines apart
+    ss_repo; sed -i '2s/.*/c unstaged next to the staged top/' c; v stash push -S; ss_state; cd ..
+    ss_repo; sed -i '3s/.*/c unstaged two lines below/' c; v stash push -S; ss_state; cd ..
+    # a second stash on top, then drop and pop in order
+    ss_repo; v stash push -S; echo "b2" >>b; v add b; v stash push -S -m second; v stash list; v stash pop; v stash pop; ss_state; cd ..
+}
+
 s_mktree() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c
