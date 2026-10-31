@@ -96,7 +96,7 @@ Ordered by severity. Everything marked **Repro** was run and the output is quote
 - **`--short` swallows the revision.** It is `Option<Option<usize>>` without `require_equals` (`crates/rivet-cli/src/cmd/plumbing.rs:422-423`), so clap tries to parse `HEAD` as the number. **Repro:** `error: invalid value 'HEAD' for '--short [<N>]'`. This is one of the most common idioms in scripts.
 - **Fixed 7-character abbreviations.** `log`/`show` use `history::abbrev` (`crates/rivet-cli/src/cmd/history.rs:1060-1085`): always 7 or more, ignoring `core.abbrev` and git's auto-length. **Repro (44k objects):** `git log --oneline -1` prints `54c947ee`, rivet prints `54c947e`. A correct implementation already exists in `query.rs:840-888`; see B1.
 
-### A15. Public `refs::loose` API panics on SHA-256 repositories
+### A15. Public `refs::loose` API panics on SHA-256 repositories — FIXED 41a5ba9+unit7 (block 18)
 - **Where:** `crates/rivet-core/src/refs/loose.rs:276,298,379` hardcode `ObjectFormat::Sha1`. `RefTarget::to_bytes` then hits `.expect("write hex")` (`refs/mod.rs:190-191`) for a 32-byte id, and `rename` parses with SHA-1.
 - **Effect:** none inside the crate today (no internal callers), but `refs::loose` is `pub` (`refs/mod.rs:64`), so any library user writing a ref in a SHA-256 repo panics.
 

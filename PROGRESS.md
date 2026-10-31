@@ -2124,3 +2124,10 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 326 passed / 0 failed / 0 ignored; `scenarios.sh` 356 PASS, `failures: 0` (final run). `s_blame_flags` is second-boundary sensitive (it prints the mtime of an uncommitted line, so the git run and the rivet run must land in the same second): it failed in 2 of 4 full runs this session (and 3 of 3 times when the suite ran at the same time as my edits) while passing alone every time; it fails the same way with this unit stashed, so it is a pre-existing flake, not a regression.
 * Left undone (in `GAPS.md`): `conflict-marker-size` and `merge=` drivers (refused), rerere's own marker width, `checkout` listing every unmerged path (`needs merge`), `am --show-current-patch`.
 
+
+## Block 18
+### Unit 7 — `refs::loose` and SHA-256 (review A15)
+* `loose::write` / `write_locked` serialise a direct target at its own id's width (`target_format`), so a SHA-256 id is written as 64 digits instead of reaching `RefTarget::to_bytes`'s `expect("write hex")` with a SHA-1 width; `loose::rename` takes the format from the file (SHA-1 parse, then SHA-256 on `InvalidHex`). Signatures unchanged; the functions have no internal callers, so narrowing them to `pub(crate)` would only have produced dead code.
+* Proof: `refs::loose::tests` (SHA-256 write + rename round trip, SHA-1 still 40 digits); the SHA-256 test panics on `41a5ba9`. No scenario: no CLI path reaches these functions.
+* Flake fixed first (PRIORITIES rule): `every_scenario_matches_real_git` failed in `cargo test --workspace` on `s_blame_flags` (diff: `Not Committed Yet 11:46:01` vs `11:46:02`); the two commands that printed the wall clock now use `-s`.
+* Gate for unit 7 + flake fix: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 328 passed / 0 failed / 0 ignored; `scenarios.sh` 356 PASS, `failures: 0`. `s_attributes_eol_paths` had the same wall-clock blame output as `s_blame_flags` and was fixed alongside.

@@ -11777,10 +11777,10 @@ s_attributes_eol_paths() {
     printf 'one\r\nedited\r\nmore\r\n' >b.cr
     v diff
     v diff --stat
-    v blame b.cr
+    v blame -s b.cr
     printf 'one\r\nedited\r\nmore\r\n' >a.txt
     v diff a.txt
-    v blame a.txt
+    v blame -s a.txt
     # core.autocrlf without attributes
     g checkout -q -f main 2>/dev/null; g reset -q --hard
     g config core.autocrlf true
@@ -11854,7 +11854,9 @@ s_blame_flags() {
     v blame -n HEAD~2 f
     v blame -n -w g
     echo uncommitted >>g
-    v blame -n g
+    # git stamps the not-yet-committed line with the wall clock, so -s (no author, no time) keeps
+    # the two runs from straddling a second boundary
+    v blame -n -s g
     sed -i '$d' g
     # --since: commits older than the date are boundaries
     v blame --since=1700000130 g
@@ -11863,7 +11865,7 @@ s_blame_flags() {
     v blame --since=1700000130 -p -L 1,6 g
     v blame --since=1700000130 --incremental -L 1,6 g
     v blame --since=1699999000 g
-    v blame --since=1800000000 g
+    v blame --since=1800000000 -s g
     v blame --since 1700000130 -s g
     v blame --since=2023-11-14 g
     v blame --since=garbage g

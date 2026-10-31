@@ -273,7 +273,7 @@ pub fn exists(git_dir: &Path, name: &RefName) -> bool {
 /// [`crate::error::Error::IoAtPath`] if a directory cannot be created or the rename fails.
 pub fn write(git_dir: &Path, name: &RefName, target: &RefTarget) -> Result<()> {
     let mut lock = RefLock::acquire(git_dir, name)?;
-    lock.write_and_commit(&target.to_bytes(ObjectFormat::Sha1))
+    lock.write_and_commit(&target.to_bytes(target_format(target)))
 }
 
 /// Phase 2 — write a ref's file through a lock the caller already holds.
@@ -295,8 +295,17 @@ pub fn write(git_dir: &Path, name: &RefName, target: &RefTarget) -> Result<()> {
 ///
 /// [`crate::error::Error::IoAtPath`] if the write fails.
 pub fn write_locked(lock: &mut RefLock, target: &RefTarget) -> Result<()> {
-    let data = target.to_bytes(ObjectFormat::Sha1);
+    let data = target.to_bytes(target_format(target));
     lock.write_and_commit(&data)
+}
+
+/// The width a target is serialised at: an id carries its own format, so a SHA-256 id is written as
+/// 64 hex digits whatever repository the caller thinks it is in. A symbolic target has no width.
+fn target_format(target: &RefTarget) -> ObjectFormat {
+    match target {
+        RefTarget::Direct(id) => id.format(),
+        RefTarget::Symbolic(_) => ObjectFormat::Sha1,
+    }
 }
 
 /// Phase 2 — delete a loose ref, pruning directories that become empty.
@@ -376,7 +385,12 @@ pub fn delete(git_dir: &Path, name: &RefName) -> Result<()> {
 pub fn rename(git_dir: &Path, from: &RefName, to: &RefName) -> Result<()> {
     let mut src_lock = RefLock::acquire(git_dir, from)?;
     let mut dst_lock = RefLock::acquire(git_dir, to)?;
-    let target = read(git_dir, from, ObjectFormat::Sha1)?;
+    // The repository's format is not a parameter, so take it from the file: a 64-digit id is
+    // rejected as the wrong width by the SHA-1 parse and accepted by the SHA-256 one.
+    let target = match read(git_dir, from, ObjectFormat::Sha1) {
+        Err(Error::InvalidHex { .. }) => read(git_dir, from, ObjectFormat::Sha256)?,
+        other => other?,
+    };
     delete(git_dir, from)?;
     write_locked(&mut dst_lock, &target)?;
     let _ = src_lock.release();
@@ -550,5 +564,47 @@ pub fn read_symbolic(git_dir: &Path, name: &RefName, format: ObjectFormat) -> Re
     match read(git_dir, name, format)? {
         RefTarget::Symbolic(target) => Ok(target.into_bstring()),
         RefTarget::Direct(oid) => Err(Error::SymbolicRef { name: oid.to_hex() }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn name(n: &str) -> RefName {
+        RefName::from_bytes(n.as_bytes()).unwrap()
+    }
+
+    fn sha256_id(byte: u8) -> ObjectId {
+        let hex = format!("{byte:02x}").repeat(32);
+        ObjectId::from_hex(ObjectFormat::Sha256, hex.as_bytes().into()).unwrap()
+    }
+
+    #[test]
+    fn write_locked_and_rename_carry_a_sha256_id_without_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (name("refs/heads/a"), name("refs/heads/b"));
+        let id = sha256_id(0xab);
+        write(dir.path(), &a, &RefTarget::Direct(id)).unwrap();
+        let on_disk = std::fs::read(a.file_path(dir.path())).unwrap();
+        assert_eq!(on_disk, format!("{}\n", "ab".repeat(32)).into_bytes());
+
+        rename(dir.path(), &a, &b).unwrap();
+        assert!(!exists(dir.path(), &a));
+        assert_eq!(
+            read(dir.path(), &b, ObjectFormat::Sha256).unwrap(),
+            RefTarget::Direct(id)
+        );
+    }
+
+    #[test]
+    fn sha1_ids_are_still_written_at_forty_digits() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = name("refs/heads/a");
+        let id = ObjectId::from_hex(ObjectFormat::Sha1, "cd".repeat(20).as_bytes().into()).unwrap();
+        write(dir.path(), &r, &RefTarget::Direct(id)).unwrap();
+        rename(dir.path(), &r, &name("refs/heads/c")).unwrap();
+        let on_disk = std::fs::read(name("refs/heads/c").file_path(dir.path())).unwrap();
+        assert_eq!(on_disk, format!("{}\n", "cd".repeat(20)).into_bytes());
     }
 }
