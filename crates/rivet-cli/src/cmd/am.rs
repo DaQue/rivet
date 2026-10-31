@@ -15,7 +15,7 @@
 //! Not implemented: `--signoff`, `--keep`, `--directory`, `--whitespace`, scissors,
 //! mailbox formats other than plain mbox, RFC 2047 encoded headers.
 
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -44,6 +44,16 @@ pub struct AmArgs {
     /// Restore the branch to where it was before `am`.
     #[arg(long = "abort")]
     pub abort: bool,
+
+    /// Show the message (`raw`, the default) or the patch (`diff`) being applied.
+    #[arg(
+        long = "show-current-patch",
+        value_name = "raw|diff",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "raw"
+    )]
+    pub show_current_patch: Vec<String>,
 
     /// Do not run the `applypatch-msg` and `pre-applypatch` hooks.
     #[arg(short = 'n', long = "no-verify")]
@@ -94,7 +104,8 @@ fn split_mbox(text: &[u8]) -> Vec<Vec<u8>> {
             if let Some(done) = current.take() {
                 messages.push(done);
             }
-            current = Some(Vec::new());
+            // git's mailsplit keeps the `From ` line in the stored message.
+            current = Some(line.to_vec());
             previous_blank = false;
             continue;
         }
@@ -277,6 +288,9 @@ pub fn run_am(global: &GlobalArgs, args: &AmArgs) -> Result<i32> {
         (_, true) => Some(false),
         _ => None,
     });
+    if let Some(mode) = args.show_current_patch.last() {
+        return show_current_patch(args, mode, &dir);
+    }
     let controls = [args.continue_am, args.skip, args.abort]
         .iter()
         .filter(|on| **on)
@@ -382,6 +396,61 @@ pub fn run_am(global: &GlobalArgs, args: &AmArgs) -> Result<i32> {
     run_patches(global, &mut repository, &dir, args.no_verify)
 }
 
+/// `am --show-current-patch[=raw|diff]`: print the stored message or the stored patch.
+fn show_current_patch(args: &AmArgs, mode: &str, dir: &Path) -> Result<i32> {
+    if !matches!(mode, "raw" | "diff") {
+        eprintln!("error: invalid value for '--show-current-patch': '{mode}'");
+        return Ok(129);
+    }
+    // git's command-mode options name the later option first.
+    let shows: Vec<String> = std::env::args()
+        .filter(|a| a.starts_with("--show-current-patch"))
+        .collect();
+    if let [.., earlier, later] = shows.as_slice() {
+        eprintln!("error: options '{later}' and '{earlier}' cannot be used together");
+        return Ok(129);
+    }
+    let spelled = format!("--show-current-patch={mode}");
+    let spelled = if mode == "raw" && !std::env::args().any(|a| a == spelled) {
+        "--show-current-patch".to_string()
+    } else {
+        spelled
+    };
+    let others = [
+        ("--continue", args.continue_am),
+        ("--skip", args.skip),
+        ("--abort", args.abort),
+    ];
+    let position =
+        |name: &str| std::env::args().position(|a| a == name || a == "-r" && name == "--continue");
+    let shown_at = std::env::args().position(|a| a.starts_with("--show-current-patch"));
+    for (name, on) in others {
+        if on {
+            let (later, earlier) = match (position(name), shown_at) {
+                (Some(other), Some(shown)) if other > shown => (name, spelled.as_str()),
+                _ => (spelled.as_str(), name),
+            };
+            eprintln!("error: options '{later}' and '{earlier}' cannot be used together");
+            return Ok(129);
+        }
+    }
+    if !dir.join("applying").exists() {
+        eprintln!("fatal: Resolve operation not in progress, we are not resuming.");
+        return Ok(128);
+    }
+    let file = if mode == "diff" {
+        "patch".to_string()
+    } else {
+        read(dir, "next")
+            .parse::<usize>()
+            .map_or_else(|_| "0001".to_string(), |n| format!("{n:04}"))
+    };
+    let bytes = std::fs::read(dir.join(&file))
+        .map_err(|e| anyhow::anyhow!("could not read '{}': {e}", dir.join(&file).display()))?;
+    std::io::stdout().write_all(&bytes)?;
+    Ok(0)
+}
+
 fn write(dir: &Path, name: &str, text: &str) -> Result<()> {
     std::fs::write(dir.join(name), text)
         .map_err(|e| anyhow::anyhow!("could not write '{}': {e}", dir.join(name).display()))
@@ -409,9 +478,16 @@ fn run_patches(
         if next > last {
             break;
         }
-        let raw = std::fs::read(dir.join(format!("{next:04}")))?;
+        let stored = std::fs::read(dir.join(format!("{next:04}")))?;
+        let raw = match stored.starts_with(b"From ") {
+            true => stored
+                .iter()
+                .position(|b| *b == b'\n')
+                .map_or(&stored[..0], |at| &stored[at + 1..]),
+            false => &stored[..],
+        };
         let fallback = repository.author_signature()?;
-        let message = parse_message(&raw, &fallback)?;
+        let message = parse_message(raw, &fallback)?;
         let number = format!("{next:04}");
         // Remember the message for `--continue`.
         write(dir, "applying", "")?;

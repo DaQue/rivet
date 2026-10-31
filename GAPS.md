@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 372 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 373 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 343 tests / 0 failed, 372 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 343 tests / 0 failed, 373 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -146,7 +146,7 @@ The command works for the common case; the listed options or edge cases are miss
   multi-line or blank-run ASCII subject is still refused, as are attachments, path limiting, `format.coverLetter`,
   `format.thread`, `--description-file`, `-v<n>`, `--range-diff`, scissors. Found on the way and not fixed: `commit`
   keeps the trailing `"` of an author name where git's ident cleanup drops it, and the reflog message of a commit
-  whose subject has a tab stops at the tab. `am --3way`/`-3`, `--no-3way`, `am.threeWay` and `--[no-]rerere-autoupdate` work (`s_am_3way`, `s_am_3way_rerere`); `am --show-current-patch` is still absent.
+  whose subject has a tab stops at the tab. `am --3way`/`-3`, `--no-3way`, `am.threeWay` and `--[no-]rerere-autoupdate` work (`s_am_3way`, `s_am_3way_rerere`); `am --show-current-patch[=raw|diff]` prints the stored message (with its `From ` line) or patch, with git's refusals for no operation in progress, a bad value and a clash with `--continue`/`--skip`/`--abort` (exit 129; `s_am_show_current_patch`).
 * **`stash`** — `create`, `store` and `save` exist (`s_stash_stack`), as does `branch`
   (`s_stash_branch`), and `save`/`store` error text matches (`s_stash_errors`). `push`/`save` `-S`/`--staged` (the stash is the index; the staged changes leave the work tree through a
   reverse `apply` with one line of context and are reset in the index, `-k` keeps the index, a pathspec

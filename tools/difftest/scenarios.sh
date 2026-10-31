@@ -12525,6 +12525,17 @@ age_shared() {
     local d; d=$(g rev-parse --git-dir)
     for f in "$d"/sharedindex.*; do [ -e "$f" ] && touch -d "$1" "$f"; done
 }
+# The shared index names are hashes of stat data, so their order differs between the two runs: age
+# every shared index that is not the one the index links to, except the newest of those, by role.
+age_stale_keep_newest() {
+    local d cur f kept=
+    d=$(g rev-parse --git-dir)
+    cur=$(od -An -v -tx1 "$d/index" | tr -d ' \n' | sed -n 's/.*6c696e6b[0-9a-f]\{8\}\([0-9a-f]\{40\}\).*/\1/p')
+    for f in $(ls -t "$d"/sharedindex.*); do
+        [ "$f" = "$d/sharedindex.$cur" ] && continue
+        if [ -z "$kept" ]; then kept=$f; else touch -d "$1" "$f"; fi
+    done
+}
 s_split_index_expire() {
     OLD='2026-01-01 00:00:00'
     v init -q repo; cd repo
@@ -12571,8 +12582,7 @@ s_split_index_expire() {
     age_shared "$OLD"
     echo o >>f3; v add f3; nshared
     g config splitIndex.sharedIndexExpire 3.days.ago
-    d=$(g rev-parse --git-dir); n=0
-    for f in "$d"/sharedindex.*; do n=$((n + 1)); [ $n = 1 ] && touch -d "$OLD" "$f"; done
+    age_stale_keep_newest "$OLD"
     echo n >>f3; v add f3; nshared
     g config splitIndex.sharedIndexExpire 1.second.ago
     echo l >>f3; v add f3; nshared
@@ -13523,6 +13533,37 @@ s_am_3way() {
     v am --no-3way ../one.patch; v am --abort
     v config --unset am.threeWay
     vg fsck --no-dangling
+}
+
+s_am_show_current_patch() {
+    v init -q repo; cd repo
+    seq 1 10 >f; seq 1 5 >g
+    v add f g; tick; v commit -q -m base
+    base=$(g rev-parse HEAD)
+    v checkout -q -b w
+    sed -i 's/^7$/seven/' f; tick; v commit -q -am w1
+    sed -i 's/^3$/three/' g; tick; v commit -q -am w2
+    v checkout -q main
+    g format-patch -q -2 w --stdout >../series.patch
+    sed -i 's/^3$/THREE/' g; tick; v commit -q -am main
+    # nothing under way
+    v am --show-current-patch; v am --show-current-patch=diff; v am --show-current-patch=raw
+    v am --show-current-patch=bogus
+    # the second patch of the series stops; the shown message is that one
+    v am ../series.patch; v status --short
+    v am --show-current-patch
+    v am --show-current-patch=raw
+    v am --show-current-patch=diff
+    v am --show-current-patch=bogus
+    # git's command-mode conflicts name the later option first
+    v am --show-current-patch --abort
+    v am --abort --show-current-patch
+    v am --show-current-patch=diff --skip
+    v am --continue --show-current-patch=raw
+    v am --show-current-patch --show-current-patch=diff
+    v am --skip; v am --show-current-patch
+    v am --abort; v am --show-current-patch
+    v log --format=%s
 }
 
 s_am_3way_rerere() {
