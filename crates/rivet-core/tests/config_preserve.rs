@@ -57,3 +57,17 @@ fn unset_keeps_headers_and_comments_and_remove_section_takes_the_section_with_it
         "# top\n[splitIndex]\n\t# c\n\tsharedIndexExpire = now   # trailing\n\n[remote \"o\"]\n\turl = x\n# tail\n"
     );
 }
+
+#[test]
+fn a_continued_value_joins_its_lines_and_survives_an_edit_elsewhere() {
+    let file = b"[a]\n\tk = one\\\n  two\n\tn = a\\\n\tb # c\n\tr = s\\\n\n\tq = 1\n";
+    let mut cfg = Config::parse(file).unwrap();
+    assert_eq!(cfg.get(BStr::new("a.k")).unwrap().unwrap(), "one  two");
+    assert_eq!(cfg.get(BStr::new("a.n")).unwrap().unwrap(), "a\tb");
+    assert_eq!(cfg.get(BStr::new("a.r")).unwrap().unwrap(), "s");
+    assert_eq!(cfg.get(BStr::new("a.q")).unwrap().unwrap(), "1");
+    cfg.set(BStr::new("a.q"), b"5").unwrap();
+    let out = cfg.to_bytes();
+    assert!(out.starts_with(&file[..file.len() - "\tq = 1\n".len()]));
+    assert!(out.ends_with(b"\tq = 5\n"));
+}

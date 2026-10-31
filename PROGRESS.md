@@ -2284,3 +2284,9 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Found, not fixed: line continuation (`k = one\` + ` two`) is parsed wrongly (leading instead of trailing backslashes); an emptied section followed by an empty duplicate header (`[a] x=1 [a]`) is not removed like git.
 * Proof: scenario `s_config_preserve` (fails on the parent), Rust tests `tests/config_preserve.rs`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 347 passed / 0 failed / 0 ignored; `scenarios.sh` 377 PASS, `failures: 0`.
+
+### UNIT 30 — config: continued values
+* Chosen from GAPS.md by the weekend run (every unit in PRIORITIES.md was committed). `Config::parse` counted *leading* backslashes and dropped the entry that ended a continuation; now trailing backslashes continue, the next line is appended whole (its blanks stay, `#` or an empty line do not make it a comment) and a `\r` before the newline is ignored, as git does.
+* Found, not fixed: git ends an unquoted value at any `#`/`;` (`k = x#y` reads `x`); rivet only after whitespace (recorded in GAPS.md).
+* Proof: scenario `s_config_continued` (fails on the parent), Rust test in `tests/config_preserve.rs`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 348 passed / 0 failed / 0 ignored; `scenarios.sh` 378 PASS, `failures: 0`.

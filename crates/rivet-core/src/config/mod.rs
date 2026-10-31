@@ -407,35 +407,36 @@ impl Config {
             let line = &data[start..j];
             i = if j < n { j + 1 } else { j };
             line_no += 1;
-            let trimmed = line
-                .iter()
-                .position(|b| *b != b' ' && *b != b'\t')
-                .map(|p| &line[p..])
-                .unwrap_or(&[]);
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed[0] == b'#' || trimmed[0] == b';' {
-                continue;
-            }
-            if !cont {
-                logical_start = start;
-            }
-            let mut k = 0usize;
-            while k < trimmed.len() && trimmed[k] == b'\\' {
-                k += 1;
-            }
-            if k % 2 == 1 {
-                cont = true;
-                logical.extend_from_slice(&trimmed[..k - 1]);
-                continue;
-            }
+            // A line may end in `\r\n`; git drops the `\r` with the newline.
+            let body = line.strip_suffix(b"\r").unwrap_or(line);
+            let trailing_backslashes =
+                |s: &[u8]| s.iter().rev().take_while(|b| **b == b'\\').count();
             if cont {
+                // A continuation line is taken whole: its leading blanks stay in the value and a
+                // `#` or an empty line does not make it a comment.
+                if trailing_backslashes(body) % 2 == 1 {
+                    logical.extend_from_slice(&body[..body.len() - 1]);
+                    continue;
+                }
+                logical.extend_from_slice(body);
                 cont = false;
-                logical.extend_from_slice(&trimmed[k..]);
-                continue;
+            } else {
+                let trimmed = body
+                    .iter()
+                    .position(|b| *b != b' ' && *b != b'\t')
+                    .map(|p| &body[p..])
+                    .unwrap_or(&[]);
+                if trimmed.is_empty() || trimmed[0] == b'#' || trimmed[0] == b';' {
+                    continue;
+                }
+                logical_start = start;
+                if trailing_backslashes(trimmed) % 2 == 1 {
+                    cont = true;
+                    logical = trimmed[..trimmed.len() - 1].to_vec();
+                    continue;
+                }
+                logical = trimmed.to_vec();
             }
-            logical = trimmed.to_vec();
             let t = &logical[..];
             if t[0] == b'[' {
                 let close = t

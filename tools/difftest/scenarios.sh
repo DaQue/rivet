@@ -13720,6 +13720,19 @@ s_config_preserve() {
     v config --unset a.k; show
 }
 
+# a value continued with a trailing backslash: the lines join, the next line's blanks stay, an
+# empty line in the continuation ends it, and an edit elsewhere keeps the continued lines
+s_config_continued() {
+    v init -q repo; cd repo
+    printf '[a]\n\tk = one\\\n  two\n\tm = "x\\\ny"\n\tn = a\\\n\tb # c\n\to = p\\\\\n\tq = 1\n\tr = s\\\n\n\tt = 2\n\tx = 3\n' >.git/config
+    v config -l --local
+    for k in a.k a.m a.n a.o a.q a.r a.t a.x; do v config --get $k; done
+    v config a.q 5
+    { echo "== config file"; cat -A .git/config; } >>"$TRANSCRIPT"
+    v config --unset a.o
+    { echo "== config file"; cat -A .git/config; } >>"$TRANSCRIPT"
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
