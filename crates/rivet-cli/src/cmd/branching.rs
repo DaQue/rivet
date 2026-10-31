@@ -792,6 +792,15 @@ pub fn run_switch(global: &GlobalArgs, args: &SwitchArgs) -> Result<i32> {
     }
     let mut repository = super::open(global)?;
 
+    // `switch` (unlike `checkout`) is refused while another operation is under way.
+    if args.orphan.is_none()
+        && let Some((action, command)) = operation_in_progress(&repository)
+    {
+        eprintln!("fatal: cannot switch branch while {action}");
+        eprintln!("Consider \"{command}\" or \"git worktree add\".");
+        return Ok(128);
+    }
+
     if let Some(orphan) = &args.orphan {
         return orphan_branch(&mut repository, orphan, global.quiet, true);
     }
@@ -1703,6 +1712,45 @@ fn rename_branch(
     Ok(0)
 }
 
+/// The operation `HEAD` is in the middle of, and the command that would end it.
+fn operation_in_progress(repository: &Repository) -> Option<(&'static str, &'static str)> {
+    let dir = repository.git_dir();
+    let has = |name: &str| dir.join(name).exists();
+    if has("MERGE_HEAD") {
+        Some(("merging", "git merge --quit"))
+    } else if has("rebase-apply") && !has("rebase-apply/applying") {
+        Some(("rebasing", "git rebase --quit"))
+    } else if has("rebase-apply") {
+        Some(("applying patches", "git am --quit"))
+    } else if has("rebase-merge") {
+        Some(("rebasing", "git rebase --quit"))
+    } else if has("CHERRY_PICK_HEAD") {
+        Some(("cherry-picking", "git cherry-pick --quit"))
+    } else if has("REVERT_HEAD") {
+        Some(("reverting", "git revert --quit"))
+    } else if has("BISECT_LOG") {
+        Some(("bisecting", "git bisect reset"))
+    } else {
+        None
+    }
+}
+
+/// `report_checkout_refusal` for `checkout` and `switch`: an index with conflicts names every
+/// unmerged path (`<path>: needs merge`, once each, in index order) before the refusal.
+fn report_switch_refusal(repository: &Repository, error: rivet_core::Error) -> Result<i32> {
+    if matches!(error, rivet_core::Error::UnmergedPath { .. }) {
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in repository.index().entries() {
+            if entry.is_unmerged() && seen.insert(entry.path.clone()) {
+                println!("{}: needs merge", entry.path);
+            }
+        }
+        eprintln!("error: you need to resolve your current index first");
+        return Ok(1);
+    }
+    report_checkout_refusal(error, "checkout")
+}
+
 /// Report a refused checkout the way Git does and return its exit status.
 pub(super) fn report_checkout_refusal(error: rivet_core::Error, op: &str) -> Result<i32> {
     let dirty_block = |paths: &[bstr::BString]| {
@@ -1789,6 +1837,11 @@ fn switch_to(
     advise: bool,
     merge: bool,
 ) -> Result<i32> {
+    // A cherry-pick or revert under way is dropped by the switch, with a warning after it.
+    let cancelled = ["CHERRY_PICK_HEAD", "REVERT_HEAD"]
+        .into_iter()
+        .find(|name| repository.git_dir().join(name).exists());
+
     let old_head = repository.head()?;
     if let Destination::Branch(branch) = &destination
         && old_head.branch() != Some(branch)
@@ -1842,10 +1895,10 @@ fn switch_to(
                     let stash = super::stash::autostash_save(repository, &text)?;
                     autostash = Some((stash, base));
                     if let Err(error) = repository.checkout_tree(tree, force) {
-                        return report_checkout_refusal(error, "checkout");
+                        return report_switch_refusal(repository, error);
                     }
                 }
-                (error, _) => return report_checkout_refusal(error, "checkout"),
+                (error, _) => return report_switch_refusal(repository, error),
             }
         }
     }
@@ -1884,6 +1937,11 @@ fn switch_to(
         }
     }
 
+    if cancelled.is_some() {
+        for name in ["CHERRY_PICK_HEAD", "REVERT_HEAD", "MERGE_MSG", "AUTO_MERGE"] {
+            let _ = std::fs::remove_file(repository.git_dir().join(name));
+        }
+    }
     if !quiet {
         if autostash.is_some() {
             println!("The following paths have local changes:");
@@ -1916,6 +1974,13 @@ fn switch_to(
                     super::commit_subject(repository, oid)?
                 );
             }
+        }
+        match cancelled {
+            Some("CHERRY_PICK_HEAD") => {
+                eprintln!("warning: cancelling a cherry picking in progress")
+            }
+            Some(_) => eprintln!("warning: cancelling a revert in progress"),
+            None => {}
         }
     }
     Ok(post_checkout_hook(
@@ -1990,7 +2055,7 @@ fn checkout_new_branch(
     if old_head.oid() != Some(start_oid) || force {
         let tree = repository.commit_tree(start_oid)?;
         if let Err(error) = repository.checkout_tree(tree, force) {
-            return report_checkout_refusal(error, "checkout");
+            return report_switch_refusal(repository, error);
         }
     }
 

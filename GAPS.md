@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 368 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 369 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 339 tests / 0 failed, 368 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 339 tests / 0 failed, 369 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -276,4 +276,4 @@ If a command refuses with `not implemented`, that is this list, not a crash. Any
 a panic, a wrong result, a hang — is a bug worth an issue with the command line and the
 repository state that produced it.
 * **`name-rev`** — `--all` is refused by name (`name-rev: --all is not implemented`; git lists commits in its in-memory object-table order). When several refs point at the same non-commit object (a tag object), git's choice among them depends on a binary search in its tip table; that case is refused by name instead of guessed. The commit-date cutoff optimisation is not reproduced (it does not change a name unless dates are badly skewed).
-* **`checkout` / `switch` with several unmerged paths** — git prints `<path>: needs merge` for every unmerged path before `error: you need to resolve your current index first`; rivet prints the first one only (found while writing `s_resolve_undo`, which resolves all conflicts before it switches).
+* **`checkout` / `switch` with several unmerged paths** — every unmerged path is named (`<path>: needs merge`, once each, index order) before `error: you need to resolve your current index first`, for `checkout`, `-B`, `--detach`, `-m` and `switch` (`s_checkout_needs_merge`). `switch` refuses while a merge, cherry-pick, revert, rebase, `am` or bisect is under way (`fatal: cannot switch branch while merging` + the `Consider "git merge --quit" or "git worktree add".` line; only merge and cherry-pick are compared), and a switch that succeeds drops a cherry-pick/revert with `warning: cancelling a cherry picking in progress`. Not matched: `checkout -b <new>` (no start point) with unmerged paths prints `M` lines where git prints nothing.

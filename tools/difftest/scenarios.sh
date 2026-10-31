@@ -7161,6 +7161,48 @@ s_worktree_add_branch() {
     for w in ../feat ../w-other ../nb1 ../tr1 ../tr2; do (cd $w && v status -sb); done
 }
 
+s_checkout_needs_merge() {
+    v init -q repo; cd repo
+    tick; for f in a b c d; do seq 1 3 >$f; done; mkdir sub; echo s >sub/e; v add .; v commit -q -m base
+    v branch side; v branch other
+    tick; for f in a b c; do echo ours >>$f; done; echo ours >sub/e; v commit -q -a -m ours
+    v switch -q side; tick; for f in a b c; do echo theirs >>$f; done; echo theirs >sub/e; v commit -q -a -m theirs
+    v switch -q main
+    v merge side
+    v status -s
+    # several unmerged paths: every one is named, in index order, then the refusal
+    v checkout other
+    v switch other
+    v switch main
+    v checkout -B topic3 other
+    v switch -C topic4 other
+    v checkout --detach other
+    v switch --detach other
+    v checkout side
+    v checkout -m other
+    v switch -m other
+    v branch
+    # resolve some of them: the rest are still named
+    echo fixed >a; v add a
+    v checkout -m other
+    echo fixed >sub/e; v add sub/e
+    v checkout -m other
+    v status -s
+    # a cherry-pick and a revert in progress
+    echo fixed >b; v add b; echo fixed >c; v add c
+    v commit -q -m merged
+    v branch -f cp main~1
+    v switch -q -c scratch other
+    tick; echo x >>a; v commit -q -a -m onother
+    v cherry-pick side
+    v switch main
+    v switch --detach main
+    v checkout main
+    v status -s
+    v checkout -f main
+    v branch
+}
+
 s_worktree_lock_remove() {
     v init -q repo; cd repo
     tick; printf 'a\nb\n' >f; v add f; v commit -q -m one

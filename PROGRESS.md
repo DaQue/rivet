@@ -2217,3 +2217,10 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Found, not fixed: `config --get-regexp` is a substring match; `branch -vv` is refused by clap (`--verbose` twice).
 * Proof: `s_worktree_add_branch` (about 45 invocations incl. state and reflogs; fails on the parent: `fatal: invalid reference` for the DWIM, no tracking, `--track` not implemented). `s_hooks_clone` and the other worktree scenarios unchanged.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 339 passed / 0 failed / 0 ignored; `scenarios.sh` 368 PASS, `failures: 0`.
+
+### Unit 21 — `checkout` / `switch` with several unmerged paths
+* `report_switch_refusal` (checkout and switch only; merge-like callers keep the one-path form): on `UnmergedPath` it names every unmerged path of the index once, in index order, then `error: you need to resolve your current index first` (exit 1). The core error still carries one path; the list comes from the index, so no public type changed.
+* Found by the scenario: `switch` is refused outright while an operation is under way (`fatal: cannot switch branch while merging` / `cherry-picking` …, `Consider "git merge --quit" or "git worktree add".`, exit 128), for every form except `--orphan`; `checkout` is not. A switch that succeeds clears a cherry-pick/revert (`CHERRY_PICK_HEAD`/`REVERT_HEAD`/`MERGE_MSG`/`AUTO_MERGE`) and warns `cancelling a cherry picking in progress` after the `Switched to…` line. Earlier steps of the scenario showed that any successful branch switch clears `MERGE_HEAD` (so later listings need a fresh merge).
+* Found, not fixed: `checkout -b <new>` on an unmerged index prints `M\t<path>` lines (git prints nothing).
+* Proof: `s_checkout_needs_merge` (checkout/switch in all forms over four conflicted paths, partial resolution, a cherry-pick in progress; fails on the parent).
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 339 passed / 0 failed / 0 ignored; `scenarios.sh` 369 PASS, `failures: 0`.
