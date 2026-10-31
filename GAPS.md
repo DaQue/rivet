@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 362 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 363 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 332 tests / 0 failed, 362 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 336 tests / 0 failed, 363 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -131,8 +131,16 @@ The command works for the common case; the listed options or edge cases are miss
   otherwise ignored (`s_grep_threads`). No `-P`, `--and`/`--or`/`--not`, `--no-index`.
 * **`apply`** — `GIT binary patch` (from `diff --binary`) is not decoded; no fuzz, symlink
   patches, whitespace options or `--reject` together with `--3way`.
-* **`format-patch` / `am`** — no cover letters, threading, RFC 2047 headers (so `-k` with a
-  multi-line subject or a run of blanks is refused), scissors. `am --3way`/`-3`, `--no-3way`, `am.threeWay` and `--[no-]rerere-autoupdate` work (`s_am_3way`, `s_am_3way_rerere`); `am --show-current-patch` is still absent.
+* **`format-patch` / `am`** — `--cover-letter` (`0000-cover-letter.patch`: shortlog wrapped at 72 columns,
+  the range's diffstat and summary, numbering `0/N`), `--thread[=shallow|deep]`, `--no-thread` and `--in-reply-to`
+  (`Message-ID`, `In-Reply-To`, `References`; a deep thread lists every earlier message), and RFC 2047 encoding of
+  non-ASCII names and subjects (folded at 76 columns, the address moved to its own line past 78, the MIME headers
+  added for a non-ASCII subject or message, ASCII names with a special quoted) are compared with git
+  (`s_format_patch_cover`; the message ids carry the clock, so the scenario normalises them). `-k` with a
+  multi-line or blank-run ASCII subject is still refused, as are attachments, path limiting, `format.coverLetter`,
+  `format.thread`, `--description-file`, `-v<n>`, `--range-diff`, scissors. Found on the way and not fixed: `commit`
+  keeps the trailing `"` of an author name where git's ident cleanup drops it, and the reflog message of a commit
+  whose subject has a tab stops at the tab. `am --3way`/`-3`, `--no-3way`, `am.threeWay` and `--[no-]rerere-autoupdate` work (`s_am_3way`, `s_am_3way_rerere`); `am --show-current-patch` is still absent.
 * **`stash`** — `create`, `store` and `save` exist (`s_stash_stack`), as does `branch`
   (`s_stash_branch`), and `save`/`store` error text matches (`s_stash_errors`). `push`/`save` `-S`/`--staged` (the stash is the index; the staged changes leave the work tree through a
   reverse `apply` with one line of context and are reset in the index, `-k` keeps the index, a pathspec

@@ -4216,6 +4216,80 @@ body"
     ls >>"$TRANSCRIPT"
 }
 
+# format-patch --cover-letter, --thread / --in-reply-to and RFC 2047 names and subjects, against git.
+# A message id carries the wall clock, so the threaded runs go to files whose ids are normalised.
+s_format_patch_cover() {
+    v init -q repo; cd repo
+    local n=0
+    fpt() {
+        n=$((n + 1))
+        # outside the repository: the files hold the wall clock, which the state comparison would see
+        v format-patch -o ../out$n "$@"
+        local f
+        for f in ../out$n/*; do
+            echo "== $f" >>"$TRANSCRIPT"
+            sed -e 's/\.[0-9]\{9,11\}\.git\./.NOW.git./g' "$f" >>"$TRANSCRIPT"
+        done
+    }
+    echo a >a; v add a; tick; v commit -q -m "base"
+    echo b >>a; tick; v commit -q -a -m "one by the default author"
+    echo n >new; v add new; tick; GIT_AUTHOR_NAME="Bob" v commit -q -m "two by bob"
+    echo c >>a; tick; v commit -q -a -m "three by the default author which has a really long subject line that definitely needs to be wrapped at the width limit"
+    echo d >>a; tick; GIT_AUTHOR_NAME="alice lower" v commit -q -a -m "four by lowercase alice" -m "with a body
+of two lines"
+    echo e >>a; tick; GIT_AUTHOR_NAME="Bob" v commit -q -a -m "five by bob"
+    v format-patch --stdout --cover-letter --no-signature HEAD~5
+    v format-patch --stdout --cover-letter --signature="sig line" HEAD~3
+    v format-patch --stdout --cover-letter --no-signature -1
+    v format-patch --stdout --cover-letter --no-signature -n -2
+    v format-patch --stdout --cover-letter --no-signature --start-number 3 HEAD~2
+    v format-patch --stdout --cover-letter --no-signature --subject-prefix="RFC PATCH" HEAD~2
+    v format-patch --stdout --cover-letter --no-signature -k HEAD~2
+    v format-patch --stdout --cover-letter --no-signature --no-numbered HEAD~2
+    v format-patch --stdout --cover-letter --no-cover-letter --no-signature HEAD~2
+    v format-patch --stdout --no-cover-letter --cover-letter --no-signature HEAD~2
+    v format-patch --stdout --cover-letter --no-signature --root HEAD~4
+    v format-patch --stdout --cover-letter --no-signature HEAD~9
+    v format-patch --cover-letter --no-signature -o cdir HEAD~2
+    ls cdir >>"$TRANSCRIPT"
+    cat cdir/0000-cover-letter.patch >>"$TRANSCRIPT"
+    # threading
+    fpt --thread --no-signature HEAD~3
+    fpt --thread=deep --no-signature HEAD~3
+    fpt --thread=shallow --no-signature HEAD~3
+    fpt --thread --cover-letter --no-signature HEAD~3
+    fpt --thread=deep --cover-letter --no-signature HEAD~3
+    fpt --no-thread --thread --no-signature HEAD~2
+    fpt --thread --no-thread --no-signature HEAD~2
+    fpt --in-reply-to="<abc@example.com>" --no-signature HEAD~2
+    fpt --in-reply-to=abc@example.com --no-signature HEAD~2
+    fpt --thread --in-reply-to=abc@example.com --no-signature HEAD~2
+    fpt --thread=deep --in-reply-to=abc@example.com --cover-letter --no-signature HEAD~2
+    fpt --thread --no-signature -1
+    fpt --thread --cover-letter --no-signature -1
+    fpt --thread=sideways --no-signature -1
+    # RFC 2047 names and subjects
+    echo f >>a; tick; GIT_AUTHOR_NAME="José Müller" v commit -q -a -m "plain ascii subject"
+    echo g >>a; tick; v commit -q -a -m "Fünf Äpfel — test with a long subject that will need folding because it is rather long indeed yes"
+    echo h >>a; tick; v commit -q -a -m "leading ascii words then ünïcode in the middle and trailing ascii words follow here"
+    echo i >>a; tick; v commit -q -a -m "ünïcode first"
+    echo j >>a; tick; v commit -q -a -m "last is ünï"
+    echo k >>a; tick; v commit -q -a -m "naïve"
+    echo l >>a; tick; g commit -q -a -m "tab	and 100% (ok) ü=x?_y"   # (rivet's reflog message stops at the tab)
+    echo m >>a; tick; v commit -q -a -m "ascii subject" -m "Body with ünïcode text."
+    echo o >>a; tick; v commit -q -a -m "$(printf 'ü%.0s' $(seq 1 60))"
+    echo p >>a; tick; v commit -q -a -m "multi
+line ü subject"
+    v format-patch --stdout --no-signature -10
+    v format-patch --stdout --no-signature -k -3
+    v format-patch --stdout --no-signature --cover-letter -10
+    fpt --thread --cover-letter --no-signature -4
+    for name in "José" "Ünter Müller" "Dr. Ünter" "O'Brien ü" 'Quote "ü" Name' "a,b ü" "Zoë (z)" "Dr. Who" "a;b" "plain name" "x@y" "Löng Nämé Löng Nämé Löng Nämé Löng Nämé Löng Nämé Löng Nämé Löng Nämé Löng Nämé"; do
+        echo "$name" >>a; tick; GIT_AUTHOR_NAME="$name" v commit -q -a -m "n"
+        v format-patch --stdout --no-signature -1
+    done
+}
+
 s_am() {
     v init -q repo; cd repo
     seq 1 10 >a; echo x >b; v add .; v commit -q -m base
