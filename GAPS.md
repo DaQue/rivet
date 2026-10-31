@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 373 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 374 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 343 tests / 0 failed, 373 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 343 tests / 0 failed, 374 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -15,7 +15,7 @@ only the first two are defects.
 
 The command or subsystem is absent; it either fails at the argument parser or refuses by name.
 
-* **Split index** — read (`link` extension merged with `sharedindex.<hash>`, deletions, replacements, additions) and written (`core.splitIndex`, `splitIndex.maxPercentChange`, `update-index --[no-]split-index`; `s_split_index`, which has git read what rivet wrote and the reverse). A new shared index is written when entries the shared one lacks exceed `splitIndex.maxPercentChange` (0 always, 100 never), and then the other `sharedindex.*` files not newer than `splitIndex.sharedIndexExpire` (`never`, `now`, `N.units.ago`; default 2 weeks) are deleted; reading or writing a split index touches the shared index it stands on, so one in use does not age (`s_split_index_expire`). Not done: git's fatal for an unusable `sharedIndexExpire` (`false`, `all`, a date before the epoch: `Invalid splitindex.sharedindexexpire`, only when a second shared index exists), and `gc`/`update-index --no-split-index` leave shared indexes alone as in git. Found on the way: `rivet config` rewrites existing section headers in lower case (`[splitIndex]` becomes `[splitindex]`) where git keeps them. Index v4 is read and written, and `index.version` (2 to 4) / `feature.manyFiles` pick the version of a new index (`s_index_version`); git's `index.version` warning for an out-of-range value and its fatal for a non-numeric one are not reproduced.
+* **Split index** — read (`link` extension merged with `sharedindex.<hash>`, deletions, replacements, additions) and written (`core.splitIndex`, `splitIndex.maxPercentChange`, `update-index --[no-]split-index`; `s_split_index`, which has git read what rivet wrote and the reverse). A new shared index is written when entries the shared one lacks exceed `splitIndex.maxPercentChange` (0 always, 100 never), and then the other `sharedindex.*` files not newer than `splitIndex.sharedIndexExpire` (`never`, `now`, `N.units.ago`; default 2 weeks) are deleted; reading or writing a split index touches the shared index it stands on, so one in use does not age (`s_split_index_expire`). An unusable `sharedIndexExpire` (`false`, `all`, text git cannot read as a date) is fatal as in git once a write leaves a second shared index: `error: Invalid splitindex.sharedindexexpire: '<v>'`, `fatal: bad config variable … at line N`, exit 128, the new shared index kept and the index file not replaced (`s_split_index_expire_invalid`); the file and line come from the repository's own config, a value set in a global config prints git's command-line wording instead of its file. Not done: `gc`/`update-index --no-split-index` leave shared indexes alone as in git. Found on the way: `rivet config` rewrites existing section headers in lower case (`[splitIndex]` becomes `[splitindex]`) where git keeps them. Index v4 is read and written, and `index.version` (2 to 4) / `feature.manyFiles` pick the version of a new index (`s_index_version`); git's `index.version` warning for an out-of-range value and its fatal for a non-numeric one are not reproduced.
 * **Partial clone** — promisor/partial clones are not implemented: no filtered transfer, no lazy
   fetch of missing objects. `clone --filter=blob:none|tree:<n>|blob:limit=<n>[kmg]` is accepted only
   where git itself ignores the filter (a local path, or a `file://` URL whose repository does not set

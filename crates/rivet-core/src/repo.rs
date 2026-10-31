@@ -1051,26 +1051,38 @@ impl Repository {
             .filter(|n| (0..=100).contains(n))
             .map_or(20, |n| n as usize);
         // `splitIndex.sharedIndexExpire`: how old an unused shared index must be to be deleted
-        // when a new one is written (`never` keeps them all, `now` and `all` delete them all).
+        // when a new one is written (`never` keeps them all, `now` deletes them all). Anything
+        // else must be a date git can read (`false`, `all` and nonsense read as "now", which it
+        // refuses); it dies on one that is not, but only once it
+        // has another shared index to judge.
+        let now = crate::ops::now_seconds();
+        let mut bad_expire: Option<String> = None;
         let expire = match self
             .config_value(bstr::BStr::new(b"splitindex.sharedindexexpire"))
             .ok()
             .flatten()
         {
-            None => Some(crate::ops::now_seconds().saturating_sub(14 * 86_400)),
-            Some(text) => match String::from_utf8_lossy(&text)
-                .trim()
-                .to_ascii_lowercase()
-                .as_str()
-            {
-                "never" | "false" => None,
-                "now" | "all" => Some(i64::MAX),
-                other => Some(
-                    crate::ops::parse_expiry_ago(other)
-                        .unwrap_or(crate::ops::now_seconds().saturating_sub(14 * 86_400)),
-                ),
-            },
+            None => Some(now.saturating_sub(14 * 86_400)),
+            Some(text) => {
+                let text = String::from_utf8_lossy(&text).into_owned();
+                match text.trim().to_ascii_lowercase().as_str() {
+                    "never" => None,
+                    "now" => Some(i64::MAX),
+                    other => match crate::ops::parse_expiry_ago(other) {
+                        Some(cutoff) => Some(cutoff),
+                        None => {
+                            bad_expire = Some(text);
+                            None
+                        }
+                    },
+                }
+            }
         };
+        // git dies while the index is still locked, so the shared index it just wrote stays and
+        // the index file is not replaced: keep the old bytes to put back.
+        let shared_before = bad_expire
+            .as_ref()
+            .map(|_| (self.shared_index_names(), std::fs::read(&path).ok()));
         // A new index file starts at `index.version` (2 to 4), or v4 under `feature.manyFiles`;
         // an existing one keeps the version it has.
         if !path.exists()
@@ -1079,10 +1091,76 @@ impl Repository {
         {
             let mut index = index.clone();
             index.set_version(version);
-            return index.write_split(&path, self.format, split, max_percent, expire);
+            index.write_split(&path, self.format, split, max_percent, expire)?;
+        } else {
+            self.index
+                .write_split(&path, self.format, split, max_percent, expire)?;
         }
-        self.index
-            .write_split(&path, self.format, split, max_percent, expire)
+        if let (Some(text), Some((before, old_index))) = (bad_expire, shared_before) {
+            let after = self.shared_index_names();
+            if after.iter().any(|n| !before.contains(n)) && after.len() > 1 {
+                match old_index {
+                    Some(bytes) => std::fs::write(&path, bytes).map_err(Error::Io)?,
+                    None => std::fs::remove_file(&path).map_err(Error::Io)?,
+                }
+                return Err(self.invalid_shared_index_expire(&text));
+            }
+        }
+        Ok(())
+    }
+
+    /// The `sharedindex.*` files next to the index, leftovers of an interrupted write excluded.
+    fn shared_index_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(&self.git_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.starts_with("sharedindex.") && !n.ends_with(".tmp"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Git's `git_config_get_expiry` failure: an `error:` line, then the die naming the file and
+    /// line of the setting (read from this repository's config; a value set in a global config
+    /// gets no location).
+    fn invalid_shared_index_expire(&self, text: &str) -> Error {
+        eprintln!("error: Invalid splitindex.sharedindexexpire: '{text}'");
+        let config = self.common_dir().join("config");
+        let line = std::fs::read(&config).ok().and_then(|data| {
+            let mut found = None;
+            let mut in_section = false;
+            for (i, raw) in data.split(|b| *b == b'\n').enumerate() {
+                let line = String::from_utf8_lossy(raw);
+                let line = line.trim();
+                if let Some(header) = line.strip_prefix('[') {
+                    let name = header.split([']', ' ', '"']).next().unwrap_or("");
+                    in_section = name.eq_ignore_ascii_case("splitindex");
+                } else if in_section
+                    && line
+                        .split('=')
+                        .next()
+                        .is_some_and(|k| k.trim().eq_ignore_ascii_case("sharedindexexpire"))
+                {
+                    found = Some(i + 1);
+                }
+            }
+            found
+        });
+        let shown = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| config.strip_prefix(cwd).ok().map(|p| p.to_path_buf()))
+            .unwrap_or(config);
+        match line {
+            Some(line) => Error::Message(format!(
+                "bad config variable 'splitindex.sharedindexexpire' in file '{}' at line {line}",
+                shown.display()
+            )),
+            None => Error::Message(
+                "unable to parse 'splitindex.sharedindexexpire' from command-line config".into(),
+            ),
+        }
     }
 
     /// The cone-mode definition when this repository writes a sparse index: `index.sparse`,

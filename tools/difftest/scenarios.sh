@@ -12599,6 +12599,28 @@ s_split_index_expire() {
     echo j >>f3; v add f3; issplit; nshared
 }
 
+# An unusable splitIndex.sharedIndexExpire is fatal, once a write has another shared index to
+# judge, and the index file is then left as it was (the new shared index stays); `never` and `now` are not read as dates, a past date is.
+s_split_index_expire_invalid() {
+    v init -q repo; cd repo
+    for i in 1 2 3 4 5 6; do echo "file $i" >f$i; done
+    v config core.splitIndex true
+    v add f1 f2 f3; issplit; nshared
+    g config splitIndex.maxPercentChange 0
+    # the first write after this already has two shared indexes to judge
+    g config splitIndex.sharedIndexExpire false
+    echo a >>f1; v add f1; issplit; nshared
+    # two of them now: each unusable value dies after the index is written
+    for bad in false all bogus 3.days.ago; do
+        g config splitIndex.sharedIndexExpire "$bad"
+        echo "$bad" >>f2; v add f2; issplit; nshared
+    done
+    vg ls-files -s; vg status --short
+    # a usable one works again and deletes the old ones
+    g config splitIndex.sharedIndexExpire now
+    echo b >>f3; v add f3; nshared
+}
+
 # update-index: the options that change what the index holds. Real git reads every index rivet
 # writes (vg) and rivet reads the indexes real git writes (g setup, then v).
 s_update_index() {
