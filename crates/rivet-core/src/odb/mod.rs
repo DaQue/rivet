@@ -723,25 +723,141 @@ impl Odb {
             }
         }
 
-        // Match `starts_with` against the union of loose and packed ids. `starts_with` already
-        // treats the zero-fill as unspecified, so this is the whole prefix primitive. De-duplicate
-        // by id so an object present in both stores is counted once.
-        let mut candidates = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for id in self.oids_with_alternates()? {
-            if id.starts_with(prefix) && seen.insert(id) {
-                candidates.push(id);
-            }
-        }
+        // The zero fill is unspecified: the digits that count end at the last non-zero byte. (A
+        // prefix whose own last byte is `00` cannot be told apart from fill here;
+        // `Odb::resolve_hex_prefix` takes the digits themselves.)
+        let bytes = prefix.as_bytes();
+        let span = bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+        let hex: String = bytes[..span].iter().map(|b| format!("{b:02x}")).collect();
+        self.resolve_hex_prefix(prefix.format(), bstr::BStr::new(hex.as_bytes()))
+    }
 
+    /// Phase 10 — resolve an abbreviated id given as hex digits of any length.
+    ///
+    /// Unlike [`Odb::resolve_prefix`], the digits are taken exactly: `ab00` is four digits (not
+    /// `ab` followed by fill) and an odd count is allowed. Candidates are found through the loose
+    /// fan-out directory and the fan-out and sorted id tables of the packs, not by listing every
+    /// object.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Error::ObjectNotFound`], [`crate::error::Error::AmbiguousPrefix`], and
+    /// [`crate::error::Error::InvalidHex`] for a non-hex digit.
+    pub fn resolve_hex_prefix(
+        &self,
+        format: crate::hash::ObjectFormat,
+        hex: &bstr::BStr,
+    ) -> Result<ObjectId> {
+        let mut candidates = self.oids_with_hex_prefix(hex)?;
         match candidates.len() {
-            0 => Err(Error::ObjectNotFound { oid: *prefix }),
+            0 => {
+                // The error carries an `ObjectId` prefix, which has whole bytes only.
+                let even = hex.len() - hex.len() % 2;
+                Err(Error::ObjectNotFound {
+                    oid: ObjectId::from_hex_prefix(format, bstr::BStr::new(&hex[..even]))?,
+                })
+            }
             1 => Ok(candidates.pop().unwrap()),
             n => Err(Error::AmbiguousPrefix {
-                prefix: prefix.to_hex(),
+                prefix: hex.to_ascii_lowercase().into(),
                 candidates: n,
             }),
         }
+    }
+
+    /// Phase 10 — every object, here and in the alternates, whose id starts with the hex digits
+    /// `hex` (any case, any count), each once.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Error::InvalidHex`] for a non-hex digit, and the errors of listing a loose
+    /// fan-out directory.
+    pub fn oids_with_hex_prefix(&self, hex: &bstr::BStr) -> Result<Vec<ObjectId>> {
+        let wanted = hex.to_ascii_lowercase();
+        if wanted.iter().any(|b| !b.is_ascii_hexdigit()) {
+            return Err(Error::InvalidHex {
+                value: hex.to_owned(),
+                reason: "not a hexadecimal digit",
+            });
+        }
+        let digit = |b: u8| (b as char).to_digit(16).unwrap_or(0) as u8;
+        // The prefix as bytes, an odd last digit in the high nibble with a zero low nibble: the
+        // smallest id that can match.
+        let mut low = vec![0u8; self.format().len()];
+        for (at, b) in wanted.iter().enumerate().take(low.len() * 2) {
+            low[at / 2] |= digit(*b) << (if at % 2 == 0 { 4 } else { 0 });
+        }
+        let matches = |id: &ObjectId| {
+            let bytes = id.as_bytes();
+            wanted.iter().enumerate().all(|(at, b)| {
+                let nibble = if at % 2 == 0 {
+                    bytes[at / 2] >> 4
+                } else {
+                    bytes[at / 2] & 0x0f
+                };
+                nibble == digit(*b)
+            })
+        };
+        let mut found: Vec<ObjectId> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        // Loose objects: only the fan-out directories the first digit(s) allow.
+        let dirs: Vec<String> = match wanted.len() {
+            0 => (0..=255u8).map(|b| format!("{b:02x}")).collect(),
+            1 => (0..16u8)
+                .map(|low_digit| format!("{}{low_digit:x}", wanted[0] as char))
+                .collect(),
+            _ => vec![String::from_utf8_lossy(&wanted[..2]).into_owned()],
+        };
+        let objects_dir = self.loose.objects_dir();
+        for dir in dirs {
+            let Ok(entries) = std::fs::read_dir(objects_dir.join(&dir)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let Some(rest) = name.to_str() else {
+                    continue;
+                };
+                if let Ok(id) =
+                    ObjectId::from_hex(self.format(), format!("{dir}{rest}").as_str().into())
+                    && matches(&id)
+                    && seen.insert(id)
+                {
+                    found.push(id);
+                }
+            }
+        }
+        // Packs: binary search of the sorted id table for the first id at or above the prefix,
+        // then the run that matches.
+        for pack in &self.packs {
+            let owned = pack.index();
+            let index = owned.as_index();
+            let (mut lo, mut hi) = (0usize, index.len());
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                match index.entry(mid) {
+                    Some(entry) if entry.oid.as_bytes() < &low[..] => lo = mid + 1,
+                    _ => hi = mid,
+                }
+            }
+            while let Some(entry) = index.entry(lo) {
+                if !matches(&entry.oid) {
+                    break;
+                }
+                if seen.insert(entry.oid) {
+                    found.push(entry.oid);
+                }
+                lo += 1;
+            }
+        }
+        for alt in &self.alternates {
+            for id in alt.oids_with_hex_prefix(hex)? {
+                if seen.insert(id) {
+                    found.push(id);
+                }
+            }
+        }
+        Ok(found)
     }
 
     /// Phase 10 — every object id in the database, loose and packed.
@@ -1201,6 +1317,78 @@ mod tests {
         fs::create_dir_all(&objects_dir).expect("create objects/");
         let odb = Odb::open_objects_dir(&objects_dir, ObjectFormat::Sha1).expect("open");
         (tmp, odb)
+    }
+
+    /// A prefix whose last byte is `00` is four digits, not two digits of fill, and an odd count
+    /// of digits counts all of them; both are found through the fan-out, loose and packed.
+    #[test]
+    fn hex_prefix_keeps_a_trailing_00_and_an_odd_digit() {
+        let (_tmp, odb) = fresh_objects_odb();
+        // Blobs until one has an id starting `xx00`, and another that shares only its first byte.
+        let (mut zero, mut sibling): (Option<ObjectId>, Option<ObjectId>) = (None, None);
+        let mut n = 0u32;
+        while sibling.is_none() {
+            n += 1;
+            let oid = odb
+                .loose()
+                .write_raw(ObjectKind::Blob, format!("blob {n}\n").as_bytes())
+                .expect("write");
+            let hex = oid.to_hex().to_string();
+            match zero {
+                None if &hex[2..4] == "00" => zero = Some(oid),
+                Some(first) if hex.as_bytes()[..2] == first.to_hex()[..2] && &hex[2..4] != "00" => {
+                    sibling = Some(oid);
+                }
+                _ => {}
+            }
+        }
+        let (zero, sibling) = (zero.unwrap(), sibling.unwrap());
+        let hex = zero.to_hex().to_string();
+        let digits = |text: &str| bstr::BStr::new(text.as_bytes().to_vec().leak() as &[u8]);
+
+        // Exactly four digits, five, and the whole id all name `zero`.
+        for width in [4, 5, 9, 40] {
+            let found = odb.resolve_hex_prefix(ObjectFormat::Sha1, digits(&hex[..width]));
+            assert_eq!(found.unwrap(), zero, "{width} digits");
+        }
+        assert_eq!(
+            odb.resolve_hex_prefix(ObjectFormat::Sha1, digits(&hex[..4].to_uppercase()))
+                .unwrap(),
+            zero
+        );
+        // The first byte alone is shared with `sibling`.
+        assert!(matches!(
+            odb.resolve_hex_prefix(ObjectFormat::Sha1, digits(&hex[..2])),
+            Err(Error::AmbiguousPrefix {
+                candidates: 2..,
+                ..
+            })
+        ));
+        assert!(
+            odb.oids_with_hex_prefix(digits(&hex[..1]))
+                .unwrap()
+                .contains(&sibling)
+        );
+        // A digit that cannot match, and a non-digit.
+        let miss = format!(
+            "{}{:x}",
+            &hex[..4],
+            (hex.as_bytes()[4] as char).to_digit(16).unwrap() ^ 1
+        );
+        assert!(matches!(
+            odb.resolve_hex_prefix(ObjectFormat::Sha1, digits(&miss)),
+            Err(Error::ObjectNotFound { .. })
+        ));
+        assert!(matches!(
+            odb.oids_with_hex_prefix(digits("zz")),
+            Err(Error::InvalidHex { .. })
+        ));
+        // The zero-filled form cannot say "four digits": it reads as the first byte only.
+        let filled = ObjectId::from_hex_prefix(ObjectFormat::Sha1, digits(&hex[..4])).unwrap();
+        assert!(matches!(
+            odb.resolve_prefix(&filled),
+            Err(Error::AmbiguousPrefix { .. })
+        ));
     }
 
     /// The id `write` returns is the one git computes for the canonical header + body —

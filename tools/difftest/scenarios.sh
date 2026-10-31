@@ -7203,6 +7203,48 @@ s_checkout_needs_merge() {
     v branch
 }
 
+# Abbreviated ids: a prefix whose last two digits are `00` is not fill, an odd count of digits
+# counts every digit, and the ids in an `index` line of a patch are resolved the same way.
+s_abbrev_zero() {
+    v init -q repo; cd repo
+    tick; seq 1 12 >base; v add base; v commit -q -m base
+    # blobs until one has an id like xx00..., and another that shares only its first byte
+    a=; b=; n=0
+    while [ -z "$b" ]; do
+        n=$((n + 1))
+        o=$( (echo "n$n"; seq 2 12) | g hash-object -w --stdin)
+        if [ -z "$a" ]; then
+            [ "${o:2:2}" = 00 ] && { a=$o; an=$n; }
+        elif [ "${o:0:2}" = "${a:0:2}" ] && [ "${o:2:2}" != 00 ]; then
+            b=$o
+        fi
+    done
+    echo "found after $n blobs"
+    echo "${a:0:4} ${a:0:5} ${a:0:7} ${b:0:4}" >/dev/null
+    for p in "${a:0:4}" "${a:0:5}" "${a:0:6}" "${a:0:7}" "${a:0:40}" "${b:0:4}" "${b:0:5}" "${a:0:2}" "${a:0:3}" "$(echo ${a:0:4} | tr a-f A-F)"; do
+        v rev-parse "$p"
+        v rev-parse --verify "$p^{blob}"
+    done
+    v rev-parse "${a:0:4}x"
+    # an index line with the object's abbreviation resolves to the blob it names
+    (echo "n$an"; seq 2 12; echo extra) >f; v add f; tick; v commit -q -m f
+    for width in 4 5 7; do
+        printf 'diff --git a/f b/f\nindex %s..%s 100644\n--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n-n%s\n+one\n 2\n 3\n' "${a:0:$width}" "1111111" "$an" >w$width.patch
+        v apply --3way w$width.patch
+        v status --short
+        v diff
+        g reset -q --hard
+    done
+    # the same when the objects are packed (the sorted id table instead of the fan-out directory)
+    g repack -a -d -k -q
+    for p in "${a:0:4}" "${a:0:5}" "${a:0:2}" "${b:0:4}" "${b:0:7}" "${a:0:40}"; do
+        v rev-parse "$p"
+    done
+    # too short to be an abbreviation
+    printf 'diff --git a/f b/f\nindex %s..1111111 100644\n--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n-n%s\n+one\n 2\n 3\n' "${a:0:3}" "$an" >w3.patch
+    v apply --3way w3.patch
+}
+
 s_worktree_lock_remove() {
     v init -q repo; cd repo
     tick; printf 'a\nb\n' >f; v add f; v commit -q -m one

@@ -455,8 +455,8 @@ impl RevSpec {
             RevSpec::Head | RevSpec::DetachedHead => refs.head_commit(odb)?,
             RevSpec::Oid(oid) | RevSpec::Resolved(oid) => *oid,
             RevSpec::Abbrev(prefix) => {
-                let abbreviated = ObjectId::from_hex_prefix(format, BStr::new(prefix))?;
-                odb.resolve_prefix(&abbreviated)?
+                // The digits go in as written: a trailing `00` is two digits, not fill.
+                odb.resolve_hex_prefix(format, BStr::new(prefix))?
             }
             RevSpec::Ref(name) => refs.resolve_oid(name)?,
         };

@@ -1262,15 +1262,10 @@ fn three_way_merge(
         let Some(hex) = abbreviation else {
             return Err(lacks());
         };
-        if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if hex.len() < 4 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(lacks());
         }
-        // `from_hex_prefix` decodes whole bytes: an odd abbreviation loses its last digit.
-        let even = hex.len() & !1;
-        let Ok(prefix) = ObjectId::from_hex_prefix(format, BStr::new(&hex[..even])) else {
-            return Err(lacks());
-        };
-        let Ok(oid) = odb.resolve_prefix(&prefix) else {
+        let Ok(oid) = odb.resolve_hex_prefix(format, BStr::new(hex.as_bytes())) else {
             return Err(lacks());
         };
         let Ok(object) = odb.read_typed(&oid, ObjectKind::Blob) else {
@@ -1598,13 +1593,12 @@ pub fn build_ancestor(
             ]
         };
         let hex = patch.old_oid.as_deref().ok_or_else(lacking)?;
-        if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if hex.len() < 4 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(lacking());
         }
-        let even = hex.len() & !1;
-        let prefix =
-            ObjectId::from_hex_prefix(format, BStr::new(&hex[..even])).map_err(|_| lacking())?;
-        let oid = odb.resolve_prefix(&prefix).map_err(|_| lacking())?;
+        let oid = odb
+            .resolve_hex_prefix(format, BStr::new(hex.as_bytes()))
+            .map_err(|_| lacking())?;
         let object = odb
             .read_typed(&oid, ObjectKind::Blob)
             .map_err(|_| lacking())?;

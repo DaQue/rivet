@@ -186,14 +186,7 @@ fn resolve_base(format: ObjectFormat, refs: &RefStore, odb: &Odb, base: &BStr) -
 /// An `ObjectId` prefix holds whole bytes zero-filled, so `ab00` would read as `ab` and an odd
 /// length could not be expressed at all; the hex text of every id is compared instead.
 fn short_candidates(odb: &Odb, base: &BStr) -> Result<Vec<ObjectId>> {
-    let wanted = base.to_ascii_lowercase();
-    let mut found = Vec::new();
-    for id in odb.oids_with_alternates()? {
-        if id.to_hex().starts_with(&wanted) {
-            found.push(id);
-        }
-    }
-    Ok(found)
+    odb.oids_with_hex_prefix(base)
 }
 
 /// Resolves an abbreviated id of at least four hex digits, or reports why it names no single object.

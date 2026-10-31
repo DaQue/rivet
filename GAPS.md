@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 370 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 371 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 341 tests / 0 failed, 370 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 342 tests / 0 failed, 371 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -264,7 +264,7 @@ deleted in the commit that fixes it.
 
 * **A2 (remainder)** — the recursive merge base is built for criss-cross histories, including when merging the bases conflicts in file content (the virtual base keeps the markers: nine characters wide at the first level, `Temporary merge branch 1/2`, git's `diff3` base names; `s_merge_criss_cross_markers`) and when the conflict is modify/delete or binary (the virtual base keeps the base's version, or the empty file for an add/add of binaries; `s_merge_criss_cross_nontext`). A base merge whose conflict is of another kind (distinct types / mode, submodule, directory/file, rename) is still refused by name (`fatal: merge with more than one merge base (...) is not implemented`, exit 128; `merge_criss_cross_refusal.rs`). `merge.conflictStyle` and git's marker labels are honoured by `merge`, `pull`, `cherry-pick`, `revert`, `rebase`, `stash apply/pop`, `checkout -m`/`switch -m` and `rebase --autostash` (`s_conflict_style_ops`: `HEAD`/`parent of <id> (<subject>)`, `Updated upstream`/`Stash base`/`Stashed changes`, the branch left as the `checkout -m` base); not covered: `merge-file`. The plain `merge` style now refines a conflict to the lines the sides really disagree on and joins conflicts at most three common lines apart, as git's zealous level does (`s_merge_conflict_gap`); `diff3`/`zdiff3` stay unjoined. A conflicting binary merge prints git's `warning: Cannot merge binary files: <path> (HEAD vs. <label>)`. Markers nested more than one virtual level deep (width `7 + 2 * depth`) are written from git's rule for the first level and not verified deeper.
 * **A3 (remainder)** — `text`/`eol`/`crlf`/`binary`, `core.autocrlf`, `core.eol`, `core.safecrlf` and the attribute stack (`convert.rs`) apply on `add`/`status`/`checkout`, on the marked-up files a conflicted merge writes, on `stash` (tracked changes, untracked files, and their restore), on `commit -a`, and on the work tree side of `diff` and `blame` (`s_attributes_eol`, `s_attributes_eol_paths`); `ident`, `working-tree-encoding` and a configured `filter=` driver are refused by name on all of those paths (`convert_refusals.rs`). A `.gitattributes` that is not in the work tree (a sparse checkout) is read from the index (`s_attributes_sparse`). Not done: git reads attributes index-first when it writes files (`checkout` direction) and work-tree-first when it hashes them, while rivet always prefers the work tree copy; a bare repository has no attribute lookup at all (`check-attr --cached`); `grep` reads raw files like git, but `diff --no-index`, `apply` and `am` on the work tree do not convert; `commit -a` with unmerged paths refuses where git stages the conflicted files as they are.
-* **A4 (remainder)** — short ids are matched by scanning `Odb::oids()` (no fanout use); `Odb::resolve_prefix` still reads a trailing `00` byte as fill (used by `revwalk.rs` `RevSpec::Abbrev`).
+* **A4** — short ids (`rev-parse`, `RevSpec::Abbrev`, the `index` lines of `apply --3way` / `am --3way`) are found through the loose fan-out directory and the packs' sorted id tables (`Odb::oids_with_hex_prefix`, `Odb::resolve_hex_prefix`, new and additive), digit by digit: a trailing `00` and an odd count of digits count (`s_abbrev_zero`, Rust test `hex_prefix_keeps_a_trailing_00_and_an_odd_digit`). `Odb::resolve_prefix` keeps its zero-filled `ObjectId` argument, so a prefix whose own last byte is `00` still reads as shorter there; nothing in the tree passes one any more. The fan-out also does not use a multi-pack-index or commit-graph.
 
 ## Flaky scenarios (fixed)
 
