@@ -2270,3 +2270,10 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Not probed: `checkout -f -B`, `checkout -b` over a cherry-pick/revert in progress.
 * Proof: scenario `s_checkout_unmerged_noop` (fails on the parent: the `M` lines and the kept merge state).
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 343 passed / 0 failed / 0 ignored; `scenarios.sh` 375 PASS, `failures: 0`.
+
+### Unit 28 — ident cleanup and reflog whitespace
+* GAPS.md ("Found on the way"): `commit` kept the trailing `"` of `Jo "Q"` and wrote a tab inside a reflog message. git (probed): `strbuf_addstr_without_crud` drops leading and trailing control characters, space and `, : ; < > " \ '` (not `.`) from name and email, and `<`, `>`, newline inside; `copy_reflog_msg` makes a run of whitespace one space and trims the end.
+* `ops::strip_ident_crud` (private) is applied in `resolve_identity`; `Repository::reflog_message` collapses whitespace.
+* Chosen over the other "found on the way" item (`rivet config` lower-casing section headers) because that one needs a new field on the public `ConfigEntry`, which the API freeze forbids; still open.
+* Proof: scenario `s_ident_crud_reflog` (fails on the parent).
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 343 passed / 0 failed / 0 ignored; `scenarios.sh` 376 PASS, `failures: 0`.

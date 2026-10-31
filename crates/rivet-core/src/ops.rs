@@ -110,6 +110,30 @@ pub enum IdentityKind {
     Committer,
 }
 
+/// Git's `strbuf_addstr_without_crud`: leading and trailing crud (control characters, space and
+/// `, : ; < > " \ '`) are dropped, and newlines and angle brackets inside are removed. A value
+/// that is nothing but crud is kept as it was (git would refuse it).
+fn strip_ident_crud(value: BString) -> BString {
+    fn crud(c: u8) -> bool {
+        c <= 32 || matches!(c, b',' | b':' | b';' | b'<' | b'>' | b'"' | b'\\' | b'\'')
+    }
+    let bytes = value.as_slice();
+    let Some(start) = bytes.iter().position(|c| !crud(*c)) else {
+        return value;
+    };
+    let end = bytes
+        .iter()
+        .rposition(|c| !crud(*c))
+        .map_or(start, |i| i + 1);
+    BString::from(
+        bytes[start..end]
+            .iter()
+            .copied()
+            .filter(|c| !matches!(c, b'\n' | b'<' | b'>'))
+            .collect::<Vec<u8>>(),
+    )
+}
+
 /// Resolve an identity from the environment, then the configuration, stamped with
 /// `GIT_*_DATE` if set and the current time otherwise.
 pub fn resolve_identity(local: Option<&Config>, kind: IdentityKind) -> Result<Signature> {
@@ -143,6 +167,8 @@ pub fn resolve_identity(local: Option<&Config>, kind: IdentityKind) -> Result<Si
             "cannot resolve {what} identity: set user.name and user.email"
         )));
     };
+    let name = strip_ident_crud(name);
+    let email = strip_ident_crud(email);
     let date =
         env_bytes(date_var).and_then(|v| crate::object::commit::parse_git_date(BStr::new(&v)));
     Ok(match date {

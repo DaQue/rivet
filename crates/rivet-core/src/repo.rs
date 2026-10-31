@@ -1696,7 +1696,21 @@ impl Repository {
         let mut message = BString::from(operation);
         message.extend_from_slice(b": ");
         message.extend_from_slice(description);
-        message
+        // Git's `copy_reflog_msg`: a run of whitespace is one space, and none trails.
+        let mut out = Vec::with_capacity(message.len());
+        let mut was_space = false;
+        for &byte in message.iter() {
+            let space = byte.is_ascii_whitespace() || byte == 0x0b;
+            if space && was_space {
+                continue;
+            }
+            was_space = space;
+            out.push(if space { b' ' } else { byte });
+        }
+        while out.last() == Some(&b' ') {
+            out.pop();
+        }
+        BString::from(out)
     }
 }
 

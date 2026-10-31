@@ -7203,6 +7203,24 @@ s_checkout_needs_merge() {
     v branch
 }
 
+# Identity cleanup and the reflog message: a name loses the crud at either end (`Jo "Q"` becomes
+# `Jo "Q`), angle brackets and newlines inside, and a run of whitespace in a commit subject is one
+# space in the reflog (git's strbuf_addstr_without_crud and copy_reflog_msg).
+s_ident_crud_reflog() {
+    v init -q repo; cd repo
+    echo a >f; v add f
+    tick
+    GIT_AUTHOR_NAME='Jo "Q"' GIT_AUTHOR_EMAIL=' a@b. ' GIT_COMMITTER_NAME=".'Max <M> R',;" GIT_COMMITTER_EMAIL='c@d' \
+        v commit -q -m "$(printf 'sub\t\tject  with   gaps')"
+    v cat-file -p HEAD
+    echo b >f; tick
+    v config user.name '  Sam "X"  '; v config user.email '<s@x>'
+    v commit -q -a -m "$(printf 'tail \t')"
+    v cat-file -p HEAD
+    v reflog
+    cut -f2- .git/logs/HEAD | cat -A
+}
+
 # A checkout that moves nothing still stops at an unresolved index (`HEAD`, the branch already
 # checked out, `--detach`, `-B`), `-b` does not and prints no local changes, and every forced,
 # merging or branch-creating checkout that goes through ends the merge (git's remove_branch_state).
