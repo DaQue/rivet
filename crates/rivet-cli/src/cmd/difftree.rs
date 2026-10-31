@@ -30,6 +30,10 @@ struct Opts {
     name_only: bool,
     name_status: bool,
     stat: bool,
+    numstat: bool,
+    raw: bool,
+    full_index: bool,
+    stdin: bool,
     patch: bool,
     nul: bool,
     abbrev: Option<Option<usize>>,
@@ -250,12 +254,15 @@ fn tree_of(named: &Named) -> Result<ObjectId> {
 /// # Caveats
 ///
 /// * **Raw, `--name-only`, `--name-status`, `--stat` and `-p` output are implemented**, with
-///   `-r`, `-t`, `--root`, `--no-commit-id`, `-m`, `-s`, `-z` and `--abbrev[=<n>]`. `--stat` and
-///   `-p` are always recursive, as in Git, and `--name-only` wins over `--name-status` wins over
-///   the patch formats.
+///   `-r`, `-t`, `--root`, `--no-commit-id`, `-m`, `-s`, `-z` and `--abbrev[=<n>]`. `--stat`,
+///   `--numstat` and `-p` are always recursive, as in Git; `--raw`, `--numstat`, `--stat` and `-p`
+///   (also as `--patch-with-raw` / `--patch-with-stat`) combine in that order with a blank line
+///   before the patch, and `--name-only` wins over `--name-status` wins over the patch formats.
+///   `--full-index` widens the `index` line of a patch. `--stdin` reads one commit (or
+///   `<commit> <parent>...`, or `<tree> <tree>`) per line after the command-line ones and echoes
+///   a line that names nothing.
 /// * **`--first-parent` changes nothing**: Git 2.x prints no merge diffs for it without `-m`.
-/// * **Not implemented, refused by name:** `-c`/`--cc`, `--stdin`, rename and copy detection,
-///   `--numstat`, `--patch-with-raw`, `--full-index`.
+/// * **Not implemented, refused by name:** `-c`/`--cc` and rename and copy detection.
 pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
     let repository = super::open(global)?;
     let format = repository.format();
@@ -289,20 +296,22 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
             "--name-only" => opts.name_only = true,
             "--name-status" => opts.name_status = true,
             "--stat" => opts.stat = true,
+            "--numstat" => opts.numstat = true,
+            "--patch-with-raw" => {
+                opts.patch = true;
+                opts.raw = true;
+            }
+            "--patch-with-stat" => {
+                opts.patch = true;
+                opts.stat = true;
+            }
+            "--full-index" => opts.full_index = true,
+            "--stdin" => opts.stdin = true,
             "-p" | "-u" | "--patch" => opts.patch = true,
             "-z" => opts.nul = true,
-            "--raw" => {}
+            "--raw" => opts.raw = true,
             "--abbrev" => opts.abbrev = Some(None),
-            "-c"
-            | "--cc"
-            | "--stdin"
-            | "-M"
-            | "-C"
-            | "--numstat"
-            | "--patch-with-raw"
-            | "--patch-with-stat"
-            | "--full-index"
-            | "--find-copies-harder" => {
+            "-c" | "--cc" | "-M" | "-C" | "--find-copies-harder" => {
                 anyhow::bail!("diff-tree: {word} is not implemented");
             }
             other if other.starts_with("--abbrev=") => {
@@ -318,7 +327,7 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
             other => positional.push(other),
         }
     }
-    if positional.is_empty() {
+    if positional.is_empty() && !opts.stdin {
         eprint!("{USAGE}");
         return Ok(129);
     }
@@ -352,27 +361,32 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
         );
     }
 
-    // (header id, old tree, new tree) per comparison.
-    let mut jobs: Vec<(Option<ObjectId>, Option<ObjectId>, ObjectId)> = Vec::new();
+    let commit_jobs = |oid: &ObjectId, tree: &ObjectId, parents: &[ObjectId]| -> Result<Vec<Job>> {
+        let mut jobs: Vec<Job> = Vec::new();
+        let header = Some(oid.to_string().into_bytes());
+        if parents.is_empty() {
+            if opts.root {
+                jobs.push((header, None, *tree));
+            }
+        } else if parents.len() == 1 || opts.merges {
+            for parent in parents {
+                let parent_tree = match name(&repository, &parent.to_string())? {
+                    Named::Commit(_, parent_tree, _) => parent_tree,
+                    _ => continue,
+                };
+                jobs.push((header.clone(), Some(parent_tree), *tree));
+            }
+        }
+        Ok(jobs)
+    };
+
+    // (header, old tree, new tree) per comparison.
+    let mut jobs: Vec<Job> = Vec::new();
     if named.len() == 2 {
         jobs.push((None, Some(tree_of(&named[0])?), tree_of(&named[1])?));
-    } else {
-        match &named[0] {
-            Named::Commit(oid, tree, parents) => {
-                if parents.is_empty() {
-                    if opts.root {
-                        jobs.push((Some(*oid), None, *tree));
-                    }
-                } else if parents.len() == 1 || opts.merges {
-                    for parent in parents {
-                        let parent_tree = match name(&repository, &parent.to_string())? {
-                            Named::Commit(_, parent_tree, _) => parent_tree,
-                            _ => continue,
-                        };
-                        jobs.push((Some(*oid), Some(parent_tree), *tree));
-                    }
-                }
-            }
+    } else if let Some(first) = named.first() {
+        match first {
+            Named::Commit(oid, tree, parents) => jobs = commit_jobs(oid, tree, parents)?,
             Named::Tree(oid) => eprintln!("error: object {oid} is a tree, not a commit"),
             Named::Other(oid, kind) => eprintln!("error: object {oid} is a {kind}, not a commit"),
         }
@@ -397,107 +411,272 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
         }
     };
     let end = if opts.nul { b'\0' } else { b'\n' };
-    let mut out: Vec<u8> = Vec::new();
-    let text_mode = opts.patch || opts.stat;
-    for (header, old, new) in jobs {
-        let mut body: Vec<u8> = Vec::new();
-        let any;
-        if text_mode && !opts.name_only && !opts.name_status {
-            let empty = rivet_core::object::hash_object(format, ObjectKind::Tree, b"")?.0;
-            let mut options = rivet_core::DiffOptions::new();
-            options.detect_binary = true;
-            let mut diff = rivet_core::tree_diff(
-                format,
-                old.unwrap_or(empty),
-                new,
-                repository.odb(),
-                &options,
-            )?;
-            if !specs.is_empty() {
-                let keep: Vec<bool> = diff
+    let named_only = opts.name_only || opts.name_status;
+    let text_mode = (opts.patch || opts.stat || opts.numstat) && !named_only;
+    let want_raw = !text_mode || opts.raw;
+    let render = |jobs: Vec<Job>| -> Result<Vec<u8>> {
+        let mut out: Vec<u8> = Vec::new();
+        for (header, old, new) in jobs {
+            let mut body: Vec<u8> = Vec::new();
+            let mut any = false;
+            if want_raw {
+                let mut walker = Walker {
+                    repository: &repository,
+                    recursive: opts.recursive || text_mode,
+                    show_trees: opts.show_trees,
+                    specs: &specs,
+                    out: Vec::new(),
+                };
+                walker.walk(old, Some(new), BStr::new(b""))?;
+                any = !walker.out.is_empty();
+                for rec in walker.out.iter().filter(|_| !opts.silent) {
+                    let path = if opts.nul {
+                        rec.path.to_vec()
+                    } else {
+                        rivet_core::ops::quote_path(rec.path.as_bstr(), false).to_vec()
+                    };
+                    if opts.name_only {
+                        body.extend_from_slice(&path);
+                    } else if opts.name_status {
+                        body.push(rec.status);
+                        body.push(if opts.nul { b'\0' } else { b'\t' });
+                        body.extend_from_slice(&path);
+                    } else {
+                        let mode = |mode: Option<EntryMode>| mode.map_or(0, EntryMode::to_u32);
+                        body.extend_from_slice(
+                            format!(
+                                ":{:06o} {:06o} {} {} {}",
+                                mode(rec.omode),
+                                mode(rec.nmode),
+                                zero_id(&rec.ooid),
+                                zero_id(&rec.noid),
+                                rec.status as char,
+                            )
+                            .as_bytes(),
+                        );
+                        body.push(if opts.nul { b'\0' } else { b'\t' });
+                        body.extend_from_slice(&path);
+                    }
+                    body.push(end);
+                }
+            }
+            if text_mode {
+                let empty = rivet_core::object::hash_object(format, ObjectKind::Tree, b"")?.0;
+                let mut options = rivet_core::DiffOptions::new();
+                options.detect_binary = true;
+                let mut diff = rivet_core::tree_diff(
+                    format,
+                    old.unwrap_or(empty),
+                    new,
+                    repository.odb(),
+                    &options,
+                )?;
+                if !specs.is_empty() {
+                    let keep: Vec<bool> = diff
+                        .files
+                        .iter()
+                        .map(|file| {
+                            specs.iter().any(|spec| {
+                                rivet_core::ops::pathspec_matches(file.path(), spec.as_bstr())
+                            })
+                        })
+                        .collect();
+                    let mut at = 0;
+                    diff.files.retain(|_| {
+                        at += 1;
+                        keep[at - 1]
+                    });
+                    let mut at = 0;
+                    diff.stats.retain(|_| {
+                        at += 1;
+                        keep[at - 1]
+                    });
+                }
+                any = !diff.is_empty();
+                if any && !opts.silent {
+                    if opts.numstat {
+                        for stat in &diff.stats {
+                            if stat.is_binary {
+                                body.extend_from_slice(b"-\t-\t");
+                            } else {
+                                body.extend_from_slice(
+                                    format!("{}\t{}\t", stat.added, stat.deleted).as_bytes(),
+                                );
+                            }
+                            if opts.nul {
+                                body.extend_from_slice(&stat.path);
+                            } else {
+                                body.extend_from_slice(&rivet_core::ops::quote_path(
+                                    stat.path.as_bstr(),
+                                    false,
+                                ));
+                            }
+                            body.push(end);
+                        }
+                    }
+                    if opts.stat {
+                        rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut body)?;
+                    }
+                    if opts.patch {
+                        // The blank line between the other formats and the patch ends in NUL under -z.
+                        if !body.is_empty() {
+                            body.push(end);
+                        }
+                        let mut patch = Vec::new();
+                        rivet_core::format_unified(&diff, format, &mut patch)?;
+                        if opts.full_index {
+                            patch = widen_index_lines(&patch, &diff, format);
+                        }
+                        body.extend_from_slice(&patch);
+                    }
+                }
+            }
+            if !any {
+                continue;
+            }
+            if let Some(id) = header
+                && !opts.no_commit_id
+            {
+                out.extend_from_slice(&id);
+                out.push(end);
+            }
+            out.extend_from_slice(&body);
+        }
+        Ok(out)
+    };
+    write_stdout(&render(jobs)?)?;
+
+    if opts.stdin {
+        use std::io::Read as _;
+        let mut input = Vec::new();
+        std::io::stdin().read_to_end(&mut input)?;
+        let mut lines: Vec<&[u8]> = input.split(|b| *b == b'\n').collect();
+        // What follows the last newline is a line git does not act on (it echoes it if it does not
+        // start with an id).
+        let unterminated = lines.pop().unwrap_or_default();
+        if !unterminated.is_empty() {
+            let hex = format.hex_len();
+            let starts_with_id = unterminated.len() >= hex
+                && ObjectId::from_hex(format, BStr::new(&unterminated[..hex])).is_ok();
+            if !starts_with_id {
+                lines.push(unterminated);
+            }
+        }
+        let last = lines.len().saturating_sub(1);
+        for (at, line) in lines.into_iter().enumerate() {
+            let tail = at == last && !unterminated.is_empty() && line == unterminated;
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let mut ids: Vec<ObjectId> = Vec::new();
+            for word in line.split(|b| *b == b' ') {
+                match ObjectId::from_hex(format, BStr::new(word)) {
+                    Ok(id) => ids.push(id),
+                    Err(_) => break,
+                }
+            }
+            let echo = || write_stdout(&[line, if tail { b"" } else { b"\n" }].concat());
+            if ids.is_empty() {
+                echo()?;
+                continue;
+            }
+            let Ok(object) = repository.odb().read(&ids[0]) else {
+                continue;
+            };
+            let mut jobs: Vec<Job> = Vec::new();
+            match object.kind() {
+                ObjectKind::Commit => {
+                    let commit = Commit::parse(format, object.data())?;
+                    if ids.len() == 1 {
+                        let parents = repository.odb().visible_parents(&ids[0], &commit);
+                        jobs = commit_jobs(&ids[0], &commit.tree, &parents)?;
+                    } else if ids.len() == 2 || opts.merges {
+                        for parent in &ids[1..] {
+                            let parent_tree = tree_of(&name(&repository, &parent.to_string())?)?;
+                            jobs.push((
+                                Some(ids[0].to_string().into_bytes()),
+                                Some(parent_tree),
+                                commit.tree,
+                            ));
+                        }
+                    }
+                }
+                ObjectKind::Tree => {
+                    if ids.len() != 2 {
+                        eprintln!("error: Need exactly two trees, separated by a space");
+                        continue;
+                    }
+                    if repository
+                        .odb()
+                        .read_typed(&ids[1], ObjectKind::Tree)
+                        .is_err()
+                    {
+                        eprintln!("error: Object {} not a tree", ids[1]);
+                        continue;
+                    }
+                    let second = ids[1];
+                    jobs.push((
+                        Some(format!("{} {}", ids[0], ids[1]).into_bytes()),
+                        Some(ids[0]),
+                        second,
+                    ));
+                }
+                other => {
+                    eprintln!(
+                        "error: Object {} is a {}, not a commit or tree",
+                        ids[0],
+                        other.as_str()
+                    );
+                    continue;
+                }
+            }
+            write_stdout(&render(jobs)?)?;
+        }
+    }
+    Ok(0)
+}
+
+/// One comparison: the header line (a commit id, or two tree ids), the old tree and the new tree.
+type Job = (Option<Vec<u8>>, Option<ObjectId>, ObjectId);
+
+/// `--full-index`: every `index <old>..<new>` line of `patch` with the ids spelled out in full.
+fn widen_index_lines(
+    patch: &[u8],
+    diff: &rivet_core::TreeDiff,
+    format: rivet_core::ObjectFormat,
+) -> Vec<u8> {
+    let zeros = "0".repeat(format.hex_len());
+    let full = |oid: &Option<ObjectId>| match oid {
+        Some(oid) => oid.to_string(),
+        None => zeros.clone(),
+    };
+    let matches = |oid: &Option<ObjectId>, short: &str| match oid {
+        Some(oid) => oid.to_string().starts_with(short),
+        None => short.bytes().all(|b| b == b'0'),
+    };
+    let mut out = Vec::with_capacity(patch.len());
+    for line in patch.split_inclusive(|b| *b == b'\n') {
+        if let Some(rest) = line.strip_prefix(b"index ")
+            && let Ok(rest) = std::str::from_utf8(rest)
+        {
+            let cut = rest.find([' ', '\n']).unwrap_or(rest.len());
+            if let Some((old, new)) = rest[..cut].split_once("..")
+                && let Some(file) = diff
                     .files
                     .iter()
-                    .map(|file| {
-                        specs.iter().any(|spec| {
-                            rivet_core::ops::pathspec_matches(file.path(), spec.as_bstr())
-                        })
-                    })
-                    .collect();
-                let mut at = 0;
-                diff.files.retain(|_| {
-                    at += 1;
-                    keep[at - 1]
-                });
-                let mut at = 0;
-                diff.stats.retain(|_| {
-                    at += 1;
-                    keep[at - 1]
-                });
-            }
-            any = !diff.is_empty();
-            if any && !opts.silent {
-                if opts.stat {
-                    rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut body)?;
-                }
-                if opts.stat && opts.patch {
-                    body.push(b'\n');
-                }
-                if opts.patch {
-                    rivet_core::format_unified(&diff, format, &mut body)?;
-                }
-            }
-        } else {
-            let mut walker = Walker {
-                repository: &repository,
-                recursive: opts.recursive,
-                show_trees: opts.show_trees,
-                specs: &specs,
-                out: Vec::new(),
-            };
-            walker.walk(old, Some(new), BStr::new(b""))?;
-            any = !walker.out.is_empty();
-            for rec in walker.out.iter().filter(|_| !opts.silent) {
-                let path = if opts.nul {
-                    rec.path.to_vec()
-                } else {
-                    rivet_core::ops::quote_path(rec.path.as_bstr(), false).to_vec()
-                };
-                if opts.name_only {
-                    body.extend_from_slice(&path);
-                } else if opts.name_status {
-                    body.push(rec.status);
-                    body.push(if opts.nul { b'\0' } else { b'\t' });
-                    body.extend_from_slice(&path);
-                } else {
-                    let mode = |mode: Option<EntryMode>| mode.map_or(0, EntryMode::to_u32);
-                    body.extend_from_slice(
-                        format!(
-                            ":{:06o} {:06o} {} {} {}",
-                            mode(rec.omode),
-                            mode(rec.nmode),
-                            zero_id(&rec.ooid),
-                            zero_id(&rec.noid),
-                            rec.status as char,
-                        )
-                        .as_bytes(),
-                    );
-                    body.push(if opts.nul { b'\0' } else { b'\t' });
-                    body.extend_from_slice(&path);
-                }
-                body.push(end);
+                    .find(|file| matches(&file.old_oid, old) && matches(&file.new_oid, new))
+            {
+                out.extend_from_slice(
+                    format!(
+                        "index {}..{}{}",
+                        full(&file.old_oid),
+                        full(&file.new_oid),
+                        &rest[cut..]
+                    )
+                    .as_bytes(),
+                );
+                continue;
             }
         }
-        if !any {
-            continue;
-        }
-        if let Some(id) = header
-            && !opts.no_commit_id
-        {
-            out.extend_from_slice(id.to_string().as_bytes());
-            out.push(end);
-        }
-        out.extend_from_slice(&body);
+        out.extend_from_slice(line);
     }
-    write_stdout(&out)?;
-    Ok(0)
+    out
 }

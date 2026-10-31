@@ -10957,6 +10957,118 @@ s_diff_tree() {
     done
 }
 
+# diff-tree --numstat / --patch-with-raw / --patch-with-stat / --full-index / --stdin against git.
+s_diff_tree_opts() {
+    v init -q repo; cd repo
+    mkdir d e; echo 1 >a; echo 2 >d/b; echo 3 >d/c; echo 4 >e/f
+    ln -s a link
+    v add .; tick; v commit -q -m one
+    ONE=$(g rev-parse HEAD)
+    echo 4 >>a; echo 5 >d/b; v rm -q d/c; echo n >d/n; chmod +x a; printf 'a\0b\n' >bin
+    v rm -q -r e; mkdir e; echo x >e/g; v add -A; tick; v commit -q -m two
+    git_branch=$(g rev-parse --abbrev-ref HEAD)
+    v checkout -q -b side HEAD~1
+    echo s >s; v add s; tick; v commit -q -m side
+    v merge -q --no-edit "$git_branch"
+    TWO=$(g rev-parse HEAD~1); M=$(g rev-parse HEAD)
+    for o in "--numstat" "-r --numstat" "--numstat -z" "-r --numstat -z" "--numstat --stat" "--numstat -p" \
+        "--raw --numstat" "--raw --stat" "--raw -p" "--raw --numstat --stat -p" "--patch-with-raw" "--patch-with-stat" \
+        "-r --patch-with-raw" "-r --patch-with-stat -z" "--full-index" "-p --full-index" "--patch-with-raw --full-index" \
+        "-r --raw --abbrev --full-index" "--numstat -s" "--numstat --name-only" "-p --name-status --full-index" \
+        "-m --numstat" "-m --patch-with-stat" "--numstat --root" "--full-index --stat" "-t --numstat"; do
+        for rev in HEAD HEAD~1 HEAD^2 HEAD~2 "$ONE"; do
+            v diff-tree $o $rev
+        done
+    done
+    v diff-tree --numstat HEAD~2 HEAD
+    v diff-tree --numstat HEAD HEAD~2
+    v diff-tree --numstat HEAD~2 HEAD -- d
+    v diff-tree --patch-with-raw --full-index HEAD~2 HEAD -- d/b bin
+    v diff-tree --root --patch-with-stat --full-index "$ONE"
+    v diff-tree --numstat 'HEAD^{tree}' 'HEAD~2^{tree}'
+    # --stdin
+    T0=$(g rev-parse "$ONE^{tree}"); T1=$(g rev-parse "$TWO^{tree}"); B=$(g rev-parse HEAD:a)
+    vin "$TWO
+$M
+$ONE
+" diff-tree --stdin -r
+    vin "$TWO $ONE
+" diff-tree --stdin -r
+    vin "$M $ONE
+" diff-tree --stdin -r
+    vin "$M $ONE
+" diff-tree --stdin -r -m
+    vin "$M
+" diff-tree --stdin -r
+    vin "$M
+" diff-tree --stdin -r -m
+    vin "$M
+" diff-tree --stdin -r -m --stat
+    vin "$T0 $T1
+" diff-tree --stdin -r
+    vin "$T0
+" diff-tree --stdin -r
+    vin "$T0 $B
+" diff-tree --stdin -r
+    vin "$B
+$TWO
+" diff-tree --stdin -r
+    vin "$TWO
+$ONE
+" diff-tree --stdin --root -r
+    vin "$TWO
+$ONE
+" diff-tree --stdin -r
+    vin "$TWO
+$ONE
+" diff-tree --stdin -r --no-commit-id
+    vin "$TWO
+$ONE
+" diff-tree --stdin -r -s
+    vin "$TWO
+$ONE
+" diff-tree --stdin -r -z
+    vin "$TWO
+$ONE
+" diff-tree --stdin -p
+    vin "$TWO
+$ONE
+" diff-tree --stdin --numstat
+    vin "$TWO
+$ONE
+" diff-tree --stdin --patch-with-stat --full-index
+    vin "$TWO
+$ONE
+" diff-tree --stdin -r --name-status
+    vin "$TWO
+$ONE
+" diff-tree --stdin -r --abbrev
+    vin "$TWO
+" diff-tree --stdin -r -- d
+    vin "$TWO
+" diff-tree --stdin -r $ONE
+    vin "junk
+$TWO
+more junk with spaces
+" diff-tree --stdin -r
+    vin "
+$TWO
+
+" diff-tree --stdin -r
+    vin "1111111111111111111111111111111111111111
+$TWO
+" diff-tree --stdin -r
+    vin "$TWO $TWO extra
+" diff-tree --stdin -r
+    vin "$(printf '%s\r\n' "$TWO")" diff-tree --stdin -r
+    vin "$TWO" diff-tree --stdin -r
+    vin "" diff-tree --stdin -r
+    vin "$TWO
+" diff-tree --stdin
+    vin "$TWO
+" diff-tree -r --stdin HEAD
+}
+
 s_mktree() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c
