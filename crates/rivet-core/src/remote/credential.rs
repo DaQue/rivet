@@ -65,6 +65,8 @@ pub struct Credential {
     pub state: Vec<BString>,
     /// A helper said `continue=1`: it expects another round of authentication.
     pub multistage: bool,
+    /// The `state[]` values of the previous round, which the helper hears on its next `get`.
+    pub(crate) prev_state: Vec<BString>,
 }
 
 /// Undo `%XX` escapes; a `%` not followed by two hex digits stays as it is (as in Git).
@@ -91,6 +93,19 @@ fn percent_decode(text: &str) -> Vec<u8> {
 }
 
 impl Credential {
+    /// Prepare the next round of a multistage exchange, as Git does after a `continue=1` credential
+    /// was refused: the secrets are dropped (the user name and `authtype` stay), the helper's
+    /// `state[]` becomes the input of the next `get`, and `continue` starts over.
+    pub(crate) fn next_round(&mut self, wwwauth: Vec<String>) {
+        self.password = None;
+        self.credential = None;
+        self.oauth_refresh_token = None;
+        self.password_expiry_utc = None;
+        self.prev_state = std::mem::take(&mut self.state);
+        self.multistage = false;
+        self.wwwauth = wwwauth;
+    }
+
     /// Whether nothing more needs to be asked: a user name and password, or an `authtype` with its
     /// `credential`.
     pub fn is_complete(&self) -> bool {
@@ -537,7 +552,7 @@ fn input(credential: &Credential, operation: Operation) -> Vec<u8> {
     if echo_state {
         out.extend_from_slice(b"capability[]=state\n");
     }
-    if operation != Operation::Get && credential.capa_authtype {
+    if operation == Operation::Get || credential.capa_authtype {
         if let Some(authtype) = &credential.authtype {
             out.extend_from_slice(format!("authtype={authtype}\n").as_bytes());
         }
@@ -582,6 +597,13 @@ fn input(credential: &Credential, operation: Operation) -> Vec<u8> {
     if operation != Operation::Store {
         for challenge in &credential.wwwauth {
             out.extend_from_slice(format!("wwwauth[]={challenge}\n").as_bytes());
+        }
+    }
+    if operation == Operation::Get && credential.capa_state {
+        for value in &credential.prev_state {
+            out.extend_from_slice(b"state[]=");
+            out.extend_from_slice(value);
+            out.push(b'\n');
         }
     }
     if echo_state {
@@ -667,6 +689,29 @@ mod tests {
         assert_eq!(
             input(&credential, Operation::Store),
             b"capability[]=authtype\nauthtype=Bearer\ncredential=tok\nprotocol=http\nhost=h:1\n"
+        );
+    }
+
+    #[test]
+    fn the_next_round_drops_secrets_and_hands_the_previous_state_to_get() {
+        let mut credential = Credential {
+            protocol: "http".into(),
+            host: "h:1".into(),
+            authtype: Some("Bearer".into()),
+            credential: Some(BString::from("bad")),
+            password: Some(BString::from("pw")),
+            capa_state: true,
+            multistage: true,
+            state: vec![BString::from("r1")],
+            ..Credential::default()
+        };
+        credential.next_round(vec!["Bearer realm=\"x\"".into()]);
+        assert!(!credential.is_complete());
+        assert!(!credential.multistage);
+        assert!(credential.state.is_empty());
+        assert_eq!(
+            input(&credential, Operation::Get),
+            b"capability[]=authtype\ncapability[]=state\nauthtype=Bearer\nprotocol=http\nhost=h:1\nwwwauth[]=Bearer realm=\"x\"\nstate[]=r1\n"
         );
     }
 

@@ -2131,3 +2131,9 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Proof: `refs::loose::tests` (SHA-256 write + rename round trip, SHA-1 still 40 digits); the SHA-256 test panics on `41a5ba9`. No scenario: no CLI path reaches these functions.
 * Flake fixed first (PRIORITIES rule): `every_scenario_matches_real_git` failed in `cargo test --workspace` on `s_blame_flags` (diff: `Not Committed Yet 11:46:01` vs `11:46:02`); the two commands that printed the wall clock now use `-s`.
 * Gate for unit 7 + flake fix: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 328 passed / 0 failed / 0 ignored; `scenarios.sh` 356 PASS, `failures: 0`. `s_attributes_eol_paths` had the same wall-clock blame output as `s_blame_flags` and was fixed alongside.
+
+### Unit 8 — `continue=1` multi-round credential retry
+* Real git (2.56) is the oracle, and it does not loop inside `credential fill`: the retry lives in `http_request_reauth`. A refused credential with `continue=1` is not erased; secrets are cleared and the helpers get another `get` (with `authtype`, `wwwauth[]` and last round's `state[]`, no `continue`). At most two credential rounds per request, the first included; after that `fatal: unable to access '<url>': The requested URL returned error: 401` with no `erase`. A second round without `continue=1` that is refused: `erase` + `Authentication failed`.
+* `Credential::next_round` (crate-private), `input(Get)`, `HttpTransport::authenticated` (`rounds`), `main.rs` message. The `git credential` command itself is still not implemented (GAPS.md).
+* Proof: `s_credential_state` gained `two`/`three`/`stop`/`never` helpers (fails on the parent: rivet erased after the first refusal); Rust test `the_next_round_drops_secrets_and_hands_the_previous_state_to_get`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 329 passed / 0 failed / 0 ignored; `scenarios.sh` 356 PASS, `failures: 0`.

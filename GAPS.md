@@ -5,7 +5,7 @@ against the real `git` binary by the differential suite in `tools/difftest/scena
 (currently 356 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 328 tests / 0 failed, 356 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 329 tests / 0 failed, 356 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -197,9 +197,12 @@ The command works for the common case; the listed options or edge cases are miss
   `Authorization: <authtype> <credential>` header, `s_credential_authtype`) and `url=` (replaces the credential;
   `s_credential_url`; `store`/`erase` still go to the helpers chosen for the original URL, git re-selects them
   for the new one). Helper output `state[]` and `continue=1` (with `capability[]=state`) come back to
-  `store`/`erase` (`s_credential_state`); the multi-round retry itself is not implemented (git re-runs the
-  helper chain with the state after a rejected `continue=1` credential, rivet erases and fails), nor is
-  `state[]` shown to a later helper's `get`. Not implemented: `credential.<url>.*` keys other than `helper`,
+  `store`/`erase` (`s_credential_state`); a rejected `continue=1` credential is not erased but sent back to the helpers (secrets dropped,
+  `authtype`, `wwwauth[]` and the previous `state[]` in the `get`), with git's cap of two credential rounds
+  per request; a third refusal ends in `fatal: unable to access '<url>': The requested URL returned error: 401`
+  and a second round without `continue=1` is a plain rejection (erase, `Authentication failed`)
+  (`s_credential_state`: `two`, `three`, `stop`, `never`). `state[]` is not shown to a later helper of the same
+  round. Not implemented: `credential.<url>.*` keys other than `helper`,
   `useHttpPath` and `username`, `http.proxy` credentials, `credential.interactive`, the
   `git credential` command, and credentials for `ssh://` (the ssh program asks). Covered by
   `s_credential` against a local Basic-auth server; a `401` that first appears on a POST (discovery

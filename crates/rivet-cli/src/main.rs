@@ -132,6 +132,12 @@ fn main() -> ExitCode {
             {
                 if reason.starts_with("RPC failed; ") {
                     eprintln!("error: {reason}");
+                } else if reason == "unable to access" {
+                    let url = url.to_string();
+                    let slash = if url.ends_with('/') { "" } else { "/" };
+                    eprintln!(
+                        "fatal: unable to access '{url}{slash}': The requested URL returned error: 401"
+                    );
                 } else if reason.starts_with("could not read ")
                     || reason.starts_with("credential helper ")
                     || reason.starts_with("credential url ")

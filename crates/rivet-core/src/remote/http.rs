@@ -909,6 +909,9 @@ impl HttpTransport {
     ) -> Result<T> {
         use crate::remote::credential::Credential;
         let mut asked = self.credentials.is_some() || self.authorization.is_some();
+        // Git makes at most two credential rounds per request, the first one included
+        // (`http_request_reauth` loops three times, the initial 401 being the first pass).
+        let mut rounds = 0u8;
         loop {
             let base = self.base_url(url, true);
             AUTH_HEADER.with(|h| *h.borrow_mut() = self.authorization.clone());
@@ -935,7 +938,22 @@ impl HttpTransport {
             let (shown, reason) = challenge_failed;
             let wwwauth = LAST_CHALLENGE.with(|c| c.borrow().clone());
             let settings = self.credential_settings.clone().unwrap_or_default();
-            if asked {
+            let mut next_round: Option<Credential> = None;
+            if asked && self.pending_approval.as_ref().is_some_and(|c| c.multistage) {
+                // The helper said `continue=1`: nothing is erased, it is asked again with its state.
+                self.authorization = None;
+                self.credentials = None;
+                let mut credential = self.pending_approval.take().expect("checked above");
+                if rounds >= 1 {
+                    return Err(Error::Authentication {
+                        url: shown,
+                        reason: "unable to access".to_string(),
+                    });
+                }
+                rounds += 1;
+                credential.next_round(wwwauth.clone());
+                next_round = Some(credential);
+            } else if asked {
                 // What was sent was refused: the helpers must not keep it.
                 if self.authorization.take().is_some() {
                     if let Some(mut credential) = self.pending_approval.take() {
@@ -956,7 +974,8 @@ impl HttpTransport {
                 return Err(Error::Authentication { url: shown, reason });
             }
             asked = true;
-            let mut credential: Credential = settings.credential_for(url, wwwauth);
+            let mut credential: Credential =
+                next_round.unwrap_or_else(|| settings.credential_for(url, wwwauth));
             credential.plain_get = !capabilities;
             if let Some((user, password)) = &self.url_credentials {
                 credential.username = Some(user.clone());

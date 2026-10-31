@@ -1066,7 +1066,8 @@ cred_helper_out() {  # <root> <name> <shell commands run on get>
     cat >"$root/$name.sh" <<HELPER_END
 #!/bin/sh
 echo "== $name \$1" >>"$root/helper.log"
-sed 's/^/  in: /' >>"$root/helper.log"
+cat >"$root/in.txt"
+sed 's/^/  in: /' "$root/in.txt" >>"$root/helper.log"
 if [ "\$1" = get ]; then $3; fi
 HELPER_END
     chmod +x "$root/$name.sh"
@@ -1200,12 +1201,22 @@ s_credential_state() {
     export GIT_TERMINAL_PROMPT=0
     cred_helper_out "$root" both 'echo capability[]=authtype; echo capability[]=state; echo authtype=Bearer; echo credential=tok123; echo state[]=foo:bar; echo continue=1'
     cred_helper_out "$root" rejected 'echo capability[]=authtype; echo capability[]=state; echo authtype=Bearer; echo credential=bad; echo state[]=s1; echo state[]=s2'
+    # continue=1 rounds: git asks again (state[] handed back, no erase) once; a third round or a helper
+    # that never stops ends in "unable to access"; a second round without continue=1 is a plain rejection
+    cred_helper_out "$root" two 'echo capability[]=authtype; echo capability[]=state; echo authtype=Bearer; if grep -q "^state\[\]=r1" "$root/in.txt"; then echo credential=tok123; else echo credential=bad; echo state[]=r1; echo continue=1; fi'
+    cred_helper_out "$root" three 'echo capability[]=authtype; echo capability[]=state; echo authtype=Bearer; if grep -q "^state\[\]=r2" "$root/in.txt"; then echo credential=tok123; elif grep -q "^state\[\]=r1" "$root/in.txt"; then echo credential=bad; echo state[]=r2; echo continue=1; else echo credential=bad; echo state[]=r1; echo continue=1; fi'
+    cred_helper_out "$root" stop 'echo capability[]=authtype; echo capability[]=state; echo authtype=Bearer; echo credential=bad; if grep -q "^state\[\]=r1" "$root/in.txt"; then echo state[]=r2; else echo state[]=r1; echo continue=1; fi'
+    cred_helper_out "$root" never 'echo capability[]=authtype; echo capability[]=state; echo authtype=Bearer; echo credential=bad; echo state[]=r; echo continue=1'
     cred_helper_out "$root" stateonly 'echo capability[]=state; echo username=alice; echo password=s3cret; echo state[]=d1'
     cred_helper_out "$root" nocap 'echo username=alice; echo password=s3cret; echo state[]=ignored; echo continue=1'
     v config --global credential.helper "$root/both.sh"
     v clone -q http://127.0.0.1:$port/o.git c_both; cred_dump "$root"
     v config --global credential.helper "$root/rejected.sh"
     v clone -q http://127.0.0.1:$port/o.git c_rej; cred_dump "$root"
+    for h in two three stop never; do
+        v config --global credential.helper "$root/$h.sh"
+        v clone -q http://127.0.0.1:$port/o.git c_$h; cred_dump "$root"
+    done
     v config --global credential.helper "$root/stateonly.sh"
     v clone -q http://127.0.0.1:$port2/o.git c_stateonly; cred_dump "$root"
     rm -f "$root/req2.log"
@@ -12414,7 +12425,7 @@ for s in "$@"; do
         s_credential_post) run_scenario "$s" c_post ;;
         s_credential_keys) run_scenario "$s" c_exp c_quitfull ;;
         s_credential_authtype) run_scenario "$s" c_bearer c_bare c_first ;;
-        s_credential_state) run_scenario "$s" c_both c_stateonly c_nocap ;;
+        s_credential_state) run_scenario "$s" c_both c_two c_three c_stop c_never c_stateonly c_nocap ;;
         s_credential_url) run_scenario "$s" c_same c_moved c_cleared c_junk c_nl ;;
         s_hooks_push) run_scenario "$s" repo origin.git other.git ;;
         s_sparse_linked) run_scenario "$s" repo wt ;;
