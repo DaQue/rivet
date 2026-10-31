@@ -2209,3 +2209,11 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Found, not fixed (out of the unit): `status` ignores `status.showUntrackedFiles`.
 * Proof: scenario `s_submodule_status_dirty` (nested dirty/moved submodule, four `--ignore-submodules` values in all three formats, config and `.gitmodules` precedence, `diff.ignoreSubmodules`, summary with limits, staged and unstaged blocks, `submodule summary` with the setting; fails on the parent: no `--ignore-submodules`).
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 339 passed / 0 failed / 0 ignored; `scenarios.sh` 367 PASS, `failures: 0`.
+
+### Unit 20 — `worktree add` branch creation and tracking
+* `worktree add <path> <name>` where `<name>` is no local branch but exactly one remote has it: git makes the local branch `<name>` from `refs/remotes/<remote>/<name>` (reflog `branch: Created from refs/remotes/…`), tracking it and printing `branch '<name>' set up to track '<remote>/<name>'.` on stdout before `HEAD is now at`. `--guess-remote` does the same for the directory's name when no commit-ish is given. `-b`/`-B` from a remote-tracking start point set `branch.<new>.remote`/`merge` the same way.
+* `--track`/`--no-track`/`branch.autoSetupMerge` (`false`, `always`, otherwise only remote-tracking starts): `--track` from a local branch records remote `.`; from a commit it ends `fatal: cannot set up tracking information; starting point '<x>' is not a branch` (exit 255, no branch left behind); either flag without a new branch ends `fatal: --[no-]track can only be used if a new branch is created` (exit 128, after the `Preparing worktree` line).
+* Ordering as git: `-B` onto a branch used elsewhere fails before `Preparing worktree`; an invalid `-b` name fails after it with `'<name>' is not a valid branch name` and the two hints (exit 255).
+* Found, not fixed: `config --get-regexp` is a substring match; `branch -vv` is refused by clap (`--verbose` twice).
+* Proof: `s_worktree_add_branch` (about 45 invocations incl. state and reflogs; fails on the parent: `fatal: invalid reference` for the DWIM, no tracking, `--track` not implemented). `s_hooks_clone` and the other worktree scenarios unchanged.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 339 passed / 0 failed / 0 ignored; `scenarios.sh` 368 PASS, `failures: 0`.

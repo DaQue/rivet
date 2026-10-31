@@ -7109,6 +7109,58 @@ s_worktree_basic() {
     (cd ../w2 && v log --oneline)
 }
 
+s_worktree_add_branch() {
+    g config --global protocol.file.allow always
+    g init -q origin; (cd origin && tick && echo 1 >f && g add f && g commit -q -m o1 && g branch -q feat && g branch -q other && g branch -q guessme && tick && echo 2 >>f && g commit -q -a -m o2)
+    v clone -q origin repo; cd repo
+    v branch -a
+    # a name that exists only as a remote-tracking branch
+    v worktree add ../feat feat
+    v worktree add ../w-other other
+    v worktree add ../p-feat2 origin/feat
+    v worktree add ../nosuch nosuch
+    v branch
+    # the directory's name, with and without a remote-tracking branch of that name
+    v worktree add ../other2
+    v worktree add ../fresh
+    v worktree add --guess-remote ../origin-only
+    v worktree add --guess-remote ../guessme
+    v worktree add --no-guess-remote ../guessme2
+    # -b / -B with a start point
+    v worktree add -b nb1 ../nb1 origin/other
+    v worktree add -b nb2 ../nb2 feat
+    v worktree add -b nb3 ../nb3 HEAD~1
+    v worktree add -B nb3 ../nb3b HEAD
+    v worktree add -B nb2 ../nb2b main
+    v worktree add -B nb4 ../nb4 origin/feat
+    v worktree add -b feat ../dup
+    v worktree add -b nb5 ../nb5 nosuch
+    v worktree add -b 'bad name' ../bad
+    # --detach and --track
+    v worktree add --detach ../d1
+    v worktree add --detach ../d2 origin/other
+    v worktree add --detach ../d3 feat
+    v worktree add -d -b x ../d4
+    v worktree add --track -b tr1 ../tr1 origin/other
+    v worktree add --no-track -b tr2 ../tr2 origin/other
+    v worktree add --track ../tr3 origin/other
+    v worktree add --no-track ../tr4 origin/feat
+    v worktree add --track -b tr5 ../tr5 HEAD~1
+    v worktree add --track -b tr6 ../tr6 main
+    v worktree add -b tr7 ../tr7 main
+    g config branch.autoSetupMerge always
+    v worktree add -b tr8 ../tr8 main
+    v worktree add -b tr9 ../tr9 HEAD~1
+    g config branch.autoSetupMerge false
+    v worktree add -b tr10 ../tr10 origin/other
+    g config --unset branch.autoSetupMerge
+    v worktree add -q -b tr11 ../tr11 origin/other
+    v branch
+    v config --get-regexp 'branch'
+    v worktree list
+    for w in ../feat ../w-other ../nb1 ../tr1 ../tr2; do (cd $w && v status -sb); done
+}
+
 s_worktree_lock_remove() {
     v init -q repo; cd repo
     tick; printf 'a\nb\n' >f; v add f; v commit -q -m one

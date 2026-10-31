@@ -1363,7 +1363,7 @@ fn start_label(repository: &Repository, start: &str) -> Result<String> {
 }
 
 /// A remote-tracking ref `refs/remotes/<remote>/<name>`, if exactly one remote has it.
-fn guess_remote_branch(repository: &Repository, name: &str) -> Result<Option<RefName>> {
+pub(super) fn guess_remote_branch(repository: &Repository, name: &str) -> Result<Option<RefName>> {
     let mut found = Vec::new();
     for (remote_ref, _) in repository.refs().list_remote()? {
         let short = &remote_ref.as_bytes()[b"refs/remotes/".len()..];

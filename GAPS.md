@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 367 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 368 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 339 tests / 0 failed, 367 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 339 tests / 0 failed, 368 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -206,10 +206,13 @@ The command works for the common case; the listed options or edge cases are miss
   prepared, aborted and committed again around every commit and switch; `branch -m` aborts one
   transaction and redoes it). A hook that saw only some of those events would mislead whoever relies
   on it (replication, auditing), so rivet runs none until the whole set can be matched.
-* **Found by `s_hooks_clone`, not hooks** — `worktree add <path> <name>` does not create a local branch
-  from a unique remote-tracking branch (`fatal: invalid reference`), and `worktree add -b <new>
-  origin/<x>` does not set up `branch.<new>.remote`/`merge`; `clone` of an empty repository does not
-  write `branch.<default>.remote`/`merge`; `clone -b <tag>` is refused.
+* **Found by `s_hooks_clone`, not hooks** — `clone` of an empty repository does not
+  write `branch.<default>.remote`/`merge`; `clone -b <tag>` is refused. (`worktree add <path> <name>` makes a
+  local branch from a unique remote-tracking branch, `--guess-remote` does it for the directory's name,
+  `-b`/`-B` from a remote-tracking start point set `branch.<new>.remote`/`merge`, and `--track`/`--no-track`/
+  `branch.autoSetupMerge` are read; `s_worktree_add_branch`. Not done: `--track=inherit|direct`, `--orphan`,
+  `--relative-paths`.) `config --get-regexp` matches by substring: `^` anchors and `\.` are not regular
+  expressions there.
 * **Credential helpers** — `credential.helper` (global, per URL, `!shell`, absolute path,
   `git-credential-<name>`; an empty value resets), `credential.useHttpPath`, `credential.username`,
   URL userinfo, `GIT_ASKPASS`/`core.askPass`/`SSH_ASKPASS` and a terminal prompt (`/dev/tty`,

@@ -921,6 +921,9 @@ struct AddOptions {
     new_branch: Option<String>,
     reset_branch: bool,
     quiet: bool,
+    /// `--track` (`Some(true)`) or `--no-track`.
+    track: Option<bool>,
+    guess_remote: bool,
 }
 
 fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
@@ -933,6 +936,8 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         new_branch: None,
         reset_branch: false,
         quiet: global.quiet,
+        track: None,
+        guess_remote: false,
     };
     let mut positional: Vec<&String> = Vec::new();
     let mut iter = args.iter();
@@ -966,13 +971,11 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             a if a.starts_with("--reason=") => {
                 options.reason = Some(a["--reason=".len()..].to_string())
             }
-            "--orphan"
-            | "--track"
-            | "--no-track"
-            | "--guess-remote"
-            | "--no-guess-remote"
-            | "--relative-paths"
-            | "--no-relative-paths" => {
+            "--track" => options.track = Some(true),
+            "--no-track" => options.track = Some(false),
+            "--guess-remote" => options.guess_remote = true,
+            "--no-guess-remote" => options.guess_remote = false,
+            "--orphan" | "--relative-paths" | "--no-relative-paths" => {
                 anyhow::bail!("worktree add: {arg} is not implemented")
             }
             a if a.starts_with('-') && a.len() > 1 => {
@@ -1008,6 +1011,8 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     let mut new_branch = options.new_branch.clone();
     let reset_branch = options.reset_branch;
     let mut checkout_branch: Option<String> = None;
+    // A remote-tracking branch a new branch is made from (and then follows).
+    let mut guessed_start: Option<RefName> = None;
     if new_branch.is_none() && !options.detach {
         match commit_ish {
             None => {
@@ -1017,19 +1022,35 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
                     checkout_branch = Some(basename.clone());
                 } else {
                     new_branch = Some(basename.clone());
+                    if options.guess_remote {
+                        guessed_start =
+                            super::branching::guess_remote_branch(&repository, &basename)?;
+                    }
                 }
             }
             Some(spec) => {
                 let as_branch = RefName::branch(BStr::new(spec.as_bytes()));
                 if as_branch.is_ok_and(|n| repository.refs().exists(&n)) {
                     checkout_branch = Some(spec.to_string());
+                } else if let Some(remote) =
+                    super::branching::guess_remote_branch(&repository, spec)?
+                {
+                    // A name only a remote-tracking branch has: a local branch that follows it.
+                    new_branch = Some(spec.to_string());
+                    guessed_start = Some(remote);
                 } else {
                     // A commit that is not a branch name: a detached HEAD.
                 }
             }
         }
     }
-    let start_spec = commit_ish.unwrap_or("HEAD");
+    let guessed_spec = guessed_start.as_ref().map(|r| r.short_name().to_string());
+    let start_spec = guessed_spec
+        .as_deref()
+        .or(commit_ish)
+        .unwrap_or("HEAD")
+        .to_string();
+    let start_spec = start_spec.as_str();
     let start: Option<ObjectId> = if let Some(branch) = &checkout_branch {
         let name = RefName::branch(BStr::new(branch.as_bytes()))?;
         Some(repository.refs().resolve_oid(&name)?)
@@ -1047,9 +1068,21 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         }
     };
 
+    if let Some(branch) = new_branch.as_ref().filter(|_| reset_branch)
+        && !options.force
+        && let Some(path) = branch_in_use(&repository, &format!("refs/heads/{branch}"), None)?
+    {
+        eprintln!(
+            "fatal: '{branch}' is already used by worktree at '{}'",
+            path.display()
+        );
+        return Ok(128);
+    }
+
     if !options.quiet {
         if let Some(branch) = &new_branch {
-            let name = RefName::branch(BStr::new(branch.as_bytes()))?;
+            let name = RefName::branch(BStr::new(branch.as_bytes()))
+                .unwrap_or_else(|_| RefName::branch(BStr::new(b"x")).expect("a valid name"));
             if reset_branch && repository.refs().exists(&name) {
                 let was = repository.refs().resolve_oid(&name)?;
                 eprintln!(
@@ -1082,11 +1115,7 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             return Ok(128);
         }
     }
-    let used_branch = checkout_branch.clone().or_else(|| {
-        // `-B` onto a branch that is checked out elsewhere is refused the same way.
-        new_branch.clone().filter(|_| reset_branch)
-    });
-    if let Some(branch) = &used_branch
+    if let Some(branch) = &checkout_branch
         && !options.force
         && let Some(path) = branch_in_use(&repository, &format!("refs/heads/{branch}"), None)?
     {
@@ -1094,6 +1123,18 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             "fatal: '{branch}' is already used by worktree at '{}'",
             path.display()
         );
+        return Ok(128);
+    }
+    if let Some(branch) = &new_branch
+        && RefName::branch(BStr::new(branch.as_bytes())).is_err()
+    {
+        eprintln!("fatal: '{branch}' is not a valid branch name");
+        eprintln!("hint: See 'git help check-ref-format'");
+        eprintln!("hint: Disable this message with \"git config set advice.refSyntax false\"");
+        return Ok(255);
+    }
+    if options.track.is_some() && new_branch.is_none() {
+        eprintln!("fatal: --[no-]track can only be used if a new branch is created");
         return Ok(128);
     }
     if let Some(branch) = &new_branch
@@ -1117,6 +1158,41 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     }
     let admin = admin_root.join(&id);
 
+    // `branch.autoSetupMerge`, `--track` and `--no-track`: a new branch follows its start point.
+    let mut follow: Option<RefName> = None;
+    if new_branch.is_some() && start.is_some() {
+        let upstream = [
+            format!("refs/heads/{start_spec}"),
+            format!("refs/remotes/{start_spec}"),
+            start_spec.to_string(),
+        ]
+        .into_iter()
+        .filter_map(|c| RefName::from_bytes(c.as_bytes()).ok())
+        .find(|r| (r.is_remote() || r.is_branch()) && repository.refs().exists(r));
+        let setting = repository
+            .config_value(BStr::new("branch.autoSetupMerge"))
+            .ok()
+            .flatten()
+            .map(|v| String::from_utf8_lossy(&v).trim().to_ascii_lowercase());
+        let wanted = match options.track {
+            Some(on) => on,
+            None => match setting.as_deref() {
+                Some("false" | "no" | "off" | "0") => false,
+                Some("always") => true,
+                _ => upstream.as_ref().is_some_and(|r| r.is_remote()),
+            },
+        };
+        if wanted {
+            if upstream.is_none() && options.track == Some(true) {
+                eprintln!(
+                    "fatal: cannot set up tracking information; starting point '{start_spec}' is not a branch"
+                );
+                return Ok(255);
+            }
+            follow = upstream;
+        }
+    }
+
     // The branch first, as `git branch` would create it.
     if let (Some(branch), Some(oid)) = (&new_branch, start) {
         let name = RefName::branch(BStr::new(branch.as_bytes()))?;
@@ -1126,10 +1202,29 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         } else {
             "Created from"
         };
-        let reason = format!("branch: {verb} {start_spec}");
+        let label = guessed_start
+            .as_ref()
+            .map_or_else(|| start_spec.to_string(), |r| r.to_string());
+        let reason = format!("branch: {verb} {label}");
         repository.set_ref_logged(&name, oid, &who, BStr::new(reason.as_bytes()))?;
     }
 
+    let mut tracking_line: Option<String> = None;
+    if let (Some(branch), Some(upstream)) = (&new_branch, &follow) {
+        let name = RefName::branch(BStr::new(branch.as_bytes()))?;
+        let mut writable =
+            Repository::open_with(repository.git_dir(), repository.worktree_path(), None)?;
+        tracking_line = Some(super::branching::set_upstream(
+            &mut writable,
+            &name,
+            upstream,
+        )?);
+    }
+    if let Some(line) = &tracking_line
+        && !options.quiet
+    {
+        println!("{line}");
+    }
     std::fs::create_dir_all(&target)?;
     let target = std::fs::canonicalize(&target)?;
     std::fs::create_dir_all(&admin)?;
