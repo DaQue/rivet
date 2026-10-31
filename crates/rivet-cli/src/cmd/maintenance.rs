@@ -67,6 +67,18 @@ pub struct RepackArgs {
     #[arg(short = 'F')]
     pub no_reuse_object: bool,
 
+    /// Like `-a`; the unreachable objects go into a cruft pack of their own.
+    #[arg(long = "cruft")]
+    pub cruft: bool,
+
+    /// With `--cruft`: leave out the unreachable objects not newer than this date.
+    #[arg(long = "cruft-expiration", value_name = "DATE")]
+    pub cruft_expiration: Option<String>,
+
+    /// Roll the smallest packs up so that pack sizes grow by at least this factor.
+    #[arg(long = "geometric", value_name = "FACTOR")]
+    pub geometric: Option<String>,
+
     /// Accepted for compatibility: objects from alternates are never packed here.
     #[arg(short = 'l')]
     pub local: bool,
@@ -204,21 +216,60 @@ pub fn run_gc(global: &GlobalArgs, args: &GcArgs) -> Result<i32> {
 /// `0`; `128` outside a repository.
 pub fn run_repack(global: &GlobalArgs, args: &RepackArgs) -> Result<i32> {
     let repository = super::open(global)?;
+    if args.cruft && args.loosen {
+        anyhow::bail!("options '-A' and '--cruft' cannot be used together");
+    }
+    if args.cruft && args.keep_unreachable {
+        anyhow::bail!("options '-k/--keep-unreachable' and '--cruft' cannot be used together");
+    }
+    let geometric = match &args.geometric {
+        None => None,
+        Some(text) => match parse_factor(text) {
+            Some(factor) => Some(factor),
+            None => {
+                eprintln!(
+                    "error: option `geometric' expects an integer value with an optional k/m/g suffix"
+                );
+                return Ok(129);
+            }
+        },
+    };
+    if geometric.is_some_and(|factor| factor != 0) && (args.all || args.loosen || args.cruft) {
+        anyhow::bail!("options '--geometric' and '-A/-a' cannot be used together");
+    }
     if args.all && args.loosen {
         anyhow::bail!("repack: -a and -A cannot be combined");
     }
+
     let options = rivet_core::gc::RepackOptions {
         all: args.all,
         loosen_unreachable: args.loosen,
         delete_redundant: args.delete,
         keep_unreachable: args.keep_unreachable,
         no_reuse_delta: args.no_reuse_delta || args.no_reuse_object,
+        geometric: geometric.map(|factor| factor.max(0) as u64),
+        cruft: args.cruft,
+        cruft_expiration: match &args.cruft_expiration {
+            Some(text) if args.cruft => parse_expiry(text)?,
+            _ => None,
+        },
     };
     let report = rivet_core::gc::repack(&repository, &options)?;
     if report.objects_packed == 0 && !global.quiet {
         println!("Nothing new to pack.");
     }
     Ok(0)
+}
+
+/// An integer with an optional `k`/`m`/`g` suffix, as git's option parser reads it.
+fn parse_factor(text: &str) -> Option<i64> {
+    let (digits, unit) = match text.chars().last()? {
+        'k' | 'K' => (&text[..text.len() - 1], 1i64 << 10),
+        'm' | 'M' => (&text[..text.len() - 1], 1 << 20),
+        'g' | 'G' => (&text[..text.len() - 1], 1 << 30),
+        _ => (text, 1),
+    };
+    digits.trim().parse::<i64>().ok()?.checked_mul(unit)
 }
 
 fn is_loose_name(name: &str, hex_len: usize) -> bool {

@@ -2925,6 +2925,145 @@ s_gc_cruft_expire() {
     vs fsck
 }
 
+s_repack_cruft() {
+    OLD='2026-09-01 00:00:00'; MID='2026-10-10 00:00:00'; NEW='2026-10-20 00:00:00'; CUT=2026-10-05T00:00:00Z
+    g config --global pack.threads 1
+    v init -q repo; cd repo
+    for i in 1 2 3; do echo $i >f$i; v add f$i; tick; v commit -q -m "c$i"; done
+    seq 1 300 | sed 's/^/line /' >big; v add big; tick; v commit -q -m big
+    v repack -q -d
+    mkt() { local ix=.git/ti.$RANDOM; GIT_INDEX_FILE=$ix g update-index --add --cacheinfo "100644,$1,$2" >&2; GIT_INDEX_FILE=$ix g write-tree; }
+    blob() { local o; o=$(echo "$1" | g hash-object -w --stdin); age "$o" "$2"; echo "$o"; }
+    # an old chain, a newer commit on top of it, a newer lone commit, lone blobs of every age
+    b1=$(blob b1 "$OLD"); t1=$(mkt "$b1" n1); age "$t1" "$OLD"
+    o1=$(g commit-tree "$t1" -m o1); age "$o1" "$OLD"
+    b2=$(blob b2 "$OLD"); t2=$(mkt "$b2" n2); age "$t2" "$OLD"
+    f1=$(g commit-tree "$t2" -p "$o1" -m f1); age "$f1" "$NEW"
+    b4=$(blob b4 "$OLD"); t4=$(mkt "$b4" n4); age "$t4" "$OLD"
+    f2=$(g commit-tree "$t4" -m f2); age "$f2" "$MID"
+    blob lone-old "$OLD" >/dev/null
+    blob lone-at "2026-10-05 00:00:00" >/dev/null
+    blob lone-after "2026-10-05 00:00:01" >/dev/null
+    allobjects
+    # refused combinations
+    v repack -A --cruft
+    v repack -k --cruft
+    v repack -a -A --cruft
+    # --cruft alone is -a: new packs, the old ones stay, loose objects stay
+    v repack --cruft
+    cruftshape; packshape; allobjects
+    # with -d the old packs and the loose objects the new ones hold go
+    v repack -d --cruft
+    cruftshape; packshape; allobjects
+    vs fsck
+    v repack -a -d --cruft
+    cruftshape; allobjects
+    # an expiry keeps the young ones and what they reach
+    v repack -a -d --cruft --cruft-expiration=$CUT
+    cruftshape; packshape; allobjects
+    # a later expiry; the cruft pack is an input of the next one
+    v repack -a -d --cruft --cruft-expiration=2026-10-15T00:00:00Z
+    cruftshape; allobjects
+    # without --cruft the expiry means nothing
+    v repack -a -d --cruft-expiration=now
+    cruftshape; packshape; allobjects
+    # new loose unreachable objects join an existing cruft pack
+    echo more-loose | g hash-object -w --stdin >/dev/null
+    age "$(echo more-loose | g hash-object --stdin)" "$NEW"
+    v repack -a -d --cruft
+    cruftshape; packshape; allobjects
+    v repack -a -d --cruft --cruft-expiration=now
+    cruftshape; allobjects
+    vs fsck
+    v log --oneline
+}
+
+# Each pack as the set of objects it holds (the order inside a rolled-up pack is not compared).
+packsets() {
+    echo "## packsets" >>"$TRANSCRIPT"
+    local idx key blocks tag; blocks=$(mktemp -d "${TMPDIR:-/tmp}/packsets.XXXXXX")
+    for idx in .git/objects/pack/*.idx; do
+        [ -e "$idx" ] || continue
+        tag="# pack$([ -f "${idx%.idx}.mtimes" ] && echo ' (cruft)')$([ -f "${idx%.idx}.keep" ] && echo ' (keep)')"
+        { echo "$tag"; g verify-pack -v "$idx" | awk 'NF == 5 || NF == 7 { if ($1 ~ /^[0-9a-f]+$/) print $1, $2 }' | sort; } >"$blocks/cur"
+        key=$(sha1sum <"$blocks/cur" | cut -c1-40)
+        mv "$blocks/cur" "$blocks/$key"
+    done
+    for key in $(ls "$blocks"); do cat "$blocks/$key" >>"$TRANSCRIPT"; done
+}
+# A pack holding the given number of fresh blobs, "$1" naming the batch.
+blobpack() {
+    local batch=$1 count=$2 i
+    for i in $(seq 1 "$count"); do echo "batch $batch blob $i of $count" | g hash-object -w --stdin; done | g pack-objects -q .git/objects/pack/pack >/dev/null
+    g prune-packed
+}
+
+s_repack_geometric() {
+    g config --global pack.threads 1
+    v init -q repo; cd repo
+    echo base >b; v add b; tick; v commit -q -m base
+    v repack -q -a -d
+    packsets
+    # already a geometric progression: nothing to do
+    blobpack a 20
+    v repack --geometric=2 -d
+    packsets
+    # small packs roll up, the big ones stay
+    blobpack b 1; blobpack c 1; blobpack d 3
+    packsets
+    v repack --geometric=2
+    packsets
+    v repack --geometric=2 -d
+    packsets; allobjects
+    # a factor of 3 pulls in more
+    blobpack e 5; blobpack f 6
+    v repack --geometric=3 -d
+    packsets
+    # loose objects join the roll-up, reachable or not
+    echo lonely | g hash-object -w --stdin >/dev/null
+    blobpack g 1; blobpack h 1
+    tick; echo r >r; v add r; v commit -q -m r2
+    packsets; allobjects
+    v repack --geometric=2 -d
+    packsets; allobjects
+    # loose objects alone, with nothing to roll up
+    echo lonely2 | g hash-object -w --stdin >/dev/null
+    v repack --geometric=2 -d
+    packsets; allobjects
+    # nothing at all
+    v repack --geometric=2 -d
+    # a .keep pack is left alone, and so is a cruft pack
+    blobpack k 2; blobpack l 2
+    kb=$(echo "batch k blob 1 of 2" | g hash-object --stdin)
+    for idx in .git/objects/pack/*.idx; do g show-index <"$idx" | grep -q "$kb" && touch "${idx%.idx}.keep"; done
+    v repack --geometric=2 -d
+    packsets
+    echo cruft-me | g hash-object -w --stdin >/dev/null
+    age "$(echo cruft-me | g hash-object --stdin)" '2026-10-20 00:00:00'
+    g repack -a -d --cruft -q
+    blobpack m 1; blobpack n 1
+    v repack --geometric=2 -d
+    packsets
+    # factors of 0 and 1 roll nothing up; the k suffix is read
+    blobpack o 1; blobpack p 1
+    v repack --geometric=0 -d
+    packsets
+    v repack --geometric=1 -d
+    packsets
+    v repack --geometric=1k -d
+    packsets
+    # combinations
+    v repack --geometric=2 -a
+    v repack --geometric=2 -A
+    v repack --geometric=2 --cruft
+    v repack --geometric=0 -a -d
+    v repack --geometric=2 -d -k
+    v repack --geometric=2 -d -f
+    vq repack --geometric=two
+    vs fsck
+    v log --oneline
+}
+
 s_gc_after_cruft() {
     g init -q repo; cd repo
     echo a >a; g add a; g commit -qm one
