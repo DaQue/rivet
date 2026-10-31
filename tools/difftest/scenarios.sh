@@ -7203,6 +7203,47 @@ s_checkout_needs_merge() {
     v branch
 }
 
+# A checkout that moves nothing still stops at an unresolved index (`HEAD`, the branch already
+# checked out, `--detach`, `-B`), `-b` does not and prints no local changes, and every forced,
+# merging or branch-creating checkout that goes through ends the merge (git's remove_branch_state).
+s_checkout_unmerged_noop() {
+    v init -q repo; cd repo
+    tick; for f in a b c; do seq 1 3 >$f; done; v add .; v commit -q -m base
+    v branch side
+    tick; for f in a b; do echo ours >>$f; done; v commit -q -a -m ours
+    v switch -q side; tick; for f in a b; do echo theirs >>$f; done; v commit -q -a -m theirs
+    v switch -q main
+    merge_state() { v merge side; echo mod >>c; v status -s; }
+    merge_state
+    v checkout HEAD
+    v checkout main
+    v checkout --detach
+    v checkout -B again
+    v checkout -B main
+    v status -s
+    # -b stands on the unresolved index, prints no local changes and ends the merge
+    v checkout -b topic
+    v status -s
+    test -e .git/MERGE_HEAD && echo merge-head-kept
+    v switch -c topic2
+    v branch
+    # -f and -m go through too, and end the merge
+    v checkout -q -f main; v reset -q --hard; v clean -q -f
+    merge_state
+    v checkout -m main
+    test -e .git/MERGE_HEAD && echo merge-head-kept
+    v status -s
+    v reset -q --hard
+    merge_state
+    v checkout -f main
+    test -e .git/MERGE_HEAD && echo merge-head-kept
+    v reset -q --hard
+    merge_state
+    v checkout -f --detach
+    test -e .git/MERGE_HEAD && echo merge-head-kept
+    v status -s
+}
+
 # Abbreviated ids: a prefix whose last two digits are `00` is not fill, an odd count of digits
 # counts every digit, and the ids in an `index` line of a patch are resolved the same way.
 s_abbrev_zero() {

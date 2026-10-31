@@ -948,6 +948,20 @@ pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
     }
 
     let Some(first) = &args.target else {
+        // `git checkout --detach` detaches `HEAD` where it is.
+        if args.detach
+            && let Some(head) = repository.head()?.oid()
+        {
+            return switch_to(
+                &mut repository,
+                Destination::Detached(head),
+                "HEAD",
+                args.force,
+                global.quiet,
+                false,
+                args.merge,
+            );
+        }
         // `git checkout` with no arguments only reports; there is nothing to switch to.
         return Ok(0);
     };
@@ -1024,9 +1038,20 @@ pub fn run_checkout(global: &GlobalArgs, args: &CheckoutArgs) -> Result<i32> {
         && !args.merge
         && let Some(head) = repository.head()?.oid()
     {
+        if let Some(entry) = repository
+            .index()
+            .entries()
+            .iter()
+            .find(|e| e.is_unmerged())
+            && !args.force
+        {
+            let path = entry.path.clone();
+            return report_switch_refusal(&repository, rivet_core::Error::UnmergedPath { path });
+        }
         if args.force {
             let tree = repository.commit_tree(head)?;
             repository.reset_hard_to_tree(tree)?;
+            remove_merge_state(&repository);
         }
         if !global.quiet {
             show_local_changes(&mut repository)?;
@@ -1828,6 +1853,13 @@ Or undo this operation with:
 Turn off this advice by setting config variable advice.detachedHead to false
 ";
 
+/// A branch switch ends a merge in progress: git drops its state files (`remove_branch_state`).
+fn remove_merge_state(repository: &Repository) {
+    for state in ["MERGE_HEAD", "MERGE_MODE", "MERGE_MSG", "AUTO_MERGE"] {
+        let _ = std::fs::remove_file(repository.git_dir().join(state));
+    }
+}
+
 fn switch_to(
     repository: &mut Repository,
     destination: Destination,
@@ -1854,6 +1886,17 @@ fn switch_to(
         );
         return Ok(128);
     }
+    // Even a switch that moves nothing (`-m` included) stops at an unresolved index, unless forced.
+    if !force
+        && let Some(entry) = repository
+            .index()
+            .entries()
+            .iter()
+            .find(|e| e.is_unmerged())
+    {
+        let path = entry.path.clone();
+        return report_switch_refusal(repository, rivet_core::Error::UnmergedPath { path });
+    }
     let from = super::head_reflog_label(repository)?;
     let reason = format!("checkout: moving from {from} to {label}");
 
@@ -1870,6 +1913,7 @@ fn switch_to(
             repository.reset_hard_to_tree(tree)?;
         }
         repository.point_head(HeadTarget::Branch(branch), BStr::new(reason.as_bytes()))?;
+        remove_merge_state(repository);
         if !quiet {
             show_local_changes(repository)?;
             eprintln!("Already on '{}'", branch.short_name());
@@ -1942,6 +1986,7 @@ fn switch_to(
             let _ = std::fs::remove_file(repository.git_dir().join(name));
         }
     }
+    remove_merge_state(repository);
     if !quiet {
         if autostash.is_some() {
             println!("The following paths have local changes:");
@@ -2051,6 +2096,24 @@ fn checkout_new_branch(
     let old_head = repository.head()?;
     let from = super::head_reflog_label(repository)?;
 
+    // Git lets `checkout -b` stand on an unresolved index when `HEAD` does not move (and then says
+    // nothing about local changes), but `-B` goes through the full check.
+    let unmerged = repository
+        .index()
+        .entries()
+        .iter()
+        .find(|e| e.is_unmerged())
+        .map(|e| e.path.clone());
+    if reset
+        && !force
+        && let Some(path) = &unmerged
+    {
+        return report_switch_refusal(
+            repository,
+            rivet_core::Error::UnmergedPath { path: path.clone() },
+        );
+    }
+
     // The work tree moves first: a refused checkout must not leave a new branch behind.
     if old_head.oid() != Some(start_oid) || force {
         let tree = repository.commit_tree(start_oid)?;
@@ -2121,8 +2184,11 @@ fn checkout_new_branch(
     {
         println!("{message}");
     }
+    remove_merge_state(repository);
     if !quiet {
-        show_local_changes(repository)?;
+        if unmerged.is_none() {
+            show_local_changes(repository)?;
+        }
         if unborn_same {
             eprintln!("Already on '{name}'");
         } else if exists

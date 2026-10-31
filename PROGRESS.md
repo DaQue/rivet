@@ -2263,3 +2263,10 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Not reproduced: the location for a value set in a global config.
 * Proof: scenario `s_split_index_expire_invalid` (`false`, `all`, `bogus`, then `3.days.ago` and `now` working again; fails on the parent: no fatal, exit 0).
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 343 passed / 0 failed / 0 ignored; `scenarios.sh` 374 PASS, `failures: 0`.
+
+### Unit 27 — checkout that moves nothing over an unresolved index
+* GAPS.md ("Found on the way": `checkout -b <new>` with unmerged paths prints `M` lines where git prints nothing). Probed against git: `checkout -b <new>` stands on the unmerged index, prints no local changes (not even for an ordinary modified file) and drops `MERGE_HEAD`/`MERGE_MODE`/`MERGE_MSG`/`AUTO_MERGE`; `checkout HEAD`, `checkout <current branch>`, `checkout --detach`, `-m <current>` and `-B` (new or current branch, no start point) are refused with `<path>: needs merge` + `error: you need to resolve your current index first`; `-f` (also `--detach`) and a successful switch end the merge. rivet printed `M` lines, succeeded, and kept the merge, so a later `switch -c` was refused as "while merging".
+* `checkout_new_branch` and `switch_to` check for unmerged entries first (unless forced), `checkout HEAD` does the same, a bare `checkout --detach` detaches at `HEAD` (it used to do nothing), and `remove_merge_state` clears the merge files on every successful switch. No signature changed.
+* Not probed: `checkout -f -B`, `checkout -b` over a cherry-pick/revert in progress.
+* Proof: scenario `s_checkout_unmerged_noop` (fails on the parent: the `M` lines and the kept merge state).
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 343 passed / 0 failed / 0 ignored; `scenarios.sh` 375 PASS, `failures: 0`.
