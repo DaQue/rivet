@@ -1050,6 +1050,27 @@ impl Repository {
             .and_then(|v| crate::config::parse_int(bstr::BStr::new(&v[..])).ok())
             .filter(|n| (0..=100).contains(n))
             .map_or(20, |n| n as usize);
+        // `splitIndex.sharedIndexExpire`: how old an unused shared index must be to be deleted
+        // when a new one is written (`never` keeps them all, `now` and `all` delete them all).
+        let expire = match self
+            .config_value(bstr::BStr::new(b"splitindex.sharedindexexpire"))
+            .ok()
+            .flatten()
+        {
+            None => Some(crate::ops::now_seconds().saturating_sub(14 * 86_400)),
+            Some(text) => match String::from_utf8_lossy(&text)
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "never" | "false" => None,
+                "now" | "all" => Some(i64::MAX),
+                other => Some(
+                    crate::ops::parse_expiry_ago(other)
+                        .unwrap_or(crate::ops::now_seconds().saturating_sub(14 * 86_400)),
+                ),
+            },
+        };
         // A new index file starts at `index.version` (2 to 4), or v4 under `feature.manyFiles`;
         // an existing one keeps the version it has.
         if !path.exists()
@@ -1058,10 +1079,10 @@ impl Repository {
         {
             let mut index = index.clone();
             index.set_version(version);
-            return index.write_with(&path, self.format, split, max_percent);
+            return index.write_split(&path, self.format, split, max_percent, expire);
         }
         self.index
-            .write_with(&path, self.format, split, max_percent)
+            .write_split(&path, self.format, split, max_percent, expire)
     }
 
     /// The cone-mode definition when this repository writes a sparse index: `index.sparse`,

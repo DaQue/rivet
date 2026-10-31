@@ -12517,6 +12517,78 @@ s_split_index() {
     v write-tree
 }
 
+# `splitIndex.sharedIndexExpire` and the cleaning of old `sharedindex.*` files, the rule for writing
+# a new shared index (`splitIndex.maxPercentChange` 0 / 100 / the default), and the refreshing of
+# the shared index a split index sits on. File names differ between git and rivet (they hash stat
+# data), so the scenario counts files and ages whichever exist.
+age_shared() {
+    local d; d=$(g rev-parse --git-dir)
+    for f in "$d"/sharedindex.*; do [ -e "$f" ] && touch -d "$1" "$f"; done
+}
+s_split_index_expire() {
+    OLD='2026-01-01 00:00:00'
+    v init -q repo; cd repo
+    for i in 1 2 3 4 5 6 7 8 9 10; do echo "file $i" >f$i; done
+    v config core.splitIndex true
+    v add f1 f2 f3 f4 f5; issplit; nshared
+    # the percentage: 0 always writes a new shared index (nothing is old enough to delete)
+    g config splitIndex.maxPercentChange 0
+    echo x >>f1; v add f1; issplit; nshared
+    echo y >>f1; v add f1; issplit; nshared
+    # 100 never does, however much is added
+    g config splitIndex.maxPercentChange 100
+    v add f6 f7 f8 f9 f10; issplit; nshared
+    vg ls-files -s; vg status --short
+    # the default is 20 %: one more file in a hundred stays split
+    g config --unset splitIndex.maxPercentChange
+    mkdir many; for i in $(seq 1 60); do echo "m$i" >many/m$i; done
+    v add many; issplit; nshared
+    v commit -q -m one; issplit; nshared
+    # old shared indexes go when the next new one is written
+    age_shared "$OLD"; nshared
+    g config splitIndex.maxPercentChange 0
+    echo z >>f2; v add f2; issplit; nshared
+    vg ls-files -s; vg fsck --strict --no-dangling
+    # a shared index in use is refreshed by a split-only write, so it does not age out
+    age_shared "$OLD"
+    g config splitIndex.maxPercentChange 100
+    echo w >>f3; v add f3; issplit; nshared
+    g config splitIndex.maxPercentChange 0
+    echo v >>f3; v add f3; issplit; nshared
+    # never: nothing is deleted, however old
+    g config splitIndex.sharedIndexExpire never
+    age_shared "$OLD"
+    echo u >>f3; v add f3; nshared
+    age_shared "$OLD"
+    echo t >>f3; v add f3; nshared
+    # now: everything but the current one goes, however new
+    g config splitIndex.sharedIndexExpire now
+    echo r >>f3; v add f3; nshared
+    echo q >>f3; v add f3; nshared
+    # an explicit age: files older than that go, newer ones stay
+    g config splitIndex.sharedIndexExpire never
+    echo p >>f3; v add f3; nshared
+    age_shared "$OLD"
+    echo o >>f3; v add f3; nshared
+    g config splitIndex.sharedIndexExpire 3.days.ago
+    d=$(g rev-parse --git-dir); n=0
+    for f in "$d"/sharedindex.*; do n=$((n + 1)); [ $n = 1 ] && touch -d "$OLD" "$f"; done
+    echo n >>f3; v add f3; nshared
+    g config splitIndex.sharedIndexExpire 1.second.ago
+    echo l >>f3; v add f3; nshared
+    vg ls-files -s; vg status --short; vg fsck --strict --no-dangling
+    # git writes a new shared index with its own rules; rivet reads what is left and goes on
+    g config splitIndex.sharedIndexExpire never
+    g update-index --split-index; nshared
+    g config splitIndex.sharedIndexExpire now
+    g config splitIndex.maxPercentChange 0
+    echo k >>f3; v add f3; issplit; nshared
+    v ls-files -s; v status --short
+    # no splitting any more: the files stay where they are
+    g config core.splitIndex false
+    echo j >>f3; v add f3; issplit; nshared
+}
+
 # update-index: the options that change what the index holds. Real git reads every index rivet
 # writes (vg) and rivet reads the indexes real git writes (g setup, then v).
 s_update_index() {

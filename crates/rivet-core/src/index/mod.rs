@@ -1500,7 +1500,8 @@ impl Index {
             // Like git, only entries the shared index lacks count as "not shared": a replaced
             // entry still belongs to its shared slot.
             let changed = added.len();
-            if changed * 100 <= self.entries.len() * max_percent {
+            // 0 % always writes a new shared index, 100 % never does.
+            if max_percent != 0 && changed * 100 <= self.entries.len() * max_percent {
                 replacements.sort_by_key(|(i, _)| *i);
                 let mut main: Vec<IndexEntry> = replacements
                     .into_iter()
@@ -1706,6 +1707,11 @@ impl Index {
             source: e,
         })?;
         let shared = Index::parse(format, &bytes)?;
+        // Reading a split index touches the shared index it stands on (as git does), so one in
+        // use is never old enough for `splitIndex.sharedIndexExpire`.
+        if let Ok(file) = std::fs::File::options().write(true).open(&shared_path) {
+            let _ = file.set_modified(std::time::SystemTime::now());
+        }
         let mut merged = shared.entries;
         let main = std::mem::take(&mut self.entries);
         let replacements = parsed.replaced.len();
@@ -1778,6 +1784,28 @@ impl Index {
         mode: SplitMode,
         max_percent: usize,
     ) -> Result<()> {
+        self.write_split(
+            path,
+            format,
+            mode,
+            max_percent,
+            Some(now_seconds().saturating_sub(14 * 86_400)),
+        )
+    }
+
+    /// [`Index::write_with`] with `splitIndex.sharedIndexExpire` spelled out: when a new shared
+    /// index is written, every other `sharedindex.*` next to the index that is not newer than
+    /// `expire` (seconds since the epoch; `i64::MAX` for "now") is deleted, `None` deletes
+    /// nothing. A split index written on top of the same shared index refreshes that file's
+    /// modification time, so a shared index in use does not age.
+    pub fn write_split(
+        &self,
+        path: &Path,
+        format: ObjectFormat,
+        mode: SplitMode,
+        max_percent: usize,
+        expire: Option<i64>,
+    ) -> Result<()> {
         let lock_path = path.with_file_name("index.lock");
         if lock_path.exists() {
             return Err(Error::LockHeld {
@@ -1786,6 +1814,13 @@ impl Index {
         }
         let dir = path.parent().unwrap_or(Path::new("."));
         let (bytes, shared) = self.split_bytes(dir, format, mode, max_percent);
+        let new_shared = shared.as_ref().map(|(name, _)| name.clone());
+        // The shared index the bytes link to when no new one is written.
+        let freshen = if shared.is_none() {
+            bytes_link_name(format, &bytes)
+        } else {
+            None
+        };
         if let Some((name, data)) = shared {
             let shared_path = dir.join(&name);
             if !shared_path.exists() {
@@ -1817,6 +1852,14 @@ impl Index {
             });
         }
         let _ = std::fs::remove_file(&lock_path);
+        if let Some(name) = new_shared {
+            clean_shared_index_files(dir, &name, expire);
+        } else if let Some(name) = freshen {
+            // Git touches the shared index a split index was written against.
+            if let Ok(file) = std::fs::File::options().write(true).open(dir.join(name)) {
+                let _ = file.set_modified(std::time::SystemTime::now());
+            }
+        }
         Ok(())
     }
 
@@ -2294,6 +2337,50 @@ pub enum SplitMode {
 }
 
 /// The entries of the shared index `shared` in `dir`, if it can be read.
+fn now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// The `sharedindex.<hash>` file name the `link` extension of the index `bytes` names, if any.
+fn bytes_link_name(format: ObjectFormat, bytes: &[u8]) -> Option<String> {
+    let index = Index::parse(format, bytes).ok()?;
+    let link = index.extensions.iter().find(|e| e.is_split_index_link())?;
+    let parsed = split::parse_link(format, &link.data).ok()?;
+    Some(split::shared_name(&parsed.shared))
+}
+
+/// Git's `clean_shared_index_files`: after writing `current`, delete the other shared indexes in
+/// `dir` whose modification time is not newer than `expire`.
+fn clean_shared_index_files(dir: &Path, current: &str, expire: Option<i64>) {
+    let Some(expire) = expire else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with("sharedindex.") || name == current || name.ends_with(".tmp") {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        let seconds = match modified.duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => d.as_secs() as i64,
+            Err(e) => -(e.duration().as_secs() as i64),
+        };
+        if seconds <= expire {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 fn read_shared(dir: &Path, format: ObjectFormat, shared: &ObjectId) -> Option<Vec<IndexEntry>> {
     let bytes = std::fs::read(dir.join(split::shared_name(shared))).ok()?;
     Index::parse(format, &bytes).ok().map(|i| i.entries)
@@ -2311,6 +2398,50 @@ fn same_entry(a: &IndexEntry, b: &IndexEntry) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// `sharedIndexExpire`: other shared indexes not newer than the cutoff go, the current one and
+    /// the newer ones stay, and `None` deletes nothing.
+    #[test]
+    fn old_shared_indexes_are_cleaned_but_never_the_current_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |secs: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let make = |name: &str, secs: u64| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"x").unwrap();
+            let file = std::fs::File::options().write(true).open(&path).unwrap();
+            file.set_modified(at(secs)).unwrap();
+        };
+        let names = |dir: &Path| {
+            let mut found: Vec<String> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .collect();
+            found.sort();
+            found
+        };
+        make("sharedindex.current", 1000);
+        make("sharedindex.old", 1000);
+        make("sharedindex.cutoff", 5000);
+        make("sharedindex.newer", 5001);
+        make("sharedindex.old.tmp", 10);
+        make("index", 10);
+        clean_shared_index_files(dir.path(), "sharedindex.current", None);
+        assert_eq!(names(dir.path()).len(), 6);
+        clean_shared_index_files(dir.path(), "sharedindex.current", Some(5000));
+        assert_eq!(
+            names(dir.path()),
+            [
+                "index",
+                "sharedindex.current",
+                "sharedindex.newer",
+                "sharedindex.old.tmp"
+            ]
+        );
+        clean_shared_index_files(dir.path(), "sharedindex.current", Some(i64::MAX));
+        assert_eq!(
+            names(dir.path()),
+            ["index", "sharedindex.current", "sharedindex.old.tmp"]
+        );
+    }
 
     fn unhex(s: &str) -> Vec<u8> {
         let b = s.replace(' ', "");

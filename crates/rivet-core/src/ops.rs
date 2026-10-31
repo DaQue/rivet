@@ -1163,6 +1163,39 @@ fn relative_date(when: i64, now: i64) -> String {
     unit((diff + 183) / 365, "year", "years")
 }
 
+/// Seconds since the epoch, by the wall clock.
+pub fn now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// An expiry date as git's `parse_expiry_date` reads it, for the forms that are not `never`,
+/// `false`, `now` or `all`: `N.unit.ago` (also `N unit ago`) or anything
+/// [`parse_approxidate`] knows.
+pub fn parse_expiry_ago(text: &str) -> Option<i64> {
+    let words: Vec<&str> = text
+        .split(|c: char| c == '.' || c.is_whitespace())
+        .filter(|w| !w.is_empty() && *w != "ago")
+        .collect();
+    if words.len() == 2
+        && let Ok(count) = words[0].parse::<i64>()
+    {
+        let unit = match words[1].trim_end_matches('s') {
+            "second" => 1,
+            "minute" => 60,
+            "hour" => 3600,
+            "day" => 86_400,
+            "week" => 7 * 86_400,
+            "month" => 30 * 86_400,
+            "year" => 365 * 86_400,
+            _ => return parse_approxidate(text),
+        };
+        return Some(now_seconds() - count * unit);
+    }
+    parse_approxidate(text)
+}
+
 /// Parse a `--since`/`--until` style date (`@epoch`, `epoch`, ISO date or datetime) to seconds.
 pub fn parse_approxidate(text: &str) -> Option<i64> {
     let text = text.trim();
