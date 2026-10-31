@@ -40,6 +40,18 @@ pub struct UpdateRefArgs {
     #[arg(long = "no-stdin", overrides_with = "stdin")]
     pub no_stdin: bool,
 
+    /// Apply the updates that hold and report the others as `rejected`.
+    #[arg(
+        short = '0',
+        long = "batch-updates",
+        overrides_with = "no_batch_updates"
+    )]
+    pub batch_updates: bool,
+
+    /// Do not batch the updates.
+    #[arg(long = "no-batch-updates", overrides_with = "batch_updates")]
+    pub no_batch_updates: bool,
+
     /// Create a reflog even where `core.logAllRefUpdates` would not.
     #[arg(long = "create-reflog", overrides_with = "no_create_reflog")]
     pub create_reflog: bool,
@@ -70,7 +82,7 @@ const USAGE: &str = "usage: git update-ref [<options>] -d <refname> [<old-oid>]
 ";
 
 /// What a command expects the ref to hold before it is touched.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Old {
     /// No expectation.
     Any,
@@ -78,14 +90,25 @@ enum Old {
     Absent,
     /// The ref must hold this id.
     Is(ObjectId),
+    /// The ref must be a symbolic ref to this name.
+    Symref(RefName),
 }
 
 /// What a command does once the expectation holds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Action {
     Write(ObjectId),
+    /// Make the ref a symbolic ref to this name.
+    Symref(RefName),
     Delete,
     Verify,
+}
+
+/// Why an expectation did not hold: git's `cannot lock ref` text, and the reason `--batch-updates`
+/// prints on a `rejected` line.
+struct Reject {
+    error: String,
+    reason: &'static str,
 }
 
 /// One queued command: the ref it was named with, the ref it lands on, and what to do there.
@@ -96,6 +119,8 @@ struct Op {
     target: RefName,
     old: Old,
     action: Action,
+    /// Added by git's own splitting of an update through a symbolic ref, not named by the input.
+    extra: bool,
 }
 
 /// Handler for `rivet update-ref`.
@@ -106,10 +131,11 @@ struct Op {
 ///
 /// # Caveats
 ///
-/// * `--stdin` accepts `update`, `create`, `delete`, `verify`, `option no-deref` and
-///   `start`/`prepare`/`commit`/`abort`. The `symref-*` commands are refused by name.
-/// * A `delete` releases its lock just before the ref is removed, because the removal takes the
-///   lock itself.
+/// * `--stdin` accepts `update`, `create`, `delete`, `verify`, the four `symref-*` commands,
+///   `option no-deref` (for the next command only) and `start`/`prepare`/`commit`/`abort`.
+/// * `-0`/`--batch-updates` applies the updates whose expectations hold and prints the others as
+///   `rejected <ref> <new> <old> <reason>`; a name conflict is still fatal, not a rejection.
+/// * A `delete` removes the ref while it still holds the ref's lock.
 pub fn run_update_ref(global: &GlobalArgs, args: &UpdateRefArgs) -> Result<i32> {
     let stdin = args.stdin && !args.no_stdin;
     let positional_ok = if stdin {
@@ -130,6 +156,7 @@ pub fn run_update_ref(global: &GlobalArgs, args: &UpdateRefArgs) -> Result<i32> 
         repository: &repository,
         reason: args.message.clone().unwrap_or_default(),
         force_log: args.create_reflog && !args.no_create_reflog,
+        batch: args.batch_updates && !args.no_batch_updates,
     };
     let no_deref = args.no_deref && !args.deref;
     if stdin {
@@ -189,6 +216,7 @@ struct Session<'a> {
     repository: &'a Repository,
     reason: String,
     force_log: bool,
+    batch: bool,
 }
 
 impl Session<'_> {
@@ -209,6 +237,7 @@ impl Session<'_> {
             target,
             old,
             action,
+            extra: false,
         }
     }
 
@@ -226,10 +255,19 @@ impl Session<'_> {
         }
     }
 
-    /// Lock every ref and check every expectation; the locks come back to the caller.
-    fn prepare(&self, ops: &[Op]) -> Result<Vec<RefLock>, String> {
+    /// Lock every ref and check every expectation; the locks come back to the caller, `None` for an
+    /// update `--batch-updates` rejected (reported here, so it is skipped when applying).
+    fn prepare(&self, ops: &[Op]) -> Result<Vec<Option<RefLock>>, String> {
         let mut seen = HashSet::new();
+        let mut named = HashSet::new();
         for op in ops {
+            // Git queues an update under the name it was given, before any symbolic ref is followed.
+            if !op.extra && !named.insert(op.named.clone()) {
+                return Err(format!(
+                    "multiple updates for ref '{}' not allowed",
+                    op.named
+                ));
+            }
             if !seen.insert(op.target.clone()) {
                 return Err(format!(
                     "multiple updates for ref '{}' not allowed",
@@ -241,42 +279,113 @@ impl Session<'_> {
         for op in ops {
             let lock = RefLock::acquire(self.home(&op.target), &op.target)
                 .map_err(|e| format!("cannot lock ref '{}': {e}", op.target))?;
-            let current = self
-                .repository
-                .refs()
-                .resolve_oid(&op.target)
-                .ok()
-                .filter(|_| {
-                    self.repository
-                        .refs()
-                        .try_read(&op.target)
-                        .ok()
-                        .flatten()
-                        .is_some()
-                });
-            let refuse = |why: String| format!("cannot lock ref '{}': {why}", op.target);
-            match (op.old, current) {
-                (Old::Any, _) => {}
-                (Old::Absent, Some(_)) => return Err(refuse("reference already exists".into())),
-                (Old::Absent, None) => {}
-                (Old::Is(_), None) => {
-                    return Err(refuse(format!(
-                        "unable to resolve reference '{}'",
-                        op.target
-                    )));
+            match self.check(op) {
+                Ok(()) => locks.push(Some(lock)),
+                Err(reject) if self.batch => {
+                    eprintln!("error: {}", reject.error);
+                    println!(
+                        "rejected {} {} {} {}",
+                        op.target,
+                        self.new_field(op),
+                        self.old_field(op),
+                        reject.reason
+                    );
+                    locks.push(None);
                 }
-                (Old::Is(want), Some(found)) if want != found => {
-                    return Err(refuse(format!("is at {found} but expected {want}")));
-                }
-                (Old::Is(_), Some(_)) => {}
+                Err(reject) => return Err(reject.error),
             }
-            locks.push(lock);
         }
         Ok(locks)
     }
 
+    /// The `<new>` a `rejected` line shows for `op`.
+    fn new_field(&self, op: &Op) -> String {
+        match &op.action {
+            Action::Write(new) => new.to_string(),
+            Action::Verify => "(null)".to_string(),
+            Action::Symref(_) | Action::Delete => {
+                ObjectId::zero(self.repository.format()).to_string()
+            }
+        }
+    }
+
+    /// The `<old>` a `rejected` line shows for `op`.
+    fn old_field(&self, op: &Op) -> String {
+        match &op.old {
+            Old::Any => "(null)".to_string(),
+            Old::Absent | Old::Symref(_) => ObjectId::zero(self.repository.format()).to_string(),
+            Old::Is(old) => old.to_string(),
+        }
+    }
+
+    /// Whether the ref `op` lands on holds what the command expects of it.
+    fn check(&self, op: &Op) -> Result<(), Reject> {
+        let refs = self.repository.refs();
+        let raw = refs.try_read(&op.target).ok().flatten();
+        let current = raw.as_ref().and_then(|_| refs.resolve_oid(&op.target).ok());
+        let shown = if matches!(op.action, Action::Symref(_)) {
+            &op.named
+        } else {
+            &op.target
+        };
+        let cannot = |why: String| format!("cannot lock ref '{shown}': {why}");
+        let missing = || Reject {
+            error: cannot(format!("unable to resolve reference '{}'", op.target)),
+            reason: "reference does not exist",
+        };
+        match &op.old {
+            Old::Any => {}
+            Old::Absent => {
+                if current.is_some() {
+                    return Err(Reject {
+                        error: cannot("reference already exists".into()),
+                        reason: "reference already exists",
+                    });
+                }
+                if raw.is_some() && matches!(op.action, Action::Symref(_)) {
+                    return Err(Reject {
+                        error: cannot("dangling symref already exists".into()),
+                        reason: "reference already exists",
+                    });
+                }
+            }
+            Old::Is(want) => match current {
+                None => return Err(missing()),
+                Some(found) if found != *want => {
+                    return Err(Reject {
+                        error: cannot(format!("is at {found} but expected {want}")),
+                        reason: "incorrect old value provided",
+                    });
+                }
+                Some(_) => {}
+            },
+            Old::Symref(want) => match raw {
+                None => return Err(missing()),
+                Some(RefTarget::Direct(_)) => {
+                    return Err(Reject {
+                        error: cannot(format!(
+                            "expected symref with target '{want}': but is a regular ref"
+                        )),
+                        reason: "expected symref but found regular ref",
+                    });
+                }
+                Some(RefTarget::Symbolic(found)) if found != *want => {
+                    return Err(Reject {
+                        error: format!(
+                            "verifying symref target: '{}': is at {found} but expected {want}",
+                            op.target
+                        ),
+                        reason: "incorrect old value provided",
+                    });
+                }
+                Some(RefTarget::Symbolic(_)) => {}
+            },
+        }
+        Ok(())
+    }
+
     /// Write what the prepared transaction decided.
-    fn apply(&self, ops: &[Op], locks: Vec<RefLock>) -> Result<(), String> {
+    fn apply(&self, ops: &[Op], locks: Vec<Option<RefLock>>) -> Result<(), String> {
         let refs = self.repository.refs();
         let format = self.repository.format();
         let zero = ObjectId::zero(format);
@@ -284,17 +393,42 @@ impl Session<'_> {
             .repository
             .committer_signature()
             .map_err(|e| e.to_string())?;
-        for (op, mut lock) in ops.iter().zip(locks) {
+        for (op, lock) in ops.iter().zip(locks) {
+            let Some(mut lock) = lock else { continue };
             let current = refs.resolve_oid(&op.target).ok();
-            match op.action {
+            match op.action.clone() {
                 Action::Verify => {
                     let _ = lock.release();
                 }
                 Action::Delete => {
-                    let _ = lock.release();
                     if current.is_some() || refs.exists(&op.target) {
-                        refs.delete(&op.target).map_err(|e| e.to_string())?;
+                        refs.delete_holding(&op.target, &lock)
+                            .map_err(|e| e.to_string())?;
                     }
+                    let _ = lock.release();
+                    // The lock file kept the ref's directory from being pruned as empty.
+                    let _ = rivet_core::refs::loose::delete(self.home(&op.target), &op.target);
+                }
+                Action::Symref(target) => {
+                    std::fs::write(
+                        lock.path(),
+                        RefTarget::Symbolic(target.clone()).to_bytes(format),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    // A symbolic ref to nothing yet has no value to log.
+                    if let Ok(new) = refs.resolve_oid(&target)
+                        && (self.force_log || self.repository.should_log_ref(&op.target))
+                    {
+                        let entry = ReflogEntry::new(
+                            current.unwrap_or(zero),
+                            new,
+                            who.clone(),
+                            BString::from(self.reason.as_bytes()),
+                        );
+                        refs.append_reflog(&op.target, &entry)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    lock.commit().map_err(|e| e.to_string())?;
                 }
                 Action::Write(new) => {
                     let old = current.unwrap_or(zero);
@@ -352,7 +486,7 @@ impl Session<'_> {
     }
 
     /// Run the `--stdin` command stream.
-    fn run_stdin(&self, nul: bool, mut no_deref: bool) -> Result<i32> {
+    fn run_stdin(&self, nul: bool, no_deref: bool) -> Result<i32> {
         #[derive(PartialEq)]
         enum State {
             Open,
@@ -371,8 +505,9 @@ impl Session<'_> {
         }
         let mut cursor = pieces.into_iter();
         let mut state = State::Open;
+        let mut next_no_deref = false;
         let mut ops: Vec<Op> = Vec::new();
-        let mut held: Option<Vec<RefLock>> = None;
+        let mut held: Option<Vec<Option<RefLock>>> = None;
         let zero = ObjectId::zero(self.repository.format());
 
         while let Some(raw) = cursor.next() {
@@ -395,7 +530,8 @@ impl Session<'_> {
                     if state == State::Closed {
                         bail!("transaction is closed");
                     }
-                    if held.is_none() {
+                    // A batch is checked when it commits: what it rejects is reported then.
+                    if held.is_none() && !self.batch {
                         held = Some(
                             self.prepare(&ops)
                                 .map_err(|e| anyhow::anyhow!("prepare: {e}"))?,
@@ -430,14 +566,25 @@ impl Session<'_> {
                     println!("abort: ok");
                 }
                 ("option", Some(opt)) => match opt {
-                    "no-deref" => no_deref = true,
+                    "no-deref" => next_no_deref = true,
                     _ => bail!("option unknown: {opt}\n"),
                 },
-                ("update" | "create" | "delete" | "verify", rest) => {
+                (
+                    "update" | "create" | "delete" | "verify" | "symref-update" | "symref-create"
+                    | "symref-delete" | "symref-verify",
+                    rest,
+                ) => {
                     if state == State::Closed {
                         bail!("transaction is closed");
                     }
-                    let op = self.parse_command(command, rest, nul, &mut cursor, no_deref)?;
+                    // `option no-deref` is for the next command naming a ref, and no further.
+                    let deref_off = no_deref || std::mem::take(&mut next_no_deref);
+                    let mut parsed = if command.starts_with("symref-") {
+                        self.parse_symref(command, rest, nul, &mut cursor, deref_off)?
+                    } else {
+                        vec![self.parse_command(command, rest, nul, &mut cursor, deref_off)?]
+                    };
+                    let op = parsed.remove(0);
                     // A zero or empty new id on `update` deletes, like git.
                     let op = match op.action {
                         Action::Write(new) if new == zero => Op {
@@ -447,9 +594,7 @@ impl Session<'_> {
                         _ => op,
                     };
                     ops.push(op);
-                }
-                (other, _) if other.starts_with("symref-") => {
-                    bail!("not implemented: update-ref --stdin {other}");
+                    ops.append(&mut parsed);
                 }
                 _ => bail!("unknown command: {line}\n"),
             }
@@ -550,5 +695,151 @@ impl Session<'_> {
             }
         };
         Ok(self.plan(&parsed, old, action, no_deref))
+    }
+
+    /// Parse the arguments of one `symref-update`, `symref-create`, `symref-delete` or
+    /// `symref-verify` command.
+    fn parse_symref(
+        &self,
+        command: &str,
+        rest: Option<&str>,
+        nul: bool,
+        cursor: &mut std::vec::IntoIter<Vec<u8>>,
+        no_deref: bool,
+    ) -> Result<Vec<Op>> {
+        let zero = ObjectId::zero(self.repository.format());
+        let Some(rest) = rest else {
+            bail!("unknown command: {command}\n");
+        };
+        // Line mode: space separated words on the line; `-z`: the ref after the space, then one
+        // NUL-terminated field for each further argument.
+        let mut words: Vec<String> = Vec::new();
+        let name;
+        let mut extra = None;
+        let take_field = |cursor: &mut std::vec::IntoIter<Vec<u8>>| {
+            cursor
+                .next()
+                .map(|field| String::from_utf8_lossy(&field).into_owned())
+        };
+        // The old value of `symref-update`: `ref <target>`, `oid <id>`, or nothing.
+        let mut old_kind = None;
+        if nul {
+            name = rest.to_string();
+            if name.is_empty() {
+                bail!("{command}: missing <ref>");
+            }
+            match command {
+                "symref-update" | "symref-create" => {
+                    words.push(take_field(cursor).unwrap_or_default());
+                    if command == "symref-update" && !words[0].is_empty() {
+                        let kind = take_field(cursor).unwrap_or_default();
+                        if !kind.is_empty() {
+                            old_kind = Some((kind, take_field(cursor).unwrap_or_default()));
+                        }
+                    }
+                }
+                _ => words.push(take_field(cursor).unwrap_or_default()),
+            }
+        } else {
+            let mut parts = rest.splitn(2, ' ');
+            name = parts.next().unwrap_or_default().to_string();
+            if name.is_empty() {
+                bail!("{command}: missing <ref>");
+            }
+            let mut remaining = parts.next();
+            let next_word = |remaining: &mut Option<&str>| {
+                let text = remaining.take()?;
+                let (head, tail) = match text.split_once(' ') {
+                    Some((h, t)) => (h, Some(t)),
+                    None => (text, None),
+                };
+                *remaining = tail;
+                Some(head.to_string())
+            };
+            words.push(next_word(&mut remaining).unwrap_or_default());
+            if command == "symref-update" && !words[0].is_empty() && remaining.is_some() {
+                let kind = next_word(&mut remaining).unwrap_or_default();
+                if !matches!(kind.as_str(), "ref" | "oid") {
+                    bail!("{command} {name}: invalid arg '{kind}' for old value");
+                }
+                let value = next_word(&mut remaining).unwrap_or_default();
+                old_kind = Some((kind, value));
+            }
+            if let Some(text) = remaining {
+                extra = Some(text.to_string());
+            }
+        }
+        if (command == "symref-update" || command == "symref-create") && words[0].is_empty() {
+            bail!("{command} {name}: missing <new-target>");
+        }
+        if let Some(text) = extra {
+            bail!("{command} {name}: extra input:  {text}\n");
+        }
+        let Ok(parsed) = RefName::from_bytes(name.as_bytes()) else {
+            bail!("invalid ref format: {name}");
+        };
+        let target_of = |text: &str| {
+            RefName::from_bytes(text.as_bytes())
+                .map_err(|_| anyhow::anyhow!("invalid ref format: {text}"))
+        };
+        let (action, old) = match command {
+            "symref-update" | "symref-create" => {
+                let new = target_of(&words[0])?;
+                let old = match old_kind {
+                    _ if command == "symref-create" => Old::Absent,
+                    None => Old::Any,
+                    Some((kind, value)) => {
+                        if value.is_empty() {
+                            bail!("{command} {name}: expected old value");
+                        }
+                        if kind == "ref" {
+                            Old::Symref(target_of(&value)?)
+                        } else if kind == "oid" {
+                            let id = super::resolve_rev(self.repository, &value).map_err(|_| {
+                                anyhow::anyhow!("{command} {name}: invalid oid: {value}")
+                            })?;
+                            old_from(id, zero)
+                        } else {
+                            bail!("{command} {name}: invalid arg '{kind}' for old value");
+                        }
+                    }
+                };
+                (Action::Symref(new), old)
+            }
+            _ => {
+                if !no_deref {
+                    bail!("{command}: cannot operate with deref mode");
+                }
+                let old = if words[0].is_empty() {
+                    if command == "symref-verify" {
+                        Old::Absent
+                    } else {
+                        Old::Any
+                    }
+                } else {
+                    Old::Symref(target_of(&words[0])?)
+                };
+                let action = if command == "symref-verify" {
+                    Action::Verify
+                } else {
+                    Action::Delete
+                };
+                (action, old)
+            }
+        };
+        let op = self.plan(&parsed, old.clone(), action.clone(), no_deref);
+        // Through a symbolic ref git points the named ref at the target as well as the ref at the
+        // end of the chain.
+        if matches!(action, Action::Symref(_)) && op.named != op.target {
+            let named = Op {
+                target: op.named.clone(),
+                named: op.named.clone(),
+                old,
+                action,
+                extra: true,
+            };
+            return Ok(vec![op, named]);
+        }
+        Ok(vec![op])
     }
 }

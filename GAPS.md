@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 356 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 357 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 329 tests / 0 failed, 356 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 330 tests / 0 failed, 357 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -213,7 +213,7 @@ The command works for the common case; the listed options or edge cases are miss
   tip rather than the fork point.
 * **Network protocol** — v2 capabilities other than `object-format=sha1` are not implemented;
   git follows tags after a fetch with an explicit refspec where rivet does not.
-* **`update-ref --stdin`** — the `symref-update`, `symref-create`, `symref-delete` and `symref-verify` commands are refused by name (`not implemented: update-ref --stdin symref-…`, exit 128; `update_ref_refusals.rs`); `-0`/`--batch-updates` is not accepted. A `delete` releases its lock just before the removal, which takes the lock itself, so a concurrent writer can slip in between.
+* **`update-ref --stdin`** — `symref-update`, `symref-create`, `symref-delete` and `symref-verify` (line and `-z` framing, git's validation text, the `ref`/`oid` old values, `symref-delete`/`-verify` refused in deref mode, a symref update through a symbolic ref pointing both the named ref and the end of the chain at the target), `option no-deref` for the next command only, and `-0`/`--batch-updates` (what holds is applied, the rest comes back as `rejected <ref> <new> <old> <reason>` with `incorrect old value provided`, `reference does not exist`, `reference already exists` and `expected symref but found regular ref`, checked when the batch commits) are compared with git (`s_update_ref_symref`); `delete` removes the ref while holding its lock (`RefStore::delete_holding`). Not done: a batch rejects a name conflict (`refname conflict`) where rivet stops with a fatal error; C-style quoted fields in line mode; the duplicate and old-value checks of a symref update through a chain are only verified for a plain symbolic ref; git refuses commands after `prepare` (`prepared transactions can only be closed`). Found on the way: `for-each-ref %(symref)` prints the direct target of a chain of symbolic refs, git the final one.
 * **`commit-tree`** — `-S`/`--gpg-sign` and a non-UTF-8 `i18n.commitEncoding` (git adds an `encoding` header) are refused by name (`commit-tree: signing (-S) is not supported`, exit 128; `commit_tree_refusals.rs`). Relative date words in `GIT_AUTHOR_DATE` (`2.days.ago`) are rejected as `invalid date format`, as `parse_git_date` does not read them.
 * **`diff-tree`** — `-c`/`--cc`, `--stdin`, `-M`/`-C`, `--numstat`, `--patch-with-raw`, `--patch-with-stat` and `--full-index` are refused by name (`diff-tree: <option> is not implemented`, exit 128; `diff_tree_refusals.rs`). `-p` of a symlink replaced by a regular file (or the reverse) prints one modification with mode lines where git prints a deletion and an addition; this is in the shared unified formatter, so `diff` has it too. `--first-parent` is accepted and changes nothing, as in git 2.x without `-m`.
 * **`mktree`** — a mode with a sign or wider than 32 bits is refused by name (`mktree: a negative mode is not implemented`, `mktree: a mode wider than 32 bits is not implemented`, exit 128; `mktree_refusals.rs`), because git's `strtoul` reading of such a mode wraps. Leading whitespace and `+` before a mode are accepted, as in git. 

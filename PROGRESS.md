@@ -2137,3 +2137,9 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * `Credential::next_round` (crate-private), `input(Get)`, `HttpTransport::authenticated` (`rounds`), `main.rs` message. The `git credential` command itself is still not implemented (GAPS.md).
 * Proof: `s_credential_state` gained `two`/`three`/`stop`/`never` helpers (fails on the parent: rivet erased after the first refusal); Rust test `the_next_round_drops_secrets_and_hands_the_previous_state_to_get`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 329 passed / 0 failed / 0 ignored; `scenarios.sh` 356 PASS, `failures: 0`.
+
+### Unit 9 — `update-ref --stdin` symref commands, `-0`/`--batch-updates`
+* The brief's vocabulary (`create-reflog`, `reason:`, `-0` as NUL framing) is not git's; the oracle is git 2.56: `-0` is `--batch-updates`, `-z` is the NUL framing, and the commands are `symref-update/create/delete/verify` with `ref <target>` / `oid <id>` old values.
+* `updateref.rs`: `Old::Symref`, `Action::Symref`, `parse_symref`, `check()` (git's lock texts, and the `rejected` reasons), `option no-deref` now for one command only (it used to stay on), duplicate check on the name as given (`multiple updates for ref`), batch mode checked at commit. `RefStore::delete_holding` (new, `refs/mod.rs`) lets `delete` keep the ref's lock across the removal.
+* Proof: scenario `s_update_ref_symref` (about 130 cases against real git; all fail on the parent, which refuses the commands), `delete_holding_removes_the_ref_and_keeps_the_callers_lock`, `update_ref_refusals.rs` rewritten (the refusal no longer exists).
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 330 passed / 0 failed / 0 ignored; `scenarios.sh` 357 PASS, `failures: 0`.

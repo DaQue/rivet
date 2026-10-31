@@ -10688,6 +10688,146 @@ s_update_ref() {
     vs fsck
 }
 
+# update-ref --stdin symref-* commands, option no-deref (one command only), -z framing and
+# -0/--batch-updates, against real git. Every case starts from the same refs.
+s_update_ref_symref() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    echo b >a; v commit -q -a -m two
+    A=$(g rev-parse HEAD~1); B=$(g rev-parse HEAD); Z=0000000000000000000000000000000000000000
+    # sr <stdin text for printf> <update-ref options...>
+    sr() {
+        local r
+        for r in other s dang nothere n n2 x gone; do g update-ref --no-deref -d refs/heads/$r 2>/dev/null; done
+        g update-ref refs/heads/other $A; g symbolic-ref refs/heads/s refs/heads/other
+        g symbolic-ref refs/heads/dang refs/heads/nothere
+        printf "$1" | tr "~" "\0" >.git/stdin.txt; shift
+        STDIN_FILE=.git/stdin.txt v update-ref "$@"
+        v for-each-ref --format='%(refname) %(objectname)'
+        for r in s dang n n2 other; do v symbolic-ref -q refs/heads/$r; done
+        vg reflog show --no-abbrev refs/heads/n
+        vg reflog show --no-abbrev refs/heads/s
+    }
+    # create
+    sr "symref-create refs/heads/n refs/heads/main\n" --stdin
+    sr "symref-create refs/heads/n refs/heads/main\n" --stdin -m why
+    sr "symref-create refs/heads/n refs/heads/nothere\n" --stdin
+    sr "symref-create refs/heads/s refs/heads/main\n" --stdin
+    sr "symref-create refs/heads/other refs/heads/main\n" --stdin --no-deref
+    sr "symref-create refs/heads/n\n" --stdin
+    sr "symref-create refs/heads/n \n" --stdin
+    sr "symref-create refs/heads/n refs/heads/main x\n" --stdin
+    sr "symref-create refs/heads/n bad..name\n" --stdin
+    sr "symref-create bad..name refs/heads/main\n" --stdin
+    sr "symref-create\n" --stdin
+    sr "symref-create \n" --stdin
+    # update, no-deref
+    sr "symref-update refs/heads/s refs/heads/main\n" --stdin --no-deref
+    sr "option no-deref\nsymref-update refs/heads/s refs/heads/main\n" --stdin
+    sr "symref-update refs/heads/s refs/heads/main ref refs/heads/other\n" --stdin --no-deref
+    sr "symref-update refs/heads/s refs/heads/main ref refs/heads/zzz\n" --stdin --no-deref
+    sr "symref-update refs/heads/other refs/heads/main ref refs/heads/zzz\n" --stdin --no-deref
+    sr "symref-update refs/heads/s refs/heads/main oid $A\n" --stdin --no-deref
+    sr "symref-update refs/heads/s refs/heads/main oid $B\n" --stdin --no-deref
+    sr "symref-update refs/heads/other refs/heads/main oid $A\n" --stdin --no-deref
+    sr "symref-update refs/heads/other refs/heads/main oid $B\n" --stdin --no-deref
+    sr "symref-update refs/heads/other refs/heads/main oid $Z\n" --stdin --no-deref
+    sr "symref-update refs/heads/dang refs/heads/main oid $Z\n" --stdin --no-deref
+    sr "symref-update refs/heads/n refs/heads/main oid $Z\n" --stdin --no-deref
+    sr "symref-update refs/heads/n refs/heads/main ref refs/heads/other\n" --stdin --no-deref
+    sr "symref-update refs/heads/n refs/heads/main\n" --stdin --no-deref
+    sr "symref-update refs/heads/dang refs/heads/main\n" --stdin --no-deref
+    sr "symref-update refs/heads/s refs/heads/nothere\n" --stdin --no-deref
+    sr "symref-update refs/heads/s refs/heads/main ref\n" --stdin --no-deref
+    sr "symref-update refs/heads/s refs/heads/main oid\n" --stdin --no-deref
+    sr "symref-update refs/heads/s refs/heads/main foo bar\n" --stdin --no-deref
+    sr "symref-update refs/heads/s refs/heads/main ref a b\n" --stdin --no-deref
+    sr "symref-update refs/heads/s refs/heads/main oid nothex\n" --stdin --no-deref
+    sr "symref-update refs/heads/s\n" --stdin --no-deref
+    sr "symref-update refs/heads/s bad..x\n" --stdin --no-deref
+    sr "symref-update\n" --stdin --no-deref
+    sr "symref-update \n" --stdin --no-deref
+    # update through the symbolic ref (deref mode): the ref it points at changes
+    sr "symref-update refs/heads/s refs/heads/main\n" --stdin
+    sr "symref-update refs/heads/dang refs/heads/main\n" --stdin
+    sr "symref-update refs/heads/other refs/heads/main\n" --stdin
+    # delete / verify
+    sr "symref-delete refs/heads/s\n" --stdin
+    sr "symref-verify refs/heads/s refs/heads/other\n" --stdin
+    sr "symref-delete refs/heads/s\n" --stdin --no-deref
+    sr "symref-delete refs/heads/s refs/heads/other\n" --stdin --no-deref
+    sr "symref-delete refs/heads/s refs/heads/zzz\n" --stdin --no-deref
+    sr "symref-delete refs/heads/other\n" --stdin --no-deref
+    sr "symref-delete refs/heads/other refs/heads/x\n" --stdin --no-deref
+    sr "symref-delete refs/heads/gone\n" --stdin --no-deref
+    sr "symref-delete refs/heads/gone refs/heads/x\n" --stdin --no-deref
+    sr "symref-delete refs/heads/dang refs/heads/nothere\n" --stdin --no-deref
+    sr "symref-verify refs/heads/s refs/heads/other\n" --stdin --no-deref
+    sr "symref-verify refs/heads/s refs/heads/zzz\n" --stdin --no-deref
+    sr "symref-verify refs/heads/s\n" --stdin --no-deref
+    sr "symref-verify refs/heads/gone\n" --stdin --no-deref
+    sr "symref-verify refs/heads/other refs/heads/x\n" --stdin --no-deref
+    sr "symref-verify refs/heads/dang refs/heads/nothere\n" --stdin --no-deref
+    sr "symref-verify refs/heads/s refs/heads/other x\n" --stdin --no-deref
+    # option no-deref reaches only the next command
+    sr "option no-deref\nsymref-delete refs/heads/s\nsymref-delete refs/heads/other\n" --stdin
+    sr "option no-deref\nsymref-delete refs/heads/s\nsymref-update refs/heads/n refs/heads/main\n" --stdin
+    sr "option no-deref\nupdate refs/heads/s $B\ndelete refs/heads/other\n" --stdin
+    sr "option no-deref\nupdate refs/heads/s $B\nupdate refs/heads/s $A\n" --stdin
+    sr "option bogus\n" --stdin
+    # several commands, transactions
+    sr "symref-update refs/heads/s refs/heads/main\nsymref-update refs/heads/s refs/heads/other\n" --stdin --no-deref
+    sr "symref-create refs/heads/n refs/heads/main\nupdate refs/heads/n $A\n" --stdin --no-deref
+    sr "symref-create refs/heads/n refs/heads/main\nupdate refs/heads/other $B\n" --stdin
+    sr "symref-create refs/heads/n refs/heads/other\nupdate refs/heads/other $B\n" --stdin
+    sr "symref-create refs/heads/n refs/heads/main\nsymref-create refs/heads/n2 refs/heads/main\nsymref-verify refs/heads/s refs/heads/other\n" --stdin --no-deref
+    sr "symref-create refs/heads/n refs/heads/main\nsymref-update refs/heads/s refs/heads/zzz ref refs/heads/zzz\n" --stdin --no-deref
+    sr "start\nsymref-create refs/heads/n refs/heads/main\nprepare\ncommit\n" --stdin
+    sr "start\nsymref-create refs/heads/n refs/heads/main\nabort\n" --stdin
+    sr "start\nsymref-create refs/heads/n refs/heads/main\n" --stdin
+    # -z framing
+    sr "symref-create refs/heads/n~refs/heads/main~" --stdin -z
+    sr "symref-create refs/heads/n~~" --stdin -z
+    sr "symref-create refs/heads/n~" --stdin -z
+    sr "symref-update refs/heads/s~refs/heads/main~~" --stdin -z --no-deref
+    sr "symref-update refs/heads/s~refs/heads/main~ref~refs/heads/other~" --stdin -z --no-deref
+    sr "symref-update refs/heads/s~refs/heads/main~ref~refs/heads/zzz~" --stdin -z --no-deref
+    sr "symref-update refs/heads/other~refs/heads/main~oid~$A~" --stdin -z --no-deref
+    sr "symref-update refs/heads/other~refs/heads/main~oid~$B~" --stdin -z --no-deref
+    sr "symref-update refs/heads/s~~" --stdin -z --no-deref
+    sr "symref-update refs/heads/s" --stdin -z --no-deref
+    sr "symref-delete refs/heads/s~refs/heads/other~" --stdin -z --no-deref
+    sr "symref-delete refs/heads/s~~" --stdin -z --no-deref
+    sr "symref-delete refs/heads/s~refs/heads/zzz~" --stdin -z --no-deref
+    sr "symref-verify refs/heads/s~refs/heads/other~" --stdin -z --no-deref
+    sr "symref-verify refs/heads/s~~" --stdin -z --no-deref
+    sr "symref-verify refs/heads/gone~~" --stdin -z --no-deref
+    # -0 / --batch-updates: what holds is applied, the rest is reported
+    sr "update refs/heads/other $B $B\ncreate refs/heads/x $A\n" --stdin --batch-updates
+    sr "update refs/heads/other $B $B\ncreate refs/heads/x $A\n" --stdin
+    sr "update refs/heads/other $B $B\nupdate refs/heads/x $A\n" --stdin -0
+    sr "update refs/heads/other $B $B\nupdate refs/heads/x $A\n" --stdin -0 --no-batch-updates
+    sr "update refs/heads/x $A\nupdate refs/heads/x $B\n" --stdin -0
+    sr "create refs/heads/other $A\n" --stdin -0
+    sr "delete refs/heads/gone\ndelete refs/heads/gone2 $A\ndelete refs/heads/other $B\n" --stdin -0
+    sr "update refs/heads/other $B $Z\n" --stdin -0
+    sr "update refs/heads/x $Z\n" --stdin -0
+    sr "update refs/heads/x bad\n" --stdin -0
+    sr "update refs/heads/x $A $B\nupdate refs/heads/n $A\n" --stdin -0
+    sr "verify refs/heads/other $B\nverify refs/heads/gone $A\n" --stdin -0
+    sr "start\nupdate refs/heads/x $A $B\nupdate refs/heads/n $A\nprepare\ncommit\n" --stdin -0
+    sr "start\nupdate refs/heads/x $A $B\nprepare\nabort\n" --stdin -0
+    sr "update refs/heads/x~$A~$B~update refs/heads/n~$A~~" --stdin -z -0
+    sr "symref-create refs/heads/other refs/heads/main\nsymref-create refs/heads/n refs/heads/main\n" --stdin -0 --no-deref
+    sr "symref-update refs/heads/other refs/heads/main ref refs/heads/zzz\nsymref-create refs/heads/n refs/heads/main\n" --stdin -0 --no-deref
+    sr "symref-update refs/heads/s refs/heads/main ref refs/heads/zzz\nsymref-create refs/heads/n refs/heads/main\n" --stdin -0 --no-deref
+    sr "symref-update refs/heads/s refs/heads/main oid $B\nsymref-create refs/heads/n refs/heads/main\n" --stdin -0 --no-deref
+    sr "symref-verify refs/heads/s refs/heads/zz\nsymref-verify refs/heads/s\n" --stdin -0 --no-deref
+    sr "symref-delete refs/heads/s refs/heads/zz\nsymref-delete refs/heads/other refs/heads/zz\n" --stdin -0 --no-deref
+    sr "symref-delete refs/heads/gone refs/heads/zz\nsymref-verify refs/heads/gone refs/heads/zz\nsymref-update refs/heads/gone refs/heads/main ref refs/heads/zz\n" --stdin -0 --no-deref
+    sr "symref-update refs/heads/dang refs/heads/main oid $Z\nsymref-create refs/heads/n refs/heads/main\n" --stdin -0 --no-deref
+}
+
 s_commit_tree() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m one

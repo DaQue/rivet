@@ -1066,6 +1066,46 @@ impl RefStore {
             });
         }
         let _lock = RefLock::acquire(git_dir, name)?;
+        self.remove_everywhere(git_dir, name, loose_present, packed_present)
+    }
+
+    /// Phase 2 — delete a ref while the caller already holds its lock.
+    ///
+    /// [`RefStore::delete`] takes the ref's lock itself, so a caller that has locked the ref to
+    /// check its value would have to let go first and leave a window in which another writer can
+    /// move it. This does the same removal under the lock `lock` the caller keeps, which must be
+    /// the lock of `name` (a [`RefLock`] does not record which ref it is for). The lock is left
+    /// held; releasing it is the caller's.
+    ///
+    /// # Errors
+    ///
+    /// As [`RefStore::delete`], except that no lock is taken here.
+    pub fn delete_holding(&self, name: &RefName, _lock: &RefLock) -> Result<()> {
+        if name.is_head() {
+            return Err(Error::SymbolicRef {
+                name: name_bytes(name),
+            });
+        }
+        let git_dir = self.home(name);
+        self.reload_live()?;
+        let loose_present = loose::exists(git_dir, name);
+        let packed_present = self.with_packed(|p| p.get(name).is_some());
+        if !loose_present && !packed_present {
+            return Err(Error::RefNotFound {
+                name: name_bytes(name),
+            });
+        }
+        self.remove_everywhere(git_dir, name, loose_present, packed_present)
+    }
+
+    /// The removal [`RefStore::delete`] and [`RefStore::delete_holding`] share, under a lock.
+    fn remove_everywhere(
+        &self,
+        git_dir: &Path,
+        name: &RefName,
+        loose_present: bool,
+        packed_present: bool,
+    ) -> Result<()> {
         if loose_present {
             loose::delete(git_dir, name)?;
         }
@@ -1724,6 +1764,38 @@ mod tests {
             loose::delete(dir, &name(&format!("refs/heads/{n}"))).unwrap();
         }
         store
+    }
+
+    /// `delete_holding` removes the ref (file, packed entry, reflog) under the caller's lock and
+    /// leaves that lock in place, so nobody can create the ref again before the caller lets go.
+    #[test]
+    fn delete_holding_removes_the_ref_and_keeps_the_callers_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("refs/heads")).unwrap();
+        let store = packed_repo(dir.path());
+        let r = name("refs/heads/live");
+        store.set_direct(&r, id(9), None).unwrap();
+        let mut lock = RefLock::acquire(dir.path(), &r).unwrap();
+        store.delete_holding(&r, &lock).unwrap();
+        assert!(!dir.path().join("refs/heads/live").exists());
+        assert!(
+            dir.path().join("refs/heads/live.lock").exists(),
+            "the lock is still held"
+        );
+        assert!(RefLock::acquire(dir.path(), &r).is_err());
+        lock.release().unwrap();
+        // a packed ref goes too
+        let packed = name("refs/heads/a");
+        let mut lock = RefLock::acquire(dir.path(), &packed).unwrap();
+        let before = store.delete_holding(&packed, &lock);
+        lock.release().unwrap();
+        before.unwrap();
+        assert!(store.read(&packed).is_err());
+        assert!(
+            store
+                .delete_holding(&packed, &RefLock::acquire(dir.path(), &packed).unwrap())
+                .is_err()
+        );
     }
 
     /// `delete` takes `&self`, so the packed snapshot cannot be replaced; a second operation in the
