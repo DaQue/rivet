@@ -2290,3 +2290,8 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Found, not fixed: git ends an unquoted value at any `#`/`;` (`k = x#y` reads `x`); rivet only after whitespace (recorded in GAPS.md).
 * Proof: scenario `s_config_continued` (fails on the parent), Rust test in `tests/config_preserve.rs`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 348 passed / 0 failed / 0 ignored; `scenarios.sh` 378 PASS, `failures: 0`.
+
+### UNIT 31 — config: an unquoted `#`/`;` ends a value anywhere
+* Chosen from GAPS.md by the weekend run (every unit in PRIORITIES.md was committed). `Config::parse` ended a value at `#`/`;` only after a blank; git ends it at any unquoted one (`k = x#y` reads `x`, `https://h/#frag` reads `https://h/`), drops the blanks before it and keeps quoted ones and escaped characters. The two doc comments that described the old rule were corrected.
+* Proof: scenario `s_config_comment_chars` (fails on the parent), Rust test in `tests/config_preserve.rs`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 349 passed / 0 failed / 0 ignored; `scenarios.sh` 379 PASS, `failures: 0`.

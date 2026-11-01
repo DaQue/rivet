@@ -71,3 +71,18 @@ fn a_continued_value_joins_its_lines_and_survives_an_edit_elsewhere() {
     assert!(out.starts_with(&file[..file.len() - "\tq = 1\n".len()]));
     assert!(out.ends_with(b"\tq = 5\n"));
 }
+
+#[test]
+fn an_unquoted_hash_or_semicolon_ends_a_value_where_it_stands() {
+    let file = b"[a]\n\tk = x#y\n\tm = x;y\n\tu = https://h/#frag\n\tq = \"x#y\"#z\n\te = #c\n";
+    let cfg = Config::parse(file).unwrap();
+    for (key, want) in [
+        ("a.k", "x"),
+        ("a.m", "x"),
+        ("a.u", "https://h/"),
+        ("a.q", "x#y"),
+        ("a.e", ""),
+    ] {
+        assert_eq!(cfg.get(BStr::new(key)).unwrap().unwrap(), want, "{key}");
+    }
+}

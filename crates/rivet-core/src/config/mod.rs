@@ -31,11 +31,9 @@
 //!    from the same file, so the representation has to keep the duplicates and let the accessor
 //!    choose.
 //! 3. **A value can be continued across lines with a trailing backslash**, and a line can carry a
-//!    comment after the value. `\` at the end of a line joins the next, comment markers inside a
-//!    value are literal unless preceded by whitespace, and `\n` in a value is a newline while a
-//!    bare `n` is just an `n`. A parser that splits on `#` unconditionally truncates any URL or
-//!    password containing one — and URLs with fragments are not rare, which is why Git is careful
-//!    here.
+//!    comment after the value. `\` at the end of a line joins the next, an unquoted `#` or `;`
+//!    ends the value wherever it stands (`k = x#y` reads `x`, as in Git), a quoted one is literal,
+//!    and `\n` in a value is a newline while a bare `n` is just an `n`.
 //!
 //! # Caveats that bite
 //!
@@ -368,9 +366,9 @@ impl Config {
     ///   `key` sets it to `true`; and a line ending in an odd number of backslashes continues onto
     ///   the next. Quoted values may contain `#`, `;` and escaped characters, and the escapes are
     ///   `\n`, `\t`, `\b`, `\\` and `\"`.
-    /// * **A value's comment is only a comment when the `#` or `;` follows whitespace.** `url =
-    ///   https://x/#frag` keeps its fragment, because the `#` is not preceded by a space. This is
-    ///   the rule that a naive split-on-hash gets wrong, and it silently truncates URLs.
+    /// * **An unquoted `#` or `;` starts a comment wherever it stands in a value**, whitespace
+    ///   before it or not: `url = https://x/#frag` reads `https://x/`, exactly as Git does. Inside
+    ///   double quotes both are literal.
     /// * **The section runs until the next section header.** A key before any section header is
     ///   [`crate::error::Error::ConfigSyntax`], not a key in an unnamed section; Git's format has no
     ///   such thing.
@@ -591,6 +589,7 @@ impl Config {
                 let mut out: Vec<u8> = Vec::new();
                 let mut vi = 0usize;
                 let mut quoted = false;
+                let mut kept = 0usize;
                 while vi < value_bytes.len() {
                     let b = value_bytes[vi];
                     if b == b'\\' && vi + 1 < value_bytes.len() {
@@ -608,6 +607,7 @@ impl Config {
                             }
                             _ => out.push(c),
                         }
+                        kept = out.len();
                         vi += 2;
                         continue;
                     }
@@ -617,13 +617,17 @@ impl Config {
                         vi += 1;
                         continue;
                     }
-                    if !quoted && (b == b' ' || b == b'\t') {
-                        let rest = &value_bytes[vi..];
-                        if rest.len() >= 2 && (rest[1] == b'#' || rest[1] == b';') {
-                            break;
+                    if !quoted && (b == b'#' || b == b';') {
+                        // Blanks before the comment are not part of the value; quoted ones are.
+                        while out.len() > kept && matches!(out.last(), Some(b' ' | b'\t')) {
+                            out.pop();
                         }
+                        break;
                     }
                     out.push(b);
+                    if quoted {
+                        kept = out.len();
+                    }
                     vi += 1;
                 }
                 BString::from(out)

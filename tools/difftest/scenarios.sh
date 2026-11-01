@@ -13733,6 +13733,13 @@ s_config_continued() {
     { echo "== config file"; cat -A .git/config; } >>"$TRANSCRIPT"
 }
 
+s_config_comment_chars() {
+    v init -q repo; cd repo
+    printf '[a]\n\tk = x#y\n\tm = x;y\n\tn = a  # c\n\tu = https://h/#frag\n\tq = "x#y"#z\n\tz = a   b ;c\n\te = #c\n\tf = "a "; d\n\tg = a\\t #c\n' >.git/config
+    v config -l --local
+    for k in a.k a.m a.n a.u a.q a.z a.e a.f a.g; do v config --get $k; done
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
