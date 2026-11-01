@@ -13885,6 +13885,27 @@ s_config_get_all() {
     v config --get-all nosection
 }
 
+s_config_bool_or_int() {
+    v init -q repo; cd repo
+    printf '[a]\n\tbare\n\tempty =\n\tyes = Yes\n\toff = OFF\n\tone = 1\n\tzero = 0\n\tbig = 2k\n\tneg = -3m\n\tword = foo\n\thuge = 99999999999999999999\n\tunit = 1k5\n' >.git/config
+    for k in bare empty yes off one zero big neg word huge unit missing; do
+        v config --get --type=bool-or-int a.$k
+        v config --type=bool-or-int a.$k
+    done
+    v config --type=bool-or-int --get-regexp 'a\.(yes|big|one)'
+    v config --type=bool-or-int --get-all a.big
+    v config --type=int --get-regexp 'a\.(big|neg|one)'
+    v config --type=bool --get-regexp 'a\.(yes|off|zero)'
+    v config --type=bool-or-int a.set 3000000000
+    for w in yes 1 0 2k off foo ''; do
+        v config --type=bool-or-int a.set "$w"
+        v config --get a.set
+    done
+    v config --type=bool-or-int a.set 5g
+    v config --get a.set
+    v config --type=bool-or-int --get a.set
+}
+
 s_stash_pathspec_file() {
     local n=0
     sp_repo() {

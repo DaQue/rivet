@@ -697,6 +697,7 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                     int_failure(value)
                 ),
             },
+            Some(ConfigTypeArg::BoolOrInt) => bool_or_int(value, key, Some(origin)),
             Some(ConfigTypeArg::Path) => {
                 let text = value.to_string();
                 Ok(match text.strip_prefix("~/") {
@@ -763,7 +764,7 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
             }
         };
         let mut found = false;
-        for (_, config) in read_sources()? {
+        for (origin, config) in read_sources()? {
             for (index, entry) in config.entries().iter().enumerate() {
                 let key = display_key(entry);
                 // A bare `key` matches a value pattern as the empty string and prints no value.
@@ -779,7 +780,7 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                     out.extend_from_slice(key.as_bytes());
                     if !bare {
                         out.push(if args.null_terminated { b'\n' } else { b' ' });
-                        out.extend_from_slice(value);
+                        out.extend_from_slice(&render(&key, BStr::new(value), &origin)?);
                     }
                     out.extend_from_slice(terminator);
                 }
@@ -933,6 +934,7 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                     Err(_) => anyhow::bail!("bad boolean config value '{value}' for '{key}'"),
                 }
             }
+            Some(ConfigTypeArg::BoolOrInt) => bool_or_int(BStr::new(value.as_bytes()), key, None)?,
             _ => value.as_bytes().to_vec(),
         };
         if args.add {
@@ -990,6 +992,32 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
 }
 
 use bstr::BStr;
+
+/// `--type=bool-or-int`: a boolean word prints as `true`/`false`, anything else is read as an
+/// integer with `k`/`m`/`g` suffixes. Unlike `--type=bool`, `1` and `0` are integers here. The
+/// failure is git's integer one; `origin` is the file a *read* names, and a write names none.
+fn bool_or_int(value: &BStr, key: &str, origin: Option<&str>) -> Result<Vec<u8>> {
+    let lower = value.to_ascii_lowercase();
+    match &lower[..] {
+        b"true" | b"yes" | b"on" => return Ok(b"true".to_vec()),
+        b"" | b"false" | b"no" | b"off" => return Ok(b"false".to_vec()),
+        _ => {}
+    }
+    // git reads this one as a C `int`, not the 64-bit integer `--type=int` uses.
+    match rivet_core::parse_int(value)
+        .ok()
+        .and_then(|n| i32::try_from(n).ok())
+    {
+        Some(n) => Ok(n.to_string().into_bytes()),
+        None => {
+            let place = origin.map_or(String::new(), |o| format!(" in file {o}"));
+            anyhow::bail!(
+                "bad numeric config value '{value}' for '{key}'{place}: {}",
+                int_failure(value)
+            )
+        }
+    }
+}
 
 /// The name git prints for a repository's own config file: relative to the work tree's top, or
 /// to the current directory for a bare repository, and as found otherwise.

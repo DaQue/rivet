@@ -505,6 +505,9 @@ pub enum ConfigTypeArg {
     /// Interpret the value as an integer, honouring Git's `k`/`m`/`g` suffixes.
     Int,
 
+    /// Interpret the value as a boolean word, or else as an integer.
+    BoolOrInt,
+
     /// Interpret the value as a path, expanding a leading `~`.
     Path,
 
