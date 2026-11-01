@@ -1,0 +1,5 @@
+# Project list for the workload gate (COMPLETION.md). Tab-separated:
+# name <TAB> source path <TAB> test command (run inside the rivet clone) <TAB> timeout seconds
+rigwatch	/data/go/rigwatch	go test ./...	600
+rivet	/data/rust/rivet	cargo test --workspace	2400
+lt3092egui	/data/rust/lt3092egui	cargo test	900
