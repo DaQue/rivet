@@ -13871,6 +13871,21 @@ s_config_get_regexp_type_word() {
     v config --get-regexp --type nope '^foo\.ba'
 }
 
+s_config_type_short() {
+    v init -q repo; cd repo
+    printf '[foo]\n\tbar = 1\n\tbaz = yes\n\tbig = 2k\n\tcol = bold red\n' >.git/config
+    v config -t int --get foo.big
+    v config -tint --get foo.big
+    v config --get -t bool foo.baz
+    v config -t bool-or-int --get-all foo.baz
+    v config -t color --get foo.col
+    v config -t int --list
+    v config -t bool foo.new yes
+    v config --list
+    v config -t nope --get foo.bar
+    v config -tnope --get foo.bar
+}
+
 s_config_bare() {
     v init -q repo; cd repo
     printf '[foo]\n\tbare\n\tempty =\n\tfull = true\n\tother = x\n' >.git/config

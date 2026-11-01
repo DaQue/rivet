@@ -60,8 +60,17 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
     let mut in_blame = false;
     let mut in_config = false;
     let mut after_dashes = false;
-    while let Some(arg) = iter.next() {
-        let text = arg.to_string_lossy().into_owned();
+    while let Some(mut arg) = iter.next() {
+        let mut text = arg.to_string_lossy().into_owned();
+        if in_config && command_seen && !after_dashes && text.starts_with("-t") {
+            // git's `-t <type>` / `-t<type>` is `--type`; clap's config has no such short flag.
+            let spelled = match &text[2..] {
+                "" => "--type".to_owned(),
+                value => format!("--type={value}"),
+            };
+            arg = spelled.clone().into();
+            text = spelled;
+        }
         if !command_seen {
             if text == "--repo" {
                 out.push(arg);
