@@ -10124,6 +10124,47 @@ s_rebase_interop() {
     v status
 }
 
+# A plain (non-`-i`) rebase that stops on a conflict is resumed, skipped or aborted by the other
+# implementation: git starts and rivet continues/skips/aborts, and the reverse.
+s_rebase_interop_plain() {
+    v init -q repo; cd repo
+    echo 0 >f; v add f; v commit -q -m base
+    v switch -q -c topic
+    for i in 1 2 3; do echo $i >f$i; v add f$i; tick; v commit -q -m c$i; done
+    v switch -q main
+    echo m >m; v add m; tick; v commit -q -m main
+    echo conflict >f2; v add f2; tick; v commit -q -m "main f2"
+    orig=$(g rev-parse topic)
+    local starter resumer
+    for starter in vg v; do
+        for resumer in vg v; do
+            [ "$starter" = "$resumer" ] && continue
+            v switch -q -C topic "$orig"
+            $starter rebase main
+            echo "rc=$?"
+            $resumer status
+            echo res >f2; v add f2
+            GIT_EDITOR=true $resumer rebase --continue
+            echo "rc=$?"
+            v status
+            v log --format='%h %s' main..topic
+            v reflog -10
+            v switch -q -C topic "$orig"
+            $starter rebase main
+            $resumer rebase --skip
+            echo "rc=$?"
+            v status
+            v log --format='%h %s' main..topic
+            v switch -q -C topic "$orig"
+            $starter rebase main
+            $resumer rebase --abort
+            echo "rc=$?"
+            v status
+            v log --format='%h %s' main..topic
+        done
+    done
+}
+
 # `--no-edit`: `commit --amend` keeps the message (cleaned up as Git's whitespace mode does) and
 # opens no editor; `merge` and `cherry-pick` accept the flag.
 s_commit_no_edit() {

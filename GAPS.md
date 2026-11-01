@@ -2,7 +2,7 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 402 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 403 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
 Last checked 2026-11-01, gate: 352 tests / 0 failed, 402 scenarios / 0 failures, `fmt`,
@@ -67,11 +67,6 @@ The command or subsystem is absent; it either fails at the argument parser or re
   is not compared (git leaves no `message-fixup` there; rivet writes one). An empty message from the editor aborts the whole rebase back to the
   original tip (git stops with the commit pending). The editor sees the message plus git's `#` footer, not
   the `git status` template. `post-rewrite` lines for a squash chain are not compared with git.
-* **Rebase interop** — a rebase that rivet starts (plain or `-i`) can be resumed, skipped or aborted by real
-  `git rebase --continue`/`--skip`/`--abort`, and the reverse, with identical ids, reflogs and files
-  (`s_rebase_interop`: edit stop, squash, conflict, reword). rivet's `rebase-merge/` carries one extra file,
-  `rivet-interactive`, which git ignores; a git-written state lacks it and rivet does not need it. Plain
-  (non-`-i`) rebase states written by git are not compared.
 * **`bundle-uri`** (beyond `clone --bundle-uri=<file>`) and SHA-256 bundles. Creating, listing, verifying and unbundling bundles works;
   fetching, cloning and `ls-remote` *from* a bundle file work (`s_bundle_clone`, `s_ls_remote`). `clone --bundle-uri` takes a file path
   or `file://` URL only (refs land in `refs/bundles/*`, `s_clone_bundle_uri`); other schemes warn and fall back to a plain clone, as an
