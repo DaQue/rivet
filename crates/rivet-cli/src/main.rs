@@ -107,6 +107,36 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                 }
                 continue;
             }
+        } else if in_config && !after_dashes && (text == "--type" || text.starts_with("--type=")) {
+            // git checks the name while it parses options, so a name it does not know is fatal
+            // whatever else is on the line; clap's own error would read differently.
+            let value = match text.strip_prefix("--type=") {
+                Some(value) => Some(value.to_owned()),
+                None => iter.next().map(|next| {
+                    let value = next.to_string_lossy().into_owned();
+                    out.push(arg.clone());
+                    out.push(next);
+                    value
+                }),
+            };
+            if let Some(value) = value {
+                if !matches!(
+                    value.as_str(),
+                    "bool"
+                        | "int"
+                        | "bool-or-int"
+                        | "bool-or-str"
+                        | "path"
+                        | "expiry-date"
+                        | "color"
+                ) {
+                    eprintln!("fatal: unrecognized --type argument, {value}");
+                    std::process::exit(cmd::EXIT_FATAL);
+                }
+                if text == "--type" {
+                    continue;
+                }
+            }
         } else if in_config && text == "--get-regexp" {
             // git's `--get-regexp` is a mode flag, so `-z` may follow it; clap's takes the
             // next word as its pattern. A `-z`/`--null` right after it moves in front.

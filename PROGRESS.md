@@ -2337,3 +2337,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 43** — `config --type=bool-or-int`: a boolean word reads as `true`/`false` (an empty value is false, a bare key true), anything else as a C `int` with `k`/`m`/`g` (so `1` stays `1`, `5g` is out of range), on read, in `--get-regexp` (which now applies `--type` to every type) and on write (`config --type=bool-or-int k yes` stores `true`); git's `bad numeric config value` fatal without a file on write; `s_config_bool_or_int` fails on `6133e77`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 391 PASS, `failures: 0`.
+
+* **UNIT 44** — `config --type=<name>`: a name git does not know (`foo`, `str`, an empty one) is `fatal: unrecognized --type argument, <name>` (exit 128) wherever it stands on the line, as git checks it while parsing options; `s_config_type_unknown` fails on `a89a266`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 392 PASS, `failures: 0`.

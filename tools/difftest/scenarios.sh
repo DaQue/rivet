@@ -13906,6 +13906,23 @@ s_config_bool_or_int() {
     v config --type=bool-or-int --get a.set
 }
 
+s_config_type_unknown() {
+    v init -q repo; cd repo
+    printf '[a]\n\tone = 1\n' >.git/config
+    for t in foo str Bool '' bool-or-str-x; do
+        v config --type="$t" --get a.one
+        v config --get --type="$t" a.one
+        v config --type="$t" a.set 2
+        v config --type="$t" --list
+    done
+    v config --type nope --get a.one
+    v config --type nope a.set 2
+    v config --get --type nope --type int a.one
+    v config --type int --type nope --get a.one
+    v config --type=int --get a.one
+    v config --get a.set
+}
+
 s_stash_pathspec_file() {
     local n=0
     sp_repo() {
