@@ -13965,6 +13965,25 @@ s_config_expiry_date() {
     done
 }
 
+s_config_color() {
+    v init -q repo; cd repo
+    printf '[a]\n\tred = red\n\tbold = bold red blue\n\thex = "#ff8000"\n\tn = 200\n\tlow = 3\n\tbright = brightred\n\tdim = ul dim\n\tnorm = normal\n\tempty =\n\tbare\n\tbad = nonsense\n\ttoo = red blue green\n[a "s"]\n\tk = green\n\tk = bold\n' >.git/config
+    for k in red bold hex n low bright dim norm empty bare bad too s.k missing; do
+        v config --get --type=color a.$k
+        v config --type=color a.$k
+    done
+    v config --type=color --get-all a.s.k
+    v config --type=color --get-regexp 'a\.(red|n|hex)'
+    v config --type=color --get-regexp 'a\.(red|bad)'
+    printf '[a]\n\tred = red\n\tbold = bold red blue\n\tbad = nonsense\n\tempty =\n' >.git/config
+    v config --local --type=color --list
+    v config --local --list --type=color -z
+    for w in 'bold red' garbage; do
+        v config --type=color a.set "$w"
+        v config --get a.set
+    done
+}
+
 s_config_type_unknown() {
     v init -q repo; cd repo
     printf '[a]\n\tone = 1\n' >.git/config

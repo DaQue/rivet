@@ -2352,3 +2352,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 48** — `config --type=expiry-date`: `never`/`false` read as 0, `now`/`all` as 18446744073709551615, a date as its timestamp, on read, `--get-regexp`, `--get-all` and `--list` (non-dates left out); a non-date is git's `error: '<v>' for '<key>' is not a valid timestamp` (bare key: `missing value`) plus `fatal: bad config line N in file F`, exit 128. Writes store the text as given. `s_config_expiry_date` fails on `4345091`. Also `s_split_index_expire` now sleeps a second around its `now` steps (it flaked once at a second boundary).
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 396 scenarios, `failures: 0`.
+
+* **UNIT 49** — `config --type=color`: the value prints as its ANSI escape sequence on read, `--get-regexp`, `--get-all` and `--list` (non-colours left out); a bad colour is `error: invalid color value: <v>` (bare key: `missing value`) plus `fatal: bad config line N in file F`, exit 128; a write checks the colour (`fatal: cannot parse color '<v>'`) and stores the text as given. `s_config_color` fails on `1e7c074`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 397 scenarios, `failures: 0`.

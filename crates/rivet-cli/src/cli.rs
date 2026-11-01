@@ -514,6 +514,9 @@ pub enum ConfigTypeArg {
     /// Interpret the value as a date and print it as a timestamp.
     ExpiryDate,
 
+    /// Interpret the value as a colour and print its ANSI escape sequence.
+    Color,
+
     /// Interpret the value as a path, expanding a leading `~`.
     Path,
 

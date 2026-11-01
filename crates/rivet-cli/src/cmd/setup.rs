@@ -703,6 +703,8 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
             Some(ConfigTypeArg::BoolOrStr) => Ok(bool_or_str(value)),
             Some(ConfigTypeArg::ExpiryDate) => expiry_date(value)
                 .ok_or_else(|| expiry_failure(key, origin, Some(&value.to_string()))),
+            Some(ConfigTypeArg::Color) => color_value(value)
+                .ok_or_else(|| color_failure(key, origin, Some(&value.to_string()))),
             Some(ConfigTypeArg::Path) => {
                 let text = value.to_string();
                 Ok(match text.strip_prefix("~/") {
@@ -732,7 +734,8 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                             eprintln!("error: missing value for '{key}'");
                             None
                         }
-                        (true, Some(ConfigTypeArg::ExpiryDate)) => None,
+                        (true, Some(ConfigTypeArg::ExpiryDate | ConfigTypeArg::Color)) => None,
+                        (false, Some(ConfigTypeArg::Color)) => color_value(entry.value.as_ref()),
                         (false, Some(ConfigTypeArg::ExpiryDate)) => {
                             expiry_date(entry.value.as_ref())
                         }
@@ -922,6 +925,9 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                     if bare && args.value_type == Some(ConfigTypeArg::ExpiryDate) {
                         return Err(expiry_failure(key, &origin, None));
                     }
+                    if bare && args.value_type == Some(ConfigTypeArg::Color) {
+                        return Err(color_failure(key, &origin, None));
+                    }
                     out.extend_from_slice(&render(key, BStr::new(&value[..]), &origin)?);
                 }
                 out.extend_from_slice(terminator);
@@ -971,6 +977,13 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
             }
             Some(ConfigTypeArg::BoolOrInt) => bool_or_int(BStr::new(value.as_bytes()), key, None)?,
             Some(ConfigTypeArg::BoolOrStr) => bool_or_str(BStr::new(value.as_bytes())),
+            Some(ConfigTypeArg::Color) => {
+                if color_value(BStr::new(value.as_bytes())).is_none() {
+                    eprintln!("error: invalid color value: {value}");
+                    anyhow::bail!("cannot parse color '{value}'");
+                }
+                value.as_bytes().to_vec()
+            }
             _ => value.as_bytes().to_vec(),
         };
         if args.add {
@@ -1019,6 +1032,9 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                 };
                 if bare && args.value_type == Some(ConfigTypeArg::ExpiryDate) {
                     return Err(expiry_failure(key, &origin, None));
+                }
+                if bare && args.value_type == Some(ConfigTypeArg::Color) {
+                    return Err(color_failure(key, &origin, None));
                 }
                 out.extend_from_slice(&render(key, BStr::new(&value[..]), &origin)?);
             }
@@ -1101,6 +1117,26 @@ fn expiry_failure(key: &str, origin: &str, value: Option<&str>) -> anyhow::Error
         Some(text) => eprintln!("error: '{text}' for '{key}' is not a valid timestamp"),
         None => eprintln!("error: missing value for '{key}'"),
     }
+    bad_config_line(key, origin, value)
+}
+
+/// `--type=color`: the escape sequence of a colour specification; `None` when git rejects it.
+fn color_value(value: &BStr) -> Option<Vec<u8>> {
+    super::pretty::parse_color_spec(&value.to_string()).map(String::into_bytes)
+}
+
+/// Git's `error:` line for a value that is no colour (`None`: a bare `key`), then the
+/// `fatal: bad config line N in file F` that follows it.
+fn color_failure(key: &str, origin: &str, value: Option<&str>) -> anyhow::Error {
+    match value {
+        Some(text) => eprintln!("error: invalid color value: {text}"),
+        None => eprintln!("error: missing value for '{key}'"),
+    }
+    bad_config_line(key, origin, value)
+}
+
+/// The `bad config line N in file F` fatal for `key` at `origin`, the line found by reading it.
+fn bad_config_line(key: &str, origin: &str, value: Option<&str>) -> anyhow::Error {
     let line = std::fs::read(origin)
         .ok()
         .and_then(|data| config_line_of(&data, key, value));
