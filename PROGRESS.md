@@ -2331,3 +2331,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 41** — `stash push --pathspec-from-file=<file|->` and `--pathspec-file-nul`: LF/CRLF lines (a leading `"` is C-quoted), NUL records taken literally, an empty file stashes everything, and git's fatals for `-p`, `--staged`, pathspec arguments, a missing `--pathspec-from-file`, an unreadable file, a badly quoted line and an empty record; `s_stash_pathspec_file` fails on `48ca53b`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 389 PASS, `failures: 0`.
+
+* **UNIT 42** — `format-patch`: `format.coverLetter` (`true`/`false`/`auto`, auto only for more than one patch) and `format.thread` (`true`, `deep`, `shallow`) set the defaults that `--[no-]cover-letter` / `--[no-]thread` override; a bad boolean is `fatal: bad boolean config value '<v>' for '<key>'` (exit 128); `s_format_patch_config` fails on `23464a2`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 390 PASS, `failures: 0`.

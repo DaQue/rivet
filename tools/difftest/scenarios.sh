@@ -13911,6 +13911,51 @@ s_stash_pathspec_file() {
     sp_repo; v stash push --pathspec-file-nul; sp_state; cd ..
 }
 
+s_format_patch_config() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m "base"
+    echo b >>a; tick; v commit -q -a -m "one"
+    echo c >>a; tick; v commit -q -a -m "two"
+    local n=0
+    fpc() {
+        n=$((n + 1))
+        # outside the repository: the files hold the wall clock, which is normalised below
+        v format-patch -o ../out$n --no-signature "$@"
+        local f
+        for f in ../out$n/*; do
+            [ -e "$f" ] || continue
+            echo "== $f" >>"$TRANSCRIPT"
+            sed -e 's/\.[0-9]\{9,11\}\.git\./.NOW.git./g' "$f" >>"$TRANSCRIPT"
+        done
+    }
+    for value in true false auto yes no on off 1 0 2 deep; do
+        v config format.coverLetter "$value"
+        echo "-- coverLetter=$value" >>"$TRANSCRIPT"
+        fpc HEAD~2
+        fpc -1
+        fpc --no-cover-letter HEAD~2
+        fpc --cover-letter -1
+    done
+    v config format.coverLetter AUTO
+    fpc HEAD~2
+    v config format.coverLetter nonsense
+    fpc HEAD~2
+    v config --unset format.coverLetter
+    for value in true false yes no deep shallow Deep SHALLOW 1 0 nonsense; do
+        v config format.thread "$value"
+        echo "-- thread=$value" >>"$TRANSCRIPT"
+        fpc HEAD~2
+        fpc --no-thread HEAD~2
+        fpc --thread HEAD~2
+        fpc --thread=deep HEAD~2
+        fpc --in-reply-to=abc@example.com HEAD~2
+    done
+    v config format.coverLetter true
+    v config format.thread deep
+    fpc HEAD~2
+    fpc -1
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

@@ -13,6 +13,7 @@
 //!   compare patches byte for byte should pass `--no-signature`.
 //! * Attachments, path limiting and `-k` with a multi-line subject (which needs RFC 2047 encoding
 //!   of an ASCII string) are not implemented and are refused.
+//! * `format.coverLetter` (`true`, `false`, `auto`) and `format.thread` (`true`, `deep`, `shallow`) set the defaults.
 //! * `--cover-letter` writes `0000-cover-letter.patch` (shortlog wrapped by bytes, then the diffstat
 //!   of the whole range); `--thread[=shallow|deep]` and `--in-reply-to` add `Message-ID`,
 //!   `In-Reply-To` and `References`, where the id carries the current time as git's does;
@@ -316,6 +317,40 @@ fn slug(subject: &str) -> String {
     out.chars().take(52).collect::<String>()
 }
 
+/// `format.thread`: `deep` or `shallow`, otherwise a boolean (true is shallow), as git reads it.
+fn config_thread(repository: &rivet_core::Repository) -> Result<Option<bool>> {
+    let Some(value) = repository.config_value(bstr::BStr::new(b"format.thread"))? else {
+        return Ok(None);
+    };
+    if value.eq_ignore_ascii_case(b"deep") {
+        return Ok(Some(true));
+    }
+    if value.eq_ignore_ascii_case(b"shallow") {
+        return Ok(Some(false));
+    }
+    Ok(config_bool(&value, "format.thread")?.then_some(false))
+}
+
+/// `format.coverLetter`: `Some(None)` is `auto`, `Some(Some(on))` a boolean.
+fn config_cover_letter(repository: &rivet_core::Repository) -> Result<Option<Option<bool>>> {
+    let Some(value) = repository.config_value(bstr::BStr::new(b"format.coverLetter"))? else {
+        return Ok(None);
+    };
+    if value.eq_ignore_ascii_case(b"auto") {
+        return Ok(Some(None));
+    }
+    Ok(Some(Some(config_bool(&value, "format.coverletter")?)))
+}
+
+/// Git's boolean config value, an integer counting as true when nonzero.
+fn config_bool(value: &[u8], key: &str) -> Result<bool> {
+    let value = bstr::BStr::new(value);
+    match rivet_core::parse_bool(value).or_else(|_| rivet_core::parse_int(value).map(|n| n != 0)) {
+        Ok(b) => Ok(b),
+        Err(_) => anyhow::bail!("bad boolean config value '{value}' for '{key}'"),
+    }
+}
+
 /// Handler for `rivet format-patch`.
 ///
 /// # Exit codes
@@ -341,6 +376,8 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
     }
     let repository = super::open(global)?;
     let odb = repository.odb();
+    let config_thread = config_thread(&repository)?;
+    let config_cover = config_cover_letter(&repository)?;
 
     let bad = |result: Result<ObjectId>, spec: &str| -> Result<ObjectId> {
         result.map_err(|_| {
@@ -413,8 +450,17 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
     }
     selected.reverse();
 
-    let cover = args.cover_letter && !args.no_cover_letter;
     let total = selected.len();
+    // `--cover-letter`/`--no-cover-letter` beat `format.coverLetter`; `auto` wants more than one patch.
+    let cover = if args.cover_letter || args.no_cover_letter {
+        args.cover_letter && !args.no_cover_letter
+    } else {
+        match config_cover {
+            Some(Some(on)) => on,
+            Some(None) => total > 1,
+            None => false,
+        }
+    };
     let numbered = (total > 1 || args.numbered || cover) && !args.no_numbered;
     let last_number = args.start_number + total.saturating_sub(1);
     let digits = last_number.to_string().len();
@@ -422,7 +468,7 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         None
     } else {
         match args.thread.as_deref() {
-            None => None,
+            None => config_thread,
             Some("shallow" | "") => Some(false),
             Some("deep") => Some(true),
             // Git says nothing about a thread style it does not know and exits 129.
