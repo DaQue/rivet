@@ -13812,6 +13812,20 @@ s_for_each_ref_symref_chain() {
     v for-each-ref --format='%(refname)|%(symref:lstrip=2)|%(symref:rstrip=1)' refs/heads/c
 }
 
+# `config --get-regexp <key-regex> <value-regex>`: an ERE over the value, `!` negating it.
+s_config_get_regexp_value() {
+    v init -q repo; cd repo
+    printf '[foo]\n\tbar = 1\n\tbaz = 2\n\tqux = abc\n\tbar = 10\n\tUp = Abc\n[x "Y"]\n\tk = a!b\n' >.git/config
+    for p in '1' '^1$' '!1' '!^1' 'a|2' 'A' '!A' '' '!' '!!1' 'a!b' '[' '(1' '!(' 'b{2}' '[[:digit:]]+'; do
+        v config --get-regexp '^foo\.' "$p"
+    done
+    v config --get-regexp 'x' '1'
+    v config --get-regexp '[' '['
+    v config -z --get-regexp '^foo\.ba' '1'
+    v config --get-regexp a b c
+    v config --get-regexp '\.k$' 'a!b'
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

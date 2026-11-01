@@ -717,13 +717,42 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
             eprintln!("error: invalid key pattern: {pattern}");
             return Ok(6);
         };
+        // The optional second word is an ERE over the value, case-sensitive, `!` in front
+        // negating it (git's `config_set` value-pattern rule). It lands in `key` because the
+        // flag took the first word.
+        if args.value.is_some() {
+            eprintln!("error: wrong number of arguments, should be from 1 to 2");
+            return Ok(129);
+        }
+        let value_matcher = match &args.key {
+            None => None,
+            Some(text) => {
+                let (negated, body) = match text.strip_prefix('!') {
+                    Some(rest) => (true, rest),
+                    None => (false, text.as_str()),
+                };
+                match super::regex::Regex::new(body.as_bytes(), true, false) {
+                    Ok(re) => Some((re, negated)),
+                    Err(_) => {
+                        eprintln!("error: invalid pattern: {body}");
+                        return Ok(6);
+                    }
+                }
+            }
+        };
         let mut found = false;
         for (_, config) in read_sources()? {
             for entry in config.entries() {
                 let key = display_key(entry);
+                if let Some((re, negated)) = &value_matcher
+                    && re.is_match(entry.value.as_ref(), false) == *negated
+                {
+                    continue;
+                }
                 if matcher.is_match(key.as_bytes(), false) {
                     found = true;
-                    out.extend_from_slice(format!("{key} {}", entry.value).as_bytes());
+                    let sep = if args.null_terminated { '\n' } else { ' ' };
+                    out.extend_from_slice(format!("{key}{sep}{}", entry.value).as_bytes());
                     out.extend_from_slice(terminator);
                 }
             }

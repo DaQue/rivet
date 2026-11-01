@@ -2313,3 +2313,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 35** — `for-each-ref %(symref)` resolves a chain of symbolic refs to its final target and accepts `refname`'s modifiers (`:short`, `:lstrip=`, `:rstrip=`); `s_for_each_ref_symref_chain` fails on 0a6c533.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 350 passed / 0 failed / 0 ignored; `scenarios.sh` 383 PASS, `failures: 0`.
+
+* **UNIT 36** — `config --get-regexp <key-regex> <value-regex>`: the value pattern is an ERE, case-sensitive, a leading `!` negates it, a bad one is `error: invalid pattern: <p>` (exit 6), a third word is git's wrong-number-of-arguments (exit 129); `-z` prints `key\nvalue\0`; `s_config_get_regexp_value` fails on 6d90ad5.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 350 passed / 0 failed / 0 ignored; `scenarios.sh` 384 PASS, `failures: 0`.
