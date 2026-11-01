@@ -143,14 +143,24 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
             // pattern is the first word that is none of them (git's pattern follows any options).
             while let Some(next) = iter.as_slice().first().filter(|next| match next.to_str() {
                 Some("-z" | "--null" | "--global" | "--local" | "--system") => true,
+                Some("--type") => iter.as_slice().len() > 1,
                 Some(word) => word.starts_with("--type="),
                 None => false,
             }) {
                 let next = next.clone();
                 iter.next();
-                if let Some(value) = next.to_string_lossy().strip_prefix("--type=")
+                let spelled = next.to_string_lossy();
+                let two_word = spelled == "--type";
+                let value = if two_word {
+                    iter.as_slice()
+                        .first()
+                        .map(|v| v.to_string_lossy().into_owned())
+                } else {
+                    spelled.strip_prefix("--type=").map(str::to_owned)
+                };
+                if let Some(value) = value
                     && !matches!(
-                        value,
+                        value.as_str(),
                         "bool"
                             | "int"
                             | "bool-or-int"
@@ -164,6 +174,9 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                     std::process::exit(cmd::EXIT_FATAL);
                 }
                 out.push(next);
+                if two_word && let Some(value) = iter.next() {
+                    out.push(value);
+                }
             }
             out.push(arg);
             continue;

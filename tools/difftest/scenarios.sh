@@ -13860,6 +13860,17 @@ s_config_get_regexp_opts() {
     v config --get-regexp --type=nope '^foo\.ba'
 }
 
+s_config_get_regexp_type_word() {
+    v init -q repo; cd repo
+    printf '[foo]\n\tbar = 1\n\tbaz = yes\n\tbig = 2k\n' >.git/config
+    v config --get-regexp --type int '^foo\.b[ai]'
+    v config --get-regexp --type bool '^foo\.ba'
+    v config --get-regexp -z --type bool '^foo\.baz'
+    v config --get-regexp --type bool --null '^foo\.baz' 'true'
+    v config --get-regexp --local --type int '^foo\.big'
+    v config --get-regexp --type nope '^foo\.ba'
+}
+
 s_config_bare() {
     v init -q repo; cd repo
     printf '[foo]\n\tbare\n\tempty =\n\tfull = true\n\tother = x\n' >.git/config
