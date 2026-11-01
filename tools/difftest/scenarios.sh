@@ -13768,6 +13768,15 @@ s_config_emptied() {
     emptied '[a]\n\tx = 1\n[a]\n\tx = 2\n[a]\n[c]\n\tz = 3\n' --unset-all a.x
 }
 
+# --get-regexp reads its pattern as a lowercased ERE over the whole key; a bad one is exit 6
+s_config_get_regexp() {
+    v init -q repo; cd repo
+    printf '[remote "Origin"]\n\turl = u\n\tfetch = +refs/heads/*:refs/remotes/Origin/*\n[branch "Main"]\n\tremote = o\n[foo]\n\tbar = 1\n\tbaz = 2\n' >.git/config
+    for p in '^remote\.' 'Origin' 'origin' 'REMOTE\.ORIGIN' 'rigin' '^foo\.ba[rz]$' 'bar|remote$' '(url|fetch)$' '^branch\.' 'x*' '^$' '\.url' 'a{2}' 'foo\.ba.' '[' 'Remo(' '*a' 'foo.bar+' '[[:alpha:]]+\.bar'; do
+        v config --get-regexp "$p"
+    done
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

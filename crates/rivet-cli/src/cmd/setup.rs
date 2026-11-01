@@ -710,12 +710,18 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
     }
 
     if let Some(pattern) = &args.get_regexp {
-        let needle = pattern.to_ascii_lowercase();
+        // git lowercases the pattern and matches it as an ERE against the key.
+        let Ok(matcher) =
+            super::regex::Regex::new(pattern.to_ascii_lowercase().as_bytes(), true, false)
+        else {
+            eprintln!("error: invalid key pattern: {pattern}");
+            return Ok(6);
+        };
         let mut found = false;
         for (_, config) in read_sources()? {
             for entry in config.entries() {
                 let key = display_key(entry);
-                if key.contains(&needle) {
+                if matcher.is_match(key.as_bytes(), false) {
                     found = true;
                     out.extend_from_slice(format!("{key} {}", entry.value).as_bytes());
                     out.extend_from_slice(terminator);

@@ -2300,3 +2300,8 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Chosen from GAPS.md by the weekend run (every unit in PRIORITIES.md was committed). `Config::remove_entry` now follows git's `maybe_remove_section`: scanning back, only blank lines and headers of the same section may stand between the entry and its header; scanning forward, only blanks and empty headers of the same section up to a header of another section or the end of the file. A comment or another entry on either side keeps the section (`# top` before the header, `[a] # c`, a trailing comment); everything from the first header to there goes. Probed against `git config --unset` on 22 files.
 * Proof: scenario `s_config_emptied` (fails on the parent), Rust test in `tests/config_preserve.rs`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 350 passed / 0 failed / 0 ignored; `scenarios.sh` 380 scenarios, `failures: 0`.
+
+### UNIT 33 — config: `--get-regexp` is an ERE over the key
+* Chosen from GAPS.md by the weekend run (every unit in PRIORITIES.md was committed). `config --get-regexp` matched by substring; git lowercases the pattern and matches it as an extended regular expression over the whole key, and a malformed one prints `error: invalid key pattern: <p>` (original spelling) with exit 6. rivet now compiles the pattern with its ERE matcher. Not done: the matcher is grep's, so `a{2` and `^*` are accepted where glibc rejects them (left out of the scenario), and no value pattern is taken.
+* Proof: scenario `s_config_get_regexp` (fails on the parent).
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 350 passed / 0 failed / 0 ignored; `scenarios.sh` 381 PASS, `failures: 0`.

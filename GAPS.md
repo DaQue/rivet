@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 380 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 381 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 350 tests / 0 failed, 380 scenarios / 0 failures, `fmt`,
+Last checked 2026-10-31, gate: 350 tests / 0 failed, 381 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -209,8 +209,7 @@ The command works for the common case; the listed options or edge cases are miss
   local branch from a unique remote-tracking branch, `--guess-remote` does it for the directory's name,
   `-b`/`-B` from a remote-tracking start point set `branch.<new>.remote`/`merge`, and `--track`/`--no-track`/
   `branch.autoSetupMerge` are read; `s_worktree_add_branch`. Not done: `--track=inherit|direct`, `--orphan`,
-  `--relative-paths`.) `config --get-regexp` matches by substring: `^` anchors and `\.` are not regular
-  expressions there.
+  `--relative-paths`.) `config --get-regexp` reads its pattern as git does: lowercased, an ERE over the whole key, a bad one `error: invalid key pattern: <p>` with exit 6 (`s_config_get_regexp`). Not done: the matcher is grep's, so `a{2` and `^*` are accepted where glibc rejects them, and no value pattern is taken.
 * **Credential helpers** — `credential.helper` (global, per URL, `!shell`, absolute path,
   `git-credential-<name>`; an empty value resets), `credential.useHttpPath`, `credential.username`,
   URL userinfo, `GIT_ASKPASS`/`core.askPass`/`SSH_ASKPASS` and a terminal prompt (`/dev/tty`,
