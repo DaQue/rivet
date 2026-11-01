@@ -13826,6 +13826,16 @@ s_config_get_regexp_value() {
     v config --get-regexp '\.k$' 'a!b'
 }
 
+s_config_get_regexp_z() {
+    v init -q repo; cd repo
+    printf '[foo]\n\tbar = 1\n\tbaz = 2\n' >.git/config
+    v config --get-regexp -z '^foo\.ba'
+    v config --get-regexp -z '^foo\.ba' '2'
+    v config --null --get-regexp '^foo\.ba'
+    v config --get-regexp --null '^foo\.baz'
+    v config --get-regexp '^foo\.ba'
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

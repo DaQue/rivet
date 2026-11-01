@@ -58,6 +58,7 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
     let mut in_log = false;
     let mut in_format_patch = false;
     let mut in_blame = false;
+    let mut in_config = false;
     let mut after_dashes = false;
     while let Some(arg) = iter.next() {
         let text = arg.to_string_lossy().into_owned();
@@ -72,6 +73,7 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                 in_log = text == "log" || text == "reflog";
                 in_format_patch = text == "format-patch";
                 in_blame = text == "blame";
+                in_config = text == "config";
             }
         } else if in_format_patch && !after_dashes {
             if text == "--" {
@@ -105,6 +107,21 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                 }
                 continue;
             }
+        } else if in_config && text == "--get-regexp" {
+            // git's `--get-regexp` is a mode flag, so `-z` may follow it; clap's takes the
+            // next word as its pattern. A `-z`/`--null` right after it moves in front.
+            match iter.next() {
+                Some(next) if matches!(next.to_str(), Some("-z" | "--null")) => {
+                    out.push(next);
+                    out.push(arg);
+                }
+                Some(next) => {
+                    out.push(arg);
+                    out.push(next);
+                }
+                None => out.push(arg),
+            }
+            continue;
         } else if in_log && !after_dashes {
             if text == "--" {
                 after_dashes = true;
