@@ -3064,6 +3064,17 @@ s_repack_geometric() {
     v log --oneline
 }
 
+# A factor must fit a C int once the k/m/g suffix is applied; one that does not is
+# `value <text> for option `geometric' not in range`, even when it overflows every integer type.
+s_repack_geometric_range() {
+    v init -q repo; cd repo
+    echo base >b; v add b; tick; v commit -q -m base
+    for f in 2147483647 -2147483648 -2g 1g 2097151k 2048m 0; do v repack --geometric=$f; done
+    for f in 2147483648 -2147483649 2g -3g 2097152k 99999999999g 9223372036854775808 \
+        -99999999999999999999 x 1x 2kk -g; do v repack --geometric=$f; done
+    v log --oneline
+}
+
 s_gc_after_cruft() {
     g init -q repo; cd repo
     echo a >a; g add a; g commit -qm one

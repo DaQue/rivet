@@ -2346,3 +2346,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 46** — `config --list` applies `--type`: values are converted, entries that do not convert are left out, a bare key is `true` for the boolean types and dropped for `int` (`path` reports `error: missing value for '<key>'`), and a number past a C `int` is no boolean for `bool`/`bool-or-str`. `s_config_list_type` fails on `9b72a23`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 394 scenarios, `failures: 0`.
+
+* **UNIT 47** — `repack --geometric=<n>`: a factor outside a C `int` after the `k`/`m`/`g` suffix, or too big for any integer type, is git's `error: value <text> for option `geometric' not in range [-2147483648,2147483647]` (exit 129) instead of being accepted; a malformed one keeps the `expects an integer` text. `s_repack_geometric_range` fails on `8434a86`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 395 scenarios, `failures: 0`.

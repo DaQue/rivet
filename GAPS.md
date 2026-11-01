@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 394 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 395 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-01, gate: 351 tests / 0 failed, 394 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-01, gate: 351 tests / 0 failed, 395 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -156,7 +156,8 @@ The command works for the common case; the listed options or edge cases are miss
   words). `repack --geometric=<n>` rolls packs up as git's split does (by object count, the loose objects joining
   the new pack, `.keep` and cruft packs left alone; `s_repack_geometric`), but compared as sets of objects: the
   order inside the rolled-up pack is rivet's own, no multi-pack-index is written, a malformed factor prints only
-  the one-line error (exit 129, no usage text) and `--geometric=-1` is not given git's overflow fatal. No
+  the one-line error (exit 129, no usage text), and a factor outside a C `int` once `k`/`m`/`g` is applied (or too big for
+  any integer) is git's `value <text> for option `geometric' not in range [-2147483648,2147483647]` (`s_repack_geometric_range`). No
   `--window`/`--depth`, `--max-pack-size`, `--max-cruft-size`, `--expire-to`, `--keep-largest-pack`,
   `gc.bigPackThreshold`; `repack -k` over several packs lists unreachable objects in a
   different order from git.

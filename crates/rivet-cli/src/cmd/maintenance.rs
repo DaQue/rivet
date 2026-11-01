@@ -225,10 +225,18 @@ pub fn run_repack(global: &GlobalArgs, args: &RepackArgs) -> Result<i32> {
     let geometric = match &args.geometric {
         None => None,
         Some(text) => match parse_factor(text) {
-            Some(factor) => Some(factor),
-            None => {
+            Ok(factor) => Some(factor),
+            Err(FactorError::Syntax) => {
                 eprintln!(
                     "error: option `geometric' expects an integer value with an optional k/m/g suffix"
+                );
+                return Ok(129);
+            }
+            Err(FactorError::Range) => {
+                eprintln!(
+                    "error: value {text} for option `geometric' not in range [{},{}]",
+                    i32::MIN,
+                    i32::MAX
                 );
                 return Ok(129);
             }
@@ -261,15 +269,36 @@ pub fn run_repack(global: &GlobalArgs, args: &RepackArgs) -> Result<i32> {
     Ok(0)
 }
 
-/// An integer with an optional `k`/`m`/`g` suffix, as git's option parser reads it.
-fn parse_factor(text: &str) -> Option<i64> {
-    let (digits, unit) = match text.chars().last()? {
-        'k' | 'K' => (&text[..text.len() - 1], 1i64 << 10),
+/// Why [`parse_factor`] refused a `--geometric` value.
+enum FactorError {
+    /// Not an integer with an optional `k`/`m`/`g` suffix.
+    Syntax,
+    /// An integer, but outside a C `int` once the suffix is applied.
+    Range,
+}
+
+/// An integer with an optional `k`/`m`/`g` suffix, as git's option parser reads it: the result
+/// must fit a C `int`, and a number too big for any integer type is out of range, not malformed.
+fn parse_factor(text: &str) -> Result<i64, FactorError> {
+    let last = text.chars().last().ok_or(FactorError::Syntax)?;
+    let (digits, unit) = match last {
+        'k' | 'K' => (&text[..text.len() - 1], 1i128 << 10),
         'm' | 'M' => (&text[..text.len() - 1], 1 << 20),
         'g' | 'G' => (&text[..text.len() - 1], 1 << 30),
         _ => (text, 1),
     };
-    digits.trim().parse::<i64>().ok()?.checked_mul(unit)
+    let digits = digits.trim();
+    let body = digits.strip_prefix(['+', '-']).unwrap_or(digits);
+    if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(FactorError::Syntax);
+    }
+    let value = digits
+        .parse::<i128>()
+        .ok()
+        .and_then(|n| n.checked_mul(unit))
+        .filter(|n| i32::try_from(*n).is_ok())
+        .ok_or(FactorError::Range)?;
+    Ok(value as i64)
 }
 
 fn is_loose_name(name: &str, hex_len: usize) -> bool {
