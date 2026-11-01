@@ -673,6 +673,16 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
 
     let mut repository = super::open(global)?;
 
+    // Git reads both dates before `-a` touches the index, so a bad one leaves it as it was.
+    for variable in ["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"] {
+        if let Some(value) = std::env::var_os(variable)
+            && rivet_core::object::commit::parse_git_date(BStr::new(value.as_encoded_bytes()))
+                .is_none()
+        {
+            anyhow::bail!("invalid date format: {}", value.to_string_lossy());
+        }
+    }
+
     // `-a` stages modifications and deletions of tracked files first; it never adds untracked
     // ones, which is why the update mode is used rather than `all`.
     if args.all {

@@ -13871,6 +13871,27 @@ s_config_get_regexp_type_word() {
     v config --get-regexp --type nope '^foo\.ba'
 }
 
+s_commit_date_env() {
+    v init -q repo; cd repo
+    echo a >a; v add a
+    GIT_AUTHOR_DATE='2026-01-01T00:00:00 +0000' GIT_COMMITTER_DATE='2026-01-01T00:00:00 +0000' v commit -q -m iso-space-offset
+    vg rev-parse HEAD
+    vg cat-file -p HEAD
+    echo b >a
+    GIT_AUTHOR_DATE='@1700000000 +0530' GIT_COMMITTER_DATE='1700000100 -0130' v commit -q -a -m epoch
+    vg rev-parse HEAD
+    echo c >a
+    GIT_AUTHOR_DATE='2026-02-03T04:05:06Z' GIT_COMMITTER_DATE='2026-02-03 04:05:06 +0200' v commit -q -a -m iso
+    vg rev-parse HEAD
+    echo d >a
+    GIT_AUTHOR_DATE='2026-02-03T04:05:06+0200' GIT_COMMITTER_DATE='2026-02-03T04:05:06 -0700' v commit -q -a -m iso-compact
+    vg rev-parse HEAD
+    echo e >a
+    GIT_AUTHOR_DATE='garbage' v commit -q -a -m bad-author
+    GIT_COMMITTER_DATE='garbage' v commit -q -a -m bad-committer
+    vg rev-parse HEAD
+}
+
 s_config_type_short() {
     v init -q repo; cd repo
     printf '[foo]\n\tbar = 1\n\tbaz = yes\n\tbig = 2k\n\tcol = bold red\n' >.git/config

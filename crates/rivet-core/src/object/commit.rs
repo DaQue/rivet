@@ -841,7 +841,13 @@ pub fn parse_git_date(value: &BStr) -> Option<(i64, i32)> {
     // precedes the offset.
     let mut pieces = text.split_whitespace();
     let mut body = pieces.next()?.to_string();
-    if let Some(time) = pieces.next() {
+    if body.contains(['T', 't']) {
+        // `2026-01-01T00:00:00 +0000`: the separator is already there, so what follows is the
+        // offset.
+        for offset in pieces {
+            body.push_str(offset);
+        }
+    } else if let Some(time) = pieces.next() {
         body.push('T');
         body.push_str(time);
         if let Some(offset) = pieces.next() {
@@ -905,6 +911,16 @@ fn format_offset(total_minutes: i32) -> (char, i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `T` already separates date and time, so a space-separated offset follows it.
+    #[test]
+    fn git_date_iso_with_t_and_spaced_offset() {
+        let d = |s: &str| parse_git_date(BStr::new(s));
+        assert_eq!(d("2026-01-01T00:00:00 +0000"), Some((1767225600, 0)));
+        assert_eq!(d("2026-01-01T00:00:00 +0200"), Some((1767218400, 120)));
+        assert_eq!(d("2026-01-01 00:00:00 +0000"), Some((1767225600, 0)));
+        assert_eq!(d("garbage"), None);
+    }
 
     /// A8: read paths accept the identity lines git's `split_ident_line` accepts.
     #[test]

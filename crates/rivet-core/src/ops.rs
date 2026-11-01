@@ -169,8 +169,18 @@ pub fn resolve_identity(local: Option<&Config>, kind: IdentityKind) -> Result<Si
     };
     let name = strip_ident_crud(name);
     let email = strip_ident_crud(email);
-    let date =
-        env_bytes(date_var).and_then(|v| crate::object::commit::parse_git_date(BStr::new(&v)));
+    let date = match env_bytes(date_var) {
+        Some(v) => match crate::object::commit::parse_git_date(BStr::new(&v)) {
+            Some(parsed) => Some(parsed),
+            None => {
+                return Err(Error::Message(format!(
+                    "invalid date format: {}",
+                    String::from_utf8_lossy(&v)
+                )));
+            }
+        },
+        None => None,
+    };
     Ok(match date {
         Some((when, tz_offset_minutes)) => Signature {
             name,
