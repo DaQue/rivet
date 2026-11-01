@@ -290,6 +290,8 @@ struct Layout {
     header_off: usize,
     /// The entry's own physical lines (continuations included), verbatim, while unchanged.
     raw: Option<Vec<u8>>,
+    /// The entry was written as a bare `key` with no `=`, so its value is the implicit `true`.
+    bare: bool,
 }
 
 /// One line of the text between two entries.
@@ -675,6 +677,7 @@ impl Config {
                 header: header_at.map(|_| sec.clone()),
                 header_off: header_at.map_or(0, |at| at - pre_start),
                 raw: Some(data[logical_start..i].to_vec()),
+                bare: eq.is_none(),
             });
             pre_start = i;
             header_at = None;
@@ -684,6 +687,7 @@ impl Config {
             header: header_at.and(section),
             header_off: header_at.map_or(0, |at| at - pre_start),
             raw: None,
+            bare: false,
         };
         Ok(cfg)
     }
@@ -1047,6 +1051,7 @@ impl Config {
             entry.key = key;
             entry.origin = None;
             self.layouts[at].raw = None;
+            self.layouts[at].bare = false;
             return Ok(());
         }
         self.insert_entry(section, subsection, key, value);
@@ -1073,6 +1078,7 @@ impl Config {
         } else {
             Layout {
                 raw: None,
+                bare: false,
                 ..std::mem::take(&mut self.tail)
             }
         };
@@ -1318,6 +1324,16 @@ impl Config {
     /// keys lowercased — which is what Git prints too, and is why it is not a bug.
     pub fn entries(&self) -> &[ConfigEntry] {
         &self.entries
+    }
+
+    /// Whether entry `index` (as numbered by [`Config::entries`]) was written as a bare `key` with
+    /// no `=`. Its value reads `true`, but `git config --list` prints just the key.
+    ///
+    /// # Caveats
+    ///
+    /// An entry that was set from this `Config` is no longer bare; an index past the end is not.
+    pub fn is_bare_key(&self, index: usize) -> bool {
+        self.layouts.get(index).is_some_and(|l| l.bare)
     }
 
     /// Phase 2 — whether the config has no entries at all.

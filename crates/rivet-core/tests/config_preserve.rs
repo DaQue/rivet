@@ -113,3 +113,14 @@ fn an_emptied_section_takes_its_empty_duplicate_headers_with_it() {
         "[a]\n[a]\n\tw = 1\n"
     );
 }
+
+#[test]
+fn a_key_without_equals_is_bare_until_it_is_set() {
+    let mut config = Config::parse(b"[a]\n\tb\n\tc =\n\td = true\n").unwrap();
+    let bare: Vec<bool> = (0..4).map(|i| config.is_bare_key(i)).collect();
+    // The bare key reads `true`, like `d = true`, but only it is bare.
+    assert_eq!(bare, [true, false, false, false]);
+    assert_eq!(config.entries()[0].value, "true");
+    config.set(BStr::new("a.b"), b"true").unwrap();
+    assert!(!config.is_bare_key(0));
+}

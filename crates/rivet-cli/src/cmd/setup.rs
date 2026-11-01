@@ -700,8 +700,17 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
 
     if args.list {
         for (_, config) in read_sources()? {
-            for entry in config.entries() {
-                out.extend_from_slice(format!("{}={}", display_key(entry), entry.value).as_bytes());
+            for (index, entry) in config.entries().iter().enumerate() {
+                // A bare `key` has no value at all: git prints the key alone.
+                if config.is_bare_key(index) {
+                    out.extend_from_slice(display_key(entry).as_bytes());
+                } else {
+                    // `-z` separates the key from its value with a newline, not `=`.
+                    let sep = if args.null_terminated { '\n' } else { '=' };
+                    out.extend_from_slice(
+                        format!("{}{sep}{}", display_key(entry), entry.value).as_bytes(),
+                    );
+                }
                 out.extend_from_slice(terminator);
             }
         }
@@ -742,17 +751,23 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
         };
         let mut found = false;
         for (_, config) in read_sources()? {
-            for entry in config.entries() {
+            for (index, entry) in config.entries().iter().enumerate() {
                 let key = display_key(entry);
+                // A bare `key` matches a value pattern as the empty string and prints no value.
+                let bare = config.is_bare_key(index);
+                let value: &[u8] = if bare { b"" } else { entry.value.as_ref() };
                 if let Some((re, negated)) = &value_matcher
-                    && re.is_match(entry.value.as_ref(), false) == *negated
+                    && re.is_match(value, false) == *negated
                 {
                     continue;
                 }
                 if matcher.is_match(key.as_bytes(), false) {
                     found = true;
-                    let sep = if args.null_terminated { '\n' } else { ' ' };
-                    out.extend_from_slice(format!("{key}{sep}{}", entry.value).as_bytes());
+                    out.extend_from_slice(key.as_bytes());
+                    if !bare {
+                        out.push(if args.null_terminated { b'\n' } else { b' ' });
+                        out.extend_from_slice(value);
+                    }
                     out.extend_from_slice(terminator);
                 }
             }
@@ -873,15 +888,29 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
     }
 
     // Reading: the last value wins across the consulted files.
-    let mut found: Option<bstr::BString> = None;
+    let mut found: Option<(bstr::BString, bool)> = None;
     for (_, config) in read_sources()? {
         if let Some(value) = config.get(BStr::new(key.as_bytes()))? {
-            found = Some(value.to_owned());
+            let (section, subsection, name) =
+                rivet_core::ConfigEntry::parse_key(BStr::new(key.as_bytes()))?;
+            let bare = config
+                .entries()
+                .iter()
+                .rposition(|e| {
+                    e.matches(&section, subsection.as_ref().map(|v| v.as_slice()), &name)
+                })
+                .is_some_and(|at| config.is_bare_key(at));
+            found = Some((value.to_owned(), bare));
         }
     }
     match found {
-        Some(value) => {
-            out.extend_from_slice(&render(key, BStr::new(&value[..]))?);
+        Some((value, bare)) => {
+            // A bare `key` has no value: untyped, git prints an empty line for it.
+            if bare && matches!(args.value_type, None | Some(ConfigTypeArg::Str)) {
+                out.extend_from_slice(b"");
+            } else {
+                out.extend_from_slice(&render(key, BStr::new(&value[..]))?);
+            }
             out.extend_from_slice(terminator);
             std::io::stdout().write_all(&out)?;
             Ok(0)

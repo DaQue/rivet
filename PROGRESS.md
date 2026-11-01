@@ -2319,3 +2319,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 37** — `config --get-regexp -z <pattern>`: `-z`/`--null` may follow `--get-regexp` as in git (rivet's flag took it as the pattern); `s_config_get_regexp_z` fails on `cf2de87`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 350 passed / 0 failed / 0 ignored; `scenarios.sh` 385 PASS, `failures: 0`.
+
+* **UNIT 38** — `config`: a bare `key` (no `=`) is printed as the key alone by `--list` and `--get-regexp` (a value pattern sees the empty string), untyped `--get` prints an empty line, and `-z --list` separates key and value with a newline; `Config::is_bare_key` (additive) carries the fact the parser used to drop; `s_config_bare` fails on `eb69049`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 386 PASS, `failures: 0`.

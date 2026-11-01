@@ -13836,6 +13836,26 @@ s_config_get_regexp_z() {
     v config --get-regexp '^foo\.ba'
 }
 
+s_config_bare() {
+    v init -q repo; cd repo
+    printf '[foo]\n\tbare\n\tempty =\n\tfull = true\n\tother = x\n' >.git/config
+    v config --list
+    v config -z --list
+    v config --get foo.bare
+    v config -z --get foo.bare
+    v config --type=bool --get foo.bare
+    v config --get foo.empty
+    v config --get-regexp '^foo\.'
+    v config -z --get-regexp '^foo\.'
+    v config --get-regexp '^foo\.' '^$'
+    v config --get-regexp '^foo\.' 'true'
+    v config --get-regexp '^foo\.' '!^$'
+    v config foo.other y
+    v config --list
+    v config foo.bare set
+    v config --list
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
