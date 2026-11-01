@@ -2349,3 +2349,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 47** — `repack --geometric=<n>`: a factor outside a C `int` after the `k`/`m`/`g` suffix, or too big for any integer type, is git's `error: value <text> for option `geometric' not in range [-2147483648,2147483647]` (exit 129) instead of being accepted; a malformed one keeps the `expects an integer` text. `s_repack_geometric_range` fails on `8434a86`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 395 scenarios, `failures: 0`.
+
+* **UNIT 48** — `config --type=expiry-date`: `never`/`false` read as 0, `now`/`all` as 18446744073709551615, a date as its timestamp, on read, `--get-regexp`, `--get-all` and `--list` (non-dates left out); a non-date is git's `error: '<v>' for '<key>' is not a valid timestamp` (bare key: `missing value`) plus `fatal: bad config line N in file F`, exit 128. Writes store the text as given. `s_config_expiry_date` fails on `4345091`. Also `s_split_index_expire` now sleeps a second around its `now` steps (it flaked once at a second boundary).
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 396 scenarios, `failures: 0`.

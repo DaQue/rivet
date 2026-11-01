@@ -701,6 +701,8 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
             },
             Some(ConfigTypeArg::BoolOrInt) => bool_or_int(value, key, Some(origin)),
             Some(ConfigTypeArg::BoolOrStr) => Ok(bool_or_str(value)),
+            Some(ConfigTypeArg::ExpiryDate) => expiry_date(value)
+                .ok_or_else(|| expiry_failure(key, origin, Some(&value.to_string()))),
             Some(ConfigTypeArg::Path) => {
                 let text = value.to_string();
                 Ok(match text.strip_prefix("~/") {
@@ -729,6 +731,10 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                         (true, Some(ConfigTypeArg::Path)) => {
                             eprintln!("error: missing value for '{key}'");
                             None
+                        }
+                        (true, Some(ConfigTypeArg::ExpiryDate)) => None,
+                        (false, Some(ConfigTypeArg::ExpiryDate)) => {
+                            expiry_date(entry.value.as_ref())
                         }
                         (true, _) => render(&key, BStr::new(b"true"), &origin).ok(),
                         (false, _) => render(&key, entry.value.as_ref(), &origin).ok(),
@@ -913,6 +919,9 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                     } else {
                         entry.value.clone()
                     };
+                    if bare && args.value_type == Some(ConfigTypeArg::ExpiryDate) {
+                        return Err(expiry_failure(key, &origin, None));
+                    }
                     out.extend_from_slice(&render(key, BStr::new(&value[..]), &origin)?);
                 }
                 out.extend_from_slice(terminator);
@@ -1008,6 +1017,9 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                 } else {
                     value
                 };
+                if bare && args.value_type == Some(ConfigTypeArg::ExpiryDate) {
+                    return Err(expiry_failure(key, &origin, None));
+                }
                 out.extend_from_slice(&render(key, BStr::new(&value[..]), &origin)?);
             }
             out.extend_from_slice(terminator);
@@ -1065,6 +1077,73 @@ fn bool_or_str(value: &BStr) -> Vec<u8> {
 fn bool_number(value: &BStr) -> Option<bool> {
     let n = rivet_core::parse_int(value).ok()?;
     i32::try_from(n).ok().map(|n| n != 0)
+}
+
+/// `--type=expiry-date`: `never`/`false` are 0, `now`/`all` the largest timestamp, anything else
+/// a date as [`rivet_core::ops::parse_expiry_ago`] reads it; `None` when it is no date.
+fn expiry_date(value: &BStr) -> Option<Vec<u8>> {
+    let text = value.to_string();
+    match text.as_str() {
+        "never" | "false" => return Some(b"0".to_vec()),
+        "now" | "all" => return Some(u64::MAX.to_string().into_bytes()),
+        _ => {}
+    }
+    if text.trim().is_empty() {
+        return None;
+    }
+    rivet_core::ops::parse_expiry_ago(&text).map(|when| when.to_string().into_bytes())
+}
+
+/// Git's `error:` line for a value that is no timestamp (`None`: a bare `key`), returned as the
+/// `fatal: bad config line N in file F` that follows it. The line is found by reading `origin`.
+fn expiry_failure(key: &str, origin: &str, value: Option<&str>) -> anyhow::Error {
+    match value {
+        Some(text) => eprintln!("error: '{text}' for '{key}' is not a valid timestamp"),
+        None => eprintln!("error: missing value for '{key}'"),
+    }
+    let line = std::fs::read(origin)
+        .ok()
+        .and_then(|data| config_line_of(&data, key, value));
+    match line {
+        Some(line) => anyhow::anyhow!("bad config line {line} in file {origin}"),
+        None => anyhow::anyhow!("bad config line in file {origin}"),
+    }
+}
+
+/// The 1-based line of the last `key` in `data` whose value reads `value` (any value when it is
+/// not found, or when `value` is `None`).
+fn config_line_of(data: &[u8], key: &str, value: Option<&str>) -> Option<usize> {
+    let (section, rest) = key.split_once('.')?;
+    let (subsection, name) = match rest.rsplit_once('.') {
+        Some((sub, name)) => (Some(sub), name),
+        None => (None, rest),
+    };
+    let mut in_section = false;
+    let (mut last, mut exact) = (None, None);
+    for (i, raw) in data.split(|b| *b == b'\n').enumerate() {
+        let line = String::from_utf8_lossy(raw);
+        let line = line.trim();
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.split(']').next().unwrap_or("");
+            let (head, sub) = match header.split_once('"') {
+                Some((head, sub)) => (head.trim(), Some(sub.trim_end_matches('"'))),
+                None => (header.trim(), None),
+            };
+            in_section = head.eq_ignore_ascii_case(section) && sub == subsection;
+        } else if in_section {
+            let (k, v) = match line.split_once('=') {
+                Some((k, v)) => (k.trim(), Some(v.trim())),
+                None => (line, None),
+            };
+            if k.eq_ignore_ascii_case(name) {
+                last = Some(i + 1);
+                if v == value {
+                    exact = Some(i + 1);
+                }
+            }
+        }
+    }
+    exact.or(last)
 }
 
 /// The name git prints for a repository's own config file: relative to the work tree's top, or

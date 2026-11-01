@@ -12644,7 +12644,9 @@ s_split_index_expire() {
     echo t >>f3; v add f3; nshared
     # now: everything but the current one goes, however new
     g config splitIndex.sharedIndexExpire now
+    sleep 1   # `now` spares a file written in the current second, so keep the clock off the boundary
     echo r >>f3; v add f3; nshared
+    sleep 1
     echo q >>f3; v add f3; nshared
     # an explicit age: files older than that go, newer ones stay
     g config splitIndex.sharedIndexExpire never
@@ -13940,6 +13942,26 @@ s_config_list_type() {
         v config --type=$t --list
         v config --list --type=$t
         v config --type=$t -z --list
+    done
+}
+
+s_config_expiry_date() {
+    v init -q repo; cd repo
+    printf '[a]\n\tnever = never\n\tfalse = false\n\tnow = now\n\tall = all\n\tepoch = @1000000000\n\tbig = 1234567890\n\tiso = 2020-01-02 03:04:05 +0000\n\tbare\n\tempty =\n\tbad = garbage\n[a "s"]\n\tk = 1577934245\n\tk = nope\n' >.git/config
+    for k in never false now all epoch big iso bare empty bad s.k missing; do
+        v config --get --type=expiry-date a.$k
+        v config --type=expiry-date a.$k
+    done
+    v config --type=expiry-date --get-all a.never
+    v config --type=expiry-date --get-all a.s.k
+    v config --type=expiry-date --get-regexp 'a\.(never|all|epoch)'
+    v config --type=expiry-date --get-regexp 'a\.(never|bad)'
+    printf '[a]\n\tnever = never\n\tall = all\n\tiso = 2020-01-02 03:04:05 +0000\n\tbad = garbage\n\tempty =\n' >.git/config
+    v config --local --type=expiry-date --list
+    v config --local --list --type=expiry-date -z
+    for w in never garbage '2020-01-02 03:04:05 +0000'; do
+        v config --type=expiry-date a.set "$w"
+        v config --get a.set
     done
 }
 
