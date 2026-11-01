@@ -13777,6 +13777,27 @@ s_config_get_regexp() {
     done
 }
 
+# `index.version` that is not a number: git dies on the next index write, naming the file when
+# the repository's own config holds it; a number outside 2 to 4 is only ignored.
+s_index_version_bad() {
+    v init -q repo; cd repo
+    echo a >a; echo b >b
+    v add a; iver
+    for bad in abc 3x 99999999999999999999 ""; do
+        g config index.version "$bad"
+        v add b; v update-index --add b
+    done
+    # nothing was written: the index still lists a only, and no lock is left
+    g config --unset index.version
+    v ls-files -s; ls .git | grep -c 'index.lock'
+    # numbers outside 2 to 4 are ignored, not fatal
+    for ok in 1 9 0; do
+        g config index.version "$ok"
+        v add b; v ls-files -s; iver
+        v rm -q --cached b
+    done
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

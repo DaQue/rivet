@@ -1083,6 +1083,7 @@ impl Repository {
         let shared_before = bad_expire
             .as_ref()
             .map(|_| (self.shared_index_names(), std::fs::read(&path).ok()));
+        self.check_index_version_config()?;
         // A new index file starts at `index.version` (2 to 4), or v4 under `feature.manyFiles`;
         // an existing one keeps the version it has.
         if !path.exists()
@@ -1178,6 +1179,64 @@ impl Repository {
             .ok()
             .flatten()
             .and_then(|v| crate::config::parse_bool(bstr::BStr::new(&v[..])).ok())
+    }
+
+    /// Git reads `index.version` as a number whenever it writes an index and dies on a value that
+    /// is not one (a number out of range, 2 to 4 aside, only warns). The file is named when the
+    /// repository's own config holds the setting, as git does.
+    fn check_index_version_config(&self) -> Result<()> {
+        use bstr::BStr;
+        let Some(value) = self
+            .config_value(BStr::new(b"index.version"))
+            .ok()
+            .flatten()
+        else {
+            return Ok(());
+        };
+        if crate::config::parse_int(BStr::new(&value[..])).is_ok() {
+            return Ok(());
+        }
+        let text = String::from_utf8_lossy(&value).into_owned();
+        let digits = text.strip_prefix('-').unwrap_or(&text);
+        let digits = digits
+            .strip_suffix(['k', 'K', 'm', 'M', 'g', 'G'])
+            .unwrap_or(digits);
+        let why = if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+            "out of range"
+        } else {
+            "invalid unit"
+        };
+        let config = self.common_dir().join("config");
+        let in_file = std::fs::read(&config).is_ok_and(|data| {
+            let mut in_section = false;
+            data.split(|b| *b == b'\n').any(|raw| {
+                let line = String::from_utf8_lossy(raw);
+                let line = line.trim();
+                if let Some(header) = line.strip_prefix('[') {
+                    let name = header.split([']', ' ', '"']).next().unwrap_or("");
+                    in_section = name.eq_ignore_ascii_case("index");
+                    false
+                } else {
+                    in_section
+                        && line
+                            .split('=')
+                            .next()
+                            .is_some_and(|k| k.trim().eq_ignore_ascii_case("version"))
+                }
+            })
+        });
+        let place = if in_file {
+            let shown = std::env::current_dir()
+                .ok()
+                .and_then(|cwd| config.strip_prefix(cwd).ok().map(|p| p.to_path_buf()))
+                .unwrap_or(config);
+            format!(" in file {}", shown.display())
+        } else {
+            String::new()
+        };
+        Err(Error::Message(format!(
+            "bad numeric config value '{text}' for 'index.version'{place}: {why}"
+        )))
     }
 
     fn configured_index_version(&self) -> Option<crate::index::IndexVersion> {

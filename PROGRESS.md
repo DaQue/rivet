@@ -2305,3 +2305,8 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Chosen from GAPS.md by the weekend run (every unit in PRIORITIES.md was committed). `config --get-regexp` matched by substring; git lowercases the pattern and matches it as an extended regular expression over the whole key, and a malformed one prints `error: invalid key pattern: <p>` (original spelling) with exit 6. rivet now compiles the pattern with its ERE matcher. Not done: the matcher is grep's, so `a{2` and `^*` are accepted where glibc rejects them (left out of the scenario), and no value pattern is taken.
 * Proof: scenario `s_config_get_regexp` (fails on the parent).
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 350 passed / 0 failed / 0 ignored; `scenarios.sh` 381 PASS, `failures: 0`.
+
+### UNIT 34 — index.version that is not a number is fatal on an index write
+* Chosen from GAPS.md by the weekend run (every unit in PRIORITIES.md was committed). rivet ignored an unparsable `index.version`; git dies with `fatal: bad numeric config value '<v>' for 'index.version' [in file .git/config]: invalid unit|out of range` (exit 128) before writing. `Repository::check_index_version_config` does the same; a number outside 2 to 4 stays ignored.
+* Proof: scenario `s_index_version_bad` (fails on the parent). Not done: git's `status` also dies (it refreshes the index).
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 350 passed / 0 failed / 0 ignored; `scenarios.sh` 382 PASS, `failures: 0`.
