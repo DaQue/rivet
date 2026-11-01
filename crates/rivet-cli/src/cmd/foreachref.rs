@@ -834,10 +834,22 @@ pub(super) fn atom_value(atom: &str, item: &RefItem, context: &Context) -> Eval<
                     .ok()
                     .and_then(|name| context.repository.refs().read(&name).ok())
             };
-            text(match found {
-                Some(rivet_core::RefTarget::Symbolic(target)) => lossy(target.as_bytes()),
-                _ => String::new(),
-            })
+            // git resolves the whole chain (`resolve_ref_unsafe`, at most five hops): the value
+            // is the ref the chain ends on, not the symbolic ref's own target.
+            let mut last = None;
+            let mut current = found;
+            for _ in 0..5 {
+                let Some(rivet_core::RefTarget::Symbolic(target)) = current else {
+                    break;
+                };
+                current = context.repository.refs().read(&target).ok();
+                last = Some(target);
+            }
+            match last {
+                // the modifiers are those of `refname`
+                Some(t) => text(refname_value(&lossy(t.as_bytes()), modifier, context)?),
+                None => text(String::new()),
+            }
         }
         "HEAD" => text(
             if context.head_ref.as_deref() == Some(item.name.as_str()) {

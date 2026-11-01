@@ -13798,6 +13798,20 @@ s_index_version_bad() {
     done
 }
 
+s_for_each_ref_symref_chain() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    local fmt='--format=%(refname)|%(symref)|%(symref:short)'
+    local tip; tip=$(g symbolic-ref HEAD)
+    v symbolic-ref refs/heads/a "$tip"
+    v symbolic-ref refs/heads/b refs/heads/a
+    v symbolic-ref refs/heads/c refs/heads/b
+    v for-each-ref "$fmt"
+    v symbolic-ref HEAD refs/heads/c
+    v for-each-ref --include-root-refs "$fmt"
+    v for-each-ref --format='%(refname)|%(symref:lstrip=2)|%(symref:rstrip=1)' refs/heads/c
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

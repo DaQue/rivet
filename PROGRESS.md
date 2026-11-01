@@ -2310,3 +2310,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Chosen from GAPS.md by the weekend run (every unit in PRIORITIES.md was committed). rivet ignored an unparsable `index.version`; git dies with `fatal: bad numeric config value '<v>' for 'index.version' [in file .git/config]: invalid unit|out of range` (exit 128) before writing. `Repository::check_index_version_config` does the same; a number outside 2 to 4 stays ignored.
 * Proof: scenario `s_index_version_bad` (fails on the parent). Not done: git's `status` also dies (it refreshes the index).
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 350 passed / 0 failed / 0 ignored; `scenarios.sh` 382 PASS, `failures: 0`.
+
+* **UNIT 35** — `for-each-ref %(symref)` resolves a chain of symbolic refs to its final target and accepts `refname`'s modifiers (`:short`, `:lstrip=`, `:rstrip=`); `s_for_each_ref_symref_chain` fails on 0a6c533.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 350 passed / 0 failed / 0 ignored; `scenarios.sh` 383 PASS, `failures: 0`.
