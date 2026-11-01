@@ -716,6 +716,25 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
             }
         }
     };
+    // A value as `--type` prints it, a bare `key` included: an integer sees the empty string,
+    // a timestamp, colour or path fails as git does, and the rest read it as a true boolean.
+    let render_entry = |key: &str, value: &BStr, bare: bool, origin: &str| -> Result<Vec<u8>> {
+        if bare {
+            if matches!(
+                args.value_type,
+                Some(ConfigTypeArg::ExpiryDate | ConfigTypeArg::Path)
+            ) {
+                return Err(expiry_failure(key, origin, None));
+            }
+            if args.value_type == Some(ConfigTypeArg::Color) {
+                return Err(color_failure(key, origin, None));
+            }
+            if args.value_type == Some(ConfigTypeArg::Int) {
+                return render(key, BStr::new(b""), origin);
+            }
+        }
+        render(key, value, origin)
+    };
     use std::io::Write as _;
     let mut out = Vec::new();
 
@@ -813,9 +832,14 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                 if matcher.is_match(key.as_bytes(), false) {
                     found = true;
                     out.extend_from_slice(key.as_bytes());
-                    if !bare {
+                    if !bare || !matches!(args.value_type, None | Some(ConfigTypeArg::Str)) {
                         out.push(if args.null_terminated { b'\n' } else { b' ' });
-                        out.extend_from_slice(&render(&key, BStr::new(value), &origin)?);
+                        out.extend_from_slice(&render_entry(
+                            &key,
+                            entry.value.as_ref(),
+                            bare,
+                            &origin,
+                        )?);
                     }
                     out.extend_from_slice(terminator);
                 }
@@ -917,18 +941,7 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                 if bare && matches!(args.value_type, None | Some(ConfigTypeArg::Str)) {
                     // A bare `key` prints an empty line, as `--get` does.
                 } else {
-                    let value = if bare && args.value_type == Some(ConfigTypeArg::Int) {
-                        bstr::BString::default()
-                    } else {
-                        entry.value.clone()
-                    };
-                    if bare && args.value_type == Some(ConfigTypeArg::ExpiryDate) {
-                        return Err(expiry_failure(key, &origin, None));
-                    }
-                    if bare && args.value_type == Some(ConfigTypeArg::Color) {
-                        return Err(color_failure(key, &origin, None));
-                    }
-                    out.extend_from_slice(&render(key, BStr::new(&value[..]), &origin)?);
+                    out.extend_from_slice(&render_entry(key, entry.value.as_ref(), bare, &origin)?);
                 }
                 out.extend_from_slice(terminator);
             }
@@ -1024,19 +1037,7 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
             if bare && matches!(args.value_type, None | Some(ConfigTypeArg::Str)) {
                 out.extend_from_slice(b"");
             } else {
-                // A bare `key` is an empty string to an integer, whatever it reads as for a bool.
-                let value = if bare && args.value_type == Some(ConfigTypeArg::Int) {
-                    bstr::BString::default()
-                } else {
-                    value
-                };
-                if bare && args.value_type == Some(ConfigTypeArg::ExpiryDate) {
-                    return Err(expiry_failure(key, &origin, None));
-                }
-                if bare && args.value_type == Some(ConfigTypeArg::Color) {
-                    return Err(color_failure(key, &origin, None));
-                }
-                out.extend_from_slice(&render(key, BStr::new(&value[..]), &origin)?);
+                out.extend_from_slice(&render_entry(key, BStr::new(&value[..]), bare, &origin)?);
             }
             out.extend_from_slice(terminator);
             std::io::stdout().write_all(&out)?;

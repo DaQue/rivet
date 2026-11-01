@@ -13984,6 +13984,24 @@ s_config_color() {
     done
 }
 
+s_config_typed_bare() {
+    v init -q repo; cd repo
+    printf '[a]\n\tp\n\tq = ~/x\n\tn = 1\n[a "s"]\n\tk\n\tk = 2\n' >.git/config
+    for t in bool int path expiry-date color bool-or-int bool-or-str; do
+        v config --type=$t --get-regexp 'a\.p'
+        v config --type=$t --get-regexp 'a\.p' '!x'
+        v config -z --type=$t --get-regexp 'a\.p'
+        v config --type=$t --get-regexp 'a\.q'
+    done
+    v config --type=path --get-regexp 'a\.(n|q)'
+    v config --type=path --get-regexp 'a\.s\.k'
+    v config --type=int --get-regexp 'a\.s\.k'
+    v config --get --type=path a.p
+    v config --get-all --type=path a.p
+    v config --get-all --type=path a.s.k
+    v config --get-regexp 'a\.p'
+}
+
 s_config_type_unknown() {
     v init -q repo; cd repo
     printf '[a]\n\tone = 1\n' >.git/config
