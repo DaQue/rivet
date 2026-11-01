@@ -2343,3 +2343,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 45** — `config --type=bool-or-str`: a boolean word or any number reads as `true`/`false` (an empty value false, a bare key true), other text is printed as written; on read, `--get-regexp`, `--get-all` and write (`config --type=bool-or-str k yes` stores `true`). `--list` ignoring `--type` is recorded in GAPS.md. `s_config_bool_or_str` fails on `f36e09e`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 393 PASS, `failures: 0`.
+
+* **UNIT 46** — `config --list` applies `--type`: values are converted, entries that do not convert are left out, a bare key is `true` for the boolean types and dropped for `int` (`path` reports `error: missing value for '<key>'`), and a number past a C `int` is no boolean for `bool`/`bool-or-str`. `s_config_list_type` fails on `9b72a23`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 394 scenarios, `failures: 0`.

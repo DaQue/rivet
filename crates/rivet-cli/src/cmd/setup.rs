@@ -683,12 +683,14 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
     let render = |key: &str, value: &bstr::BStr, origin: &str| -> Result<Vec<u8>> {
         match args.value_type {
             None | Some(ConfigTypeArg::Str) => Ok(value.to_vec()),
-            // Git reads any other integer as a bool too: zero is false, the rest true.
+            // Git reads any other integer as a bool too (zero is false, the rest true), but as
+            // a C `int`: a number past 32 bits is no boolean.
             Some(ConfigTypeArg::Bool) => match rivet_core::parse_bool(value)
-                .or_else(|_| rivet_core::parse_int(value).map(|n| n != 0))
+                .ok()
+                .or_else(|| bool_number(value))
             {
-                Ok(b) => Ok(b.to_string().into_bytes()),
-                Err(_) => anyhow::bail!("bad boolean config value '{value}' for '{key}'"),
+                Some(b) => Ok(b.to_string().into_bytes()),
+                None => anyhow::bail!("bad boolean config value '{value}' for '{key}'"),
             },
             Some(ConfigTypeArg::Int) => match rivet_core::parse_int(value) {
                 Ok(n) => Ok(n.to_string().into_bytes()),
@@ -714,17 +716,40 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
     let mut out = Vec::new();
 
     if args.list {
-        for (_, config) in read_sources()? {
+        let typed = !matches!(args.value_type, None | Some(ConfigTypeArg::Str));
+        for (origin, config) in read_sources()? {
             for (index, entry) in config.entries().iter().enumerate() {
-                // A bare `key` has no value at all: git prints the key alone.
-                if config.is_bare_key(index) {
-                    out.extend_from_slice(display_key(entry).as_bytes());
+                let bare = config.is_bare_key(index);
+                let key = display_key(entry);
+                // A type converts every value; an entry that does not convert is left out
+                // instead of failing, and a bare `key` is a true boolean but no integer or path.
+                let shown: Option<Vec<u8>> = if typed {
+                    match (bare, args.value_type) {
+                        (true, Some(ConfigTypeArg::Int)) => None,
+                        (true, Some(ConfigTypeArg::Path)) => {
+                            eprintln!("error: missing value for '{key}'");
+                            None
+                        }
+                        (true, _) => render(&key, BStr::new(b"true"), &origin).ok(),
+                        (false, _) => render(&key, entry.value.as_ref(), &origin).ok(),
+                    }
                 } else {
+                    None
+                };
+                if typed && shown.is_none() {
+                    continue;
+                }
+                if let Some(value) = shown {
                     // `-z` separates the key from its value with a newline, not `=`.
+                    out.extend_from_slice(key.as_bytes());
+                    out.push(if args.null_terminated { b'\n' } else { b'=' });
+                    out.extend_from_slice(&value);
+                } else if bare {
+                    // A bare `key` has no value at all: git prints the key alone.
+                    out.extend_from_slice(key.as_bytes());
+                } else {
                     let sep = if args.null_terminated { '\n' } else { '=' };
-                    out.extend_from_slice(
-                        format!("{}{sep}{}", display_key(entry), entry.value).as_bytes(),
-                    );
+                    out.extend_from_slice(format!("{key}{sep}{}", entry.value).as_bytes());
                 }
                 out.extend_from_slice(terminator);
             }
@@ -1030,10 +1055,16 @@ fn bool_or_str(value: &BStr) -> Vec<u8> {
         b"" | b"false" | b"no" | b"off" => return b"false".to_vec(),
         _ => {}
     }
-    match rivet_core::parse_int(value) {
-        Ok(n) => (n != 0).to_string().into_bytes(),
-        Err(_) => value.to_vec(),
+    match bool_number(value) {
+        Some(b) => b.to_string().into_bytes(),
+        None => value.to_vec(),
     }
+}
+
+/// A number read as a boolean the way git does: a C `int`, true unless zero.
+fn bool_number(value: &BStr) -> Option<bool> {
+    let n = rivet_core::parse_int(value).ok()?;
+    i32::try_from(n).ok().map(|n| n != 0)
 }
 
 /// The name git prints for a repository's own config file: relative to the work tree's top, or

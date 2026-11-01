@@ -13922,6 +13922,16 @@ s_config_bool_or_str() {
     v config --type=bool-or-str --get a.set
 }
 
+s_config_list_type() {
+    v init -q repo; cd repo
+    printf '[a]\n\tbare\n\tempty =\n\ton = On\n\tone = 1\n\tzero = 0\n\tbig = 3000000000\n\tneg = -1\n\tk = 2k\n\tword = foo bar\n\tpath = ~/x\n' >.git/config
+    for t in bool int bool-or-int bool-or-str path; do
+        v config --type=$t --list
+        v config --list --type=$t
+        v config --type=$t -z --list
+    done
+}
+
 s_config_type_unknown() {
     v init -q repo; cd repo
     printf '[a]\n\tone = 1\n' >.git/config
