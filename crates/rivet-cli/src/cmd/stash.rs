@@ -287,9 +287,101 @@ pub struct PushArgs {
     #[arg(short = 'p', long = "patch")]
     pub patch: bool,
 
+    /// Read the pathspecs from this file (`-` is standard input).
+    #[arg(long = "pathspec-from-file", value_name = "FILE")]
+    pub pathspec_from_file: Option<std::path::PathBuf>,
+
+    /// The pathspec file is NUL-separated and unquoted.
+    #[arg(long = "pathspec-file-nul")]
+    pub pathspec_file_nul: bool,
+
     /// Limit the stash to these paths.
     #[arg(value_name = "PATHSPEC")]
     pub paths: Vec<std::path::PathBuf>,
+}
+
+/// The pathspecs `--pathspec-from-file` names, or git's `fatal:` line (exit 128) when the options
+/// clash or the file cannot be read.
+fn pathspecs_from_file(args: &PushArgs) -> Result<Vec<std::path::PathBuf>, String> {
+    use std::io::Read as _;
+    use std::os::unix::ffi::OsStringExt as _;
+    let Some(file) = &args.pathspec_from_file else {
+        if args.pathspec_file_nul {
+            return Err(
+                "fatal: the option '--pathspec-file-nul' requires '--pathspec-from-file'".into(),
+            );
+        }
+        return Ok(args.paths.clone());
+    };
+    if args.patch {
+        return Err(
+            "fatal: options '--pathspec-from-file' and '--patch' cannot be used together".into(),
+        );
+    }
+    if args.staged && !args.no_staged {
+        return Err(
+            "fatal: options '--pathspec-from-file' and '--staged' cannot be used together".into(),
+        );
+    }
+    if !args.paths.is_empty() {
+        return Err(
+            "fatal: '--pathspec-from-file' and pathspec arguments cannot be used together".into(),
+        );
+    }
+    let mut data = Vec::new();
+    let read = if file.as_os_str() == "-" {
+        std::io::stdin().read_to_end(&mut data).map(|_| ())
+    } else {
+        std::fs::File::open(file).and_then(|mut f| f.read_to_end(&mut data).map(|_| ()))
+    };
+    if let Err(error) = read {
+        let text = error.to_string();
+        let text = text.split(" (os error").next().unwrap_or(&text);
+        return Err(format!(
+            "fatal: could not open '{}' for reading: {text}",
+            file.display()
+        ));
+    }
+    let records: Vec<Vec<u8>> = if args.pathspec_file_nul {
+        let mut parts: Vec<&[u8]> = data.split(|b| *b == 0).collect();
+        if parts.last().is_some_and(|last| last.is_empty()) {
+            parts.pop();
+        }
+        parts.into_iter().map(<[u8]>::to_vec).collect()
+    } else {
+        let mut parts: Vec<&[u8]> = data.split(|b| *b == b'\n').collect();
+        if parts.last().is_some_and(|last| last.is_empty()) {
+            parts.pop();
+        }
+        let mut out = Vec::new();
+        for line in parts {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            if line.first() == Some(&b'"') {
+                match super::sparse::unquote_c_style(line) {
+                    Some(bytes) => out.push(bytes),
+                    None => {
+                        return Err(format!(
+                            "fatal: line is badly quoted: {}",
+                            String::from_utf8_lossy(line)
+                        ));
+                    }
+                }
+            } else {
+                out.push(line.to_vec());
+            }
+        }
+        out
+    };
+    let mut specs = Vec::new();
+    for record in records {
+        if record.is_empty() {
+            return Err("fatal: empty string is not a valid pathspec. please use . instead if you meant to match all paths".into());
+        }
+        specs.push(std::path::PathBuf::from(std::ffi::OsString::from_vec(
+            record,
+        )));
+    }
+    Ok(specs)
 }
 
 /// A stash named by `stash@{N}` or `N` (default the newest).
@@ -418,6 +510,8 @@ pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
                 staged: s.staged,
                 no_staged: false,
                 patch: false,
+                pathspec_from_file: None,
+                pathspec_file_nul: false,
                 paths: Vec::new(),
             };
             push_impl(
@@ -576,6 +670,13 @@ fn push(
 }
 
 fn push_impl(quiet: bool, repository: &mut Repository, args: &PushArgs, mode: Mode) -> Result<i32> {
+    let paths = match pathspecs_from_file(args) {
+        Ok(paths) => paths,
+        Err(fatal) => {
+            eprintln!("{fatal}");
+            return Ok(128);
+        }
+    };
     if args.patch {
         eprintln!("fatal: `stash push -p` is not supported by rivet");
         return Ok(128);
@@ -584,7 +685,7 @@ fn push_impl(quiet: bool, repository: &mut Repository, args: &PushArgs, mode: Mo
         return push_staged(quiet, repository, args, mode);
     }
     let mut specs = Vec::new();
-    for path in &args.paths {
+    for path in &paths {
         specs.push(super::worktree_path(repository, path, "stash")?);
     }
     let head = repository.head()?;

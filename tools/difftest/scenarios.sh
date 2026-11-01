@@ -13885,6 +13885,32 @@ s_config_get_all() {
     v config --get-all nosection
 }
 
+s_stash_pathspec_file() {
+    local n=0
+    sp_repo() {
+        n=$((n + 1)); v init -q r$n; cd r$n
+        mkdir d; echo 1 >a; echo 1 >b; echo 1 >'d/s p'; echo 1 >$'t\303\251'
+        v add .; tick; v commit -q -m base
+        echo 2 >>a; echo 2 >>b; echo 2 >>'d/s p'; echo 2 >>$'t\303\251'
+        tick
+    }
+    sp_state() { v status --porcelain; v stash list; v stash show --stat 2>&1; }
+    sp_repo; printf 'a\r\n"d/s p"\n' >../list.$n; v stash push --pathspec-from-file=../list.$n; sp_state; cd ..
+    sp_repo; printf 'b\n' | v stash push --pathspec-from-file=-; sp_state; cd ..
+    sp_repo; printf '"t\\303\\251"\nb' >../list.$n; v stash push -m msg --pathspec-from-file=../list.$n; sp_state; cd ..
+    sp_repo; printf 'b\0d/s p\0' >../list.$n; v stash push --pathspec-file-nul --pathspec-from-file=../list.$n; sp_state; cd ..
+    sp_repo; printf '"a"\0' >../list.$n; v stash push --pathspec-file-nul --pathspec-from-file=../list.$n; sp_state; cd ..
+    sp_repo; : >../list.$n; v stash push --pathspec-from-file=../list.$n; sp_state; cd ..
+    sp_repo; printf 'a\n\nb\n' >../list.$n; v stash push --pathspec-from-file=../list.$n; sp_state; cd ..
+    sp_repo; printf '"a\n' >../list.$n; v stash push --pathspec-from-file=../list.$n; sp_state; cd ..
+    sp_repo; printf 'zz\n' >../list.$n; v stash push --pathspec-from-file=../list.$n; sp_state; cd ..
+    sp_repo; v stash push --pathspec-from-file=../nosuch; sp_state; cd ..
+    sp_repo; printf 'a\n' >../list.$n; v stash push --pathspec-from-file=../list.$n b; sp_state; cd ..
+    sp_repo; printf 'a\n' >../list.$n; v stash push -S --pathspec-from-file=../list.$n; sp_state; cd ..
+    sp_repo; printf 'a\n' >../list.$n; v stash push -p --pathspec-from-file=../list.$n; sp_state; cd ..
+    sp_repo; v stash push --pathspec-file-nul; sp_state; cd ..
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

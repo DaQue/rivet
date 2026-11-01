@@ -2328,3 +2328,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 40** — `config --get-all <key> [<value-pattern>]`: every value of a key in file order across the consulted files, a bare key as an empty line, `--type` and `-z` honoured, a value ERE with `!` negation (`error: invalid pattern` exit 6); `s_config_get_all` fails on `c5514f1`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 388 PASS, `failures: 0`.
+
+* **UNIT 41** — `stash push --pathspec-from-file=<file|->` and `--pathspec-file-nul`: LF/CRLF lines (a leading `"` is C-quoted), NUL records taken literally, an empty file stashes everything, and git's fatals for `-p`, `--staged`, pathspec arguments, a missing `--pathspec-from-file`, an unreadable file, a badly quoted line and an empty record; `s_stash_pathspec_file` fails on `48ca53b`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 389 PASS, `failures: 0`.

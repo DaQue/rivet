@@ -140,7 +140,7 @@ pub fn run_sparse_checkout(global: &GlobalArgs, args: &SparseArgs) -> Result<i32
 const CHECK_RULES_USAGE: &str = "usage: git sparse-checkout check-rules [-z] [--skip-checks][--[no-]cone] [--rules-file <file>]\n\n    -z                    terminate input and output files by a NUL character\n    --[no-]cone           when used with --rules-file interpret patterns as cone mode patterns\n    --[no-]rules-file <file>\n                          use patterns in <file> instead of the current ones.\n\n";
 
 /// The bytes a C-style quoted string (`"…"`, with `\n`, `\"`, `\ooo` escapes) stands for.
-fn unquote_c_style(text: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn unquote_c_style(text: &[u8]) -> Option<Vec<u8>> {
     let inner = text.strip_prefix(b"\"")?;
     let mut out = Vec::new();
     let mut i = 0;

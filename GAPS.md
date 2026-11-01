@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 388 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 389 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-10-31, gate: 351 tests / 0 failed, 388 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-01, gate: 351 tests / 0 failed, 389 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -151,7 +151,7 @@ The command works for the common case; the listed options or edge cases are miss
   only selects which paths are reset in the index, `Can't use --staged and --include-untracked or --all`,
   `No staged changes`; `s_stash_staged`, including `apply`, `apply --index` and `pop`). A staged binary file or
   submodule is refused by name. Not matched: `-p`/`--patch` (interactive hunk selection) is refused by name
-  for `push` and `save` (`stash_patch_refusal.rs`); there is no `--pathspec-from-file` and no `-U`.
+  for `push` and `save` (`stash_patch_refusal.rs`); `--pathspec-from-file` and `--pathspec-file-nul` work for `push` (`s_stash_pathspec_file`; `save` and `create` have neither, as in git); there is no `-U`.
 * **`gc` / `repack`** — `gc --cruft` and `repack --cruft` / `--cruft-expiration` are compared with git
   (`s_gc_cruft`, `s_gc_cruft_expire`, `s_repack_cruft`: what the cruft pack keeps, `-A`/`-k` refused with git's
   words). `repack --geometric=<n>` rolls packs up as git's split does (by object count, the loose objects joining
