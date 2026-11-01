@@ -13740,6 +13740,34 @@ s_config_comment_chars() {
     for k in a.k a.m a.n a.u a.q a.z a.e a.f a.g; do v config --get $k; done
 }
 
+# a section a removal empties goes with the empty headers of the same section around it, but not
+# past a comment, another entry or a header of another section
+s_config_emptied() {
+    v init -q repo; cd repo
+    emptied() { printf "$1" >.git/config; shift; v config "$@"; { echo "== config file"; cat -A .git/config; } >>"$TRANSCRIPT"; }
+    emptied '[a]\n\tx = 1\n[a]\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[a]\n\tx = 1\n[d]\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[a]\n\tx = 1\n[a]\n' --unset a.x
+    emptied '[a]\n\tx = 1\n[A]\n[a "s"]\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[a]\n\tx = 1\n[a]\n# c\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[a]\n\tx = 1\n\n[a]\n\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[a]\n\tx = 1\n[a]\n[a]\n\tw = 1\n' --unset a.x
+    emptied '[b]\n[a]\n\tx = 1\n[a]\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[a]\n[a]\n\tx = 1\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[a]\n# c\n[a]\n\tx = 1\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[a]\n\n[a]\n\tx = 1\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[d]\n[a]\n\tx = 1\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[a "s"]\n[a]\n\tx = 1\n[c]\n\tz = 3\n' --unset a.x
+    emptied '# top\n[a]\n\tx = 1\n[b]\n\ty = 1\n' --unset a.x
+    emptied '# top\n[a]\n[a]\n\tx = 1\n[b]\n\ty = 1\n' --unset a.x
+    emptied '[b]\n\ty = 1\n[a]\n[a]\n\tx = 1\n\n[a]\n\n' --unset a.x
+    emptied '[b]\n\ty = 1\n[a]\n\tx = 1\n[a "s"]\n[a]\n' --unset a.x
+    emptied '[a]\n\ty = 1\n[a]\n\tx = 1\n[a]\n[c]\n\tz = 3\n' --unset a.x
+    emptied '[a] # c\n\tx = 1\n[b]\n\ty = 1\n' --unset a.x
+    emptied '[a]\n\ty = 1\n\tx = 1\n[b]\n\ty = 1\n' --unset a.x
+    emptied '[a]\n\tx = 1\n[a]\n\tx = 2\n[a]\n[c]\n\tz = 3\n' --unset-all a.x
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

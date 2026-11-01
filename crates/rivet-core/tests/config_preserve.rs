@@ -86,3 +86,30 @@ fn an_unquoted_hash_or_semicolon_ends_a_value_where_it_stands() {
         assert_eq!(cfg.get(BStr::new(key)).unwrap().unwrap(), want, "{key}");
     }
 }
+
+#[test]
+fn an_emptied_section_takes_its_empty_duplicate_headers_with_it() {
+    let unset = |file: &[u8]| {
+        let mut cfg = Config::parse(file).unwrap();
+        assert!(cfg.remove(BStr::new("a.x")).unwrap());
+        cfg.to_bytes().to_str().unwrap().to_owned()
+    };
+    // Values taken from `git config --unset a.x` on the same files.
+    assert_eq!(
+        unset(b"[a]\n\tx = 1\n[a]\n[c]\n\tz = 3\n"),
+        "[c]\n\tz = 3\n"
+    );
+    assert_eq!(unset(b"[a]\n[a]\n\tx = 1\n[c]\n"), "[c]\n");
+    assert_eq!(unset(b"[a]\n\tx = 1\n[a]\n"), "");
+    assert_eq!(
+        unset(b"[a]\n\tx = 1\n[d]\n[c]\n\tz = 3\n"),
+        "[d]\n[c]\n\tz = 3\n"
+    );
+    // A comment, or another entry, on either side keeps the header.
+    assert_eq!(unset(b"[a]\n\tx = 1\n[a]\n# c\n"), "[a]\n[a]\n# c\n");
+    assert_eq!(unset(b"# t\n[a]\n\tx = 1\n[b]\n"), "# t\n[a]\n[b]\n");
+    assert_eq!(
+        unset(b"[a]\n\tx = 1\n[a]\n\tw = 1\n"),
+        "[a]\n[a]\n\tw = 1\n"
+    );
+}

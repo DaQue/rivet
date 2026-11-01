@@ -292,6 +292,40 @@ struct Layout {
     raw: Option<Vec<u8>>,
 }
 
+/// One line of the text between two entries.
+enum PreLine {
+    Blank,
+    Header(Header),
+    /// A comment, or anything else a section removal must not swallow.
+    Other,
+}
+
+/// The lines of `pre` with their start and end offsets.
+fn pre_lines(pre: &[u8]) -> Vec<(usize, usize, PreLine)> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < pre.len() {
+        let end = pre[start..]
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(pre.len(), |p| start + p + 1);
+        let text = bstr::ByteSlice::trim(&pre[start..end]);
+        let line = if text.is_empty() {
+            PreLine::Blank
+        } else if text.starts_with(b"[") && text.ends_with(b"]") {
+            match Config::parse(text).ok().and_then(|c| c.tail.header) {
+                Some(h) => PreLine::Header(h),
+                None => PreLine::Other,
+            }
+        } else {
+            PreLine::Other
+        };
+        out.push((start, end, line));
+        start = end;
+    }
+    out
+}
+
 impl Layout {
     /// Append bytes that stood before a removed section's header to the text being carried.
     fn absorb_pre(&mut self, pre: &[u8]) {
@@ -1161,41 +1195,72 @@ impl Config {
 
     /// Remove one entry, leaving the comments and headers that stood before it in the file —
     /// except that a section the removal empties loses its header, as in git (`maybe_remove_section`):
-    /// only blank lines between the header and the entry, and between the entry and the next
-    /// header (of another section) or the end of the file.
+    /// scanning back from the entry only blank lines and further headers of the same section may
+    /// stand between it and the header (a comment or another entry means the section is kept), and
+    /// scanning forward only blank lines and empty headers of the same section up to the next
+    /// header of another section or the end of the file. Everything from the first of those
+    /// headers to there goes.
     fn remove_entry(&mut self, at: usize) {
-        let blank = |b: &[u8]| b.iter().all(|c| matches!(c, b' ' | b'\t' | b'\r' | b'\n'));
         let own: Header = (
             self.entries[at].section.clone(),
             self.entries[at].subsection.clone(),
         );
-        let this = &self.layouts[at];
-        let after_header = this.pre[this.header_off..]
-            .iter()
-            .position(|b| *b == b'\n')
-            .map_or(this.pre.len(), |p| this.header_off + p + 1);
-        let header_alone = this.header.is_some() && blank(&this.pre[after_header..]);
-        let next = self.layouts.get(at + 1).unwrap_or(&self.tail);
-        let next_ends_section = match &next.header {
-            Some((s, sub)) => {
-                blank(&next.pre[..next.header_off])
-                    && !(s.eq_ignore_ascii_case(&own.0) && *sub == own.1)
+        let same = |h: &Header| h.0.eq_ignore_ascii_case(&own.0) && h.1 == own.1;
+        // Where the emptied section starts inside this entry's `pre`.
+        let begin = {
+            let this = &self.layouts[at];
+            let mut begin = None;
+            for (start, _, line) in pre_lines(&this.pre).into_iter().rev() {
+                match line {
+                    PreLine::Blank => {}
+                    PreLine::Header(h) if same(&h) => begin = Some(start),
+                    PreLine::Header(_) => break,
+                    PreLine::Other => {
+                        begin = None;
+                        break;
+                    }
+                }
             }
-            None => at + 1 == self.layouts.len() && blank(&next.pre),
+            begin
         };
-        let empties_section = header_alone && next_ends_section;
+        // Where it ends inside the next layout's `pre`; `None` for "to the end of the file".
+        let end = begin.and_then(|_| {
+            let next = self.layouts.get(at + 1).unwrap_or(&self.tail);
+            for (start, _, line) in pre_lines(&next.pre) {
+                match line {
+                    PreLine::Blank => {}
+                    PreLine::Header(h) if same(&h) => {}
+                    PreLine::Header(_) => return Some(Some(start)),
+                    PreLine::Other => return None,
+                }
+            }
+            (at + 1 == self.layouts.len()).then_some(None)
+        });
         self.entries.remove(at);
         let mut gone = self.layouts.remove(at);
-        if empties_section {
-            // The header goes with the blank lines on either side of the entry.
-            gone.pre.truncate(gone.header_off);
+        if let (Some(begin), Some(end)) = (begin, end) {
+            gone.pre.truncate(begin);
             gone.header = None;
+            gone.header_off = 0;
+            if let Some((start, _, PreLine::Header(h))) = pre_lines(&gone.pre)
+                .into_iter()
+                .rev()
+                .find(|(_, _, l)| matches!(l, PreLine::Header(_)))
+            {
+                gone.header = Some(h);
+                gone.header_off = start;
+            }
             let next = self.layouts.get_mut(at).unwrap_or(&mut self.tail);
-            if next.header.is_some() {
-                next.pre.drain(..next.header_off);
-                next.header_off = 0;
-            } else {
-                next.pre.clear();
+            match end {
+                Some(end) => {
+                    next.pre.drain(..end);
+                    next.header_off = next.header_off.saturating_sub(end);
+                }
+                None => {
+                    next.pre.clear();
+                    next.header = None;
+                    next.header_off = 0;
+                }
             }
         }
         let next = self.layouts.get_mut(at).unwrap_or(&mut self.tail);

@@ -2295,3 +2295,8 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * Chosen from GAPS.md by the weekend run (every unit in PRIORITIES.md was committed). `Config::parse` ended a value at `#`/`;` only after a blank; git ends it at any unquoted one (`k = x#y` reads `x`, `https://h/#frag` reads `https://h/`), drops the blanks before it and keeps quoted ones and escaped characters. The two doc comments that described the old rule were corrected.
 * Proof: scenario `s_config_comment_chars` (fails on the parent), Rust test in `tests/config_preserve.rs`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 349 passed / 0 failed / 0 ignored; `scenarios.sh` 379 PASS, `failures: 0`.
+
+### UNIT 32 — config: an emptied section takes its empty duplicate headers
+* Chosen from GAPS.md by the weekend run (every unit in PRIORITIES.md was committed). `Config::remove_entry` now follows git's `maybe_remove_section`: scanning back, only blank lines and headers of the same section may stand between the entry and its header; scanning forward, only blanks and empty headers of the same section up to a header of another section or the end of the file. A comment or another entry on either side keeps the section (`# top` before the header, `[a] # c`, a trailing comment); everything from the first header to there goes. Probed against `git config --unset` on 22 files.
+* Proof: scenario `s_config_emptied` (fails on the parent), Rust test in `tests/config_preserve.rs`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 350 passed / 0 failed / 0 ignored; `scenarios.sh` 380 scenarios, `failures: 0`.
