@@ -139,18 +139,33 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
             }
         } else if in_config && text == "--get-regexp" {
             // git's `--get-regexp` is a mode flag, so `-z` may follow it; clap's takes the
-            // next word as its pattern. A `-z`/`--null` right after it moves in front.
-            match iter.next() {
-                Some(next) if matches!(next.to_str(), Some("-z" | "--null")) => {
-                    out.push(next);
-                    out.push(arg);
+            // next word as its pattern. Plain flags right after it move in front, so the
+            // pattern is the first word that is none of them (git's pattern follows any options).
+            while let Some(next) = iter.as_slice().first().filter(|next| match next.to_str() {
+                Some("-z" | "--null" | "--global" | "--local" | "--system") => true,
+                Some(word) => word.starts_with("--type="),
+                None => false,
+            }) {
+                let next = next.clone();
+                iter.next();
+                if let Some(value) = next.to_string_lossy().strip_prefix("--type=")
+                    && !matches!(
+                        value,
+                        "bool"
+                            | "int"
+                            | "bool-or-int"
+                            | "bool-or-str"
+                            | "path"
+                            | "expiry-date"
+                            | "color"
+                    )
+                {
+                    eprintln!("fatal: unrecognized --type argument, {value}");
+                    std::process::exit(cmd::EXIT_FATAL);
                 }
-                Some(next) => {
-                    out.push(arg);
-                    out.push(next);
-                }
-                None => out.push(arg),
+                out.push(next);
             }
+            out.push(arg);
             continue;
         } else if in_log && !after_dashes {
             if text == "--" {
