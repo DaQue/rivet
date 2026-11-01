@@ -698,6 +698,7 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                 ),
             },
             Some(ConfigTypeArg::BoolOrInt) => bool_or_int(value, key, Some(origin)),
+            Some(ConfigTypeArg::BoolOrStr) => Ok(bool_or_str(value)),
             Some(ConfigTypeArg::Path) => {
                 let text = value.to_string();
                 Ok(match text.strip_prefix("~/") {
@@ -935,6 +936,7 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                 }
             }
             Some(ConfigTypeArg::BoolOrInt) => bool_or_int(BStr::new(value.as_bytes()), key, None)?,
+            Some(ConfigTypeArg::BoolOrStr) => bool_or_str(BStr::new(value.as_bytes())),
             _ => value.as_bytes().to_vec(),
         };
         if args.add {
@@ -1016,6 +1018,21 @@ fn bool_or_int(value: &BStr, key: &str, origin: Option<&str>) -> Result<Vec<u8>>
                 int_failure(value)
             )
         }
+    }
+}
+
+/// `--type=bool-or-str`: a boolean word or any number is `true`/`false` (zero is false, the rest
+/// true), and anything else is kept as written. Nothing fails.
+fn bool_or_str(value: &BStr) -> Vec<u8> {
+    let lower = value.to_ascii_lowercase();
+    match &lower[..] {
+        b"true" | b"yes" | b"on" => return b"true".to_vec(),
+        b"" | b"false" | b"no" | b"off" => return b"false".to_vec(),
+        _ => {}
+    }
+    match rivet_core::parse_int(value) {
+        Ok(n) => (n != 0).to_string().into_bytes(),
+        Err(_) => value.to_vec(),
     }
 }
 

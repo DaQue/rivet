@@ -2340,3 +2340,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 44** — `config --type=<name>`: a name git does not know (`foo`, `str`, an empty one) is `fatal: unrecognized --type argument, <name>` (exit 128) wherever it stands on the line, as git checks it while parsing options; `s_config_type_unknown` fails on `a89a266`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 392 PASS, `failures: 0`.
+
+* **UNIT 45** — `config --type=bool-or-str`: a boolean word or any number reads as `true`/`false` (an empty value false, a bare key true), other text is printed as written; on read, `--get-regexp`, `--get-all` and write (`config --type=bool-or-str k yes` stores `true`). `--list` ignoring `--type` is recorded in GAPS.md. `s_config_bool_or_str` fails on `f36e09e`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 393 PASS, `failures: 0`.

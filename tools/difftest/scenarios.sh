@@ -13906,6 +13906,22 @@ s_config_bool_or_int() {
     v config --type=bool-or-int --get a.set
 }
 
+s_config_bool_or_str() {
+    v init -q repo; cd repo
+    printf '[a]\n\tbare\n\tempty =\n\ton = On\n\toff = OFF\n\tone = 1\n\ttwo = 2\n\tzero = 0\n\tbig = 2k\n\tword = foo bar\n\tdate = 2.days.ago\n\tpad = " yes"\n' >.git/config
+    for k in bare empty on off one two zero big word date pad missing; do
+        v config --get --type=bool-or-str a.$k
+        v config --type=bool-or-str a.$k
+    done
+    v config --type=bool-or-str --get-regexp 'a\.(on|big|word)'
+    v config --type=bool-or-str --get-all a.two
+    for w in yes 1 0 2k off foo ''; do
+        v config --type=bool-or-str a.set "$w"
+        v config --get a.set
+    done
+    v config --type=bool-or-str --get a.set
+}
+
 s_config_type_unknown() {
     v init -q repo; cd repo
     printf '[a]\n\tone = 1\n' >.git/config

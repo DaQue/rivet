@@ -508,6 +508,9 @@ pub enum ConfigTypeArg {
     /// Interpret the value as a boolean word, or else as an integer.
     BoolOrInt,
 
+    /// Interpret the value as a boolean word or number, or else print it as it is.
+    BoolOrStr,
+
     /// Interpret the value as a path, expanding a leading `~`.
     Path,
 
