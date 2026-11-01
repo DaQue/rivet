@@ -13867,6 +13867,24 @@ s_config_int_error() {
     (cd sub && v config --get --type=int a.word)
 }
 
+s_config_get_all() {
+    v init -q repo; cd repo
+    printf '[a]\n\tk = one\n\tk = two\n\tbare\n\tj = x\n\tk = 3\n\tbare\n[b "Sub"]\n\tn = 7\n\tn = 12\n' >.git/config
+    v config --get-all a.k
+    v config -z --get-all a.k
+    v config --get-all a.j
+    v config --get-all A.K
+    v config --get-all a.bare
+    v config --get-all a.missing
+    v config --get-all b.Sub.n
+    v config --get-all --type=int b.Sub.n
+    v config --get-all a.k '^t'
+    v config --get-all a.k '!^t'
+    v config --get-all a.k '^zzz'
+    v config --get-all a.k '('
+    v config --get-all nosection
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

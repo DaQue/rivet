@@ -2325,3 +2325,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 39** — `config --get --type=int` fails as git does: `bad numeric config value '<v>' for '<key>' in file <path>: invalid unit|out of range` (a bare key is the empty string; the path is `.git/config` relative to the work tree), and `--type=bool` reads a nonzero integer as true; `s_config_int_error` fails on `b9b7b27`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 387 PASS, `failures: 0`.
+
+* **UNIT 40** — `config --get-all <key> [<value-pattern>]`: every value of a key in file order across the consulted files, a bare key as an empty line, `--type` and `-z` honoured, a value ERE with `!` negation (`error: invalid pattern` exit 6); `s_config_get_all` fails on `c5514f1`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 388 PASS, `failures: 0`.

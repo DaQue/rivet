@@ -257,6 +257,10 @@ pub struct ConfigArgs {
     /// Add the value rather than replacing an existing one.
     #[arg(long = "add")]
     pub add: bool,
+
+    /// Print every value of the key, one per line, in file order.
+    #[arg(long = "get-all")]
+    pub get_all: bool,
 }
 
 /// Phase 2 — create an empty repository, or re-initialise an existing one.
@@ -838,6 +842,57 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
     if rivet_core::config::ConfigEntry::parse_key(BStr::new(key.as_bytes())).is_err() {
         eprintln!("error: key does not contain a section: {key}");
         return Ok(1);
+    }
+
+    if args.get_all {
+        // The optional second word is an ERE over the value, a leading `!` negating it.
+        let value_matcher = match &args.value {
+            None => None,
+            Some(text) => {
+                let (negated, body) = match text.strip_prefix('!') {
+                    Some(rest) => (true, rest),
+                    None => (false, text.as_str()),
+                };
+                match super::regex::Regex::new(body.as_bytes(), true, false) {
+                    Ok(re) => Some((re, negated)),
+                    Err(_) => {
+                        eprintln!("error: invalid pattern: {body}");
+                        return Ok(6);
+                    }
+                }
+            }
+        };
+        let (section, subsection, name) =
+            rivet_core::ConfigEntry::parse_key(BStr::new(key.as_bytes()))?;
+        let mut found = false;
+        for (origin, config) in read_sources()? {
+            for (index, entry) in config.entries().iter().enumerate() {
+                if !entry.matches(&section, subsection.as_ref().map(|v| v.as_slice()), &name) {
+                    continue;
+                }
+                let bare = config.is_bare_key(index);
+                let raw: &[u8] = if bare { b"" } else { entry.value.as_ref() };
+                if let Some((re, negated)) = &value_matcher
+                    && re.is_match(raw, false) == *negated
+                {
+                    continue;
+                }
+                found = true;
+                if bare && matches!(args.value_type, None | Some(ConfigTypeArg::Str)) {
+                    // A bare `key` prints an empty line, as `--get` does.
+                } else {
+                    let value = if bare && args.value_type == Some(ConfigTypeArg::Int) {
+                        bstr::BString::default()
+                    } else {
+                        entry.value.clone()
+                    };
+                    out.extend_from_slice(&render(key, BStr::new(&value[..]), &origin)?);
+                }
+                out.extend_from_slice(terminator);
+            }
+        }
+        std::io::stdout().write_all(&out)?;
+        return Ok(if found { 0 } else { 1 });
     }
 
     if args.unset || args.unset_all {
