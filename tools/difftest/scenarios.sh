@@ -13856,6 +13856,17 @@ s_config_bare() {
     v config --list
 }
 
+s_config_int_error() {
+    v init -q repo; cd repo
+    printf '[a]\n\tbare\n\tword = abc\n\thuge = 99999999999999999999\n\tunit = 1k5\n\tsign = -\n\tbig = 5k\n\tneg = -3m\n\tzero = 0\n\tmany = 12\n' >.git/config
+    for k in bare word huge unit sign big neg zero many; do
+        v config --get --type=int a.$k
+        v config --get --type=bool a.$k
+    done
+    mkdir sub
+    (cd sub && v config --get --type=int a.word)
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

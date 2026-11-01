@@ -2322,3 +2322,6 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 
 * **UNIT 38** — `config`: a bare `key` (no `=`) is printed as the key alone by `--list` and `--get-regexp` (a value pattern sees the empty string), untyped `--get` prints an empty line, and `-z --list` separates key and value with a newline; `Config::is_bare_key` (additive) carries the fact the parser used to drop; `s_config_bare` fails on `eb69049`.
 * Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 386 PASS, `failures: 0`.
+
+* **UNIT 39** — `config --get --type=int` fails as git does: `bad numeric config value '<v>' for '<key>' in file <path>: invalid unit|out of range` (a bare key is the empty string; the path is `.git/config` relative to the work tree), and `--type=bool` reads a nonzero integer as true; `s_config_int_error` fails on `b9b7b27`.
+* Gate: fmt, doc, clippy `-D warnings` clean; `cargo test --workspace` 351 passed / 0 failed / 0 ignored; `scenarios.sh` 387 PASS, `failures: 0`.

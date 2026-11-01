@@ -646,16 +646,19 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
         let want_global = args.global || scope_count == 0;
         let want_local = args.local || scope_count == 0;
         if want_system && let Some(path) = system_config_path().filter(|p| p.is_file()) {
-            sources.push(("system".to_string(), rivet_core::Config::load(&path)?));
+            sources.push((path.display().to_string(), rivet_core::Config::load(&path)?));
         }
         if want_global {
             for path in global_config_paths().into_iter().filter(|p| p.is_file()) {
-                sources.push(("global".to_string(), rivet_core::Config::load(&path)?));
+                sources.push((path.display().to_string(), rivet_core::Config::load(&path)?));
             }
         }
         if want_local {
             if let Some(path) = local_path.as_ref().filter(|p| p.is_file()) {
-                sources.push(("local".to_string(), rivet_core::Config::load(path)?));
+                sources.push((
+                    origin_name(path, repository.as_ref()),
+                    rivet_core::Config::load(path)?,
+                ));
             } else if args.local {
                 anyhow::bail!("--local can only be used inside a git repository");
             }
@@ -673,16 +676,22 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
         key.push_str(&entry.key.to_string().to_ascii_lowercase());
         key
     };
-    let render = |key: &str, value: &bstr::BStr| -> Result<Vec<u8>> {
+    let render = |key: &str, value: &bstr::BStr, origin: &str| -> Result<Vec<u8>> {
         match args.value_type {
             None | Some(ConfigTypeArg::Str) => Ok(value.to_vec()),
-            Some(ConfigTypeArg::Bool) => match rivet_core::parse_bool(value) {
+            // Git reads any other integer as a bool too: zero is false, the rest true.
+            Some(ConfigTypeArg::Bool) => match rivet_core::parse_bool(value)
+                .or_else(|_| rivet_core::parse_int(value).map(|n| n != 0))
+            {
                 Ok(b) => Ok(b.to_string().into_bytes()),
                 Err(_) => anyhow::bail!("bad boolean config value '{value}' for '{key}'"),
             },
             Some(ConfigTypeArg::Int) => match rivet_core::parse_int(value) {
                 Ok(n) => Ok(n.to_string().into_bytes()),
-                Err(_) => anyhow::bail!("bad numeric config value '{value}' for '{key}'"),
+                Err(_) => anyhow::bail!(
+                    "bad numeric config value '{value}' for '{key}' in file {origin}: {}",
+                    int_failure(value)
+                ),
             },
             Some(ConfigTypeArg::Path) => {
                 let text = value.to_string();
@@ -888,8 +897,8 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
     }
 
     // Reading: the last value wins across the consulted files.
-    let mut found: Option<(bstr::BString, bool)> = None;
-    for (_, config) in read_sources()? {
+    let mut found: Option<(bstr::BString, bool, String)> = None;
+    for (origin, config) in read_sources()? {
         if let Some(value) = config.get(BStr::new(key.as_bytes()))? {
             let (section, subsection, name) =
                 rivet_core::ConfigEntry::parse_key(BStr::new(key.as_bytes()))?;
@@ -900,16 +909,22 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                     e.matches(&section, subsection.as_ref().map(|v| v.as_slice()), &name)
                 })
                 .is_some_and(|at| config.is_bare_key(at));
-            found = Some((value.to_owned(), bare));
+            found = Some((value.to_owned(), bare, origin));
         }
     }
     match found {
-        Some((value, bare)) => {
+        Some((value, bare, origin)) => {
             // A bare `key` has no value: untyped, git prints an empty line for it.
             if bare && matches!(args.value_type, None | Some(ConfigTypeArg::Str)) {
                 out.extend_from_slice(b"");
             } else {
-                out.extend_from_slice(&render(key, BStr::new(&value[..]))?);
+                // A bare `key` is an empty string to an integer, whatever it reads as for a bool.
+                let value = if bare && args.value_type == Some(ConfigTypeArg::Int) {
+                    bstr::BString::default()
+                } else {
+                    value
+                };
+                out.extend_from_slice(&render(key, BStr::new(&value[..]), &origin)?);
             }
             out.extend_from_slice(terminator);
             std::io::stdout().write_all(&out)?;
@@ -920,6 +935,33 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
 }
 
 use bstr::BStr;
+
+/// The name git prints for a repository's own config file: relative to the work tree's top, or
+/// to the current directory for a bare repository, and as found otherwise.
+fn origin_name(path: &std::path::Path, repository: Option<&Repository>) -> String {
+    let base = repository
+        .and_then(|r| r.worktree_path().map(PathBuf::from))
+        .or_else(|| std::env::current_dir().ok());
+    match base.as_deref().and_then(|b| path.strip_prefix(b).ok()) {
+        Some(rest) => rest.display().to_string(),
+        None => path.display().to_string(),
+    }
+}
+
+/// Why git's `git_parse_int` refused `value`: an out of range number still has the shape of a
+/// number with an optional `k`/`m`/`g`, anything else is an unknown unit.
+fn int_failure(value: &BStr) -> &'static str {
+    let digits = value.strip_prefix(b"-").unwrap_or(value);
+    let body = match digits.last() {
+        Some(b'k' | b'K' | b'm' | b'M' | b'g' | b'G') => &digits[..digits.len() - 1],
+        _ => digits,
+    };
+    if !body.is_empty() && body.iter().all(u8::is_ascii_digit) {
+        "out of range"
+    } else {
+        "invalid unit"
+    }
+}
 
 /// Split `section` or `section.subsection` as the section commands name them.
 fn split_section(name: &str) -> (String, Option<String>) {
