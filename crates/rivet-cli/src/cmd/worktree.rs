@@ -924,6 +924,8 @@ struct AddOptions {
     /// `--track` (`Some(true)`) or `--no-track`.
     track: Option<bool>,
     guess_remote: bool,
+    /// `--orphan`: an unborn branch, nothing checked out.
+    orphan: bool,
 }
 
 fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
@@ -938,6 +940,7 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         quiet: global.quiet,
         track: None,
         guess_remote: false,
+        orphan: false,
     };
     let mut positional: Vec<&String> = Vec::new();
     let mut iter = args.iter();
@@ -975,7 +978,9 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             "--no-track" => options.track = Some(false),
             "--guess-remote" => options.guess_remote = true,
             "--no-guess-remote" => options.guess_remote = false,
-            "--orphan" | "--relative-paths" | "--no-relative-paths" => {
+            "--orphan" => options.orphan = true,
+            "--no-orphan" => options.orphan = false,
+            "--relative-paths" | "--no-relative-paths" => {
                 anyhow::bail!("worktree add: {arg} is not implemented")
             }
             a if a.starts_with('-') && a.len() > 1 => {
@@ -990,12 +995,29 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         eprint!("{USAGE_ADD}");
         return Ok(129);
     }
-    if options.reason.is_some() && !options.lock {
-        eprintln!("fatal: --reason requires --lock");
-        return Ok(128);
-    }
     if options.new_branch.is_some() && options.detach {
         eprintln!("fatal: options '-b', '-B', and '--detach' cannot be used together");
+        return Ok(128);
+    }
+    if options.orphan {
+        let clash = if options.detach {
+            Some("options '--orphan' and '--detach' cannot be used together")
+        } else if options.track.is_some() {
+            Some("options '--orphan' and '--track' cannot be used together")
+        } else if !options.checkout {
+            Some("options '--orphan' and '--no-checkout' cannot be used together")
+        } else if positional.len() == 2 {
+            Some("option '--orphan' and commit-ish cannot be used together")
+        } else {
+            None
+        };
+        if let Some(message) = clash {
+            eprintln!("fatal: {message}");
+            return Ok(128);
+        }
+    }
+    if options.reason.is_some() && !options.lock {
+        eprintln!("fatal: the option '--reason' requires '--lock'");
         return Ok(128);
     }
     let path_arg = positional[0].as_str();
@@ -1013,6 +1035,10 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     let mut checkout_branch: Option<String> = None;
     // A remote-tracking branch a new branch is made from (and then follows).
     let mut guessed_start: Option<RefName> = None;
+    if options.orphan && new_branch.is_none() {
+        // An unborn branch named after the directory, as `git worktree add ../topic` would.
+        new_branch = Some(basename.clone());
+    }
     if new_branch.is_none() && !options.detach {
         match commit_ish {
             None => {
@@ -1051,7 +1077,9 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         .unwrap_or("HEAD")
         .to_string();
     let start_spec = start_spec.as_str();
-    let start: Option<ObjectId> = if let Some(branch) = &checkout_branch {
+    let start: Option<ObjectId> = if options.orphan {
+        None
+    } else if let Some(branch) = &checkout_branch {
         let name = RefName::branch(BStr::new(branch.as_bytes()))?;
         Some(repository.refs().resolve_oid(&name)?)
     } else {
@@ -1131,19 +1159,19 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         eprintln!("fatal: '{branch}' is not a valid branch name");
         eprintln!("hint: See 'git help check-ref-format'");
         eprintln!("hint: Disable this message with \"git config set advice.refSyntax false\"");
-        return Ok(255);
+        return Ok(if options.orphan { 128 } else { 255 });
     }
     if options.track.is_some() && new_branch.is_none() {
         eprintln!("fatal: --[no-]track can only be used if a new branch is created");
         return Ok(128);
     }
     if let Some(branch) = &new_branch
-        && !reset_branch
+        && (!reset_branch || options.orphan)
     {
         let name = RefName::branch(BStr::new(branch.as_bytes()))?;
         if repository.refs().exists(&name) {
             eprintln!("fatal: a branch named '{branch}' already exists");
-            return Ok(255);
+            return Ok(if options.orphan { 128 } else { 255 });
         }
     }
 
@@ -1239,8 +1267,10 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     };
     std::fs::write(admin.join("HEAD"), head_text)?;
     std::fs::create_dir_all(admin.join("refs"))?;
-    std::fs::create_dir_all(admin.join("logs"))?;
-    std::fs::write(admin.join("logs/HEAD"), "")?;
+    if !options.orphan {
+        std::fs::create_dir_all(admin.join("logs"))?;
+        std::fs::write(admin.join("logs/HEAD"), "")?;
+    }
     // A sparse checkout is inherited: the new work tree gets a copy of the definition and the two
     // settings, in its own `config.worktree`, and is checked out accordingly.
     if repository.sparse_enabled()? {

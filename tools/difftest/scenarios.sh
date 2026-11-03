@@ -7191,6 +7191,51 @@ s_worktree_add_branch() {
     for w in ../feat ../w-other ../nb1 ../tr1 ../tr2; do (cd $w && v status -sb); done
 }
 
+s_worktree_add_orphan() {
+    v init -q repo; cd repo
+    tick; echo 1 >f; v add f; v commit -q -m one
+    v branch other
+    v worktree add --orphan -b nb ../o1
+    v worktree add --orphan ../o2
+    v worktree add -q --orphan -b nq ../o3
+    v worktree add --orphan -B nbb ../o4
+    v worktree add --orphan --lock --reason busy -b ol ../o5
+    v worktree add --orphan -b nb ../o6
+    v worktree add --orphan --guess-remote -b og ../o7
+    v worktree add --no-orphan ../o8
+    # refusals, in git's order
+    v worktree add --orphan -b other ../e1
+    v worktree add --orphan -B other ../e2
+    v worktree add --orphan -B main ../e3
+    v worktree add --orphan -f -b main ../e4
+    v worktree add --orphan ../other
+    v worktree add --orphan -b 'bad name' ../e5
+    v worktree add --orphan -b ex ../o1
+    v worktree add --orphan -b ex ../e6 HEAD
+    v worktree add --orphan --detach ../e7
+    v worktree add --orphan --detach ../e8 HEAD
+    v worktree add --orphan -b ex --detach ../e9
+    v worktree add --orphan --track -b ex ../e10
+    v worktree add --orphan --no-track -b ex ../e11
+    v worktree add --orphan --track --detach ../e12
+    v worktree add --orphan --no-checkout -b ex ../e13
+    v worktree add --orphan --no-checkout ../e14 HEAD
+    v worktree add --orphan --reason why -b ex ../e15
+    v worktree add --orphan --detach --reason why ../e16
+    v worktree add --orphan
+    v worktree add --orphan ../e17 a b
+    wt_snap
+    v worktree list
+    v worktree list --porcelain
+    v branch
+    for w in ../o1 ../o2 ../o3 ../o4 ../o5 ../o6 ../o7; do (cd $w && v status -sb; ls -A); done
+    # (git's index for an unborn work tree names the empty tree's cache-tree, which its own fsck
+    # reports as missing, so the work trees go before the harness's final fsck)
+    v worktree unlock ../o5
+    for w in o1 o2 o3 o4 o5 o6 o7; do v worktree remove ../$w; done
+    v worktree list
+}
+
 s_checkout_needs_merge() {
     v init -q repo; cd repo
     tick; for f in a b c d; do seq 1 3 >$f; done; mkdir sub; echo s >sub/e; v add .; v commit -q -m base

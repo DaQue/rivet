@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-03 — `worktree add --orphan` makes an unborn branch work tree with git's option clashes and fatals; `--reason` without `--lock` is git's wording (`s_worktree_add_orphan`).
 * 2026-11-03 — `rev-list --cherry` is `--right-only --cherry-mark --no-merges` (`s_rev_list_cherry_synonym`).
 * 2026-11-03 — `diff-tree --stdin` reads its lines with no path limit once a tree-ish was given on the command line, as git does; a limit with no tree-ish still applies (`s_diff_tree_stdin_limit`).
 * 2026-11-03 — `config --get-regexp` takes its pattern after `-t <type>`, `-t<type>`, `-f <file>`, `--file <file>` and `--file=<file>` (`s_config_get_regexp_after_opts`).
