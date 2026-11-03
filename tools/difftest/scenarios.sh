@@ -13948,6 +13948,16 @@ s_config_type_short() {
     v config -tnope --get foo.bar
 }
 
+s_clone_branch_tag() {
+    g init -q src
+    (cd src && echo 1 >f && g add f && g commit -qm one && g tag light && tick && echo 2 >f && g commit -qam two)
+    v clone -q -b light src c1
+    v clone -q --bare -b light src b1
+    (cd c1 && vg rev-parse HEAD && v symbolic-ref -q HEAD; v config --list --local | grep -v '^remote.origin.url' ; v for-each-ref; cat f; v status --porcelain)
+    (cd b1 && vg rev-parse HEAD && v symbolic-ref -q HEAD; v for-each-ref)
+    v clone -q -b nope src c3
+}
+
 s_clone_empty_tracking() {
     g init -q --bare empty.git
     v clone -q empty.git cl
@@ -14259,6 +14269,7 @@ for s in "$@"; do
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
         s_clone_empty_tracking) run_scenario "$s" cl bare.git empty.git ;;
+        s_clone_branch_tag) run_scenario "$s" c1 b1 src ;;
         s_attributes_eol) run_scenario "$s" repo plain ;;
         s_alternates) run_scenario "$s" repo cl cl2 rel/r ;;
         s_shallow) run_scenario "$s" src cl ;;

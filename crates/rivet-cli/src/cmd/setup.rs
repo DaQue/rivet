@@ -1388,21 +1388,78 @@ pub(super) fn populate_clone(
         }
         return Ok(None);
     }
+    let mut tag_name = None;
     let wanted = match &args.branch {
         Some(branch) => {
             let full = format!("refs/heads/{branch}");
-            if !report
-                .advertisement
-                .refs
-                .iter()
-                .any(|r| r.name.as_slice() == full.as_bytes())
-            {
+            let has = |name: &str| {
+                report
+                    .advertisement
+                    .refs
+                    .iter()
+                    .any(|r| r.name.as_slice() == name.as_bytes())
+            };
+            if has(&full) {
+                Some(bstr::BString::from(full))
+            } else if has(&format!("refs/tags/{branch}")) {
+                tag_name = Some(RefName::from_bytes(
+                    format!("refs/tags/{branch}").as_bytes(),
+                )?);
+                None
+            } else {
                 anyhow::bail!("Remote branch {branch} not found in upstream {origin}");
             }
-            Some(bstr::BString::from(full))
         }
         None => remote_default.clone(),
     };
+    if let Some(tag) = tag_name {
+        // `-b <tag>` detaches `HEAD` at the tag's commit; no local branch or tracking is made.
+        let who = who.ok_or_else(|| anyhow::anyhow!("cannot resolve committer identity"))?;
+        let tip = repository.refs().peel_to_commit(&tag, repository.odb())?;
+        repository.refs().detach_head(tip, None)?;
+        if repository.should_log_ref(&RefName::head()) {
+            let entry = rivet_core::ReflogEntry::new(
+                rivet_core::ObjectId::zero(repository.format()),
+                tip,
+                who.clone(),
+                bstr::BString::from(reason.as_str()),
+            );
+            repository.refs().append_reflog(&RefName::head(), &entry)?;
+        }
+        if !args.bare {
+            let advice_off = repository
+                .config_value(BStr::new(b"advice.detachedhead"))
+                .ok()
+                .flatten()
+                .and_then(|v| rivet_core::parse_bool(BStr::new(&v[..])).ok())
+                == Some(false);
+            if !advice_off {
+                eprintln!("Note: switching to '{tip}'.");
+                eprintln!("{}", super::branching::DETACHED_ADVICE);
+            }
+            if let Some(default) = &remote_default {
+                let default_short = String::from_utf8_lossy(
+                    default.strip_prefix(b"refs/heads/").unwrap_or(default),
+                )
+                .into_owned();
+                let origin_head =
+                    RefName::from_bytes(format!("refs/remotes/{origin}/HEAD").as_bytes())?;
+                let target = RefName::from_bytes(
+                    format!("refs/remotes/{origin}/{default_short}").as_bytes(),
+                )?;
+                let message = rivet_core::ReflogMessage::new(&who, BStr::new(reason.as_bytes()));
+                repository
+                    .refs()
+                    .set_symbolic(&origin_head, &target, Some(message))?;
+            }
+            if checkout {
+                let tree = repository.commit_tree(tip)?;
+                repository.reset_hard_to_tree(tree)?;
+                checked_out = Some(tip);
+            }
+        }
+        return Ok(checked_out);
+    }
     let Some(wanted) = wanted else {
         if !args.bare {
             // Refs but no usable `HEAD` (a bundle made without one): the local default branch is

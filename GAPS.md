@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 404 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 405 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-03, gate: 352 tests / 0 failed, 404 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-03, gate: 352 tests / 0 failed, 405 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -199,7 +199,7 @@ The command works for the common case; the listed options or edge cases are miss
   prepared, aborted and committed again around every commit and switch; `branch -m` aborts one
   transaction and redoes it). A hook that saw only some of those events would mislead whoever relies
   on it (replication, auditing), so rivet runs none until the whole set can be matched.
-* **Found by `s_hooks_clone`, not hooks** — `clone -b <tag>` is refused. (`worktree add <path> <name>` makes a
+* **Found by `s_hooks_clone`, not hooks** — (`worktree add <path> <name>` makes a
   local branch from a unique remote-tracking branch, `--guess-remote` does it for the directory's name,
   `-b`/`-B` from a remote-tracking start point set `branch.<new>.remote`/`merge`, and `--track`/`--no-track`/
   `branch.autoSetupMerge` are read; `s_worktree_add_branch`. Not done: `--track=inherit|direct`, `--orphan`,

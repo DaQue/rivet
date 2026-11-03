@@ -1836,7 +1836,7 @@ pub(super) fn report_checkout_refusal(error: rivet_core::Error, op: &str) -> Res
     }
 }
 
-const DETACHED_ADVICE: &str =
+pub(super) const DETACHED_ADVICE: &str =
     "\nYou are in 'detached HEAD' state. You can look around, make experimental
 changes and commit them, and you can discard any commits you make in this
 state without impacting any branches by switching back to a branch.
