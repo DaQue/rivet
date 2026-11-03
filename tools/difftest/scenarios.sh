@@ -10893,6 +10893,24 @@ s_log_layout_order() {
     v log --oneline --pretty=medium -- a
 }
 
+# `show --oneline`: one line, abbreviated id; the last of `--oneline`/`--pretty`/`--format` wins.
+s_show_oneline() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    echo b >b; v add b; tick; v commit -q -m "two
+
+body"
+    v show --oneline
+    v show --oneline -s
+    v show --oneline --stat
+    v show --oneline --name-only HEAD~1
+    v show --oneline --format=%s
+    v show --format=%s --oneline
+    v show --oneline --pretty=full -s
+    v show --pretty=oneline --oneline -s
+    v show --oneline --pretty=oneline -s
+}
+
 # Hex-looking names: git tries refs before short object ids, and an abbreviation is matched nibble by
 # nibble (`xx00` is not `xx`). Fixture is built by real git; the ambiguous pair is found by hashing.
 s_revparse_hexnames() {

@@ -362,6 +362,7 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
                     no_patch: false,
                     context: None,
                     format: None,
+                    oneline: false,
                     abbrev: None,
                     stat: false,
                     name_only: false,

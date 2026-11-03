@@ -193,6 +193,10 @@ pub struct ShowArgs {
     #[arg(long = "format", value_name = "FORMAT")]
     pub format: Option<String>,
 
+    /// One line per commit: the abbreviated id and the summary.
+    #[arg(long = "oneline")]
+    pub oneline: bool,
+
     /// Abbreviate the object ids to this many hex characters, or to all of them.
     #[arg(long = "abbrev", value_name = "N")]
     pub abbrev: Option<Option<usize>>,
@@ -1805,13 +1809,25 @@ fn show_object(
         }
         rivet_core::ObjectKind::Commit => {
             let commit = read_commit(repository, oid)?;
-            let layout = match (&args.format, &args.pretty) {
-                (Some(spec), _) | (None, Some(spec)) => pretty::Layout::parse(spec)?,
-                _ => pretty::Layout::Medium,
+            // The last of `--oneline`, `--pretty` and `--format` on the command line wins.
+            let last = if args.oneline {
+                last_layout_option(&std::env::args().collect::<Vec<_>>())
+            } else {
+                None
+            };
+            let layout = match last {
+                Some(Some(spec)) => pretty::Layout::parse(&spec)?,
+                Some(None) => pretty::Layout::Oneline,
+                None => match (&args.format, &args.pretty) {
+                    (Some(spec), _) | (None, Some(spec)) => pretty::Layout::parse(spec)?,
+                    _ if args.oneline => pretty::Layout::Oneline,
+                    _ => pretty::Layout::Medium,
+                },
             };
             let date = args.date.as_deref().unwrap_or("default");
             pretty::check_date_style(date)?;
-            let full_ids = layout == pretty::Layout::Oneline;
+            // `--oneline` abbreviates the id; `--pretty=oneline` prints it in full.
+            let full_ids = layout == pretty::Layout::Oneline && !args.oneline;
             let decorations = if layout_uses_decorations(&layout) {
                 decoration_map(repository, false)?
             } else {
@@ -1825,7 +1841,7 @@ fn show_object(
                 &Look {
                     date,
                     full_ids,
-                    abbrev_commit: false,
+                    abbrev_commit: args.oneline,
                     decorations: &decorations,
                     palette,
                 },

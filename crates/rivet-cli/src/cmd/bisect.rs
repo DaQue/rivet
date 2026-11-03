@@ -1361,6 +1361,7 @@ fn show_diff_tree(global: &GlobalArgs, repository: &Repository, commit: ObjectId
             no_patch: true,
             context: None,
             format: None,
+            oneline: false,
             abbrev: None,
             stat: false,
             name_only: false,
