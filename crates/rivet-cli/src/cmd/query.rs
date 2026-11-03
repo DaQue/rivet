@@ -71,7 +71,7 @@ fn not_valid(spec: &str) -> anyhow::Error {
 // ---------------------------------------------------------------------------------------------
 
 /// Arguments of `rev-list`.
-#[derive(Debug, clap::Args)]
+#[derive(Debug, Clone, clap::Args)]
 pub struct RevListArgs {
     /// Revisions: `A`, `^A`, `A..B`, `A...B`.
     #[arg(value_name = "REV")]
@@ -124,6 +124,10 @@ pub struct RevListArgs {
     /// Mark the commits of `A...B` whose patch appears on both sides with `=` (the others get `+`).
     #[arg(long = "cherry-mark")]
     pub cherry_mark: bool,
+
+    /// A synonym for `--right-only --cherry-mark --no-merges`.
+    #[arg(long = "cherry")]
+    pub cherry: bool,
 
     /// Show only the commits that descend from an excluded one (`A..B` keeps what lies between);
     /// with `=<commit>`, only its ancestors, its descendants and itself.
@@ -334,6 +338,14 @@ pub fn run_rev_list(global: &GlobalArgs, args: &RevListArgs) -> Result<i32> {
     let bad_rev = |result: Result<ObjectId>, spec: &str| -> Result<ObjectId> {
         result.map_err(|_| ambiguous(spec))
     };
+    if args.cherry {
+        let mut expanded = args.clone();
+        expanded.cherry = false;
+        expanded.right_only = true;
+        expanded.cherry_mark = true;
+        expanded.no_merges = true;
+        return run_rev_list(global, &expanded);
+    }
     if args.revs.is_empty() && !args.all {
         eprintln!("usage: rivet rev-list [<options>] <commit>...");
         return Ok(129);

@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-03 — `rev-list --cherry` is `--right-only --cherry-mark --no-merges` (`s_rev_list_cherry_synonym`).
 * 2026-11-03 — `diff-tree --stdin` reads its lines with no path limit once a tree-ish was given on the command line, as git does; a limit with no tree-ish still applies (`s_diff_tree_stdin_limit`).
 * 2026-11-03 — `config --get-regexp` takes its pattern after `-t <type>`, `-t<type>`, `-f <file>`, `--file <file>` and `--file=<file>` (`s_config_get_regexp_after_opts`).
 * 2026-11-03 — `blame --contents <file>` (`-` is standard input) blames that file as the final version of the path, its changed lines credited to `External file (--contents)` with git's `Version of <path> from <file>` summary (`s_blame_contents`).

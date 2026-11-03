@@ -5320,6 +5320,25 @@ s_rev_list_cherry() {
     v rev-list --cherry-pick merged...main
 }
 
+s_rev_list_cherry_synonym() {
+    v init -q repo; cd repo
+    tick; echo 0 >f; v add f; v commit -q -m base
+    v switch -q -c side
+    for i in a b c; do tick; echo $i >$i; v add $i; v commit -q -m side-$i; done
+    v switch -q main
+    tick; echo m >m; v add m; v commit -q -m main-m
+    tick; v cherry-pick side~1 >/dev/null
+    tick; echo z >z; v add z; v commit -q -m main-z
+    v rev-list --cherry main...side
+    v rev-list --cherry side...main
+    v rev-list --cherry --count main...side
+    v rev-list --cherry --left-right main...side
+    v switch -q -c merged side
+    tick; v merge -q --no-ff -m merge-main main^
+    v rev-list --cherry merged...main
+    v rev-list --cherry main...merged
+}
+
 s_rev_list_children() {
     rl_repo
     v rev-list --children main
