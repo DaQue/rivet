@@ -13953,6 +13953,20 @@ s_config_get_regexp_type_word() {
     v config --get-regexp --type nope '^foo\.ba'
 }
 
+s_config_get_regexp_after_opts() {
+    v init -q repo; cd repo
+    printf '[foo]\n\tbar = 1\n\tbaz = yes\n\tbig = 2k\n' >.git/config
+    printf '[foo]\n\tother = 7\n' >../other
+    v config --get-regexp -t int '^foo\.b[ai]'
+    v config --get-regexp -tbool '^foo\.ba'
+    v config --get-regexp -z -t bool '^foo\.baz'
+    v config --get-regexp -f .git/config '^foo\.ba'
+    v config --get-regexp --file .git/config -t int '^foo\.big'
+    v config --get-regexp --file=../other '^foo\.'
+    v config --get-regexp -f ../other -t int '^foo\.o' '7'
+    v config --get-regexp -t nope '^foo\.ba'
+}
+
 s_commit_date_env() {
     v init -q repo; cd repo
     echo a >a; v add a

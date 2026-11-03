@@ -152,15 +152,28 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
             // pattern is the first word that is none of them (git's pattern follows any options).
             while let Some(next) = iter.as_slice().first().filter(|next| match next.to_str() {
                 Some("-z" | "--null" | "--global" | "--local" | "--system") => true,
-                Some("--type") => iter.as_slice().len() > 1,
-                Some(word) => word.starts_with("--type="),
+                Some("--type" | "-t" | "--file" | "-f") => iter.as_slice().len() > 1,
+                Some(word) => {
+                    word.starts_with("--type=")
+                        || word.starts_with("--file=")
+                        || (word.starts_with("-t") && word.len() > 2)
+                }
                 None => false,
             }) {
                 let next = next.clone();
                 iter.next();
-                let spelled = next.to_string_lossy();
-                let two_word = spelled == "--type";
-                let value = if two_word {
+                let spelled = next.to_string_lossy().into_owned();
+                // `-t` is `--type`; `-f` / `--file <path>` take their path from the next word.
+                let spelled = match spelled.as_str() {
+                    "-t" => "--type".to_owned(),
+                    "-f" => "--file".to_owned(),
+                    word if word.starts_with("-t") && !word.starts_with("--") => {
+                        format!("--type={}", &word[2..])
+                    }
+                    _ => spelled,
+                };
+                let two_word = spelled == "--type" || spelled == "--file";
+                let value = if spelled == "--type" {
                     iter.as_slice()
                         .first()
                         .map(|v| v.to_string_lossy().into_owned())
@@ -182,7 +195,7 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                     eprintln!("fatal: unrecognized --type argument, {value}");
                     std::process::exit(cmd::EXIT_FATAL);
                 }
-                out.push(next);
+                out.push(spelled.into());
                 if two_word && let Some(value) = iter.next() {
                     out.push(value);
                 }
