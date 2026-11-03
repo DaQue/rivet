@@ -11825,6 +11825,28 @@ $TWO
 " diff-tree -r --stdin HEAD
 }
 
+# diff-tree --stdin: a path limit applies to the stdin lines unless a tree-ish was also given on the
+# command line, in which case git reads the lines unlimited.
+s_diff_tree_stdin_limit() {
+    v init -q repo; cd repo
+    echo 1 >a; echo 2 >b; v add .; tick; v commit -q -m one
+    ONE=$(g rev-parse HEAD)
+    echo 3 >>a; echo 4 >>b; v commit -q -a -m two
+    TWO=$(g rev-parse HEAD)
+    vin "$TWO $ONE
+" diff-tree --stdin -r -- b
+    vin "$TWO $ONE
+" diff-tree --stdin -r -- nothing
+    vin "$TWO $ONE
+" diff-tree --stdin -r "$ONE" -- b
+    vin "$TWO $ONE
+" diff-tree --stdin -r "$ONE" "$TWO" -- nothing
+    vin "$TWO $ONE
+" diff-tree --stdin -r "$TWO" nothing
+    vin "$TWO
+" diff-tree --stdin -r --stat "$ONE" -- a
+}
+
 # diff-tree -M / -C / --find-copies-harder, scores and thresholds, against git.
 s_diff_tree_renames() {
     v init -q repo; cd repo

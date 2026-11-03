@@ -495,7 +495,10 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
     let named_only = opts.name_only || opts.name_status;
     let text_mode = (opts.patch || opts.stat || opts.numstat) && !named_only;
     let want_raw = !text_mode || opts.raw;
+    // Git reads `--stdin` lines with no path limit once a tree-ish was given on the command line.
+    let limit_off = std::cell::Cell::new(false);
     let render = |jobs: Vec<Job>| -> Result<Vec<u8>> {
+        let specs: &[BString] = if limit_off.get() { &[] } else { &specs };
         let mut out: Vec<u8> = Vec::new();
         for (header, old, new) in jobs {
             let mut body: Vec<u8> = Vec::new();
@@ -505,12 +508,12 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                     repository: &repository,
                     recursive: opts.recursive || text_mode,
                     show_trees: opts.show_trees,
-                    specs: &specs,
+                    specs,
                     out: Vec::new(),
                 };
                 walker.walk(old, Some(new), BStr::new(b""))?;
                 if opts.rename_score.is_some() {
-                    pair_records(&repository, &opts, old, &specs, &mut walker.out)?;
+                    pair_records(&repository, &opts, old, specs, &mut walker.out)?;
                 }
                 any = !walker.out.is_empty();
                 for rec in walker.out.iter().filter(|_| !opts.silent) {
@@ -581,7 +584,7 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                     });
                 }
                 let copied = if opts.rename_score.is_some() {
-                    pair_files(&repository, &opts, old, &specs, &mut diff)?
+                    pair_files(&repository, &opts, old, specs, &mut diff)?
                 } else {
                     Vec::new()
                 };
@@ -666,6 +669,7 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
 
     if opts.stdin {
         use std::io::Read as _;
+        limit_off.set(!named.is_empty());
         let mut input = Vec::new();
         std::io::stdin().read_to_end(&mut input)?;
         let mut lines: Vec<&[u8]> = input.split(|b| *b == b'\n').collect();
