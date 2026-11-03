@@ -214,6 +214,10 @@ pub struct ConfigArgs {
     #[arg(long = "system")]
     pub system: bool,
 
+    /// Read and write this file only.
+    #[arg(short = 'f', long = "file", value_name = "FILE")]
+    pub file: Option<std::path::PathBuf>,
+
     /// List every setting, or every setting under a section.
     #[arg(short = 'l', long = "list")]
     pub list: bool,
@@ -594,12 +598,13 @@ pub fn run_clone(global: &GlobalArgs, args: &CloneArgs) -> Result<i32> {
 ///   and outside this repository's.
 pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
     use rivet_core::ops::{global_config_paths, system_config_path};
-    let scope_count = [args.global, args.local, args.system]
+    let scope_count = [args.global, args.local, args.system, args.file.is_some()]
         .iter()
         .filter(|s| **s)
         .count();
     if scope_count > 1 {
-        anyhow::bail!("only one config file at a time");
+        eprintln!("error: only one config file at a time");
+        return Ok(129);
     }
 
     // Which file a write goes to, and which files a read consults (lowest priority first).
@@ -640,12 +645,22 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                 .ok_or_else(|| anyhow::anyhow!("$HOME not set"));
         }
         let _ = what;
+        if let Some(file) = &args.file {
+            return Ok(file.clone());
+        }
         local_path
             .clone()
             .ok_or_else(|| anyhow::anyhow!("not in a git directory"))
     };
     let read_sources = || -> Result<Vec<(String, rivet_core::Config)>> {
         let mut sources = Vec::new();
+        if let Some(file) = &args.file {
+            if !file.is_file() {
+                return Ok(sources);
+            }
+            sources.push((file.display().to_string(), rivet_core::Config::load(file)?));
+            return Ok(sources);
+        }
         let want_system = args.system || scope_count == 0;
         let want_global = args.global || scope_count == 0;
         let want_local = args.local || scope_count == 0;
@@ -739,6 +754,12 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
     let mut out = Vec::new();
 
     if args.list {
+        if let Some(file) = args.file.as_ref().filter(|f| !f.is_file()) {
+            anyhow::bail!(
+                "unable to read config file '{}': No such file or directory",
+                file.display()
+            );
+        }
         let typed = !matches!(args.value_type, None | Some(ConfigTypeArg::Str));
         for (origin, config) in read_sources()? {
             for (index, entry) in config.entries().iter().enumerate() {

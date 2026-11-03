@@ -13948,6 +13948,28 @@ s_config_type_short() {
     v config -tnope --get foo.bar
 }
 
+s_config_file() {
+    v init -q repo; cd repo
+    v config -f x.cfg a.b one
+    v config --file x.cfg a.c two
+    v config -f x.cfg sub.sec.k three
+    v config -f x.cfg --add a.b uno
+    cat x.cfg
+    v config -f x.cfg --get a.b
+    v config -f x.cfg --get-all a.b
+    v config -f x.cfg --get a.nope
+    v config --file x.cfg --list
+    v config -f x.cfg --get-regexp '^a\.'
+    v config -f x.cfg --type=int --get a.c
+    v config -f x.cfg --unset a.c
+    v config -f x.cfg --list
+    v config -f nofile.cfg --list
+    v config -f nofile.cfg --get a.b
+    v config -f x.cfg --global --list
+    v config -f x.cfg --local --list
+    v config --list --local
+}
+
 s_clone_branch_tag() {
     g init -q src
     (cd src && echo 1 >f && g add f && g commit -qm one && g tag light && tick && echo 2 >f && g commit -qam two)
