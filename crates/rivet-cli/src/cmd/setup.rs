@@ -1372,6 +1372,20 @@ pub(super) fn populate_clone(
         .all(|r| r.name.as_slice() == b"HEAD")
     {
         eprintln!("warning: You appear to have cloned an empty repository.");
+        if !args.bare {
+            // The unborn default branch is set up to track the remote branch of the same name.
+            let default = rivet_core::ops::default_branch_name()?;
+            let config = repository.config_mut();
+            config.set(
+                BStr::new(format!("branch.{default}.remote").as_bytes()),
+                origin.as_bytes(),
+            )?;
+            config.set(
+                BStr::new(format!("branch.{default}.merge").as_bytes()),
+                format!("refs/heads/{default}").as_bytes(),
+            )?;
+            repository.write_config()?;
+        }
         return Ok(None);
     }
     let wanted = match &args.branch {

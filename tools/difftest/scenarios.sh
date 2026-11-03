@@ -13948,6 +13948,14 @@ s_config_type_short() {
     v config -tnope --get foo.bar
 }
 
+s_clone_empty_tracking() {
+    g init -q --bare empty.git
+    v clone -q empty.git cl
+    v clone -q --bare empty.git bare.git
+    (cd cl && v config --list --local && v branch --show-current)
+    (cd bare.git && v config --list --local)
+}
+
 s_config_bare() {
     v init -q repo; cd repo
     printf '[foo]\n\tbare\n\tempty =\n\tfull = true\n\tother = x\n' >.git/config
@@ -14250,6 +14258,7 @@ for s in "$@"; do
         s_worktree_repair) run_scenario "$s" repo ;;
         s_worktree_repair_main) run_scenario "$s" moved2 ;;
         s_clone) run_scenario "$s" repo bare.git sidecl origin.git ;;
+        s_clone_empty_tracking) run_scenario "$s" cl bare.git empty.git ;;
         s_attributes_eol) run_scenario "$s" repo plain ;;
         s_alternates) run_scenario "$s" repo cl cl2 rel/r ;;
         s_shallow) run_scenario "$s" src cl ;;
