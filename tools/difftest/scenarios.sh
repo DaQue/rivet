@@ -14156,6 +14156,29 @@ s_config_color_no() {
     done
 }
 
+s_config_get_color() {
+    v init -q repo; cd repo
+    printf '[color "x"]\n\ty = bold red\n\te =\n\tl = blue\n\tl = green\n\tbad = zzz\n[color]\n\tnone = reset\n' >.git/config
+    local k d
+    for k in color.x.y color.x.e color.x.l color.none color.missing nodot ''; do
+        v config --get-color "$k"
+        v config --get-color "$k" blue
+        v config --get-color "$k" 'bold nobold ul'
+        v config --get-color "$k" bogus
+        v config --get-color "$k" ''
+    done
+    # (git crashes on a bare `key` here, so none is compared)
+    v config --get-color color.x.bad
+    v config --get-color color.x.bad blue
+    v config --local --get-color color.x.y
+    v config -f .git/config --get-color color.x.y
+    v config --global --get-color color.x.y red
+    v config -z --get-color color.missing bold
+    v config --get-color
+    v config --type=int --get-color color.x.y
+    v config --type=color --get-color color.x.y
+}
+
 s_config_typed_bare() {
     v init -q repo; cd repo
     printf '[a]\n\tp\n\tq = ~/x\n\tn = 1\n[a "s"]\n\tk\n\tk = 2\n' >.git/config

@@ -265,6 +265,10 @@ pub struct ConfigArgs {
     /// Print every value of the key, one per line, in file order.
     #[arg(long = "get-all")]
     pub get_all: bool,
+
+    /// Print the escape sequence of the colour configured for the slot, or of the default word.
+    #[arg(long = "get-color")]
+    pub get_color: bool,
 }
 
 /// Phase 2 — create an empty repository, or re-initialise an existing one.
@@ -917,6 +921,10 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
         return Ok(0);
     }
 
+    if args.get_color {
+        return get_color(args, &read_sources()?);
+    }
+
     let Some(key) = &args.key else {
         anyhow::bail!("no action specified");
     };
@@ -1140,6 +1148,51 @@ fn expiry_failure(key: &str, origin: &str, value: Option<&str>) -> anyhow::Error
         None => eprintln!("error: missing value for '{key}'"),
     }
     bad_config_line(key, origin, value)
+}
+
+/// `--get-color <slot> [<default>]`: the escape sequence of the slot's colour (the last
+/// setting wins; a bare `key` is no setting), else of the default word, else nothing. No
+/// newline follows, and the terminal is never asked.
+fn get_color(args: &ConfigArgs, sources: &[(String, rivet_core::Config)]) -> Result<i32> {
+    if args.value_type.is_some() {
+        eprintln!("error: --get-color and variable type are incoherent");
+        return Ok(129);
+    }
+    let Some(slot) = &args.key else {
+        eprintln!("error: wrong number of arguments, should be from 1 to 2");
+        return Ok(129);
+    };
+    let mut found: Option<(&str, &BStr)> = None;
+    if let Ok((section, subsection, name)) =
+        rivet_core::ConfigEntry::parse_key(BStr::new(slot.as_bytes()))
+    {
+        for (origin, config) in sources {
+            for (index, entry) in config.entries().iter().enumerate() {
+                if entry.matches(&section, subsection.as_ref().map(|v| v.as_slice()), &name)
+                    && !config.is_bare_key(index)
+                {
+                    found = Some((origin.as_str(), entry.value.as_ref()));
+                }
+            }
+        }
+    }
+    let sequence = match (found, &args.value) {
+        (Some((origin, value)), _) => match color_value(value) {
+            Some(sequence) => sequence,
+            None => return Err(color_failure(slot, origin, Some(&value.to_string()))),
+        },
+        (None, Some(default)) => match super::pretty::parse_color_spec(default) {
+            Some(sequence) => sequence.into_bytes(),
+            None => {
+                eprintln!("error: invalid color value: {default}");
+                eprintln!("error: unable to parse default color value");
+                return Ok(255);
+            }
+        },
+        (None, None) => Vec::new(),
+    };
+    std::io::Write::write_all(&mut std::io::stdout(), &sequence)?;
+    Ok(0)
 }
 
 /// `--type=color`: the escape sequence of a colour specification; `None` when git rejects it.
