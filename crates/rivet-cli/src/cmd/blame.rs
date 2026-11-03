@@ -12,8 +12,9 @@
 //! `--since=<date>` cuts the walk at commits older than the date (they are blamed as boundary
 //! commits), `-S <revs-file>` replaces the parents of the commits it lists.
 //!
-//! Not implemented: `--contents`, `--reverse`, `-M`/`-C` while the work tree differs from the
-//! commit.
+//! `--contents <file>` blames that file (`-` is standard input) in place of the work tree's.
+//!
+//! Not implemented: `--reverse`, `-M`/`-C` while the work tree differs from the commit.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
@@ -98,6 +99,10 @@ pub struct BlameArgs {
     /// The `-C<score>` threshold (alphanumeric characters).
     #[arg(long = "copy-score", hide = true, value_name = "N", action = clap::ArgAction::Append)]
     pub copy_score: Vec<usize>,
+
+    /// Blame this file's contents (`-` for standard input) as the final version of the path.
+    #[arg(long = "contents", value_name = "FILE")]
+    pub contents: Option<String>,
 }
 
 fn parse_range(text: &str, total: usize, file: &str) -> Result<(usize, usize)> {
@@ -1087,7 +1092,24 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
         .map(|text| rivet_core::ops::parse_approxidate(text).unwrap_or(now));
 
     // Without a revision the work tree's version is blamed, so uncommitted lines show up.
-    let (content, top_is_worktree) = if rev.is_none() {
+    let (content, top_is_worktree) = if let Some(from) = &args.contents {
+        let data = if from == "-" {
+            let mut buffer = Vec::new();
+            std::io::Read::read_to_end(&mut std::io::stdin(), &mut buffer)?;
+            buffer
+        } else {
+            match std::fs::read(from) {
+                Ok(data) => data,
+                Err(error) => {
+                    let text = error.to_string();
+                    let reason = text.split(" (os error").next().unwrap_or(&text);
+                    eprintln!("fatal: Cannot stat '{from}': {reason}");
+                    return Ok(128);
+                }
+            }
+        };
+        (data, true)
+    } else if rev.is_none() {
         let cleaned = repository
             .worktree()?
             .read_file_cleaned(BStr::new(&path[..]), &mut || committed.contains(&b'\r'));
@@ -1317,19 +1339,27 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
                 // Git stamps the fake work-tree commit with the current time in the local zone.
                 let (when, tz) =
                     rivet_core::object::commit::parse_git_date(BStr::new(b"now")).unwrap_or((0, 0));
+                let (who, mail, from) = match args.contents.as_deref() {
+                    Some(from) => (
+                        "External file (--contents)",
+                        "<external.file>",
+                        if from == "-" { "standard input" } else { from },
+                    ),
+                    None => ("Not Committed Yet", "<not.committed.yet>", file.as_str()),
+                };
                 Person {
-                    name: "Not Committed Yet".to_string(),
-                    email: "<not.committed.yet>".to_string(),
+                    name: who.to_string(),
+                    email: mail.to_string(),
                     when,
                     tz,
-                    committer: "Not Committed Yet".to_string(),
-                    committer_email: "<not.committed.yet>".to_string(),
+                    committer: who.to_string(),
+                    committer_email: mail.to_string(),
                     committer_when: when,
                     committer_tz: tz,
                     summary: format!(
                         "Version of {} from {}",
                         String::from_utf8_lossy(&path),
-                        file
+                        from
                     ),
                 }
             }

@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-03 — `blame --contents <file>` (`-` is standard input) blames that file as the final version of the path, its changed lines credited to `External file (--contents)` with git's `Version of <path> from <file>` summary (`s_blame_contents`).
 * 2026-11-03 — `config --type=color` reads `no<attr>`/`no-<attr>` words (`nobold`, `no-ul`, ...): the positive attributes come first, then the sorted 22/23/24/25/27/29 codes (`s_config_color_no`).
 * 2026-11-03 — `show --oneline`: one line with the abbreviated id, the last of `--oneline`/`--pretty`/`--format` wins and a later block layout abbreviates its `commit` line (`s_show_oneline`).
 * 2026-11-03 — `clone -b <tag>` detaches `HEAD` at the tag's commit with git's detached-HEAD note, no branch or tracking config, bare or not (`s_clone_branch_tag`).

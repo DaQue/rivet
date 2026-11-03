@@ -13212,6 +13212,29 @@ s_blame_flags() {
     v blame -S revs.cut --since=1700000130 g
 }
 
+# blame --contents: a file (or standard input) stands in for the work tree's version. -s keeps
+# the wall clock out of the output.
+s_blame_contents() {
+    v init -q repo; cd repo
+    seq 1 6 | sed 's/^/line /' >f; v add f; tick; v commit -q -m c1
+    sed -i '3s/.*/three/' f; tick; v commit -q -a -m c2
+    printf 'line 1\nnew\nthree\nline 4\nline 5\nline 6\nmore\n' >alt
+    v blame -s --contents alt f
+    v blame -s --contents alt HEAD f
+    v blame -s --contents alt HEAD~1 f
+    v blame -s -L 2,4 --contents alt f
+    v blame -s --contents alt -- f
+    v blame -s --contents - f <alt
+    : >empty
+    v blame -s --contents empty f
+    cp f same
+    v blame -s --contents same f
+    v blame -s --contents missing-file f
+    v blame -s --contents alt nofile
+    rm f
+    v blame -s --contents alt f
+}
+
 # blame -L :<funcname>, with git's default function-line rule and a configured diff driver.
 s_blame_funcname() {
     v init -q repo; cd repo
