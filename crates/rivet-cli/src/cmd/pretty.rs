@@ -156,6 +156,7 @@ pub fn parse_color_spec(spec: &str) -> Option<String> {
         ("strike", 9),
     ];
     let mut attributes: Vec<u32> = Vec::new();
+    let mut negated: Vec<u32> = Vec::new();
     let mut codes: Vec<String> = Vec::new();
     let mut colors = 0;
     let mut words = spec.split_whitespace().peekable();
@@ -166,6 +167,13 @@ pub fn parse_color_spec(spec: &str) -> Option<String> {
     for word in words {
         if let Some((_, code)) = ATTRIBUTES.iter().find(|(name, _)| *name == word) {
             attributes.push(*code);
+            continue;
+        }
+        let unset = word.strip_prefix("no-").or_else(|| word.strip_prefix("no"));
+        if let Some((_, code)) = unset.and_then(|rest| ATTRIBUTES.iter().find(|(n, _)| *n == rest))
+        {
+            // `nobold` and `nodim` both turn off intensity (22); the others add 20.
+            negated.push(if *code <= 2 { 22 } else { code + 20 });
             continue;
         }
         let fg = colors == 0;
@@ -211,6 +219,9 @@ pub fn parse_color_spec(spec: &str) -> Option<String> {
     }
     attributes.sort_unstable();
     attributes.dedup();
+    negated.sort_unstable();
+    negated.dedup();
+    attributes.extend(negated);
     let mut all: Vec<String> = attributes.iter().map(u32::to_string).collect();
     all.extend(codes);
     Some(if all.is_empty() {

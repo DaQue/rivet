@@ -14141,6 +14141,21 @@ s_config_color() {
     done
 }
 
+s_config_color_no() {
+    v init -q repo; cd repo
+    printf '[a]\n' >.git/config
+    local n=0 w
+    for w in 'bold nobold red' no-bold 'red no-ul' nobold 'bold no-reverse green' 'ul noul' \
+        'red nodim blink' 'nobold nodim' 'noul nobold' 'nostrike noitalic noblink noreverse' \
+        'bold dim nobold nodim' 'no-italic red' 'nobold bold' 'red nobold blue' 'no bold' no no- \
+        nonormal noreset; do
+        n=$((n + 1))
+        printf '[a]\n\tc%s = %s\n' "$n" "$w" >>.git/config
+        v config --type=color a.c$n
+        v config --get --type=color a.c$n
+    done
+}
+
 s_config_typed_bare() {
     v init -q repo; cd repo
     printf '[a]\n\tp\n\tq = ~/x\n\tn = 1\n[a "s"]\n\tk\n\tk = 2\n' >.git/config
