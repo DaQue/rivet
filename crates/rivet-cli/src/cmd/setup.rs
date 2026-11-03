@@ -1017,6 +1017,13 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                     Err(_) => anyhow::bail!("bad boolean config value '{value}' for '{key}'"),
                 }
             }
+            Some(ConfigTypeArg::Int) => match rivet_core::parse_int(BStr::new(value.as_bytes())) {
+                Ok(n) => n.to_string().into_bytes(),
+                Err(_) => anyhow::bail!(
+                    "bad numeric config value '{value}' for '{key}': {}",
+                    int_failure(BStr::new(value.as_bytes()))
+                ),
+            },
             Some(ConfigTypeArg::BoolOrInt) => bool_or_int(BStr::new(value.as_bytes()), key, None)?,
             Some(ConfigTypeArg::BoolOrStr) => bool_or_str(BStr::new(value.as_bytes())),
             Some(ConfigTypeArg::Color) => {

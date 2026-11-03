@@ -14179,6 +14179,18 @@ s_config_get_color() {
     v config --type=color --get-color color.x.y
 }
 
+s_config_int_write() {
+    v init -q repo; cd repo
+    local x
+    for x in 3k 2K 1m 2g 0 abc 3kk 1.5 '' 99999999999; do
+        v config --type=int a.v "$x"
+        v config --type=int --add a.w "$x"
+        v config --list --local
+    done
+    v config --type=int -f .git/config a.f 5k
+    v config --list --local
+}
+
 s_config_typed_bare() {
     v init -q repo; cd repo
     printf '[a]\n\tp\n\tq = ~/x\n\tn = 1\n[a "s"]\n\tk\n\tk = 2\n' >.git/config
