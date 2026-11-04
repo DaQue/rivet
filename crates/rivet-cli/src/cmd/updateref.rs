@@ -516,11 +516,30 @@ impl Session<'_> {
                 Some((c, r)) => (c, Some(r)),
                 None => (line.as_str(), None),
             };
+            // Once prepared, only `commit` and `abort` are taken, as in git.
+            if state == State::Prepared
+                && matches!(
+                    command,
+                    "start"
+                        | "prepare"
+                        | "option"
+                        | "update"
+                        | "create"
+                        | "delete"
+                        | "verify"
+                        | "symref-update"
+                        | "symref-create"
+                        | "symref-delete"
+                        | "symref-verify"
+                )
+            {
+                bail!("prepared transactions can only be closed");
+            }
             match (command, rest) {
                 ("start", None) => {
                     match state {
-                        State::Open => {}
-                        State::Closed => bail!("transaction is closed"),
+                        // git lets a closed transaction be started again.
+                        State::Open | State::Closed => {}
                         _ => bail!("cannot restart ongoing transaction"),
                     }
                     state = State::Started;

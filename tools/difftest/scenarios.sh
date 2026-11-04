@@ -11675,6 +11675,29 @@ s_update_ref_symref() {
     sr "symref-update refs/heads/dang refs/heads/main oid $Z\nsymref-create refs/heads/n refs/heads/main\n" --stdin -0 --no-deref
 }
 
+# update-ref --stdin: a prepared transaction takes only commit/abort, a closed one can start again.
+s_update_ref_prepared() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    A=$(g rev-parse HEAD)
+    pr() {
+        g update-ref --no-deref -d refs/heads/x 2>/dev/null
+        printf "$1" >.git/stdin.txt
+        STDIN_FILE=.git/stdin.txt v update-ref --stdin
+        v for-each-ref --format='%(refname) %(objectname)'
+    }
+    pr "start\nprepare\nstart\n"
+    pr "start\nprepare\nprepare\n"
+    pr "start\nprepare\ncreate refs/heads/x $A\n"
+    pr "start\nprepare\noption no-deref\n"
+    pr "start\nprepare\nsymref-create refs/heads/x refs/heads/main\ncommit\n"
+    pr "start\ncreate refs/heads/x $A\nprepare\nupdate refs/heads/x $A\ncommit\n"
+    pr "start\nprepare\nabort\nstart\n"
+    pr "start\ncommit\nstart\ncreate refs/heads/x $A\ncommit\n"
+    pr "start\ncommit\nstart\ncreate refs/heads/x $A\nprepare\ncommit\n"
+    pr "start\ncommit\nprepare\n"
+}
+
 s_commit_tree() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m one
