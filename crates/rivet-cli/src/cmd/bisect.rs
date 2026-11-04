@@ -1486,7 +1486,8 @@ fn bisect_run(global: &GlobalArgs, args: &[String]) -> Result<i32> {
                 "error: bisect run failed: exit code {code} from{} is < 0 or >= 128",
                 quote_args(args)
             );
-            return Ok(126);
+            // Git returns the negated status from its C function, so the shell sees `256 - code`.
+            return Ok((256 - code) & 0xff);
         }
         let state = if code == 125 {
             "skip".to_string()

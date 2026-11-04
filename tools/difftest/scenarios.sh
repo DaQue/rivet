@@ -6968,6 +6968,10 @@ s_bisect_flags() {
     v bisect start --no-checkout --reset-when-found=found HEAD HEAD~12; state
     v bisect start --no-checkout HEAD HEAD~12; v bisect run --reset-when-found ../tf.sh; state; v bisect reset
     v bisect start --reset-when-found HEAD HEAD~12 -- f; v bisect run ../tf.sh; state
+    # a run that stops before finding leaves the bisection (and its reset mode) in place
+    printf '#!/bin/sh\nexit 255\n' >../tabort.sh; chmod +x ../tabort.sh
+    v bisect start --reset-when-found=found HEAD HEAD~12; v bisect run ../tabort.sh; state; v bisect reset; state
+    for code in 128 129 200 255; do v bisect start HEAD HEAD~12; v bisect run sh -c "exit $code"; v bisect reset; done
     # by hand: the reset comes with the last answer
     v bisect start --reset-when-found HEAD HEAD~12; v bisect good; v bisect bad; v bisect good; v bisect bad; v bisect good; state
     g rev-parse --abbrev-ref HEAD >>"$TRANSCRIPT"
