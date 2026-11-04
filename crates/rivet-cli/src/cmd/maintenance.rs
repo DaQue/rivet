@@ -99,6 +99,10 @@ pub struct RepackArgs {
     #[arg(long = "no-depth", action = clap::ArgAction::Count)]
     pub no_depth: u8,
 
+    /// Largest output pack; validated like git's option, a pack is never split.
+    #[arg(long = "max-pack-size", value_name = "N", num_args = 0..=1, default_missing_value = MISSING_VALUE, action = clap::ArgAction::Append)]
+    pub max_pack_size: Vec<String>,
+
     /// Accepted for compatibility: objects from alternates are never packed here.
     #[arg(short = 'l')]
     pub local: bool,
@@ -293,6 +297,54 @@ pub fn run_repack(global: &GlobalArgs, args: &RepackArgs) -> Result<i32> {
             }
         }
     }
+    // `--max-pack-size` is a magnitude: every occurrence is read in order, the last one is
+    // the limit, and a limit under 1 MiB (but not 0) is raised with a warning.
+    {
+        let mut limit = 0u64;
+        let mut seen = false;
+        let mut it = raw.iter().skip_while(|a| *a != "repack").skip(1);
+        while let Some(arg) = it.next() {
+            if arg == "--" {
+                break;
+            }
+            let text = if let Some(value) = arg.strip_prefix("--max-pack-size=") {
+                value.to_string()
+            } else if arg == "--max-pack-size" {
+                match it.next() {
+                    Some(value) => value.clone(),
+                    None => {
+                        eprintln!("error: option `max-pack-size' requires a value");
+                        return Ok(129);
+                    }
+                }
+            } else {
+                continue;
+            };
+            if text.is_empty() {
+                eprintln!("error: option `max-pack-size' expects a numerical value");
+                return Ok(129);
+            }
+            match parse_magnitude(&text) {
+                Ok(value) => {
+                    limit = value;
+                    seen = true;
+                }
+                Err(FactorError::Syntax) => {
+                    eprintln!(
+                        "error: option `max-pack-size' expects a non-negative integer value with an optional k/m/g suffix"
+                    );
+                    return Ok(129);
+                }
+                Err(FactorError::Range) => {
+                    eprintln!("error: value {text} for option `max-pack-size' not in range [0,-1]");
+                    return Ok(129);
+                }
+            }
+        }
+        if seen && limit > 0 && limit < 1 << 20 {
+            eprintln!("warning: minimum pack size limit is 1 MiB");
+        }
+    }
     let geometric = match &args.geometric {
         None => None,
         Some(text) => match parse_factor(text) {
@@ -350,6 +402,54 @@ enum FactorError {
 
 /// An integer with an optional `k`/`m`/`g` suffix, as git's option parser reads it: the result
 /// must fit a C `int`, and a number too big for any integer type is out of range, not malformed.
+/// git's unsigned magnitude (`strtoumax` with base 0, then an optional `k`/`m`/`g`).
+fn parse_magnitude(text: &str) -> Result<u64, FactorError> {
+    let s = text.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
+    let s = s.strip_prefix('+').unwrap_or(s);
+    let bytes = s.as_bytes();
+    let (radix, start) = if bytes.len() > 2
+        && bytes[0] == b'0'
+        && (bytes[1] | 0x20) == b'x'
+        && bytes[2].is_ascii_hexdigit()
+    {
+        (16, 2)
+    } else if bytes.first() == Some(&b'0') {
+        (8, 0)
+    } else {
+        (10, 0)
+    };
+    let digits_end = bytes[start..]
+        .iter()
+        .position(|b| !(*b as char).is_digit(radix))
+        .map_or(bytes.len(), |n| n + start);
+    if digits_end == start {
+        return Err(FactorError::Syntax);
+    }
+    let mut value: u64 = 0;
+    let mut overflow = false;
+    for b in &bytes[start..digits_end] {
+        let digit = u64::from((*b as char).to_digit(radix).unwrap_or(0));
+        match value
+            .checked_mul(u64::from(radix))
+            .and_then(|v| v.checked_add(digit))
+        {
+            Some(v) => value = v,
+            None => overflow = true,
+        }
+    }
+    if overflow {
+        return Err(FactorError::Range);
+    }
+    let factor: u64 = match &s[digits_end..] {
+        "" => 1,
+        "k" | "K" => 1 << 10,
+        "m" | "M" => 1 << 20,
+        "g" | "G" => 1 << 30,
+        _ => return Err(FactorError::Syntax),
+    };
+    value.checked_mul(factor).ok_or(FactorError::Range)
+}
+
 fn parse_factor(text: &str) -> Result<i64, FactorError> {
     let last = text.chars().last().ok_or(FactorError::Syntax)?;
     let (digits, unit) = match last {

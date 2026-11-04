@@ -3101,6 +3101,32 @@ s_repack_window_depth() {
     v log --oneline
 }
 
+# `--max-pack-size` is a magnitude (base 0, k/m/g suffix, unsigned 64 bit): the last one is the
+# limit, each is checked as it is read, and a limit under 1 MiB (not 0) warns.
+s_repack_max_pack_size() {
+    v init -q repo; cd repo
+    echo base >b; v add b; tick; v commit -q -m base
+    for f in 1m 2g 0 0m 1 1k 1K 1048575 1048576 0x100000 0x10 010 +5 ' 5' 0X10M 18446744073709551615 17179869183g 16777216g; do
+        v repack -d --max-pack-size="$f"
+    done
+    for f in zz -1 -0 08 0x 1.5m 1e3 k g 5x '5 ' ZZ 1kk 18446744073709551616 17179869184g 99999999999g 99999999999999999999x ''; do
+        v repack --max-pack-size="$f"
+    done
+    v repack --max-pack-size 1m
+    v repack --max-pack-size 1
+    v repack --max-pack-size zz
+    v repack --max-pack-size
+    v repack --max-pack-size=1m --max-pack-size
+    v repack --max-pack-size=5 --max-pack-size=7
+    v repack --max-pack-size=zz --max-pack-size=1m
+    v repack --max-pack-size=1m --max-pack-size=zz
+    v repack --max-pack-size=0 --max-pack-size=1
+    v repack --max-pack-size=1 --max-pack-size=0
+    v repack -a -d --max-pack-size=5m --window=3
+    vs fsck
+    v log --oneline
+}
+
 s_gc_after_cruft() {
     g init -q repo; cd repo
     echo a >a; g add a; g commit -qm one

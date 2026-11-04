@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-04 — `repack --max-pack-size` is read as git reads a magnitude (base 0, `k`/`m`/`g`, unsigned 64 bit): every occurrence is checked in order (`expects a non-negative integer value…`, `expects a numerical value`, `requires a value`, `not in range [0,-1]`) and a limit under 1 MiB warns (`s_repack_max_pack_size`).
 * 2026-11-04 — `repack --window`/`--depth` (and `--no-…`) are read as git reads them: the last one standing is validated (`expects an integer value…`, range, `requires a value`, `expects a numerical value`), a depth over 4095 warns `delta chain depth N is too deep, forcing 4095`, and nothing else changes (`s_repack_window_depth`).
 * 2026-11-04 — `config --get-regexp`: every word after the pattern is a plain word as in git (`-z`, `--local`, `-t int` there are the value pattern or `wrong number of arguments`), and a `--` before the pattern is eaten (`s_config_get_regexp_words`).
 * 2026-11-04 — `blame --until`/`--before`/`--max-count`/`--skip`/`--max-age`/`--min-age` are read as git reads them: validated (`fatal: '<v>': not an integer` / `not a number of seconds since epoch`, exit 128) and otherwise without effect (`s_blame_revlist_limits`).
