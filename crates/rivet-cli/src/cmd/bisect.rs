@@ -1468,19 +1468,17 @@ fn bisect_run(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             eprintln!("error: bisect run cannot continue any more");
             return Ok(1);
         }
+        let good_first = known.good.first().copied();
+        let no_checkout = git_file(&repository, "BISECT_HEAD").exists();
+        let tested = read_file(&repository, "BISECT_EXPECTED_REV");
         drop(repository);
-        println!("running{}", quote_args(args));
-        let status = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("{} \"$@\"", args[0]))
-            .arg("sh")
-            .args(&args[1..])
-            .status();
-        let Ok(status) = status else {
-            eprintln!("error: bisect run could not run the command");
-            return Ok(1);
+        let code = match run_command(args) {
+            Ok(code) => code,
+            Err(()) => {
+                eprintln!("error: bisect run could not run the command");
+                return Ok(1);
+            }
         };
-        let code = status.code().unwrap_or(128);
         if !(0..128).contains(&code) {
             eprintln!(
                 "error: bisect run failed: exit code {code} from{} is < 0 or >= 128",
@@ -1488,6 +1486,32 @@ fn bisect_run(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             );
             // Git returns the negated status from its C function, so the shell sees `256 - code`.
             return Ok((256 - code) & 0xff);
+        }
+        if let (126 | 127, Some(good)) = (code, good_first) {
+            // The command may simply not run: try it on a good revision, as `verify_good` does.
+            let repository = super::open(global)?;
+            let back =
+                ObjectId::from_hex(repository.format(), BStr::new(tested.trim().as_bytes())).ok();
+            let status = checkout_candidate(global, &repository, good, no_checkout)?;
+            if status != 0 {
+                return Ok(status);
+            }
+            let bogus = run_command(args) == Ok(code);
+            if bogus {
+                eprintln!(
+                    "error: bogus exit code {code} for '{}' revision",
+                    terms.good
+                );
+            }
+            if let Some(back) = back {
+                let status = checkout_candidate(global, &repository, back, no_checkout)?;
+                if status != 0 {
+                    return Ok(status);
+                }
+            }
+            if bogus {
+                return Ok(1);
+            }
         }
         let state = if code == 125 {
             "skip".to_string()
@@ -1516,4 +1540,17 @@ fn bisect_run(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             return Ok(if step == FAILED { 1 } else { step });
         }
     }
+}
+
+/// Print `running <command>` and run it through `sh -c`, as `bisect run` does for each step.
+fn run_command(args: &[String]) -> std::result::Result<i32, ()> {
+    println!("running{}", quote_args(args));
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{} \"$@\"", args[0]))
+        .arg("sh")
+        .args(&args[1..])
+        .status()
+        .map_err(|_| ())?;
+    Ok(status.code().unwrap_or(128))
 }

@@ -7001,6 +7001,20 @@ s_bisect_flags() {
     v bisect start --first-parent --reset-when-found=found HEAD HEAD~7; v bisect run ../tbug.sh; state; v log --oneline -1
 }
 
+s_bisect_run_bogus() {
+    bisect_repo
+    # exit codes by call: the first run answers $1, the second (the good revision's check) $2
+    printf '#!/bin/sh\nn=$(cat ../ctr)\necho $((n + 1)) >../ctr\ntest $n = 0 && exit "$1"\ntest $n = 1 && exit "$2"\ntest $(cat f) -le 4\n' >../tseq.sh
+    chmod +x ../tseq.sh
+    local pair
+    for pair in "127 127" "126 126" "127 126" "126 127" "127 1" "0 127" "1 127"; do
+        set -- $pair
+        echo 0 >../ctr
+        v bisect start HEAD HEAD~11; v bisect run ../tseq.sh "$1" "$2"; v bisect log; v bisect reset
+    done
+    v bisect start HEAD HEAD~11; v bisect run sh -c 'exit 127'; v bisect log; v bisect reset
+}
+
 s_bisect_visualize() {
     bisect_repo
     unset DISPLAY SESSIONNAME MSYSTEM SECURITYSESSIONID
