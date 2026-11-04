@@ -7236,6 +7236,33 @@ s_worktree_add_orphan() {
     v worktree list
 }
 
+s_worktree_add_switches() {
+    v init -q repo; cd repo
+    tick; echo 1 >f; v add f; v commit -q -m one
+    v branch other
+    # a switch given a value: git names the option and prints no usage
+    for o in --track=direct --track=inherit --track= --no-track=direct --guess-remote=x --orphan=1 \
+        --detach=x --force=x --quiet=1 --checkout=y --lock=x --no-lock=x --relative-paths=1; do
+        v worktree add $o -b nb ../e1
+    done
+    # an unknown option keeps the usage; a short one is a "switch", the first bad letter named
+    v worktree add --bogus=1 ../e2
+    v worktree add --bogus ../e3
+    v worktree add -t ../e4
+    v worktree add -z ../e5
+    v worktree add -ft ../e6
+    v worktree add -qz ../e7
+    v worktree add -f=x ../e8
+    # bundled short switches and an attached branch name
+    v worktree add -fq ../w1 other
+    v worktree add -qbatt ../w2
+    v worktree add -Bmain2 ../w3
+    v worktree add -fb ../e9
+    v branch
+    wt_snap
+    v worktree list
+}
+
 s_checkout_needs_merge() {
     v init -q repo; cd repo
     tick; for f in a b c d; do seq 1 3 >$f; done; mkdir sub; echo s >sub/e; v add .; v commit -q -m base

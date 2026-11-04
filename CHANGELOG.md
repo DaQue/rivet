@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-04 — `worktree add` answers a switch given a value (`--track=direct`, `--guess-remote=x`, ...) with git's `error: option `x' takes no value` and no usage, names a bad short switch `unknown switch`, and parses bundles such as `-fq` and `-bname` (`s_worktree_add_switches`).
 * 2026-11-03 — `worktree add --orphan` makes an unborn branch work tree with git's option clashes and fatals; `--reason` without `--lock` is git's wording (`s_worktree_add_orphan`).
 * 2026-11-03 — `rev-list --cherry` is `--right-only --cherry-mark --no-merges` (`s_rev_list_cherry_synonym`).
 * 2026-11-03 — `diff-tree --stdin` reads its lines with no path limit once a tree-ish was given on the command line, as git does; a limit with no tree-ish still applies (`s_diff_tree_stdin_limit`).

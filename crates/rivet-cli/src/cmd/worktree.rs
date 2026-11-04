@@ -928,6 +928,28 @@ struct AddOptions {
     orphan: bool,
 }
 
+/// The `worktree add` switches that take no value (`--name=x` on one is an error in git).
+const ADD_SWITCHES: [&str; 18] = [
+    "force",
+    "no-force",
+    "detach",
+    "no-detach",
+    "checkout",
+    "no-checkout",
+    "lock",
+    "no-lock",
+    "quiet",
+    "no-quiet",
+    "track",
+    "no-track",
+    "guess-remote",
+    "no-guess-remote",
+    "orphan",
+    "no-orphan",
+    "relative-paths",
+    "no-relative-paths",
+];
+
 fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     let mut options = AddOptions {
         force: false,
@@ -983,10 +1005,47 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             "--relative-paths" | "--no-relative-paths" => {
                 anyhow::bail!("worktree add: {arg} is not implemented")
             }
-            a if a.starts_with('-') && a.len() > 1 => {
-                eprintln!("error: unknown option `{}'", a.trim_start_matches('-'));
+            a if a.starts_with("--") && a.len() > 2 => {
+                // A switch given a value: git names the option and prints no usage.
+                let name = a[2..].split_once('=').map(|(name, _)| name);
+                if let Some(name) = name.filter(|n| ADD_SWITCHES.contains(n)) {
+                    eprintln!("error: option `{name}' takes no value");
+                    return Ok(129);
+                }
+                eprintln!("error: unknown option `{}'", &a[2..]);
                 eprint!("{USAGE_ADD}");
                 return Ok(129);
+            }
+            a if a.starts_with('-') && a.len() > 1 => {
+                // Bundled short switches: `-fq`, `-bname`; the first unknown letter is named.
+                for (at, letter) in a.char_indices().skip(1) {
+                    match letter {
+                        'f' => options.force = true,
+                        'd' => options.detach = true,
+                        'q' => options.quiet = true,
+                        'b' | 'B' => {
+                            let attached = &a[at + 1..];
+                            let value = if attached.is_empty() {
+                                iter.next().cloned()
+                            } else {
+                                Some(attached.to_string())
+                            };
+                            let Some(value) = value else {
+                                eprintln!("error: switch `{letter}' requires a value");
+                                eprint!("{USAGE_ADD}");
+                                return Ok(129);
+                            };
+                            options.new_branch = Some(value);
+                            options.reset_branch = letter == 'B';
+                            break;
+                        }
+                        other => {
+                            eprintln!("error: unknown switch `{other}'");
+                            eprint!("{USAGE_ADD}");
+                            return Ok(129);
+                        }
+                    }
+                }
             }
             _ => positional.push(arg),
         }
