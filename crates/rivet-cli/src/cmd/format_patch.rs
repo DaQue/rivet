@@ -3,7 +3,7 @@
 //! # What is implemented
 //!
 //! `format-patch [-N] [<since> | <a>..<b>] [-o <dir>] [--stdout] [--root] [-n]
-//! [--start-number <n>] [--subject-prefix <p>] [-k] [--no-signature | --signature <s>]`. One file per
+//! [--start-number <n>] [--subject-prefix <p>] [-k] [-v <n>] [--no-signature | --signature <s>]`. One file per
 //! commit, `NNNN-<subject>.patch`, with the stat, the summary and a rename-aware diff. Merge
 //! commits are skipped.
 //!
@@ -13,6 +13,7 @@
 //!   compare patches byte for byte should pass `--no-signature`.
 //! * Attachments, path limiting and `-k` with a multi-line subject (which needs RFC 2047 encoding
 //!   of an ASCII string) are not implemented and are refused.
+//! * `-v <n>` / `--reroll-count=<n>` add ` v<n>` to the subject prefix and `v<n>-` to every file name.
 //! * `format.coverLetter` (`true`, `false`, `auto`) and `format.thread` (`true`, `deep`, `shallow`) set the defaults.
 //! * `--cover-letter` writes `0000-cover-letter.patch` (shortlog wrapped by bytes, then the diffstat
 //!   of the whole range); `--thread[=shallow|deep]` and `--in-reply-to` add `Message-ID`,
@@ -119,6 +120,18 @@ pub struct FormatPatchArgs {
     /// Make the first mail (or all of them, with `--thread`) a reply to this message id.
     #[arg(long = "in-reply-to", value_name = "MESSAGE-ID")]
     pub in_reply_to: Option<String>,
+
+    /// Mark the series as the `<n>`th re-roll: `[PATCH v<n>]` and `v<n>-` file names.
+    #[arg(
+        long = "reroll-count",
+        value_name = "N",
+        overrides_with_all = ["no_reroll_count", "reroll_count"]
+    )]
+    pub reroll_count: Option<String>,
+
+    /// Forget an earlier `-v`/`--reroll-count`.
+    #[arg(long = "no-reroll-count", overrides_with = "reroll_count")]
+    pub no_reroll_count: bool,
 }
 
 /// How git's `add_rfc2047` decides what to escape.
@@ -512,7 +525,21 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
             out.extend_from_slice(format!("-- \n{signature}\n\n").as_bytes());
         }
     };
-    let subject_prefix = args.subject_prefix.as_deref().unwrap_or("PATCH");
+    let mut subject_prefix = args
+        .subject_prefix
+        .as_deref()
+        .unwrap_or("PATCH")
+        .to_string();
+    // `-v<n>`: `[PATCH v<n>]`, and git's sanitised `v<n>-` in front of every file name.
+    let mut file_prefix = String::new();
+    if let Some(count) = args
+        .reroll_count
+        .as_deref()
+        .filter(|_| !args.no_reroll_count)
+    {
+        subject_prefix = format!("{subject_prefix} v{count}");
+        file_prefix = format!("{}-", slug(&format!("v{count}")));
+    }
 
     if cover && let (Some(who), Some(newest)) = (&identity, selected.last()) {
         let id = message_id("cover");
@@ -564,7 +591,7 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         } else if numbered {
             Some(format!("{subject_prefix} {:0digits$}/{last_number}", 0))
         } else {
-            Some(subject_prefix.to_string())
+            Some(subject_prefix.clone())
         };
         out.extend_from_slice(&subject_header(tag.as_deref(), b"*** SUBJECT HERE ***"));
         if needs_rfc2047(&shortlog) {
@@ -587,7 +614,7 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         }
         signature_text(&mut out);
         ids.push(id);
-        outputs.push(("0000-cover-letter.patch".to_string(), out, false));
+        outputs.push((format!("{file_prefix}0000-cover-letter.patch"), out, false));
     }
 
     for (index, oid) in selected.iter().enumerate() {
@@ -621,7 +648,7 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         } else if numbered {
             Some(format!("{subject_prefix} {number:0digits$}/{last_number}"))
         } else {
-            Some(subject_prefix.to_string())
+            Some(subject_prefix.clone())
         };
         if args.keep_subject
             && !needs_rfc2047(title)
@@ -673,7 +700,7 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         signature_text(&mut out);
         ids.push(id);
         let file = format!(
-            "{number:04}-{}.patch",
+            "{file_prefix}{number:04}-{}.patch",
             slug(&String::from_utf8_lossy(
                 subject_raw.lines().next().unwrap_or_default()
             ))

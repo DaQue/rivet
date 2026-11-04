@@ -14514,6 +14514,42 @@ s_format_patch_config() {
     fpc -1
 }
 
+s_format_patch_reroll() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m "base"
+    echo b >>a; tick; v commit -q -a -m "one"
+    echo c >>a; tick; v commit -q -a -m "two"
+    local n=0
+    fpr() {
+        n=$((n + 1))
+        echo "-- $*" >>"$TRANSCRIPT"
+        v format-patch -o ../out$n --no-signature "$@"
+        local f
+        for f in ../out$n/*; do
+            [ -e "$f" ] || continue
+            echo "== $f" >>"$TRANSCRIPT"
+            sed -e 's/\.[0-9]\{9,11\}\.git\./.NOW.git./g' "$f" >>"$TRANSCRIPT"
+        done
+    }
+    fpr -v2 HEAD~2
+    fpr -v 3 -1
+    fpr --reroll-count=2 HEAD~2
+    fpr --reroll-count 2.1 HEAD~2
+    fpr -vrc/x HEAD~2
+    fpr -v-1 HEAD~2
+    fpr --reroll-count= HEAD~2
+    fpr -v0 -1
+    fpr -v2 -k HEAD~2
+    fpr -v2 --subject-prefix=foo HEAD~2
+    fpr -v2 --cover-letter HEAD~2
+    fpr -v2 -n -1
+    fpr -v2 --start-number 5 -1
+    fpr -v2 --no-reroll-count HEAD~2
+    fpr -v2 -v3 HEAD~2
+    fpr -v2 --thread HEAD~2
+    v format-patch -v4 --stdout --no-signature HEAD~2 >>"$TRANSCRIPT" 2>&1
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'

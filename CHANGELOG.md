@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-04 — `format-patch -v <n>` / `-v<n>` / `--reroll-count=<n>` / `--no-reroll-count`: `[PATCH v<n>]` subjects, `v<n>-` file names (cover letter included), the last count wins (`s_format_patch_reroll`).
 * 2026-11-04 — `worktree add --[no-]relative-paths` and `worktree.useRelativePaths` write relative `.git`/`gitdir` links and set `extensions.relativeWorktrees` (format version 1); relative links are read by `worktree list`/`prune`/`repair` and when opening a linked work tree (`s_worktree_add_relative`).
 * 2026-11-04 — `bisect run` re-runs a command that exited 126 or 127 on a good revision and stops with `error: bogus exit code <n> for 'good' revision` (exit 1, back on the tested commit) when it fails the same way, as git does (`s_bisect_run_bogus`).
 * 2026-11-04 — `update-ref --stdin` takes only `commit`/`abort` after `prepare` (`fatal: prepared transactions can only be closed`) and lets a closed transaction `start` again, as git does (`s_update_ref_prepared`).

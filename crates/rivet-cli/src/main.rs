@@ -93,6 +93,14 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
             {
                 out.push(format!("--max-count={}", &text[1..]).into());
                 continue;
+            } else if let Some(count) = text.strip_prefix("-v") {
+                // `-v<n>` / `-v <n>` is `--reroll-count`; `-v` is already the global `--verbose`.
+                out.push(if count.is_empty() {
+                    "--reroll-count".into()
+                } else {
+                    format!("--reroll-count={count}").into()
+                });
+                continue;
             }
         } else if in_blame && !after_dashes {
             // `-M[<score>]` and `-C[<score>]` take an optional attached number; clap would let
