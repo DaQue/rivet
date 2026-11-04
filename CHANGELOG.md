@@ -24,3 +24,4 @@
 * 2026-11-03 — `config --get-color <slot> [<default>]` prints the escape sequence of the slot's colour or of the default word, nothing without either, git's errors for a bad value, a bad default and `--type` (`s_config_get_color`; a bare `key` is not compared, git crashes on it).
 * 2026-11-03 — `config --type=int` on a write stores the number (`3k` becomes `3072`) and refuses text with git's `bad numeric config value '<v>' for '<key>': invalid unit` (`s_config_int_write`).
 * 2026-11-04 — `bisect run` with a command that exits 128 or more stops with git's status `256 - code` (255 is 1, 130 is 126), not a fixed 126 (`s_bisect_flags`).
+* 2026-11-04 — `update-index --again`/`-g` updates every merged entry that differs from `HEAD` (optionally limited by pathspecs) with the options given before it (`s_update_index_again`).

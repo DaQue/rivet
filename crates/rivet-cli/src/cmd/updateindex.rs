@@ -31,8 +31,7 @@ pub struct UpdateIndexArgs {
 }
 
 /// Every long option of git's `update-index` that this command does not implement.
-const REFUSED: [&str; 13] = [
-    "again",
+const REFUSED: [&str; 12] = [
     "untracked-cache",
     "no-untracked-cache",
     "test-untracked-cache",
@@ -181,8 +180,8 @@ fn run(global: &GlobalArgs, args: &[String]) -> std::result::Result<i32, Exit> {
                 "-q" => s.quiet = true,
                 "-z" => s.nul = true,
                 "-g" => {
-                    eprintln!("fatal: update-index: --again is not implemented");
-                    return Err(128);
+                    s.reupdate(&args[i..])?;
+                    i = args.len();
                 }
                 _ => {
                     let c = word[1..].chars().next().unwrap_or('-');
@@ -218,6 +217,10 @@ fn run(global: &GlobalArgs, args: &[String]) -> std::result::Result<i32, Exit> {
             "assume-unchanged" => s.mark_valid = if negated { Some(false) } else { Some(true) },
             "skip-worktree" => s.mark_skip = if negated { Some(false) } else { Some(true) },
             "stdin" if !negated => read_stdin = true,
+            "again" if !negated => {
+                s.reupdate(&args[i..])?;
+                i = args.len();
+            }
             "unresolve" if !negated => {
                 // Every word after the option is a path to put back into its conflicted state.
                 s.require_root()?;
@@ -663,6 +666,51 @@ impl Session<'_> {
         }
         self.report("add", path);
         Ok(())
+    }
+
+    /// `--again` / `-g` (git's `do_reupdate`): every merged entry matching `paths` (all of them
+    /// without any) that differs from `HEAD` goes through `update_one` with the options so far.
+    fn reupdate(&mut self, paths: &[String]) -> std::result::Result<(), Exit> {
+        let root = self.require_root()?.to_path_buf();
+        let paths = paths.strip_prefix(&["--".to_string()]).unwrap_or(paths);
+        let prefix = self
+            .prefix
+            .strip_suffix(b"/")
+            .unwrap_or(&self.prefix)
+            .to_vec();
+        let specs = super::pathspec::Pathspecs::parse(paths, &prefix, &root.display().to_string())
+            .map_err(die)?;
+        let head = match self.repository.head_tree_oid() {
+            Ok(tree) => tree,
+            Err(e) => return Err(die(e)),
+        };
+        let head_entries = match head {
+            Some(tree) => {
+                rivet_core::ops::flatten_tree(self.repository.odb(), tree).map_err(die)?
+            }
+            None => Default::default(),
+        };
+        'redo: loop {
+            for pos in 0..self.index.entries().len() {
+                let entry = &self.index.entries()[pos];
+                if entry.stage() != Stage::Normal || !specs.matches_file(&entry.path) {
+                    continue;
+                }
+                if let Some((mode, oid)) = head_entries.get(&entry.path)
+                    && *mode == entry.mode
+                    && *oid == entry.oid
+                {
+                    continue;
+                }
+                let path = entry.path.to_vec();
+                let before = self.index.entries().len();
+                self.update_one(&path)?;
+                if before != self.index.entries().len() {
+                    continue 'redo;
+                }
+            }
+            return Ok(());
+        }
     }
 
     /// `--[no-]assume-unchanged` and `--[no-]skip-worktree` on one path.

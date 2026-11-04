@@ -14197,6 +14197,42 @@ s_config_get_regexp_words() {
     v config --get-regexp -z -- '^foo\.ba' '1'
 }
 
+s_update_index_again() {
+    v init -q repo; cd repo
+    echo a >a; echo b >b; mkdir d; echo c >d/c; echo e >e
+    # on an unborn branch every merged entry is "different from HEAD"
+    v update-index --add a b d/c e
+    echo a1 >a; echo b1 >b; echo c1 >d/c
+    v update-index --again
+    v ls-files -s
+    tick; v commit -q -m one
+    echo a2 >a; echo b2 >b; echo c2 >d/c; echo e2 >e
+    v update-index --add a b d/c e
+    echo a3 >a; echo b3 >b; echo c3 >d/c
+    # only entries that differ from HEAD are refreshed from the work tree
+    v update-index --again --verbose
+    v ls-files -s
+    echo a4 >a; echo b4 >b; echo c4 >d/c; echo e4 >e
+    v update-index -g --verbose d
+    v ls-files -s
+    (cd d && echo c5 >c && v update-index -g --verbose c)
+    v ls-files -s
+    v update-index --again -- a
+    v ls-files -s
+    # a removed file needs --remove, as with a path argument
+    rm b
+    v update-index --again
+    v update-index --remove --again --verbose
+    v ls-files -s
+    echo b6 >b; v update-index --add b; rm b
+    v update-index --again
+    v update-index --remove -g
+    v ls-files -s; v status --short
+    v update-index --again ':(exclude)a'
+    v update-index --again nope
+    vg fsck --strict --no-dangling
+}
+
 s_commit_date_env() {
     v init -q repo; cd repo
     echo a >a; v add a
