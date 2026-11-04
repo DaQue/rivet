@@ -7254,6 +7254,32 @@ s_worktree_add_orphan() {
     v worktree list
 }
 
+s_worktree_add_relative() {
+    v init -q repo; cd repo
+    tick; echo 1 >f; v add f; v commit -q -m one
+    v worktree add -q ../abs
+    v worktree add --relative-paths ../rel
+    v worktree add -q --relative-paths -b rb ../deep/er/rel2
+    v worktree add -q --no-relative-paths ../noplain
+    v config worktree.useRelativePaths true
+    v worktree add -q ../cfg
+    v worktree add -q --no-relative-paths ../noc
+    v config extensions.relativeWorktrees
+    v config core.repositoryformatversion
+    wt_snap
+    for w in rel deep/er/rel2 cfg noc; do (cd ../$w && cat .git | sed "s#$ROOT#<ROOT>#g"; v status -sb); done
+    v worktree list
+    v worktree list --porcelain
+    v worktree prune -n -v
+    v worktree lock ../rel
+    v worktree unlock ../rel
+    mv ../rel ../moved
+    v worktree list
+    v worktree prune -n -v
+    for w in abs moved deep/er/rel2 cfg noc noplain; do v worktree remove ../$w; done
+    v worktree list
+}
+
 s_worktree_add_switches() {
     v init -q repo; cd repo
     tick; echo 1 >f; v add f; v commit -q -m one

@@ -156,7 +156,7 @@ fn prune_reason(admin: &Path) -> Option<&'static str> {
     if gitdir.is_empty() {
         return Some("invalid gitdir file");
     }
-    if !Path::new(gitdir).exists() {
+    if !recorded_path(admin, gitdir).exists() {
         return Some("gitdir file points to non-existent location");
     }
     None
@@ -200,7 +200,7 @@ pub(super) fn entries(repository: &Repository) -> Result<Vec<Entry>> {
                 continue;
             };
             let gitdir = gitdir.trim();
-            let path = Path::new(gitdir)
+            let path = recorded_path(&admin, gitdir)
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_default();
@@ -411,6 +411,32 @@ fn find_entry<'a>(list: &'a [Entry], spec: &str) -> Option<&'a Entry> {
 }
 
 /// Collapse `.` and `..` without touching the filesystem.
+/// `to` as a path from the directory `from` (both absolute).
+fn relative_path(from: &Path, to: &Path) -> PathBuf {
+    let from: Vec<_> = from.components().collect();
+    let to: Vec<_> = to.components().collect();
+    let shared = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut out = PathBuf::new();
+    for _ in shared..from.len() {
+        out.push("..");
+    }
+    for part in &to[shared..] {
+        out.push(part.as_os_str());
+    }
+    out
+}
+
+/// The path a `gitdir` file records for the administrative directory `admin`: a relative one
+/// (`extensions.relativeWorktrees`) is taken from `admin`.
+fn recorded_path(admin: &Path, text: &str) -> PathBuf {
+    let path = Path::new(text);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        normalize(&admin.join(path))
+    }
+}
+
 fn normalize(path: &Path) -> PathBuf {
     use std::path::Component;
     let mut out = PathBuf::new();
@@ -762,7 +788,10 @@ fn worktree_repair(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             let Some(gitdir) = read_text(&admin.join("gitdir")) else {
                 continue;
             };
-            let Some(path) = Path::new(gitdir.trim()).parent().map(Path::to_path_buf) else {
+            let Some(path) = recorded_path(&admin, gitdir.trim())
+                .parent()
+                .map(Path::to_path_buf)
+            else {
                 continue;
             };
             if !path.exists() {
@@ -836,7 +865,9 @@ fn repair_path(common: &Path, arg: &str) -> Result<bool> {
         .filter(|t| !t.is_empty());
     let reason = match recorded {
         None => Some("gitdir unreadable"),
-        Some(path) if canonical(Path::new(&path)) != dotgit => Some("gitdir incorrect"),
+        Some(path) if canonical(&recorded_path(&admin, &path)) != dotgit => {
+            Some("gitdir incorrect")
+        }
         Some(_) => None,
     };
     if let Some(reason) = reason {
@@ -926,6 +957,9 @@ struct AddOptions {
     guess_remote: bool,
     /// `--orphan`: an unborn branch, nothing checked out.
     orphan: bool,
+    /// `--relative-paths` (`Some(true)`) or `--no-relative-paths`; unset reads
+    /// `worktree.useRelativePaths`.
+    relative_paths: Option<bool>,
 }
 
 /// The `worktree add` switches that take no value (`--name=x` on one is an error in git).
@@ -963,6 +997,7 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         track: None,
         guess_remote: false,
         orphan: false,
+        relative_paths: None,
     };
     let mut positional: Vec<&String> = Vec::new();
     let mut iter = args.iter();
@@ -1002,9 +1037,8 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             "--no-guess-remote" => options.guess_remote = false,
             "--orphan" => options.orphan = true,
             "--no-orphan" => options.orphan = false,
-            "--relative-paths" | "--no-relative-paths" => {
-                anyhow::bail!("worktree add: {arg} is not implemented")
-            }
+            "--relative-paths" => options.relative_paths = Some(true),
+            "--no-relative-paths" => options.relative_paths = Some(false),
             a if a.starts_with("--") && a.len() > 2 => {
                 // A switch given a value: git names the option and prints no usage.
                 let name = a[2..].split_once('=').map(|(name, _)| name);
@@ -1316,8 +1350,37 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     let target = std::fs::canonicalize(&target)?;
     std::fs::create_dir_all(&admin)?;
     let dot_git = target.join(".git");
-    std::fs::write(&dot_git, format!("gitdir: {}\n", admin.display()))?;
-    std::fs::write(admin.join("gitdir"), format!("{}\n", dot_git.display()))?;
+    let relative = match options.relative_paths {
+        Some(choice) => choice,
+        None => repository
+            .config()
+            .get_bool(BStr::new(b"worktree.userelativepaths"))?
+            .unwrap_or(false),
+    };
+    if relative {
+        let admin_dir = canonical(&admin);
+        let target_dir = canonical(&target);
+        std::fs::write(
+            &dot_git,
+            format!(
+                "gitdir: {}\n",
+                relative_path(&target_dir, &admin_dir).display()
+            ),
+        )?;
+        std::fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", relative_path(&admin_dir, &dot_git).display()),
+        )?;
+        let mut writable =
+            Repository::open_with(repository.git_dir(), repository.worktree_path(), None)?;
+        let config = writable.config_mut();
+        config.set(BStr::new(b"core.repositoryformatversion"), b"1")?;
+        config.set(BStr::new(b"extensions.relativeWorktrees"), b"true")?;
+        writable.write_config()?;
+    } else {
+        std::fs::write(&dot_git, format!("gitdir: {}\n", admin.display()))?;
+        std::fs::write(admin.join("gitdir"), format!("{}\n", dot_git.display()))?;
+    }
     std::fs::write(admin.join("commondir"), "../..\n")?;
     let head_text = match (new_branch.as_ref().or(checkout_branch.as_ref()), start) {
         (Some(branch), _) => format!("ref: refs/heads/{branch}\n"),

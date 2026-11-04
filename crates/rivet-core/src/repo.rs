@@ -521,6 +521,22 @@ impl Repository {
                 .ok()
                 .and_then(|text| {
                     let path = PathBuf::from(std::ffi::OsStr::from_bytes(text.trim_ascii()));
+                    // `extensions.relativeWorktrees`: a relative path is taken from `git_dir`.
+                    let path = if path.is_absolute() {
+                        path
+                    } else {
+                        let mut joined = PathBuf::new();
+                        for part in git_dir.join(&path).components() {
+                            match part {
+                                std::path::Component::CurDir => {}
+                                std::path::Component::ParentDir => {
+                                    joined.pop();
+                                }
+                                other => joined.push(other.as_os_str()),
+                            }
+                        }
+                        joined
+                    };
                     path.parent().map(Path::to_path_buf)
                 })
                 .filter(|p| !p.as_os_str().is_empty())
