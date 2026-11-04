@@ -40,6 +40,10 @@ pub struct GcArgs {
     pub no_cruft: bool,
 }
 
+/// Placeholder clap stores for `--window` / `--depth` given without a value; the real check reads
+/// the raw command line.
+const MISSING_VALUE: &str = "missing";
+
 /// Arguments to `rivet repack`.
 #[derive(Debug, clap::Args)]
 pub struct RepackArgs {
@@ -78,6 +82,22 @@ pub struct RepackArgs {
     /// Roll the smallest packs up so that pack sizes grow by at least this factor.
     #[arg(long = "geometric", value_name = "FACTOR")]
     pub geometric: Option<String>,
+
+    /// Size of the delta window; validated like git's option and otherwise ignored.
+    #[arg(long = "window", value_name = "N", num_args = 0..=1, default_missing_value = MISSING_VALUE, action = clap::ArgAction::Append)]
+    pub window: Vec<String>,
+
+    /// Forget an earlier `--window`.
+    #[arg(long = "no-window", action = clap::ArgAction::Count)]
+    pub no_window: u8,
+
+    /// Maximum delta depth; validated like git's option and otherwise ignored.
+    #[arg(long = "depth", value_name = "N", num_args = 0..=1, default_missing_value = MISSING_VALUE, action = clap::ArgAction::Append)]
+    pub depth: Vec<String>,
+
+    /// Forget an earlier `--depth`.
+    #[arg(long = "no-depth", action = clap::ArgAction::Count)]
+    pub no_depth: u8,
 
     /// Accepted for compatibility: objects from alternates are never packed here.
     #[arg(short = 'l')]
@@ -221,6 +241,57 @@ pub fn run_repack(global: &GlobalArgs, args: &RepackArgs) -> Result<i32> {
     }
     if args.cruft && args.keep_unreachable {
         anyhow::bail!("options '-k/--keep-unreachable' and '--cruft' cannot be used together");
+    }
+    // git keeps `--window`/`--depth` as strings: only the last one standing (`--no-<name>` drops
+    // it) is read, after the whole command line is parsed.
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    for name in ["window", "depth"] {
+        let mut last: Option<String> = None;
+        let mut it = raw.iter().skip_while(|a| *a != "repack").skip(1);
+        while let Some(arg) = it.next() {
+            if arg == "--" {
+                break;
+            }
+            if let Some(value) = arg.strip_prefix(&format!("--{name}=")) {
+                last = Some(value.to_string());
+            } else if *arg == format!("--{name}") {
+                match it.next() {
+                    Some(value) => last = Some(value.clone()),
+                    None => {
+                        eprintln!("error: option `{name}' requires a value");
+                        return Ok(129);
+                    }
+                }
+            } else if *arg == format!("--no-{name}") {
+                last = None;
+            }
+        }
+        let Some(text) = last else { continue };
+        if text.is_empty() {
+            eprintln!("error: option `{name}' expects a numerical value");
+            return Ok(129);
+        }
+        match parse_factor(&text) {
+            Ok(value) => {
+                if name == "depth" && value > 4095 {
+                    eprintln!("warning: delta chain depth {value} is too deep, forcing 4095");
+                }
+            }
+            Err(FactorError::Syntax) => {
+                eprintln!(
+                    "error: option `{name}' expects an integer value with an optional k/m/g suffix"
+                );
+                return Ok(129);
+            }
+            Err(FactorError::Range) => {
+                eprintln!(
+                    "error: value {text} for option `{name}' not in range [{},{}]",
+                    i32::MIN,
+                    i32::MAX
+                );
+                return Ok(129);
+            }
+        }
     }
     let geometric = match &args.geometric {
         None => None,

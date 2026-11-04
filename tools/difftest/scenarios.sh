@@ -3075,6 +3075,32 @@ s_repack_geometric_range() {
     v log --oneline
 }
 
+# `--window` and `--depth` only tune the delta search: the value is read like any integer option
+# (k/m/g suffix, C int range), a bad one is git's exit 129 error, and the history is untouched.
+s_repack_window_depth() {
+    v init -q repo; cd repo
+    echo base >b; v add b; tick; v commit -q -m base
+    for o in window depth; do
+        for f in 5 0 -1 2k 1g 2147483647 -2147483648; do v repack -d --$o=$f; done
+        for f in 2147483648 3g -3g 99999999999 x 1x 2kk ''; do v repack --$o=$f; done
+        v repack --$o 7
+        v repack --$o
+        v repack --$o=x --no-$o
+        v repack --$o=5 --no-$o
+        v repack --$o=x --$o=5
+        v repack --$o=5 --$o=x
+        v repack --$o=x --no-$o --$o=y
+        v repack --$o=9 --$o=5000
+        v repack --$o=5000 --$o=3
+        v repack -d --$o=4095
+        v repack -d --$o=4096
+        v repack --no-$o
+    done
+    v repack -a -d --window=3 --depth=4
+    vs fsck
+    v log --oneline
+}
+
 s_gc_after_cruft() {
     g init -q repo; cd repo
     echo a >a; g add a; g commit -qm one
