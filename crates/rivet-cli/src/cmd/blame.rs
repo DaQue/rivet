@@ -59,6 +59,31 @@ pub struct BlameArgs {
     #[arg(long = "since", value_name = "DATE", alias = "after")]
     pub since: Option<String>,
 
+    /// `--until=<date>`: a rev-list limit that git's blame accepts and does not act on.
+    #[arg(
+        long = "until",
+        alias = "before",
+        value_name = "DATE",
+        require_equals = true
+    )]
+    pub until: Option<String>,
+
+    /// `--max-count=<n>`: a rev-list limit that git's blame validates and does not act on.
+    #[arg(long = "max-count", value_name = "N", require_equals = true)]
+    pub max_count: Option<String>,
+
+    /// `--skip=<n>`: a rev-list limit that git's blame validates and does not act on.
+    #[arg(long = "skip", value_name = "N", require_equals = true)]
+    pub skip: Option<String>,
+
+    /// `--max-age=<seconds>`: a rev-list limit that git's blame validates and does not act on.
+    #[arg(long = "max-age", value_name = "SECONDS", require_equals = true)]
+    pub max_age: Option<String>,
+
+    /// `--min-age=<seconds>`: a rev-list limit that git's blame validates and does not act on.
+    #[arg(long = "min-age", value_name = "SECONDS", require_equals = true)]
+    pub min_age: Option<String>,
+
     /// Read the commit graph from this file (lines of `<commit> <parent>...`) instead of the
     /// repository.
     #[arg(short = 'S', value_name = "REVS-FILE")]
@@ -1037,6 +1062,22 @@ impl<'r> Blamer<'r> {
 /// `0`; `128` for an unknown revision or path or a bad range.
 pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
     let repository = super::open(global)?;
+    // git parses the rev-list limits while it reads the options and then ignores them.
+    for (text, what) in [
+        (&args.max_count, "an integer"),
+        (&args.skip, "an integer"),
+        (&args.max_age, "a number of seconds since epoch"),
+        (&args.min_age, "a number of seconds since epoch"),
+    ] {
+        if let Some(text) = text {
+            let digits = text.trim_start();
+            let digits = digits.strip_prefix(['-', '+']).unwrap_or(digits);
+            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                eprintln!("fatal: '{text}': not {what}");
+                return Ok(128);
+            }
+        }
+    }
     let mut rev: Option<String> = None;
     let file: String;
     match args.args.as_slice() {

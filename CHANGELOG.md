@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-04 — `blame --until`/`--before`/`--max-count`/`--skip`/`--max-age`/`--min-age` are read as git reads them: validated (`fatal: '<v>': not an integer` / `not a number of seconds since epoch`, exit 128) and otherwise without effect (`s_blame_revlist_limits`).
 * 2026-11-04 — `pull --rebase <remote> <branch>` replays only what follows the fork point of HEAD from that remote branch's tracking-ref reflog, as git does, instead of everything after the merge base (`s_pull_rebase_refspec`).
 * 2026-11-04 — `format-patch --description-file=<file>` fills the cover letter body (leading blank lines dropped, line ends trimmed, an empty file keeps the placeholder) and dies with `unable to read branch description file` as git does (`s_format_patch_description_file`).
 * 2026-11-04 — `format-patch -v <n>` / `-v<n>` / `--reroll-count=<n>` / `--no-reroll-count`: `[PATCH v<n>]` subjects, `v<n>-` file names (cover letter included), the last count wins (`s_format_patch_reroll`).

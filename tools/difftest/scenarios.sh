@@ -13429,6 +13429,30 @@ s_blame_contents() {
     v blame -s --contents alt f
 }
 
+# blame takes git's rev-list limits and does not act on them: --until/--before take any text, the
+# counts and ages are validated as integers / seconds with git's fatal.
+s_blame_revlist_limits() {
+    v init -q repo; cd repo
+    seq 1 4 | sed 's/^/line /' >f; v add f; tick; v commit -q -m c1
+    sed -i '2s/.*/two/' f; tick; v commit -q -a -m c2
+    sed -i '3s/.*/three/' f; tick; v commit -q -a -m c3
+    v blame -s --until=2001-01-01 f
+    v blame -s --before=junk f
+    v blame -s --until= f
+    v blame -s --max-count=1 f
+    v blame -s --max-count=-1 HEAD f
+    v blame -s --skip=1 f
+    v blame -s --skip=-1 f
+    v blame -s --max-age=5 f
+    v blame -s --min-age=5 f
+    v blame -s --max-count=x f
+    v blame -s --max-count= f
+    v blame -s --max-count=5x f
+    v blame -s --skip=x f
+    v blame -s --max-age=x f
+    v blame -s --min-age= f
+}
+
 # blame -L :<funcname>, with git's default function-line rule and a configured diff driver.
 s_blame_funcname() {
     v init -q repo; cd repo
