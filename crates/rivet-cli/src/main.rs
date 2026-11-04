@@ -208,7 +208,25 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                     out.push(value);
                 }
             }
-            out.push(arg);
+            // git stops option parsing at the first non-option word: a `--` right before the
+            // pattern is eaten, and every word after the pattern is a plain word (the value
+            // pattern, or one too many), even when it looks like an option.
+            if iter.as_slice().first().is_some_and(|next| next == "--") {
+                iter.next();
+            }
+            match iter.next() {
+                Some(pattern) => {
+                    let mut joined = std::ffi::OsString::from("--get-regexp=");
+                    joined.push(pattern);
+                    out.push(joined);
+                    let rest: Vec<_> = iter.by_ref().collect();
+                    if !rest.is_empty() {
+                        out.push("--".into());
+                        out.extend(rest);
+                    }
+                }
+                None => out.push(arg),
+            }
             continue;
         } else if in_log && !after_dashes {
             if text == "--" {

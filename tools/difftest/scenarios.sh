@@ -14185,6 +14185,18 @@ s_config_get_regexp_after_opts() {
     v config --get-regexp -t nope '^foo\.ba'
 }
 
+s_config_get_regexp_words() {
+    v init -q repo; cd repo
+    printf '[foo]\n\tbar = 1\n\tbaz = -z\n\tbig = --local\n' >.git/config
+    v config --get-regexp '^foo\.ba' -z
+    v config --get-regexp '^foo\.' --local
+    v config --get-regexp '^foo\.' -- 
+    v config --get-regexp '^foo\.' -t int
+    v config --get-regexp '^foo\.' 1 -z
+    v config --get-regexp -- '^foo\.ba'
+    v config --get-regexp -z -- '^foo\.ba' '1'
+}
+
 s_commit_date_env() {
     v init -q repo; cd repo
     echo a >a; v add a

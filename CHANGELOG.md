@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-04 — `config --get-regexp`: every word after the pattern is a plain word as in git (`-z`, `--local`, `-t int` there are the value pattern or `wrong number of arguments`), and a `--` before the pattern is eaten (`s_config_get_regexp_words`).
 * 2026-11-04 — `blame --until`/`--before`/`--max-count`/`--skip`/`--max-age`/`--min-age` are read as git reads them: validated (`fatal: '<v>': not an integer` / `not a number of seconds since epoch`, exit 128) and otherwise without effect (`s_blame_revlist_limits`).
 * 2026-11-04 — `pull --rebase <remote> <branch>` replays only what follows the fork point of HEAD from that remote branch's tracking-ref reflog, as git does, instead of everything after the merge base (`s_pull_rebase_refspec`).
 * 2026-11-04 — `format-patch --description-file=<file>` fills the cover letter body (leading blank lines dropped, line ends trimmed, an empty file keeps the placeholder) and dies with `unable to read branch description file` as git does (`s_format_patch_description_file`).
