@@ -14,6 +14,7 @@
 //! * Attachments, path limiting and `-k` with a multi-line subject (which needs RFC 2047 encoding
 //!   of an ASCII string) are not implemented and are refused.
 //! * `-v <n>` / `--reroll-count=<n>` add ` v<n>` to the subject prefix and `v<n>-` to every file name.
+//! * `--description-file=<file>` is the cover letter's body (`*** BLURB HERE ***` for an empty file).
 //! * `format.coverLetter` (`true`, `false`, `auto`) and `format.thread` (`true`, `deep`, `shallow`) set the defaults.
 //! * `--cover-letter` writes `0000-cover-letter.patch` (shortlog wrapped by bytes, then the diffstat
 //!   of the whole range); `--thread[=shallow|deep]` and `--in-reply-to` add `Message-ID`,
@@ -132,6 +133,46 @@ pub struct FormatPatchArgs {
     /// Forget an earlier `-v`/`--reroll-count`.
     #[arg(long = "no-reroll-count", overrides_with = "reroll_count")]
     pub no_reroll_count: bool,
+
+    /// Use the text of this file as the cover letter's body.
+    #[arg(
+        long = "description-file",
+        value_name = "FILE",
+        overrides_with = "description_file"
+    )]
+    pub description_file: Option<String>,
+
+    /// Accepted and ignored, as git does.
+    #[arg(long = "no-description-file")]
+    pub no_description_file: bool,
+}
+
+/// The cover letter body git builds from a `--description-file`: leading blank lines dropped, the
+/// trailing white space of every line trimmed, each line newline-terminated; an empty file keeps
+/// the `*** BLURB HERE ***` placeholder.
+fn description_body(data: &[u8]) -> Vec<u8> {
+    if data.is_empty() {
+        return b"*** BLURB HERE ***\n".to_vec();
+    }
+    let mut lines: Vec<&[u8]> = data.split(|byte| *byte == b'\n').collect();
+    if data.ends_with(b"\n") {
+        lines.pop();
+    }
+    let mut out = Vec::new();
+    let mut started = false;
+    for line in lines {
+        let end = line
+            .iter()
+            .rposition(|byte| !byte.is_ascii_whitespace())
+            .map_or(0, |at| at + 1);
+        if end == 0 && !started {
+            continue;
+        }
+        started = true;
+        out.extend_from_slice(&line[..end]);
+        out.push(b'\n');
+    }
+    out
 }
 
 /// How git's `add_rfc2047` decides what to escape.
@@ -545,6 +586,33 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         let id = message_id("cover");
         let mut out: Vec<u8> = Vec::new();
         out.extend_from_slice(format!("From {newest} Mon Sep 17 00:00:00 2001\n").as_bytes());
+        // Git reads the description right after the first line is written and dies if it cannot.
+        let blurb = match args.description_file.as_deref() {
+            None => description_body(b""),
+            Some(path) => match std::fs::read(path) {
+                Ok(data) => description_body(&data),
+                Err(error) => {
+                    if args.stdout {
+                        use std::io::Write as _;
+                        std::io::stdout().write_all(&out)?;
+                    } else {
+                        let file = format!("{file_prefix}0000-cover-letter.patch");
+                        let target = match &args.output_directory {
+                            Some(dir) => dir.join(file),
+                            None => PathBuf::from(file),
+                        };
+                        std::fs::write(&target, &out)?;
+                        if !global.quiet {
+                            println!("{}", target.display());
+                        }
+                    }
+                    let text = error.to_string();
+                    let text = text.split(" (os error").next().unwrap_or(&text);
+                    eprintln!("fatal: unable to read branch description file '{path}': {text}");
+                    return Ok(128);
+                }
+            },
+        };
         out.extend_from_slice(&thread_headers(thread, &in_reply_to, &ids, &id));
         out.extend_from_slice(&from_header(&who.name, &who.email));
         let date = rivet_core::ops::format_date_style(
@@ -597,7 +665,9 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         if needs_rfc2047(&shortlog) {
             out.extend_from_slice(MIME_HEADERS);
         }
-        out.extend_from_slice(b"\n*** BLURB HERE ***\n\n");
+        out.extend_from_slice(b"\n");
+        out.extend_from_slice(&blurb);
+        out.extend_from_slice(b"\n");
         out.extend_from_slice(&shortlog);
         let first = selected[0];
         // A range that starts at a root commit has no base to compare with: git prints no stat.

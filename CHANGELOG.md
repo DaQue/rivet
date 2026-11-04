@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-04 — `format-patch --description-file=<file>` fills the cover letter body (leading blank lines dropped, line ends trimmed, an empty file keeps the placeholder) and dies with `unable to read branch description file` as git does (`s_format_patch_description_file`).
 * 2026-11-04 — `format-patch -v <n>` / `-v<n>` / `--reroll-count=<n>` / `--no-reroll-count`: `[PATCH v<n>]` subjects, `v<n>-` file names (cover letter included), the last count wins (`s_format_patch_reroll`).
 * 2026-11-04 — `worktree add --[no-]relative-paths` and `worktree.useRelativePaths` write relative `.git`/`gitdir` links and set `extensions.relativeWorktrees` (format version 1); relative links are read by `worktree list`/`prune`/`repair` and when opening a linked work tree (`s_worktree_add_relative`).
 * 2026-11-04 — `bisect run` re-runs a command that exited 126 or 127 on a good revision and stops with `error: bogus exit code <n> for 'good' revision` (exit 1, back on the tested commit) when it fails the same way, as git does (`s_bisect_run_bogus`).

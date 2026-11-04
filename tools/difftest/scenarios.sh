@@ -14550,6 +14550,46 @@ s_format_patch_reroll() {
     v format-patch -v4 --stdout --no-signature HEAD~2 >>"$TRANSCRIPT" 2>&1
 }
 
+s_format_patch_description_file() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m "base"
+    echo b >>a; tick; v commit -q -a -m "one"
+    echo c >>a; tick; v commit -q -a -m "two"
+    local n=0
+    fpd() {
+        n=$((n + 1))
+        echo "-- $*" >>"$TRANSCRIPT"
+        v format-patch -o ../out$n --no-signature "$@" >>"$TRANSCRIPT" 2>&1
+        echo "rc=$?" >>"$TRANSCRIPT"
+        local f
+        for f in ../out$n/*; do
+            [ -e "$f" ] || continue
+            echo "== $f" >>"$TRANSCRIPT"
+            sed -e 's/\.[0-9]\{9,11\}\.git\./.NOW.git./g' "$f" | cat -A >>"$TRANSCRIPT"
+        done
+    }
+    printf 'My desc\n\nbody line\n' >../d1
+    printf 'nonl' >../d2
+    : >../d3
+    printf '  \n\t\n  first  \nb\t\n\n\n' >../d4
+    printf 'a\r\nb\r\n' >../d5
+    printf '\n\n   \n' >../d6
+    printf 'x\n\n   ' >../d7
+    local i
+    for i in 1 2 3 4 5 6 7; do
+        fpd --cover-letter --description-file=../d$i HEAD~2
+    done
+    fpd --cover-letter --description-file ../d1 -1
+    fpd --cover-letter --description-file=../d1 --description-file=../d2 HEAD~2
+    fpd --cover-letter --description-file=../d1 --no-description-file HEAD~2
+    fpd --description-file=../missing HEAD~2
+    fpd --cover-letter --description-file=../missing HEAD~2
+    fpd --cover-letter --description-file=.. HEAD~2
+    fpd -v2 --cover-letter --description-file=../d1 --thread HEAD~2
+    v format-patch --stdout --cover-letter --no-signature --description-file=../missing HEAD~2 >>"$TRANSCRIPT" 2>&1
+    echo "rc=$?" >>"$TRANSCRIPT"
+}
+
 case "${1:-}" in
     -h|--help)
         declare -F | awk '{print $3}' | grep '^s_'
