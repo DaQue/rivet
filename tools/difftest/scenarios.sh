@@ -6303,6 +6303,20 @@ s_pull_rebase() {
     v status --short
 }
 
+s_pull_rebase_refspec() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && tick && echo b >b && g add b && g commit -qm two && g push -q origin HEAD:main 2>/dev/null)
+    v clone -q origin.git repo
+    cd repo
+    tick; echo l1 >l1; v add l1; v commit -q -m local1
+    # upstream drops "two" and adds "three": the fork point differs from the merge base
+    (cd ../seed && tick && g reset -q --hard HEAD^ && echo c >c && g add c && g commit -qm three && g push -q -f origin HEAD:main 2>/dev/null)
+    v pull --rebase origin main
+    v log --format='%h %p %s'
+    v status --short
+}
+
 s_pull_rebase_conflict() {
     g init -q --bare origin.git
     g clone -q origin.git seed 2>/dev/null

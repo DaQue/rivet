@@ -933,19 +933,27 @@ pub fn run_pull(global: &GlobalArgs, args: &PullArgs) -> Result<i32> {
     };
     // `git pull --rebase` replays only what follows the fork point of HEAD from the upstream
     // branch's reflog (`merge-base --fork-point`), and reads it before the fetch moves that ref.
-    let fork_point = match (&upstream, repository.head()?.oid()) {
-        (Some((upstream_remote, merge)), Some(head_oid))
-            if rebase && args.refspecs.is_empty() && *upstream_remote == remote =>
-        {
-            rivet_core::remote::tracking_ref_name(
-                BStr::new(remote.as_bytes()),
-                BStr::new(merge.as_bytes()),
-            )
-            .and_then(|name| rivet_core::RefName::from_bstring(name).ok())
-            .map(|name| super::query::fork_point(&repository, &name, head_oid))
-            .transpose()?
-            .flatten()
+    // An explicit `<branch>` names the remote branch whose tracking ref's reflog is read instead.
+    let fork_branch: Option<String> = match (&upstream, args.refspecs.as_slice()) {
+        (Some((upstream_remote, merge)), []) if *upstream_remote == remote => Some(merge.clone()),
+        (_, [spec]) if !spec.contains(':') && !spec.starts_with('+') => {
+            if spec.starts_with("refs/") {
+                Some(spec.clone())
+            } else {
+                Some(format!("refs/heads/{spec}"))
+            }
         }
+        _ => None,
+    };
+    let fork_point = match (&fork_branch, repository.head()?.oid()) {
+        (Some(merge), Some(head_oid)) if rebase => rivet_core::remote::tracking_ref_name(
+            BStr::new(remote.as_bytes()),
+            BStr::new(merge.as_bytes()),
+        )
+        .and_then(|name| rivet_core::RefName::from_bstring(name).ok())
+        .map(|name| super::query::fork_point(&repository, &name, head_oid))
+        .transpose()?
+        .flatten(),
         _ => None,
     };
     let report = repository.fetch_remote(&remote, &request)?;

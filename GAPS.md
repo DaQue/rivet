@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 421 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 422 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-04, gate: 352 tests / 0 failed, 421 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-04, gate: 352 tests / 0 failed, 422 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -224,8 +224,6 @@ The command works for the common case; the listed options or edge cases are miss
   public, POSTs challenged) is retried like the discovery one (`s_credential_post`), but only fetch,
   clone and a first-POST refusal are compared for the failure text (`RPC failed; HTTP 401 curl 22 …`
   and `expected flush after ref listing`); a refused `receive-pack` POST is not compared.
-* **`pull --rebase <remote> <branch>`** — with an explicit refspec, rebases onto the fetched
-  tip rather than the fork point.
 * **Network protocol** — v2 capabilities other than `object-format=sha1` are not implemented;
   git follows tags after a fetch with an explicit refspec where rivet does not.
 * **`update-ref --stdin`** — `symref-update`, `symref-create`, `symref-delete` and `symref-verify` (line and `-z` framing, git's validation text, the `ref`/`oid` old values, `symref-delete`/`-verify` refused in deref mode, a symref update through a symbolic ref pointing both the named ref and the end of the chain at the target), `option no-deref` for the next command only, and `-0`/`--batch-updates` (what holds is applied, the rest comes back as `rejected <ref> <new> <old> <reason>` with `incorrect old value provided`, `reference does not exist`, `reference already exists` and `expected symref but found regular ref`, checked when the batch commits) are compared with git (`s_update_ref_symref`); `delete` removes the ref while holding its lock (`RefStore::delete_holding`). Not done: a batch rejects a name conflict (`refname conflict`) where rivet stops with a fatal error; C-style quoted fields in line mode; the duplicate and old-value checks of a symref update through a chain are only verified for a plain symbolic ref. `for-each-ref %(symref)` follows a chain of symbolic refs to the ref it ends on (five hops, as git) and takes `refname`'s modifiers (`:short`, `:lstrip=`, `:rstrip=`; `s_for_each_ref_symref_chain`).
