@@ -31,3 +31,4 @@
 * 2026-11-04 — `update-index --again`/`-g` updates every merged entry that differs from `HEAD` (optionally limited by pathspecs) with the options given before it (`s_update_index_again`).
 * 2026-11-05 — `repack --max-cruft-size` is read as git's magnitude, the cruft pack takes it (or `--max-pack-size` when it is 0) and a limit under 1 MiB warns once per pack (`s_repack_max_cruft_size`).
 * 2026-11-05 — GAPS no longer lists `repack --keep-largest-pack`: git 2.56 has no such option (`unknown option`), so there is nothing to match.
+* 2026-11-05 — `log --graph --format=format:<fmt>` draws no extra graph rows: the padding before the separator newline is skipped when the entry has no newline of its own, as git's `missing_newline` (`s_log_graph_format_separator`).

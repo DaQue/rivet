@@ -509,6 +509,8 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         .graph
         .then(|| super::graph::Graph::new(palette.is_some(), args.first_parent));
     let mut out = Vec::new();
+    // git's `missing_newline`: the last entry did not end in a newline of its own.
+    let mut missing_newline = false;
     for (position, oid) in oids.iter().enumerate() {
         let commit = read_commit(&repository, oid)?;
         if let Some(graph) = graph.as_mut() {
@@ -523,10 +525,13 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 _ => false,
             };
             if separated {
-                if let Some(graph) = graph.as_mut() {
+                if !missing_newline && let Some(graph) = graph.as_mut() {
                     graph.padding_line(&mut out);
                 }
-                out.push(b'\n');
+                // The graph's remainder rows already ended the line of a format without `%n`.
+                if !(missing_newline && graph.is_some() && out.ends_with(b"\n")) {
+                    out.push(b'\n');
+                }
             }
         }
         let text = render_commit(
@@ -542,6 +547,7 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 palette: palette.as_ref(),
             },
         );
+        missing_newline = !text.ends_with(b"\n");
         match graph.as_mut() {
             Some(graph) => {
                 graph.show_commit(&mut out);

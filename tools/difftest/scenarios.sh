@@ -6056,6 +6056,16 @@ s_log_graph_linear() {
     v log --graph --reverse
 }
 
+# `format:` separates entries with a newline; git draws the graph's padding before that newline only
+# when the entry ended in a newline of its own, so a plain `format:%s` adds no extra graph row.
+s_log_graph_format_separator() {
+    graph_fixture
+    v log --graph --format='format:%s' --all
+    v log --graph --format='format:%h %s'
+    v log --graph --format='format:%h %p' --all
+    v log --graph --format='format:%s' -3
+}
+
 s_log_graph_merges() {
     graph_fixture
     v log --graph --oneline

@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 430 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 431 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-05, gate: 352 tests / 0 failed, 430 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-05, gate: 352 tests / 0 failed, 431 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -108,8 +108,7 @@ The command works for the common case; the listed options or edge cases are miss
   empty `--format=` works (`s_log_first_parent_merge_diff`); the last of `--oneline` / `--pretty` / `--format`
   wins and `--oneline` abbreviates the `commit` line of a later layout (`s_log_layout_order`, `s_show_oneline`; read
   from the raw command line); `--graph` over several root commits exits 128 by design; `--graph` with `--date-order` or
-  `--first-parent` orders differently from git, and `--graph --format=format:%s` draws an
-  extra row.
+  `--first-parent` orders differently from git.
 * **`rev-list`** — `--cherry-pick` and `--cherry-mark` work (`s_rev_list_cherry`; `--cherry`, the synonym for `--right-only --cherry-mark --no-merges`, `s_rev_list_cherry_synonym`; `log --cherry-mark`
   does not exist). `--children` works (`s_rev_list_children`). `--left-right`, `--left-only`
   and `--right-only` work (`s_rev_list_left_right`), and so does `--ancestry-path` without a
