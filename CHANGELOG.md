@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-05 — `update-ref --stdin -0`/`--batch-updates` rejects a create that collides with a ref above or below its name as `rejected <ref> <new> <old> refname conflict` (with git's `cannot lock ref ... exists; cannot create` error), and without a batch the same text is the fatal (`s_update_ref_conflict`).
 * 2026-11-05 — `repack --cruft --cruft-expiration=<date> --expire-to=<prefix>` (and `--no-expire-to`, last one wins) writes the objects the expiry drops to a cruft pack `<prefix>-<checksum>.{pack,idx,rev,mtimes}` with their own ages, as git does; ignored without `--cruft` (`s_repack_expire_to`).
 * 2026-11-05 — `worktree repair --[no-]relative-paths` (and `worktree.useRelativePaths`) rewrite the `.git`/`gitdir` links of every work tree in the chosen style, report `absolute/relative path mismatch` as git does and set `extensions.relativeWorktrees` (`s_worktree_repair_relative`).
 * 2026-11-04 — `repack --max-pack-size` is read as git reads a magnitude (base 0, `k`/`m`/`g`, unsigned 64 bit): every occurrence is checked in order (`expects a non-negative integer value…`, `expects a numerical value`, `requires a value`, `not in range [0,-1]`) and a limit under 1 MiB warns (`s_repack_max_pack_size`).

@@ -11899,6 +11899,26 @@ s_update_ref_symref() {
 }
 
 # update-ref --stdin: a prepared transaction takes only commit/abort, a closed one can start again.
+s_update_ref_conflict() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    A=$(g rev-parse HEAD)
+    g update-ref refs/heads/x $A; g update-ref refs/heads/d/e $A
+    cf() {
+        g update-ref -d refs/heads/ok 2>/dev/null
+        printf "$1" >.git/stdin.txt; shift
+        STDIN_FILE=.git/stdin.txt v update-ref "$@"
+        v for-each-ref --format='%(refname) %(objectname)'
+    }
+    # a batch rejects the conflicts and applies the rest
+    cf "create refs/heads/x/y $A\ncreate refs/heads/d $A\nupdate refs/heads/ok $A\n" --stdin -0
+    cf "create refs/heads/x/y/z $A\nsymref-create refs/heads/d refs/heads/x\n" --stdin --batch-updates
+    # without a batch it stays fatal
+    cf "create refs/heads/x/y $A\n" --stdin
+    cf "create refs/heads/d $A\n" --stdin
+    cf "update refs/heads/ok $A\ncreate refs/heads/x/y $A\n" --stdin
+}
+
 s_update_ref_prepared() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m one

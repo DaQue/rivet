@@ -134,7 +134,7 @@ struct Op {
 /// * `--stdin` accepts `update`, `create`, `delete`, `verify`, the four `symref-*` commands,
 ///   `option no-deref` (for the next command only) and `start`/`prepare`/`commit`/`abort`.
 /// * `-0`/`--batch-updates` applies the updates whose expectations hold and prints the others as
-///   `rejected <ref> <new> <old> <reason>`; a name conflict is still fatal, not a rejection.
+///   `rejected <ref> <new> <old> <reason>`; a name conflict (`refname conflict`) is a rejection too.
 /// * A `delete` removes the ref while it still holds the ref's lock.
 pub fn run_update_ref(global: &GlobalArgs, args: &UpdateRefArgs) -> Result<i32> {
     let stdin = args.stdin && !args.no_stdin;
@@ -277,6 +277,21 @@ impl Session<'_> {
         }
         let mut locks = Vec::new();
         for op in ops {
+            if let Some(reject) = self.name_conflict(op) {
+                if !self.batch {
+                    return Err(reject.error);
+                }
+                eprintln!("error: {}", reject.error);
+                println!(
+                    "rejected {} {} {} {}",
+                    op.target,
+                    self.new_field(op),
+                    self.old_field(op),
+                    reject.reason
+                );
+                locks.push(None);
+                continue;
+            }
             let lock = RefLock::acquire(self.home(&op.target), &op.target)
                 .map_err(|e| format!("cannot lock ref '{}': {e}", op.target))?;
             match self.check(op) {
@@ -296,6 +311,44 @@ impl Session<'_> {
             }
         }
         Ok(locks)
+    }
+
+    /// A write that would create `op.target` next to a ref it cannot coexist with: a ref named by a
+    /// leading part of the name, or refs below the name.
+    fn name_conflict(&self, op: &Op) -> Option<Reject> {
+        if !matches!(op.action, Action::Write(_) | Action::Symref(_)) {
+            return None;
+        }
+        let refs = self.repository.refs();
+        let is_ref = |name: &RefName| matches!(refs.try_read(name), Ok(Some(_)));
+        if is_ref(&op.target) {
+            return None;
+        }
+        let full = op.target.as_bstr().to_string();
+        let mut blocker = None;
+        for (at, _) in full.match_indices('/') {
+            if let Ok(prefix) = RefName::from_bytes(&full.as_bytes()[..at])
+                && is_ref(&prefix)
+            {
+                blocker = Some(prefix.to_string());
+                break;
+            }
+        }
+        if blocker.is_none() {
+            let below = format!("{full}/");
+            if let Ok(found) = refs.list(below.as_bytes())
+                && let Some((first, _)) = found.first()
+            {
+                blocker = Some(first.to_string());
+            }
+        }
+        blocker.map(|other| Reject {
+            error: format!(
+                "cannot lock ref '{}': '{other}' exists; cannot create '{}'",
+                op.target, op.target
+            ),
+            reason: "refname conflict",
+        })
     }
 
     /// The `<new>` a `rejected` line shows for `op`.
