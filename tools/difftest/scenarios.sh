@@ -11941,6 +11941,37 @@ s_update_ref_prepared() {
     pr "start\ncommit\nprepare\n"
 }
 
+# update-ref --stdin: a field that starts with `"` is C-quoted in line mode (refname, ids, symref words).
+s_update_ref_quoted() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    A=$(g rev-parse HEAD)
+    qr() {
+        g for-each-ref --format='%(refname)' | grep -v 'refs/heads/\(main\|master\)$' |
+            while read -r r; do g update-ref --no-deref -d "$r"; done
+        printf "$1" >.git/stdin.txt
+        STDIN_FILE=.git/stdin.txt v update-ref --stdin
+        v for-each-ref --format='%(refname) %(objectname)'
+    }
+    qr "create \"refs/heads/q\" $A\n"
+    qr "create \"refs/heads/q\" \"$A\"\n"
+    qr "create refs/heads/q \"$A\"\n"
+    qr "create \"refs/heads/q\\\\101\" $A\n"
+    qr "create \"refs/heads/q\\\\x41\" $A\n"
+    qr "create \"refs/heads/q $A\n"
+    qr "create \"refs/heads/q\"$A\n"
+    qr "create \"refs/heads/q\"\n"
+    qr "create refs/heads/q \"$A\n"
+    qr "create refs/heads/q \"$A\"x\n"
+    qr "create \"refs/heads/q\\\\tz\" $A\n"
+    qr "create refs/heads/q $A\nupdate \"refs/heads/q\" \"$A\" \"$A\"\n"
+    qr "create refs/heads/q $A\ndelete \"refs/heads/q\" \"$A\"\n"
+    qr "create refs/heads/q $A\nverify \"refs/heads/q\" \"$A\"\n"
+    qr "symref-create \"refs/heads/s\" \"refs/heads/q\"\n" 
+    qr "symref-create refs/heads/s \"refs/heads/q\"x\n"
+    qr "symref-create refs/heads/s refs/heads/q\nsymref-update \"refs/heads/s\" \"refs/heads/r\" \"ref\" \"refs/heads/q\"\n"
+}
+
 s_commit_tree() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m one

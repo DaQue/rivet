@@ -123,6 +123,46 @@ struct Op {
     extra: bool,
 }
 
+/// The next space-separated word of a line-mode argument list and what follows it. A word that
+/// starts with `"` is C-quoted, as in git's `update-ref --stdin`.
+fn take_word(text: &str) -> Result<(String, Option<&str>)> {
+    if !text.starts_with('"') {
+        return Ok(match text.split_once(' ') {
+            Some((head, tail)) => (head.to_string(), Some(tail)),
+            None => (text.to_string(), None),
+        });
+    }
+    let bytes = text.as_bytes();
+    let mut end = 1;
+    let mut closed = false;
+    while end < bytes.len() {
+        match bytes[end] {
+            b'\\' => end += 1,
+            b'"' => {
+                closed = true;
+                break;
+            }
+            _ => {}
+        }
+        end += 1;
+    }
+    let unquoted = if closed {
+        super::sparse::unquote_c_style(&bytes[..=end])
+    } else {
+        None
+    };
+    let Some(unquoted) = unquoted else {
+        bail!("badly quoted argument: {text}\n");
+    };
+    let after = &text[end + 1..];
+    let tail = match after.strip_prefix(' ') {
+        Some(tail) => Some(tail),
+        None if after.is_empty() => None,
+        None => bail!("unexpected character after quoted argument: {text}\n"),
+    };
+    Ok((String::from_utf8_lossy(&unquoted).into_owned(), tail))
+}
+
 /// Handler for `rivet update-ref`.
 ///
 /// # Exit codes
@@ -708,17 +748,13 @@ impl Session<'_> {
                 args.push(String::from_utf8_lossy(&field).into_owned());
             }
         } else {
-            let mut parts = rest.splitn(2, ' ');
-            name = parts.next().unwrap_or_default().to_string();
-            let mut remaining = parts.next();
+            let (head, mut remaining) = take_word(rest)?;
+            name = head;
             let want = if command == "update" { 2 } else { 1 };
             while args.len() < want {
                 let Some(text) = remaining else { break };
-                let (head, tail) = match text.split_once(' ') {
-                    Some((h, t)) => (h, Some(t)),
-                    None => (text, None),
-                };
-                args.push(head.to_string());
+                let (head, tail) = take_word(text)?;
+                args.push(head);
                 remaining = tail;
             }
             if let Some(extra) = remaining {
@@ -813,28 +849,26 @@ impl Session<'_> {
                 _ => words.push(take_field(cursor).unwrap_or_default()),
             }
         } else {
-            let mut parts = rest.splitn(2, ' ');
-            name = parts.next().unwrap_or_default().to_string();
+            let (head, mut remaining) = take_word(rest)?;
+            name = head;
             if name.is_empty() {
                 bail!("{command}: missing <ref>");
             }
-            let mut remaining = parts.next();
-            let next_word = |remaining: &mut Option<&str>| {
-                let text = remaining.take()?;
-                let (head, tail) = match text.split_once(' ') {
-                    Some((h, t)) => (h, Some(t)),
-                    None => (text, None),
+            let next_word = |remaining: &mut Option<&str>| -> Result<Option<String>> {
+                let Some(text) = remaining.take() else {
+                    return Ok(None);
                 };
+                let (head, tail) = take_word(text)?;
                 *remaining = tail;
-                Some(head.to_string())
+                Ok(Some(head))
             };
-            words.push(next_word(&mut remaining).unwrap_or_default());
+            words.push(next_word(&mut remaining)?.unwrap_or_default());
             if command == "symref-update" && !words[0].is_empty() && remaining.is_some() {
-                let kind = next_word(&mut remaining).unwrap_or_default();
+                let kind = next_word(&mut remaining)?.unwrap_or_default();
                 if !matches!(kind.as_str(), "ref" | "oid") {
                     bail!("{command} {name}: invalid arg '{kind}' for old value");
                 }
-                let value = next_word(&mut remaining).unwrap_or_default();
+                let value = next_word(&mut remaining)?.unwrap_or_default();
                 old_kind = Some((kind, value));
             }
             if let Some(text) = remaining {
