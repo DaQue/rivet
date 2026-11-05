@@ -37,8 +37,8 @@ struct Entry {
 ///
 /// * **Entries are sorted, not deduplicated.** Like Git, two lines with the same name both end up
 ///   in the tree, in input order. Modes are written as the octal number given, not canonicalised.
-/// * **A mode with a sign or one that does not fit 32 bits is refused by name**, because Git's
-///   `strtoul` reading of such a mode wraps in ways that are not reproduced here.
+/// * **A mode is read as `strtoul` reads it**: an optional sign, wrapping modulo 2^64, then the
+///   low 32 bits are kept.
 /// * **Gitlinks are never looked up**; every other entry must exist unless `--missing` is given.
 pub fn run_mktree(global: &GlobalArgs, args: &MkTreeArgs) -> Result<i32> {
     let mut nul = false;
@@ -151,20 +151,27 @@ fn parse_line(repository: &Repository, line: &[u8], nul: bool, missing: bool) ->
     let shown = || String::from_utf8_lossy(line).into_owned();
     let bad = || anyhow::anyhow!("input format error: {}", shown());
 
+    // `strtoul(buf, &end, 8)` into an `unsigned int`: optional sign, the value wraps modulo 2^64
+    // (saturating at `ULONG_MAX` on overflow, then negated for `-`), then keeps its low 32 bits.
     let text = line.trim_start_with(|c| c.is_ascii_whitespace());
-    let text = text.strip_prefix(b"+").unwrap_or(text);
+    let (negative, text) = match text.first() {
+        Some(b'-') => (true, &text[1..]),
+        Some(b'+') => (false, &text[1..]),
+        _ => (false, text),
+    };
     let digits = text
         .iter()
         .take_while(|b| (b'0'..=b'7').contains(b))
         .count();
     if digits == 0 || text.get(digits) != Some(&b' ') {
-        if text.first() == Some(&b'-') && text[1..].first().is_some_and(u8::is_ascii_digit) {
-            bail!("mktree: a negative mode is not implemented");
-        }
         return Err(bad());
     }
-    let mode = u32::from_str_radix(std::str::from_utf8(&text[..digits])?, 8)
-        .map_err(|_| anyhow::anyhow!("mktree: a mode wider than 32 bits is not implemented"))?;
+    let wide = text[..digits].iter().try_fold(0u64, |n, d| {
+        n.checked_mul(8)?.checked_add(u64::from(d - b'0'))
+    });
+    let wide = wide.unwrap_or(u64::MAX);
+    let wide = if negative { wide.wrapping_neg() } else { wide };
+    let mode = wide as u32;
     let rest = &text[digits + 1..];
     let Some(space) = rest.find_byte(b' ') else {
         return Err(bad());

@@ -36,3 +36,4 @@
 * 2026-11-05 — `repack --max-cruft-size` is read as git's magnitude, the cruft pack takes it (or `--max-pack-size` when it is 0) and a limit under 1 MiB warns once per pack (`s_repack_max_cruft_size`).
 * 2026-11-05 — GAPS no longer lists `repack --keep-largest-pack`: git 2.56 has no such option (`unknown option`), so there is nothing to match.
 * 2026-11-05 — `log --graph --format=format:<fmt>` draws no extra graph rows: the padding before the separator newline is skipped when the entry has no newline of its own, as git's `missing_newline` (`s_log_graph_format_separator`).
+* 2026-11-05 — `mktree` reads a mode as git's `strtoul` into an `unsigned int` does (sign negates modulo 2^64, low 32 bits kept) instead of refusing signed or wide modes (`s_mktree_wrap`, tree ids compared).

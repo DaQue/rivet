@@ -14849,6 +14849,22 @@ s_stash_diff_context() {
     v stash list
 }
 
+# `mktree` reads the mode with `strtoul` into an `unsigned int`: a sign negates modulo 2^64 and
+# the low 32 bits are kept, so these write trees (compared by id) instead of being refused.
+s_mktree_wrap() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    B=$(g rev-parse HEAD:a)
+    T=$'\t'
+    local mode
+    for mode in -1 -0 -100644 +100644 ' 100644' '-777777777777777777777' 777777777777 \
+        100644100644 1777777777777777777777 7777777777777777777777777 -40000 -160000 '- 100644'; do
+        echo "-- mode $mode" >>"$TRANSCRIPT"
+        vin "$mode blob $B${T}z
+" mktree --missing
+    done
+}
+
 s_format_patch_config() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m "base"
