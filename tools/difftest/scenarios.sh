@@ -3127,6 +3127,36 @@ s_repack_max_pack_size() {
     v log --oneline
 }
 
+# `--max-cruft-size` is a magnitude like `--max-pack-size`; with `--cruft` the cruft pack takes
+# it (or the general limit when it is 0) and a limit under 1 MiB warns once per pack.
+s_repack_max_cruft_size() {
+    v init -q repo; cd repo
+    echo base >b; v add b; tick; v commit -q -m base
+    for f in 1m 0 1 1k 1048575 1048576 0x10 010 +5 ' 5' 18446744073709551615 16777216g; do
+        v repack -d --max-cruft-size="$f"
+        v repack -d --cruft --max-cruft-size="$f"
+    done
+    for f in zz -1 08 0x 1.5m 5x 18446744073709551616 17179869184g ''; do
+        v repack --max-cruft-size="$f"
+        v repack --cruft --max-cruft-size="$f"
+    done
+    v repack --cruft --max-cruft-size
+    v repack --max-cruft-size 1m
+    v repack --cruft --max-cruft-size 1
+    v repack --cruft --max-cruft-size=1m --max-cruft-size=zz
+    v repack --cruft --max-cruft-size=zz --max-cruft-size=1m
+    v repack --cruft --max-cruft-size=1 --max-cruft-size=0
+    v repack --cruft --max-pack-size=1 --max-cruft-size=1
+    v repack --cruft --max-pack-size=1 --max-cruft-size=1m
+    v repack --cruft --max-pack-size=1 --max-cruft-size=0
+    v repack --cruft --max-pack-size=1m --max-cruft-size=1
+    v repack --cruft --max-pack-size=1
+    v repack -a -d --max-pack-size=1 --max-cruft-size=1
+    v repack --cruft -k --max-cruft-size=1
+    vs fsck
+    v log --oneline
+}
+
 s_gc_after_cruft() {
     g init -q repo; cd repo
     echo a >a; g add a; g commit -qm one

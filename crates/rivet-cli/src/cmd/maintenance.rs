@@ -103,6 +103,10 @@ pub struct RepackArgs {
     #[arg(long = "max-pack-size", value_name = "N", num_args = 0..=1, default_missing_value = MISSING_VALUE, action = clap::ArgAction::Append)]
     pub max_pack_size: Vec<String>,
 
+    /// Largest cruft pack; validated like git's option, a pack is never split.
+    #[arg(long = "max-cruft-size", value_name = "N", num_args = 0..=1, default_missing_value = MISSING_VALUE, action = clap::ArgAction::Append)]
+    pub max_cruft_size: Vec<String>,
+
     /// Accepted for compatibility: objects from alternates are never packed here.
     #[arg(short = 'l')]
     pub local: bool,
@@ -297,52 +301,57 @@ pub fn run_repack(global: &GlobalArgs, args: &RepackArgs) -> Result<i32> {
             }
         }
     }
-    // `--max-pack-size` is a magnitude: every occurrence is read in order, the last one is
-    // the limit, and a limit under 1 MiB (but not 0) is raised with a warning.
+    // `--max-pack-size` and `--max-cruft-size` are magnitudes: every occurrence is read in
+    // order, the last one is the limit, and a limit under 1 MiB (but not 0) is raised with a
+    // warning (the cruft one only when `--cruft` is on, as it reaches `pack-objects` then).
     {
-        let mut limit = 0u64;
-        let mut seen = false;
+        let mut limits = [0u64; 2];
         let mut it = raw.iter().skip_while(|a| *a != "repack").skip(1);
         while let Some(arg) = it.next() {
             if arg == "--" {
                 break;
             }
-            let text = if let Some(value) = arg.strip_prefix("--max-pack-size=") {
-                value.to_string()
-            } else if arg == "--max-pack-size" {
-                match it.next() {
-                    Some(value) => value.clone(),
-                    None => {
-                        eprintln!("error: option `max-pack-size' requires a value");
-                        return Ok(129);
+            let mut found = None;
+            for (slot, name) in ["max-pack-size", "max-cruft-size"].iter().enumerate() {
+                if let Some(value) = arg.strip_prefix(&format!("--{name}=")) {
+                    found = Some((slot, *name, value.to_string()));
+                } else if *arg == format!("--{name}") {
+                    match it.next() {
+                        Some(value) => found = Some((slot, *name, value.clone())),
+                        None => {
+                            eprintln!("error: option `{name}' requires a value");
+                            return Ok(129);
+                        }
                     }
                 }
-            } else {
+            }
+            let Some((slot, name, text)) = found else {
                 continue;
             };
             if text.is_empty() {
-                eprintln!("error: option `max-pack-size' expects a numerical value");
+                eprintln!("error: option `{name}' expects a numerical value");
                 return Ok(129);
             }
             match parse_magnitude(&text) {
-                Ok(value) => {
-                    limit = value;
-                    seen = true;
-                }
+                Ok(value) => limits[slot] = value,
                 Err(FactorError::Syntax) => {
                     eprintln!(
-                        "error: option `max-pack-size' expects a non-negative integer value with an optional k/m/g suffix"
+                        "error: option `{name}' expects a non-negative integer value with an optional k/m/g suffix"
                     );
                     return Ok(129);
                 }
                 Err(FactorError::Range) => {
-                    eprintln!("error: value {text} for option `max-pack-size' not in range [0,-1]");
+                    eprintln!("error: value {text} for option `{name}' not in range [0,-1]");
                     return Ok(129);
                 }
             }
         }
-        if seen && limit > 0 && limit < 1 << 20 {
-            eprintln!("warning: minimum pack size limit is 1 MiB");
+        // The cruft pack takes its own limit, or the general one when that is 0.
+        let cruft_limit = if limits[1] > 0 { limits[1] } else { limits[0] };
+        for (applies, limit) in [(true, limits[0]), (args.cruft, cruft_limit)] {
+            if applies && limit > 0 && limit < 1 << 20 {
+                eprintln!("warning: minimum pack size limit is 1 MiB");
+            }
         }
     }
     let geometric = match &args.geometric {
