@@ -108,6 +108,7 @@ struct SaveOptions {
     keep_index: bool,
     staged: bool,
     quiet: bool,
+    context: DiffContext,
     words: Vec<String>,
 }
 
@@ -210,6 +211,21 @@ fn parse_save(args: &[String]) -> SaveParse {
                         );
                     }
                 }
+                "unified" | "inter-hunk-context" => {
+                    if negated {
+                        return SaveParse::Usage(format!("error: unknown option `{long}'\n"));
+                    }
+                    let value = value.or_else(|| iter.next().cloned());
+                    let parsed = match context_value(&format!("option `{opt}'"), value.as_deref()) {
+                        Ok(parsed) => parsed,
+                        Err(error) => return SaveParse::MissingValue(error),
+                    };
+                    if opt == "unified" {
+                        out.context.unified = parsed;
+                    } else {
+                        out.context.inter_hunk_context = parsed;
+                    }
+                }
                 other => return SaveParse::Unsupported(format!("--{other}")),
             }
         } else if arg.len() > 1 && arg.starts_with('-') {
@@ -236,7 +252,20 @@ fn parse_save(args: &[String]) -> SaveParse {
                         }
                         break;
                     }
-                    c @ ('p' | 'U') => return SaveParse::Unsupported(format!("-{c}")),
+                    'U' => {
+                        let rest: String = cluster[i + 1..].iter().collect();
+                        let value = if rest.is_empty() {
+                            iter.next().cloned()
+                        } else {
+                            Some(rest)
+                        };
+                        match context_value("switch `U'", value.as_deref()) {
+                            Ok(parsed) => out.context.unified = parsed,
+                            Err(error) => return SaveParse::MissingValue(error),
+                        }
+                        break;
+                    }
+                    'p' => return SaveParse::Unsupported("-p".into()),
                     c => return SaveParse::Usage(format!("error: unknown switch `{c}'\n")),
                 }
                 i += 1;
@@ -294,6 +323,29 @@ pub struct PushArgs {
     /// The pathspec file is NUL-separated and unquoted.
     #[arg(long = "pathspec-file-nul")]
     pub pathspec_file_nul: bool,
+
+    /// Diff context; only valid with `--patch`, checked from the raw command line.
+    #[arg(
+        short = 'U',
+        long = "unified",
+        value_name = "N",
+        num_args = 0..=1,
+        default_missing_value = "",
+        allow_hyphen_values = true,
+        overrides_with = "unified"
+    )]
+    pub unified: Option<String>,
+
+    /// Inter-hunk context; only valid with `--patch`, checked from the raw command line.
+    #[arg(
+        long = "inter-hunk-context",
+        value_name = "N",
+        num_args = 0..=1,
+        default_missing_value = "",
+        allow_hyphen_values = true,
+        overrides_with = "inter_hunk_context"
+    )]
+    pub inter_hunk_context: Option<String>,
 
     /// Limit the stash to these paths.
     #[arg(value_name = "PATHSPEC")]
@@ -461,7 +513,7 @@ pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
                 message: (!message.is_empty()).then_some(message),
                 ..PushArgs::default()
             };
-            push_impl(true, &mut repository, &push_args, Mode::Create)
+            push_impl(true, &mut repository, &push_args, Mode::Create, None)
         }
         Some(StashCommand::Store(s)) => store(&repository, s),
         Some(StashCommand::Save(s)) => {
@@ -512,6 +564,8 @@ pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
                 patch: false,
                 pathspec_from_file: None,
                 pathspec_file_nul: false,
+                unified: None,
+                inter_hunk_context: None,
                 paths: Vec::new(),
             };
             push_impl(
@@ -519,6 +573,7 @@ pub fn run_stash(global: &GlobalArgs, args: &StashArgs) -> Result<i32> {
                 &mut repository,
                 &push_args,
                 Mode::Push { unborn_code: 128 },
+                context_fatal(&s.context),
             )
         }
     }
@@ -666,10 +721,149 @@ fn push(
     bare: bool,
 ) -> Result<i32> {
     let unborn_code = if bare { 1 } else { 128 };
-    push_impl(global.quiet, repository, args, Mode::Push { unborn_code })
+    // git parses the whole command line first: a bad `-U` value is a usage error (129).
+    let raw: Vec<String> = std::env::args().collect();
+    let words: &[String] = raw
+        .iter()
+        .position(|a| a == "stash")
+        .map_or(&[][..], |i| &raw[i + 1..]);
+    let words = match words.split_first() {
+        Some((first, rest)) if !bare && first == "push" => rest,
+        _ => words,
+    };
+    let context = match scan_context_options(words) {
+        Ok(context) => context,
+        Err(error) => {
+            eprint!("{error}");
+            return Ok(129);
+        }
+    };
+    push_impl(
+        global.quiet,
+        repository,
+        args,
+        Mode::Push { unborn_code },
+        context_fatal(&context),
+    )
 }
 
-fn push_impl(quiet: bool, repository: &mut Repository, args: &PushArgs, mode: Mode) -> Result<i32> {
+/// `-U`/`--unified` and `--inter-hunk-context` as given to `stash push` / `save`: git reads them
+/// as integers (`-1` is its "unset"), but they only mean something with `--patch`.
+#[derive(Debug, Default)]
+struct DiffContext {
+    unified: Option<i32>,
+    inter_hunk_context: Option<i32>,
+}
+
+/// git's `fatal:` for a diff-context option given without `--patch`, if there is one.
+fn context_fatal(context: &DiffContext) -> Option<String> {
+    let name = if context.unified.is_some() {
+        "--unified"
+    } else if context.inter_hunk_context.is_some() {
+        "--inter-hunk-context"
+    } else {
+        return None;
+    };
+    Some(format!("fatal: the option '{name}' requires '--patch'"))
+}
+
+/// One value of an integer option, as git's `parse_options` reads it (`label` is ``switch `U'``
+/// or ``option `unified'``); `Ok(None)` is the unset value `-1`.
+fn context_value(label: &str, text: Option<&str>) -> Result<Option<i32>, String> {
+    use super::maintenance::{FactorError, parse_magnitude};
+    let Some(text) = text else {
+        return Err(format!("error: {label} requires a value\n"));
+    };
+    if text.is_empty() {
+        return Err(format!("error: {label} expects a numerical value\n"));
+    }
+    let trimmed = text.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
+    let (negative, magnitude) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed),
+    };
+    let out_of_range = || {
+        format!(
+            "error: value {text} for {label} not in range [{},{}]\n",
+            i32::MIN,
+            i32::MAX
+        )
+    };
+    match parse_magnitude(magnitude) {
+        Ok(n) => {
+            let n = i128::from(n);
+            let n = if negative { -n } else { n };
+            match i32::try_from(n) {
+                Ok(-1) => Ok(None),
+                Ok(n) => Ok(Some(n)),
+                Err(_) => Err(out_of_range()),
+            }
+        }
+        Err(FactorError::Range) => Err(out_of_range()),
+        Err(FactorError::Syntax) => Err(format!(
+            "error: {label} expects an integer value with an optional k/m/g suffix\n"
+        )),
+    }
+}
+
+/// Find `-U` / `--unified` / `--inter-hunk-context` in the words after `stash [push]`, the way
+/// git's option parser would (the last of each wins; `-m`, `--message` and
+/// `--pathspec-from-file` swallow the next word). `--patch` is not looked at here.
+fn scan_context_options(words: &[String]) -> Result<DiffContext, String> {
+    let mut out = DiffContext::default();
+    let mut iter = words.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            break;
+        }
+        if let Some(long) = arg.strip_prefix("--") {
+            let (name, value) = match long.split_once('=') {
+                Some((n, v)) => (n, Some(v)),
+                None => (long, None),
+            };
+            match name {
+                "unified" | "inter-hunk-context" => {
+                    let value = value.or_else(|| iter.next().map(String::as_str));
+                    let parsed = context_value(&format!("option `{name}'"), value)?;
+                    if name == "unified" {
+                        out.unified = parsed;
+                    } else {
+                        out.inter_hunk_context = parsed;
+                    }
+                }
+                "message" | "pathspec-from-file" if value.is_none() => {
+                    iter.next();
+                }
+                _ => {}
+            }
+        } else if arg.len() > 1 && arg.starts_with('-') {
+            let cluster: Vec<char> = arg[1..].chars().collect();
+            for (i, c) in cluster.iter().enumerate() {
+                if matches!(c, 'm' | 'U') {
+                    let rest: String = cluster[i + 1..].iter().collect();
+                    let value = if rest.is_empty() {
+                        iter.next().map(String::as_str)
+                    } else {
+                        Some(rest.as_str())
+                    };
+                    if *c == 'U' {
+                        out.unified = context_value("switch `U'", value)?;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn push_impl(
+    quiet: bool,
+    repository: &mut Repository,
+    args: &PushArgs,
+    mode: Mode,
+    context_fatal: Option<String>,
+) -> Result<i32> {
     let paths = match pathspecs_from_file(args) {
         Ok(paths) => paths,
         Err(fatal) => {
@@ -677,6 +871,12 @@ fn push_impl(quiet: bool, repository: &mut Repository, args: &PushArgs, mode: Mo
             return Ok(128);
         }
     };
+    if let Some(fatal) = context_fatal
+        && !args.patch
+    {
+        eprintln!("{fatal}");
+        return Ok(128);
+    }
     if args.patch {
         eprintln!("fatal: `stash push -p` is not supported by rivet");
         return Ok(128);

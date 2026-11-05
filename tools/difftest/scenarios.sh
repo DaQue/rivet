@@ -14808,6 +14808,47 @@ s_stash_pathspec_file() {
     sp_repo; v stash push --pathspec-file-nul; sp_state; cd ..
 }
 
+# `-U` / `--unified` / `--inter-hunk-context` only mean something with `--patch`: values are
+# validated like any integer option (129), then the option alone is a fatal (128).
+s_stash_diff_context() {
+    v init -q repo; cd repo
+    echo 1 >a; v add a; tick; v commit -q -m base
+    echo 2 >>a; tick
+    local arg
+    for arg in -U -Uabc -U3 -U0 '-U 3' -U1k -U2147483647 -U2147483648 -U4g '-U 3x' '-U ' -U+3 \
+        --unified=3 --unified=-5 --unified --unified= --unified=x \
+        --inter-hunk-context=2 --inter-hunk-context --inter-hunk-context=abc --inter-hunk-context=4g \
+        '--unified=2 --inter-hunk-context=1' '-U-1 --inter-hunk-context=2' '-U3 -S' '-U3 -k -q' \
+        '-U3 --pathspec-file-nul' '-U3 --pathspec-from-file=nosuch'; do
+        echo "-- push $arg" >>"$TRANSCRIPT"
+        # shellcheck disable=SC2086
+        case "$arg" in
+        '-U ') v stash push -U '' ;;
+        *) v stash push $arg ;;
+        esac
+        v stash list
+    done
+    echo "-- save, bare, create" >>"$TRANSCRIPT"
+    v stash save -U3
+    v stash save --unified=3 msg
+    v stash save -Uabc
+    v stash save -U
+    v stash save --inter-hunk-context=2
+    v stash -U3
+    v stash --unified=3
+    v stash create -U3
+    v stash list
+    echo "-- unset value stashes" >>"$TRANSCRIPT"
+    v stash push -U3 -U-1
+    v stash list
+    echo 3 >>a
+    v stash push --inter-hunk-context=-1
+    v stash list
+    echo 4 >>a
+    v stash save -U-1 --inter-hunk-context=-1 "a message"
+    v stash list
+}
+
 s_format_patch_config() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m "base"

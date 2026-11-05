@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-05 — `stash push`/`save`/bare `stash` read `-U<n>`, `--unified=<n>` and `--inter-hunk-context=<n>` as git reads an integer option (`k`/`m`/`g`, range, `requires a value`, `expects a numerical value`; `-1` is unset) and, without `--patch`, fail with `fatal: the option '--unified' requires '--patch'` (`s_stash_diff_context`).
 * 2026-11-05 — `update-ref --stdin` reads a C-quoted field in line mode (refname, ids, symref words) and fails as git does: `badly quoted argument: <rest>`, `unexpected character after quoted argument: <rest>` (`s_update_ref_quoted`).
 * 2026-11-05 — `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` are read as git's `parse_date_basic` reads them (`commit`, `commit-tree`, every identity): RFC 2822 (`Thu, 07 Apr 2005 22:13:13 +0200`), `mm/dd/yyyy`, `dd.mm.yyyy`, month/zone names, `AM`/`PM`, `hh:mm:ss.fraction`, `+hh:mm`; `now`, a date with no time of day and a result outside 1970..2099 are `fatal: invalid date format` (`s_commit_date_formats`).
 * 2026-11-05 — `update-ref --stdin -0`/`--batch-updates` rejects a create that collides with a ref above or below its name as `rejected <ref> <new> <old> refname conflict` (with git's `cannot lock ref ... exists; cannot create` error), and without a batch the same text is the fatal (`s_update_ref_conflict`).

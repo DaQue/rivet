@@ -411,7 +411,7 @@ pub fn run_repack(global: &GlobalArgs, args: &RepackArgs) -> Result<i32> {
 }
 
 /// Why [`parse_factor`] refused a `--geometric` value.
-enum FactorError {
+pub(super) enum FactorError {
     /// Not an integer with an optional `k`/`m`/`g` suffix.
     Syntax,
     /// An integer, but outside a C `int` once the suffix is applied.
@@ -421,7 +421,7 @@ enum FactorError {
 /// An integer with an optional `k`/`m`/`g` suffix, as git's option parser reads it: the result
 /// must fit a C `int`, and a number too big for any integer type is out of range, not malformed.
 /// git's unsigned magnitude (`strtoumax` with base 0, then an optional `k`/`m`/`g`).
-fn parse_magnitude(text: &str) -> Result<u64, FactorError> {
+pub(super) fn parse_magnitude(text: &str) -> Result<u64, FactorError> {
     let s = text.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
     let s = s.strip_prefix('+').unwrap_or(s);
     let bytes = s.as_bytes();
