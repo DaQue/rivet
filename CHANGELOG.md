@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-05 — `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` are read as git's `parse_date_basic` reads them (`commit`, `commit-tree`, every identity): RFC 2822 (`Thu, 07 Apr 2005 22:13:13 +0200`), `mm/dd/yyyy`, `dd.mm.yyyy`, month/zone names, `AM`/`PM`, `hh:mm:ss.fraction`, `+hh:mm`; `now`, a date with no time of day and a result outside 1970..2099 are `fatal: invalid date format` (`s_commit_date_formats`).
 * 2026-11-05 — `update-ref --stdin -0`/`--batch-updates` rejects a create that collides with a ref above or below its name as `rejected <ref> <new> <old> refname conflict` (with git's `cannot lock ref ... exists; cannot create` error), and without a batch the same text is the fatal (`s_update_ref_conflict`).
 * 2026-11-05 — `repack --cruft --cruft-expiration=<date> --expire-to=<prefix>` (and `--no-expire-to`, last one wins) writes the objects the expiry drops to a cruft pack `<prefix>-<checksum>.{pack,idx,rev,mtimes}` with their own ages, as git does; ignored without `--cruft` (`s_repack_expire_to`).
 * 2026-11-05 — `worktree repair --[no-]relative-paths` (and `worktree.useRelativePaths`) rewrite the `.git`/`gitdir` links of every work tree in the chosen style, report `absolute/relative path mismatch` as git does and set `extensions.relativeWorktrees` (`s_worktree_repair_relative`).

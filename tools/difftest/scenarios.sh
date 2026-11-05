@@ -14439,6 +14439,43 @@ s_commit_date_env() {
     vg rev-parse HEAD
 }
 
+s_commit_date_formats() {
+    v init -q repo; cd repo
+    echo a >a; v add a
+    local n=0 d
+    # Every value goes through git's parse_date_basic: the commit ids (or git's fatal) must agree.
+    while IFS= read -r d; do
+        n=$((n + 1))
+        echo "$n" >a
+        echo "== [$d]"
+        GIT_AUTHOR_DATE="$d" GIT_COMMITTER_DATE='@1700000000 +0000' v commit -q -a -m "date $n"
+        vg log -1 --format='%H %ad %cd' --date=raw
+    done <<'EOF'
+now
+NOW
+2005-04-07
+20050407
+2005-04-07T10:00
+2005-04-07 10:00:00 +02:00
+2005-04-07T10:00:00.123456Z
+1112911993 +02:00
+Thu, 07 Apr 2005 22:13:13 +0200
+Thu, 07 Apr 2005 22:13:13 PDT
+04/07/2005 10:00:00
+07.04.2005 10:00:00
+7 Apr 2005 10:00:00
+Apr 7 2005 10:00 PM
+April 7, 2005 12:30:05 am
+Mon Apr  7 10:00:00 2005 -0700
+2005-04-07 10:00:00 FOO
+2099-12-31 23:59:59 -0500
+1970-01-01 00:00:00 +0500
+2100-01-01 00:00:00 +0000
+@1112911993 +0200 x
+2.days.ago
+EOF
+}
+
 s_config_type_short() {
     v init -q repo; cd repo
     printf '[foo]\n\tbar = 1\n\tbaz = yes\n\tbig = 2k\n\tcol = bold red\n' >.git/config

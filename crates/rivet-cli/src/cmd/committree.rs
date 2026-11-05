@@ -181,7 +181,7 @@ pub fn run_commit_tree(global: &GlobalArgs, args: &CommitTreeArgs) -> Result<i32
     for variable in ["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"] {
         if let Some(value) = std::env::var_os(variable) {
             let bytes = value.as_encoded_bytes();
-            if rivet_core::object::commit::parse_git_date(BStr::new(bytes)).is_none() {
+            if rivet_core::object::commit::parse_env_date(BStr::new(bytes)).is_none() {
                 anyhow::bail!("invalid date format: {}", value.to_string_lossy());
             }
         }

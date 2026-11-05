@@ -170,7 +170,7 @@ pub fn resolve_identity(local: Option<&Config>, kind: IdentityKind) -> Result<Si
     let name = strip_ident_crud(name);
     let email = strip_ident_crud(email);
     let date = match env_bytes(date_var) {
-        Some(v) => match crate::object::commit::parse_git_date(BStr::new(&v)) {
+        Some(v) => match crate::object::commit::parse_env_date(BStr::new(&v)) {
             Some(parsed) => Some(parsed),
             None => {
                 return Err(Error::Message(format!(

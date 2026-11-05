@@ -867,6 +867,468 @@ pub fn parse_git_date(value: &BStr) -> Option<(i64, i32)> {
     Some((stamp.as_second(), offset))
 }
 
+/// The broken-down time Git's `parse_date_basic` fills in; `-1` means "not seen yet".
+struct DateParts {
+    year: i64,
+    mon: i64,
+    mday: i64,
+    hour: i64,
+    min: i64,
+    sec: i64,
+}
+
+impl DateParts {
+    fn nodate(&self) -> bool {
+        [
+            self.year, self.mon, self.mday, self.hour, self.min, self.sec,
+        ]
+        .iter()
+        .all(|v| *v < 0)
+    }
+
+    /// Git's `tm_to_time_t`: only 1970..2099 and a complete time of day convert.
+    fn to_time(&self) -> Option<i64> {
+        const MDAYS: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+        let year = self.year - 70;
+        if !(0..=129).contains(&year) || !(0..=11).contains(&self.mon) {
+            return None;
+        }
+        let mut day = self.mday;
+        if self.mon < 2 || (year + 2) % 4 != 0 {
+            day -= 1;
+        }
+        if self.hour < 0 || self.min < 0 || self.sec < 0 {
+            return None;
+        }
+        Some(
+            (year * 365 + (year + 1) / 4 + MDAYS[self.mon as usize] + day) * 86400
+                + self.hour * 3600
+                + self.min * 60
+                + self.sec,
+        )
+    }
+}
+
+/// Git's `match_string`: how many bytes of `date` agree (ignoring case) with `word`.
+fn date_match_string(date: &[u8], word: &str) -> usize {
+    let word = word.as_bytes();
+    let mut i = 0;
+    while i < date.len() {
+        let c = date[i];
+        let w = word.get(i).copied().unwrap_or(0);
+        if c != w && !c.eq_ignore_ascii_case(&w) {
+            if !c.is_ascii_alphanumeric() {
+                break;
+            }
+            return 0;
+        }
+        i += 1;
+    }
+    i
+}
+
+/// `strtoul`/`strtol` over a run of digits starting at `at`: the value (saturating) and the end.
+fn date_digits(date: &[u8], at: usize) -> (i64, usize) {
+    let mut end = at;
+    let mut value: i64 = 0;
+    while end < date.len() && date[end].is_ascii_digit() {
+        value = value
+            .saturating_mul(10)
+            .saturating_add(i64::from(date[end] - b'0'));
+        end += 1;
+    }
+    (value, end)
+}
+
+fn date_set_time(parts: &mut DateParts, hour: i64, min: i64, sec: i64) -> bool {
+    if hour < 24 && min < 60 && sec <= 60 {
+        parts.hour = hour;
+        parts.min = min;
+        parts.sec = sec;
+        return true;
+    }
+    false
+}
+
+/// Git's `set_date`; `refuse_future` carries the clock when a date in the future must be refused.
+fn date_set_date(
+    parts: &mut DateParts,
+    year: i64,
+    month: i64,
+    day: i64,
+    now: Option<i64>,
+    now_year: i64,
+) -> bool {
+    if !(month > 0 && month < 13 && day > 0 && day < 32) {
+        return false;
+    }
+    let mut check = DateParts { ..*parts };
+    let target = if now.is_some() {
+        &mut check
+    } else {
+        &mut *parts
+    };
+    target.mon = month - 1;
+    target.mday = day;
+    // The C arguments are `int`s.
+    let year = i64::from(year as i32);
+    if year == -1 {
+        let Some(_) = now else { return false };
+        target.year = now_year;
+    } else if (1970..2100).contains(&year) {
+        target.year = year - 1900;
+    } else if year > 70 && year < 100 {
+        target.year = year;
+    } else if year < 38 {
+        target.year = year + 100;
+    } else {
+        return false;
+    }
+    let Some(now) = now else { return true };
+    if let Some(specified) = check.to_time()
+        && now < specified - 86400
+    {
+        return false;
+    }
+    *parts = check;
+    true
+}
+
+/// Git's `match_multi_number`: `hh:mm[:ss]`, `yyyy-mm-dd`, `mm/dd/yyyy`, `dd.mm.yyyy` ...
+fn date_multi_number(
+    num: i64,
+    sep: u8,
+    date: &[u8],
+    end: usize,
+    parts: &mut DateParts,
+    now: i64,
+) -> usize {
+    let (num2, mut end) = date_digits(date, end + 1);
+    let mut num3 = -1;
+    if date.get(end) == Some(&sep) && date.get(end + 1).is_some_and(u8::is_ascii_digit) {
+        let (value, after) = date_digits(date, end + 1);
+        num3 = value;
+        end = after;
+    }
+    let now_year = jiff::Timestamp::from_second(now)
+        .map(|t| i64::from(t.to_zoned(jiff::tz::TimeZone::UTC).year()) - 1900)
+        .unwrap_or(0);
+    match sep {
+        b':' => {
+            if num3 < 0 {
+                num3 = 0;
+            }
+            if !(num < 25 && (0..60).contains(&num2) && (0..=60).contains(&num3)) {
+                return 0;
+            }
+            parts.hour = num;
+            parts.min = num2;
+            parts.sec = num3;
+            // `hh:mm:ss.fraction`: the fraction is dropped.
+            if date.get(end) == Some(&b'.') && date.get(end + 1).is_some_and(u8::is_ascii_digit) {
+                end = date_digits(date, end + 1).1;
+            }
+        }
+        _ => {
+            let some = Some(now);
+            let done = (num > 70
+                && (date_set_date(parts, num, num2, num3, None, now_year)
+                    || date_set_date(parts, num, num3, num2, None, now_year)))
+                || (sep != b'.' && date_set_date(parts, num3, num, num2, some, now_year))
+                || date_set_date(parts, num3, num2, num, some, now_year)
+                || (sep == b'.' && date_set_date(parts, num3, num, num2, some, now_year));
+            if !done {
+                return 0;
+            }
+        }
+    }
+    end
+}
+
+/// Git's `match_digit`.
+fn date_match_digit(
+    date: &[u8],
+    parts: &mut DateParts,
+    offset: &mut Option<i64>,
+    gmt: &mut bool,
+    now: i64,
+) -> usize {
+    let (num, end) = date_digits(date, 0);
+    if num >= 100_000_000
+        && parts.nodate()
+        && let Ok(stamp) = jiff::Timestamp::from_second(num)
+    {
+        let civil = stamp.to_zoned(jiff::tz::TimeZone::UTC);
+        parts.year = i64::from(civil.year()) - 1900;
+        parts.mon = i64::from(civil.month()) - 1;
+        parts.mday = i64::from(civil.day());
+        parts.hour = i64::from(civil.hour());
+        parts.min = i64::from(civil.minute());
+        parts.sec = i64::from(civil.second());
+        *gmt = true;
+        return end;
+    }
+    if let Some(&sep) = date.get(end)
+        && matches!(sep, b':' | b'.' | b'/' | b'-')
+        && date.get(end + 1).is_some_and(u8::is_ascii_digit)
+    {
+        let matched = date_multi_number(num, sep, date, end, parts, now);
+        if matched != 0 {
+            return matched;
+        }
+    }
+    let n = date.iter().take_while(|b| b.is_ascii_digit()).count();
+    let mut end = end;
+    if n == 8 || n == 6 {
+        let (num1, num2, num3) = (num / 10000, (num % 10000) / 100, num % 100);
+        if n == 8 {
+            date_set_date(parts, num1, num2, num3, None, 0);
+        } else if date_set_time(parts, num1, num2, num3)
+            && date.get(end) == Some(&b'.')
+            && date.get(end + 1).is_some_and(u8::is_ascii_digit)
+        {
+            end = date_digits(date, end + 1).1;
+        }
+        return end;
+    }
+    if n == 4 {
+        if num <= 1400 && offset.is_none() {
+            *offset = Some((num / 100) * 60 + num % 100);
+        } else if num > 1900 && num < 2100 {
+            parts.year = num - 1900;
+        }
+        return n;
+    }
+    if n > 2 {
+        return n;
+    }
+    if num > 0 && num < 32 && parts.mday < 0 {
+        parts.mday = num;
+        return n;
+    }
+    if num > 0 && num < 13 && parts.mon < 0 {
+        parts.mon = num - 1;
+        return n;
+    }
+    n
+}
+
+/// Git's `match_tz`.
+fn date_match_tz(date: &[u8], offset: &mut Option<i64>) -> usize {
+    let (mut hour, mut end) = date_digits(date, 1);
+    let n = end - 1;
+    let mut min = 0;
+    if n == 4 {
+        min = hour % 100;
+        hour /= 100;
+    } else if n != 2 {
+        min = 99;
+    } else if date.get(end) == Some(&b':') {
+        let (value, after) = date_digits(date, end + 1);
+        min = value;
+        end = after;
+        if end - 1 != 5 {
+            min = 99;
+        }
+    }
+    if min < 60 && hour < 24 {
+        let minutes = hour * 60 + min;
+        *offset = Some(if date[0] == b'-' { -minutes } else { minutes });
+    }
+    end
+}
+
+/// Git's `match_alpha`: month, weekday and zone names, `AM`/`PM`, the ISO `T`; other words are skipped.
+fn date_match_alpha(date: &[u8], parts: &mut DateParts, offset: &mut Option<i64>) -> usize {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    const DAYS: [&str; 7] = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ];
+    const ZONES: [(&str, i64, i64); 41] = [
+        ("IDLW", -12, 0),
+        ("NT", -11, 0),
+        ("CAT", -10, 0),
+        ("HST", -10, 0),
+        ("HDT", -10, 1),
+        ("YST", -9, 0),
+        ("YDT", -9, 1),
+        ("PST", -8, 0),
+        ("PDT", -8, 1),
+        ("MST", -7, 0),
+        ("MDT", -7, 1),
+        ("CST", -6, 0),
+        ("CDT", -6, 1),
+        ("EST", -5, 0),
+        ("EDT", -5, 1),
+        ("AST", -4, 0),
+        ("ADT", -4, 1),
+        ("WAT", -1, 0),
+        ("GMT", 0, 0),
+        ("UTC", 0, 0),
+        ("Z", 0, 0),
+        ("WET", 0, 0),
+        ("BST", 0, 1),
+        ("CET", 1, 0),
+        ("MET", 1, 0),
+        ("MEWT", 1, 0),
+        ("MEST", 1, 1),
+        ("CEST", 1, 1),
+        ("MESZ", 1, 1),
+        ("FWT", 1, 0),
+        ("FST", 1, 1),
+        ("EET", 2, 0),
+        ("EEST", 2, 1),
+        ("WAST", 7, 0),
+        ("WADT", 7, 1),
+        ("CCT", 8, 0),
+        ("JST", 9, 0),
+        ("EAST", 10, 0),
+        ("EADT", 10, 1),
+        ("GST", 10, 0),
+        ("NZT", 12, 0),
+    ];
+    const MORE_ZONES: [(&str, i64, i64); 3] = [("NZST", 12, 0), ("NZDT", 12, 1), ("IDLE", 12, 0)];
+    for (i, name) in MONTHS.iter().enumerate() {
+        let matched = date_match_string(date, name);
+        if matched >= 3 {
+            parts.mon = i as i64;
+            return matched;
+        }
+    }
+    for name in DAYS {
+        let matched = date_match_string(date, name);
+        if matched >= 3 {
+            return matched;
+        }
+    }
+    for (name, hours, dst) in ZONES.iter().chain(MORE_ZONES.iter()) {
+        let matched = date_match_string(date, name);
+        if matched >= 3 || matched == name.len() {
+            if offset.is_none() {
+                *offset = Some(60 * (hours + dst));
+            }
+            return matched;
+        }
+    }
+    if date_match_string(date, "PM") == 2 {
+        if parts.hour > 0 && parts.hour < 12 {
+            parts.hour += 12;
+        }
+        return 2;
+    }
+    if date_match_string(date, "AM") == 2 {
+        if parts.hour == 12 {
+            parts.hour = 0;
+        }
+        return 2;
+    }
+    if date[0] == b'T' && date.get(1).is_some_and(u8::is_ascii_digit) && parts.hour == -1 {
+        parts.min = 0;
+        parts.sec = 0;
+        return 1;
+    }
+    date.iter().take_while(|b| b.is_ascii_alphabetic()).count()
+}
+
+/// Reads a `GIT_AUTHOR_DATE` / `GIT_COMMITTER_DATE` value the way Git's `parse_date_basic` does:
+/// `@<epoch> <±hhmm>` (the object-header form), a bare epoch, ISO 8601 and RFC 2822 dates, `mm/dd/yyyy`,
+/// `dd.mm.yyyy`, month and zone names, `AM`/`PM`. Anything it cannot place is skipped, and the value
+/// is refused (`None`) only when no complete date and time of day (1970..2099) is left. Unlike
+/// [`parse_git_date`] it does not know `now`, nor a date without a time of day.
+///
+/// Returns `(seconds since the epoch, offset from UTC in minutes)`; a value with no zone is read
+/// in the local zone.
+pub fn parse_env_date(value: &BStr) -> Option<(i64, i32)> {
+    let date: &[u8] = value;
+    if let Some(rest) = date.strip_prefix(b"@")
+        && let Some(found) = object_header_date(rest)
+    {
+        return Some(found);
+    }
+    let now = jiff::Timestamp::now().as_second();
+    let mut parts = DateParts {
+        year: -1,
+        mon: -1,
+        mday: -1,
+        hour: -1,
+        min: -1,
+        sec: -1,
+    };
+    let mut offset: Option<i64> = None;
+    let mut gmt = false;
+    let mut at = 0;
+    while at < date.len() && date[at] != b'\n' {
+        let rest = &date[at..];
+        let c = rest[0];
+        let matched = if c.is_ascii_alphabetic() {
+            date_match_alpha(rest, &mut parts, &mut offset)
+        } else if c.is_ascii_digit() {
+            date_match_digit(rest, &mut parts, &mut offset, &mut gmt, now)
+        } else if (c == b'-' || c == b'+') && rest.get(1).is_some_and(u8::is_ascii_digit) {
+            date_match_tz(rest, &mut offset)
+        } else {
+            0
+        };
+        at += matched.max(1);
+    }
+    let mut stamp = parts.to_time()?;
+    let offset = match offset {
+        Some(offset) => offset,
+        None => jiff::Timestamp::from_second(stamp)
+            .ok()
+            .map(|t| i64::from(jiff::tz::TimeZone::system().to_offset(t).seconds()) / 60)
+            .unwrap_or(0),
+    };
+    if !gmt {
+        stamp -= offset * 60;
+    }
+    // Git's `parse_date` refuses a result outside 1970..2099 once the zone is applied.
+    if !(0..4_102_444_800).contains(&stamp) {
+        return None;
+    }
+    Some((stamp, offset as i32))
+}
+
+/// Git's `match_object_header_date`: `<epoch> ±hhmm`, exactly.
+fn object_header_date(date: &[u8]) -> Option<(i64, i32)> {
+    if !date.first()?.is_ascii_digit() {
+        return None;
+    }
+    let (stamp, end) = date_digits(date, 0);
+    if date.get(end) != Some(&b' ') || stamp == i64::MAX {
+        return None;
+    }
+    let sign = *date.get(end + 1)?;
+    if sign != b'+' && sign != b'-' {
+        return None;
+    }
+    let (zone, zone_end) = date_digits(date, end + 2);
+    if zone_end != end + 6 || date.get(zone_end).is_some_and(|b| *b != b'\n') {
+        return None;
+    }
+    let minutes = (zone / 100) * 60 + zone % 100;
+    Some((stamp, if sign == b'-' { -minutes } else { minutes } as i32))
+}
+
 /// Splits a trailing `Z`, `±hhmm` or `±hh:mm` off an ISO timestamp, returning the remainder and
 /// the offset in minutes.
 fn split_iso_offset(text: &str) -> Option<(&str, i32)> {
@@ -920,6 +1382,35 @@ mod tests {
         assert_eq!(d("2026-01-01T00:00:00 +0200"), Some((1767218400, 120)));
         assert_eq!(d("2026-01-01 00:00:00 +0000"), Some((1767225600, 0)));
         assert_eq!(d("garbage"), None);
+    }
+
+    /// `GIT_*_DATE` is read as Git's `parse_date_basic` reads it (values recorded from `git commit-tree`).
+    #[test]
+    fn env_date_follows_parse_date_basic() {
+        let d = |s: &str| parse_env_date(BStr::new(s));
+        assert_eq!(
+            d("Thu, 07 Apr 2005 22:13:13 +0200"),
+            Some((1112904793, 120))
+        );
+        assert_eq!(d("2005-04-07 22:13:13 +02:00"), Some((1112904793, 120)));
+        assert_eq!(d("1112911993 +02:00"), Some((1112911993, 120)));
+        assert_eq!(d("@1112911993 +0200"), Some((1112911993, 120)));
+        assert_eq!(d("04/07/2005 20:13:13 UTC"), Some((1112904793, 0)));
+        assert_eq!(d("Apr 7 2005 10:13:13 PM EST"), Some((1112929993, -300)));
+        assert_eq!(d("2005-04-07T20:13:13.987Z"), Some((1112904793, 0)));
+        // No time of day, `now`, a year outside 1970..2099 and relative words are all refused.
+        for bad in [
+            "now",
+            "2005-04-07",
+            "20050407",
+            "2.days.ago",
+            "2100-01-01 00:00:00 +0000",
+        ] {
+            assert_eq!(d(bad), None, "{bad}");
+        }
+        // The zone is applied before the 1970..2099 check.
+        assert_eq!(d("1970-01-01 00:00:00 +0500"), None);
+        assert_eq!(d("1970-01-01 00:00:00 -0500"), Some((18000, -300)));
     }
 
     /// A8: read paths accept the identity lines git's `split_ident_line` accepts.

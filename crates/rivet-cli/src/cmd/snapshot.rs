@@ -676,7 +676,7 @@ pub fn run_commit(global: &GlobalArgs, args: &CommitArgs) -> Result<i32> {
     // Git reads both dates before `-a` touches the index, so a bad one leaves it as it was.
     for variable in ["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"] {
         if let Some(value) = std::env::var_os(variable)
-            && rivet_core::object::commit::parse_git_date(BStr::new(value.as_encoded_bytes()))
+            && rivet_core::object::commit::parse_env_date(BStr::new(value.as_encoded_bytes()))
                 .is_none()
         {
             anyhow::bail!("invalid date format: {}", value.to_string_lossy());
