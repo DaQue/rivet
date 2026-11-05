@@ -3157,6 +3157,54 @@ s_repack_max_cruft_size() {
     v log --oneline
 }
 
+s_repack_expire_to() {
+    OLD='2026-09-01 00:00:00'; MID='2026-10-10 00:00:00'; NEW='2026-10-20 00:00:00'; CUT=2026-10-05T00:00:00Z
+    g config --global pack.threads 1
+    v init -q repo; cd repo
+    echo base >b; v add b; tick; v commit -q -m base
+    v repack -q -d
+    blob() { local o; o=$(echo "$1" | g hash-object -w --stdin); age "$o" "$2"; echo "$o"; }
+    # the objects an --expire-to directory received: ids with their ages, and the file kinds
+    expired() {
+        echo "## expired $1" >>"$TRANSCRIPT"
+        local idx m n
+        for idx in "$1"/*.idx; do
+            [ -e "$idx" ] || continue
+            m=${idx%.idx}.mtimes
+            n=$(g show-index <"$idx" | wc -l)
+            echo "mtimes header: $(od -An -tx1 -N12 "$m" | tr -d ' \n')" >>"$TRANSCRIPT"
+            paste <(g show-index <"$idx" | awk '{print $2}' | sort) <(od -An -tu4 --endian=big -j12 -N$((n * 4)) -v "$m" | tr -s ' ' '\n' | grep .) >>"$TRANSCRIPT"
+        done
+        (cd "$1" && ls | sed 's/^p-[0-9a-f]*//' | sort | uniq -c) >>"$TRANSCRIPT"
+    }
+    mkdir .git/e0 .git/e1 .git/e2 .git/e3 .git/e4
+    blob old1 "$OLD" >/dev/null
+    blob old2 "$OLD" >/dev/null
+    blob mid "$MID" >/dev/null
+    blob new "$NEW" >/dev/null
+    v repack -a -d --cruft
+    # nothing expires, so nothing is written
+    v repack -a -d --cruft --expire-to=.git/e0/p
+    expired .git/e0
+    # the objects the expiry drops go to the prefix
+    v repack -a -d --cruft --cruft-expiration=$CUT --expire-to=.git/e1/p
+    expired .git/e1
+    allobjects
+    # a later expiry; the last of --expire-to / --no-expire-to wins
+    blob again "$MID" >/dev/null
+    v repack -a -d --cruft --cruft-expiration=2026-10-15T00:00:00Z --expire-to=.git/e2/p --no-expire-to
+    expired .git/e2
+    blob later "$MID" >/dev/null
+    v repack -a -d --cruft --cruft-expiration=2026-10-15T00:00:00Z --no-expire-to --expire-to=.git/e3/p
+    expired .git/e3
+    # without --cruft the option means nothing
+    blob plain "$OLD" >/dev/null
+    v repack -a -d --cruft-expiration=now --expire-to=.git/e4/p
+    expired .git/e4
+    vs fsck
+    allobjects
+}
+
 s_gc_after_cruft() {
     g init -q repo; cd repo
     echo a >a; g add a; g commit -qm one

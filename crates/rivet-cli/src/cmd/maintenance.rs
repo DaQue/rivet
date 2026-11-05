@@ -79,6 +79,14 @@ pub struct RepackArgs {
     #[arg(long = "cruft-expiration", value_name = "DATE")]
     pub cruft_expiration: Option<String>,
 
+    /// With `--cruft`: write the objects the cruft pack drops to a cruft pack at this prefix.
+    #[arg(long = "expire-to", value_name = "DIR")]
+    pub expire_to: Option<String>,
+
+    /// Forget an earlier `--expire-to`.
+    #[arg(long = "no-expire-to")]
+    pub no_expire_to: bool,
+
     /// Roll the smallest packs up so that pack sizes grow by at least this factor.
     #[arg(long = "geometric", value_name = "FACTOR")]
     pub geometric: Option<String>,
@@ -389,6 +397,7 @@ pub fn run_repack(global: &GlobalArgs, args: &RepackArgs) -> Result<i32> {
         no_reuse_delta: args.no_reuse_delta || args.no_reuse_object,
         geometric: geometric.map(|factor| factor.max(0) as u64),
         cruft: args.cruft,
+        expire_to: expire_to_prefix(&raw),
         cruft_expiration: match &args.cruft_expiration {
             Some(text) if args.cruft => parse_expiry(text)?,
             _ => None,
@@ -610,4 +619,23 @@ pub fn run_count_objects(global: &GlobalArgs, args: &CountObjectsArgs) -> Result
         println!("{loose} objects, {} kilobytes", loose_bytes / 1024);
     }
     Ok(0)
+}
+
+/// The last `--expire-to` prefix of a `repack` command line, `--no-expire-to` forgetting one.
+fn expire_to_prefix(raw: &[String]) -> Option<std::path::PathBuf> {
+    let mut last = None;
+    let mut it = raw.iter().skip_while(|a| *a != "repack").skip(1);
+    while let Some(arg) = it.next() {
+        if arg == "--" {
+            break;
+        }
+        if let Some(value) = arg.strip_prefix("--expire-to=") {
+            last = Some(value.to_string());
+        } else if arg == "--expire-to" {
+            last = it.next().cloned();
+        } else if arg == "--no-expire-to" {
+            last = None;
+        }
+    }
+    last.filter(|value| !value.is_empty()).map(Into::into)
 }

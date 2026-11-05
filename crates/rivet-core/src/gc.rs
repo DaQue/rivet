@@ -1140,8 +1140,54 @@ struct CruftInput<'a> {
     packed_ages: &'a HashMap<ObjectId, i64>,
     loose_ids: &'a [ObjectId],
     prune_before: Option<i64>,
+    /// `repack --expire-to`: the prefix of a cruft pack that receives the expired objects.
+    expire_to: Option<&'a Path>,
     /// `gc` or `repack`, for the messages.
     caller: &'a str,
+}
+
+/// Write the objects a cruft pack just dropped as a cruft pack of their own named
+/// `<prefix>-<checksum>.{pack,idx,rev,mtimes}`, each keeping its own age (`repack --expire-to`).
+fn write_expired_pack(
+    repo: &Repository,
+    pack_dir: &Path,
+    prefix: &Path,
+    dropped: &[(ObjectId, i64)],
+) -> Result<()> {
+    if dropped.is_empty() {
+        return Ok(());
+    }
+    let order: Vec<(ObjectId, u32)> = dropped.iter().map(|(oid, _)| (*oid, 0)).collect();
+    let members: Vec<ObjectId> = dropped.iter().map(|(oid, _)| *oid).collect();
+    let mtimes: HashMap<ObjectId, i64> = dropped.iter().copied().collect();
+    let summary = write_deltified(
+        repo,
+        order,
+        &HashMap::new(),
+        pack_dir,
+        Layout::AsListed,
+        &[],
+    )?;
+    write_mtimes(pack_dir, repo.format(), summary.checksum, &mtimes, &members)?;
+    let stem = format!("pack-{}", summary.checksum);
+    let mut target = prefix.as_os_str().to_os_string();
+    target.push(format!("-{}", summary.checksum));
+    for extension in ["pack", "idx", "rev", "mtimes"] {
+        let from = pack_dir.join(format!("{stem}.{extension}"));
+        let mut to = target.clone();
+        to.push(format!(".{extension}"));
+        let to = PathBuf::from(to);
+        if std::fs::rename(&from, &to).is_err() {
+            std::fs::copy(&from, &to).map_err(|error| {
+                Error::Message(format!(
+                    "unable to write file {}: {error}",
+                    to.to_string_lossy()
+                ))
+            })?;
+            let _ = std::fs::remove_file(&from);
+        }
+    }
+    Ok(())
 }
 
 /// Write the cruft pack of the unreachable objects (loose ones and those of the packs being
@@ -1160,6 +1206,7 @@ fn write_cruft_pack(
         packed_ages: cruft,
         loose_ids,
         prune_before,
+        expire_to,
         caller,
     } = *input;
     let mut listed: Vec<(ObjectId, i64)> = Vec::new();
@@ -1204,10 +1251,18 @@ fn write_cruft_pack(
         }
     }
     let plan = plan_cruft(repo, &listed, prune_before)?;
+    let wanted: HashSet<ObjectId> = plan.order.iter().map(|(oid, _)| *oid).collect();
+    if let Some(prefix) = expire_to {
+        let dropped: Vec<(ObjectId, i64)> = listed
+            .iter()
+            .filter(|(oid, _)| !wanted.contains(oid))
+            .copied()
+            .collect();
+        write_expired_pack(repo, &pack_dir, prefix, &dropped)?;
+    }
     if plan.order.is_empty() {
         return Ok(None);
     }
-    let wanted: HashSet<ObjectId> = plan.order.iter().map(|(oid, _)| *oid).collect();
     let mut reusable: HashMap<ObjectId, (ObjectId, Vec<u8>)> = HashMap::new();
     for pack in odb.packs() {
         if !removable
@@ -1418,6 +1473,7 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
                 packed_ages: &cruft,
                 loose_ids: &loose_ids,
                 prune_before: options.prune_before,
+                expire_to: None,
                 caller: "gc",
             },
         )?
@@ -1552,6 +1608,9 @@ pub struct RepackOptions {
     /// `--cruft-expiration`: with `cruft`, unreachable objects not newer than this stay out of
     /// the cruft pack, unless a newer one reaches them.
     pub cruft_expiration: Option<i64>,
+    /// `--expire-to=<prefix>`: with `cruft`, the objects the cruft pack drops are written to a
+    /// cruft pack named `<prefix>-<checksum>` instead of being lost.
+    pub expire_to: Option<PathBuf>,
     /// `--geometric=<factor>`: roll the smallest packs up into one so that the pack sizes
     /// (in objects) grow at least by `factor` from one to the next, together with the loose
     /// objects. `None` or `Some(0)` leaves the packs alone.
@@ -1891,6 +1950,7 @@ pub fn repack(repo: &Repository, options: &RepackOptions) -> Result<RepackReport
                 packed_ages: &packed_ages,
                 loose_ids: &loose_ids,
                 prune_before: options.cruft_expiration,
+                expire_to: options.expire_to.as_deref(),
                 caller: "repack",
             },
         )?
