@@ -644,9 +644,30 @@ fn read_gitfile(dotgit: &Path) -> std::result::Result<PathBuf, (u8, Option<PathB
 }
 
 /// Point `admin/gitdir` and the work tree's `.git` file at each other.
-fn write_links(admin: &Path, dotgit: &Path) -> Result<()> {
-    std::fs::write(admin.join("gitdir"), format!("{}\n", dotgit.display()))?;
-    std::fs::write(dotgit, format!("gitdir: {}\n", admin.display()))?;
+/// With `relative`, each file holds the path of the other taken from its own directory.
+fn write_links(admin: &Path, dotgit: &Path, relative: bool) -> Result<()> {
+    let (to_dotgit, to_admin) = if relative {
+        (
+            relative_path(admin, dotgit),
+            relative_path(dotgit.parent().unwrap_or(Path::new("/")), admin),
+        )
+    } else {
+        (dotgit.to_path_buf(), admin.to_path_buf())
+    };
+    std::fs::write(admin.join("gitdir"), format!("{}\n", to_dotgit.display()))?;
+    std::fs::write(dotgit, format!("gitdir: {}\n", to_admin.display()))?;
+    Ok(())
+}
+
+/// Record `extensions.relativeWorktrees` (and repository format 1) as git does once a link is
+/// written relative.
+fn enable_relative_extension(repository: &Repository) -> Result<()> {
+    let mut writable =
+        Repository::open_with(repository.git_dir(), repository.worktree_path(), None)?;
+    let config = writable.config_mut();
+    config.set(BStr::new(b"core.repositoryformatversion"), b"1")?;
+    config.set(BStr::new(b"extensions.relativeWorktrees"), b"true")?;
+    writable.write_config()?;
     Ok(())
 }
 
@@ -755,18 +776,21 @@ fn worktree_move(global: &GlobalArgs, args: &[String]) -> Result<i32> {
         );
         return Ok(128);
     }
-    write_links(&canonical(&entry.admin), &canonical(dst_path).join(".git"))?;
+    write_links(
+        &canonical(&entry.admin),
+        &canonical(dst_path).join(".git"),
+        false,
+    )?;
     Ok(0)
 }
 
 fn worktree_repair(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     let mut paths: Vec<&String> = Vec::new();
+    let mut choice: Option<bool> = None;
     for arg in args {
         match arg.as_str() {
-            "--no-relative-paths" => {}
-            "--relative-paths" => {
-                anyhow::bail!("worktree repair: --relative-paths is not implemented")
-            }
+            "--no-relative-paths" => choice = Some(false),
+            "--relative-paths" => choice = Some(true),
             a if a.starts_with('-') && a.len() > 1 => {
                 eprintln!("error: unknown option `{}'", a.trim_start_matches('-'));
                 eprint!("{USAGE_REPAIR}");
@@ -777,9 +801,17 @@ fn worktree_repair(global: &GlobalArgs, args: &[String]) -> Result<i32> {
     }
     let repository = super::open(global)?;
     let common = canonical(repository.common_dir());
+    let relative = match choice {
+        Some(choice) => choice,
+        None => repository
+            .config()
+            .get_bool(BStr::new(b"worktree.userelativepaths"))?
+            .unwrap_or(false),
+    };
     let mut failed = false;
+    let mut wrote = false;
     for arg in paths {
-        failed |= !repair_path(&common, arg)?;
+        failed |= !repair_path(&common, arg, relative, &mut wrote)?;
     }
     // Then every registered work tree whose `.git` file does not lead back to its admin directory.
     if let Ok(dir) = std::fs::read_dir(common.join("worktrees")) {
@@ -811,18 +843,34 @@ fn worktree_repair(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             let reason = match read_gitfile(&dotgit) {
                 Err(_) => "broken",
                 Ok(back) if back != admin => "incorrect",
+                Ok(_) if gitfile_is_absolute(&dotgit) != Some(!relative) => {
+                    "absolute/relative path mismatch"
+                }
                 Ok(_) => continue,
             };
             eprintln!("repair: .git file {reason}: {}", path.display());
-            write_links(&admin, &dotgit)?;
+            write_links(&admin, &dotgit, relative)?;
+            wrote = true;
         }
+    }
+    if relative && wrote {
+        enable_relative_extension(&repository)?;
     }
     Ok(i32::from(failed))
 }
 
+/// Whether the `.git` file at `dotgit` names its administrative directory by an absolute path.
+fn gitfile_is_absolute(dotgit: &Path) -> Option<bool> {
+    let text = read_text(dotgit)?;
+    let target = text
+        .strip_prefix("gitdir: ")?
+        .trim_end_matches(['\n', '\r']);
+    Some(Path::new(target).is_absolute())
+}
+
 /// Repair the link between the work tree at `arg` and its administrative directory. `false` when
 /// the path cannot be repaired (the diagnostic has been printed).
-fn repair_path(common: &Path, arg: &str) -> Result<bool> {
+fn repair_path(common: &Path, arg: &str, relative: bool, wrote: &mut bool) -> Result<bool> {
     let Ok(abs) = std::path::absolute(arg) else {
         eprintln!("error: not a valid path: {arg}");
         return Ok(false);
@@ -868,11 +916,15 @@ fn repair_path(common: &Path, arg: &str) -> Result<bool> {
         Some(path) if canonical(&recorded_path(&admin, &path)) != dotgit => {
             Some("gitdir incorrect")
         }
+        Some(path) if Path::new(&path).is_absolute() == relative => {
+            Some("gitdir absolute/relative path mismatch")
+        }
         Some(_) => None,
     };
     if let Some(reason) = reason {
         eprintln!("repair: {reason}: {}", gitdir_file.display());
-        write_links(&admin, &dotgit)?;
+        write_links(&admin, &dotgit, relative)?;
+        *wrote = true;
     }
     Ok(true)
 }
@@ -1371,12 +1423,7 @@ fn worktree_add(global: &GlobalArgs, args: &[String]) -> Result<i32> {
             admin.join("gitdir"),
             format!("{}\n", relative_path(&admin_dir, &dot_git).display()),
         )?;
-        let mut writable =
-            Repository::open_with(repository.git_dir(), repository.worktree_path(), None)?;
-        let config = writable.config_mut();
-        config.set(BStr::new(b"core.repositoryformatversion"), b"1")?;
-        config.set(BStr::new(b"extensions.relativeWorktrees"), b"true")?;
-        writable.write_config()?;
+        enable_relative_extension(&repository)?;
     } else {
         std::fs::write(&dot_git, format!("gitdir: {}\n", admin.display()))?;
         std::fs::write(admin.join("gitdir"), format!("{}\n", dot_git.display()))?;

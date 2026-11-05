@@ -7346,6 +7346,31 @@ s_worktree_add_relative() {
     v worktree list
 }
 
+s_worktree_repair_relative() {
+    v init -q repo; cd repo
+    tick; echo 1 >f; v add f; v commit -q -m one
+    v worktree add -q ../a
+    v worktree add -q ../b
+    v worktree repair
+    v worktree repair --relative-paths
+    v config extensions.relativeWorktrees
+    v config core.repositoryformatversion
+    wt_snap
+    for w in a b; do sed "s#$ROOT#<ROOT>#g" ../$w/.git; done
+    v worktree repair --relative-paths
+    v worktree repair --no-relative-paths ../b
+    wt_snap
+    v worktree repair --relative-paths ../b
+    v worktree repair --no-relative-paths
+    wt_snap
+    v config worktree.useRelativePaths true
+    v worktree repair
+    v worktree repair --no-relative-paths ../a
+    wt_snap
+    for w in a b; do sed "s#$ROOT#<ROOT>#g" ../$w/.git; done
+    v worktree list
+}
+
 s_worktree_add_switches() {
     v init -q repo; cd repo
     tick; echo 1 >f; v add f; v commit -q -m one
