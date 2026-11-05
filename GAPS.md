@@ -152,7 +152,7 @@ The command works for the common case; the listed options or edge cases are miss
   order inside the rolled-up pack is rivet's own, no multi-pack-index is written, a malformed factor prints only
   the one-line error (exit 129, no usage text), and a factor outside a C `int` once `k`/`m`/`g` is applied (or too big for
   any integer) is git's `value <text> for option `geometric' not in range [-2147483648,2147483647]` (`s_repack_geometric_range`). `--max-pack-size` and `--max-cruft-size` are read and warned about as git does (`s_repack_max_pack_size`, `s_repack_max_cruft_size`) but a pack is never split at the limit. No
-  `--expire-to`, `--keep-largest-pack`,
+  `--expire-to`,
   `gc.bigPackThreshold`; `repack -k` over several packs lists unreachable objects in a
   different order from git.
 * **`bisect`** — `start --first-parent`, path arguments to `start` (commits that leave the paths alone are never tested; a merge identical to one parent follows only that parent) and `--reset-when-found[=original|found]` on `start` and `run` are compared with git, by hand and with `run` (`s_bisect_flags`: `BISECT_FIRST_PARENT`, `BISECT_NAMES`, `BISECT_RESET_WHEN_FOUND`, `Bisecting: -1 revisions left`, `No testable commit found` ending the bisection, a silent reset to the start or to the commit found, and the `BISECT_TERMS` file git leaves after a hand-driven finish). Not matched: a path that selects only part of a merge's history is simplified like git's default only for the cases in the scenario (no `--full-history`, no parent rewriting across non-merge commits).

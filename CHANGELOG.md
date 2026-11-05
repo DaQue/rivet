@@ -29,3 +29,4 @@
 * 2026-11-04 — `bisect run` with a command that exits 128 or more stops with git's status `256 - code` (255 is 1, 130 is 126), not a fixed 126 (`s_bisect_flags`).
 * 2026-11-04 — `update-index --again`/`-g` updates every merged entry that differs from `HEAD` (optionally limited by pathspecs) with the options given before it (`s_update_index_again`).
 * 2026-11-05 — `repack --max-cruft-size` is read as git's magnitude, the cruft pack takes it (or `--max-pack-size` when it is 0) and a limit under 1 MiB warns once per pack (`s_repack_max_cruft_size`).
+* 2026-11-05 — GAPS no longer lists `repack --keep-largest-pack`: git 2.56 has no such option (`unknown option`), so there is nothing to match.
