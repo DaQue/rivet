@@ -7,6 +7,7 @@
 //!
 //! *Phase 4 for `log`, Phases 4 and 7 for `show`, Phase 8 for `diff`.*
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -146,6 +147,18 @@ pub struct LogArgs {
     /// Do not paint the output.
     #[arg(long = "no-color", overrides_with = "color")]
     pub no_color: bool,
+
+    /// Omit the commits of a symmetric difference whose patch the other side also has.
+    #[arg(long = "cherry-pick")]
+    pub cherry_pick: bool,
+
+    /// Show only the commits reachable from the left side of `A...B`.
+    #[arg(long = "left-only")]
+    pub left_only: bool,
+
+    /// Show only the commits not reachable from the left side of `A...B`.
+    #[arg(long = "right-only")]
+    pub right_only: bool,
 }
 
 /// Arguments to `rivet show`.
@@ -410,12 +423,19 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         add_revision(&repository, spec, &mut starts, &mut options)?;
     }
 
-    options.first_parent(args.first_parent);
-    if let Some(n) = args.max_count {
-        options.max_count(n);
+    if args.left_only && args.right_only {
+        anyhow::bail!("options '--right-only' and '--left-only' cannot be used together");
     }
-    if let Some(n) = args.skip {
-        options.skip(n);
+    // These filters run before `--skip` / `-n`, so the walk itself is left unlimited.
+    let side_filter = args.cherry_pick || args.left_only || args.right_only;
+    options.first_parent(args.first_parent);
+    if !side_filter {
+        if let Some(n) = args.max_count {
+            options.max_count(n);
+        }
+        if let Some(n) = args.skip {
+            options.skip(n);
+        }
     }
     if args.topo_order || (args.graph && !args.author_date_order) {
         options.sort(SortOrder::Topo);
@@ -442,7 +462,10 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
             .push(super::worktree_path(&repository, path, "log")?);
     }
 
-    let oids = rivet_core::revwalk::walk_oids(repository.odb(), &starts, &options)?;
+    let mut oids = rivet_core::revwalk::walk_oids(repository.odb(), &starts, &options)?;
+    if side_filter {
+        oids = filter_sides(&repository, args, &specs, oids)?;
+    }
     let diff_options = rivet_core::DiffOptions::new();
     // The last of `--oneline`, `--pretty` and `--format` on the command line wins, as in git.
     let layout = match last_layout_option(&std::env::args().collect::<Vec<_>>()) {
@@ -589,6 +612,77 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     }
     write_stdout(&out)?;
     Ok(0)
+}
+
+/// `--cherry-pick`, `--left-only` and `--right-only` as `rev-list` applies them: the left side is
+/// every listed commit reachable from the left end of an `A...B`; with `--cherry-pick` a non-merge
+/// commit whose patch id appears on both sides is dropped. `--skip` and `-n` come last.
+fn filter_sides(
+    repository: &Repository,
+    args: &LogArgs,
+    specs: &[&str],
+    oids: Vec<ObjectId>,
+) -> Result<Vec<ObjectId>> {
+    let mut left_tips = Vec::new();
+    for spec in specs {
+        if let Some((left, _)) = spec.split_once("...") {
+            left_tips.push(super::resolve_commit(
+                repository,
+                if left.is_empty() { "HEAD" } else { left },
+            )?);
+        }
+    }
+    let mut walk = WalkOptions::new();
+    walk.first_parent(args.first_parent);
+    let reachable: HashSet<ObjectId> =
+        rivet_core::revwalk::walk_oids(repository.odb(), &left_tips, &walk)?
+            .into_iter()
+            .collect();
+    let left: HashSet<ObjectId> = oids
+        .iter()
+        .filter(|oid| reachable.contains(oid))
+        .copied()
+        .collect();
+    let mut same: HashSet<ObjectId> = HashSet::new();
+    if args.cherry_pick && !left.is_empty() && left.len() < oids.len() {
+        let mut sides: HashMap<Vec<u8>, [bool; 2]> = HashMap::new();
+        let mut ids = Vec::new();
+        for oid in &oids {
+            if repository.commit_parents(*oid)?.len() > 1 {
+                continue;
+            }
+            let id = super::rebase::patch_id(repository, oid)?;
+            sides.entry(id.clone()).or_default()[usize::from(!left.contains(oid))] = true;
+            ids.push((*oid, id));
+        }
+        for (oid, id) in ids {
+            if sides[&id] == [true, true] {
+                same.insert(oid);
+            }
+        }
+    }
+    let mut kept = Vec::new();
+    let mut skipped = 0usize;
+    for oid in oids {
+        if same.contains(&oid)
+            || (args.left_only && !left.contains(&oid))
+            || (args.right_only && left.contains(&oid))
+        {
+            continue;
+        }
+        if skipped < args.skip.unwrap_or(0) {
+            skipped += 1;
+            continue;
+        }
+        kept.push(oid);
+        if args.max_count.is_some_and(|n| kept.len() >= n) {
+            break;
+        }
+    }
+    if args.max_count == Some(0) {
+        kept.clear();
+    }
+    Ok(kept)
 }
 
 /// The text of `SQUASH_MSG`: every commit reachable from `theirs` but not from `ours`, newest
