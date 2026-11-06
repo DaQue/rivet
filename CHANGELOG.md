@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-06 — `log` (and `bisect visualize`/`view`, which run it) reports an unknown option as `fatal: unrecognized argument: <word as typed>`, exit 128, instead of a clap usage error (`s_log_unrecognized`).
 * 2026-11-06 — `ls-remote --sort=refname:short` (also `-`/`v:` forms) shortens each name against the local repository's refs as git does; `refname:dir`/`:base` are git's `unrecognized %(refname) argument` fatal, not a rivet refusal (`s_ls_remote_sort_short`).
 * 2026-11-06 — `s_split_index_expire` no longer depends on the wall clock: the `1.second.ago` step waits past the cutoff and git's own `update-index --split-index` count is not recorded (the gate's G3 run of the difftest failed on the second boundary).
 * 2026-11-06 — `config` (default scope: `--get`, `--get-all`, `--get-regexp`, `--list`) reads `config.worktree` after `config` once `extensions.worktreeConfig` is on; `--local` stays the shared file (`s_config_worktree_read`)

@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 439 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 440 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-06, gate: 352 tests / 0 failed, 439 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-06, gate: 352 tests / 0 failed, 440 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -156,8 +156,7 @@ The command works for the common case; the listed options or edge cases are miss
   `visualize`/`view` run `log` over the bad commit and `^` each good one, with git's quirk that
   `--bisect` is appended after the caller's words (`s_bisect_visualize`); the `gitk` form (a display
   and `gitk` on `PATH`) and a first argument that is not an option are refused by name
-  (`bisect_visualize_refusals.rs`); an unknown option gets rivet `log`'s clap error, not git's
-  `fatal: unrecognized argument`.
+  (`bisect_visualize_refusals.rs`).
 * **`archive`** — `export-subst` is refused (deliberate); gzip and deflated-zip bytes are not
   byte-identical to git's (decompressed content is); `--remote` works for local repositories
   and `file://`, not over a network URL.

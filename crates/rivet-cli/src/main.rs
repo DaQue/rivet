@@ -245,7 +245,30 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse_from(expand_count_shorthand(std::env::args_os().collect()));
+    let args = expand_count_shorthand(std::env::args_os().collect());
+    let cli = match Cli::try_parse_from(&args) {
+        Ok(cli) => cli,
+        Err(error) => {
+            // `git log` (and so `bisect visualize`) reports an option it does not know as one
+            // fatal line, not as a usage screen.
+            use clap::error::{ContextKind, ContextValue, ErrorKind};
+            if error.kind() == ErrorKind::UnknownArgument
+                && matches!(error.get(ContextKind::Usage), Some(ContextValue::StyledStr(usage))
+                    if usage.to_string().starts_with("Usage: rivet log "))
+                && let Some(ContextValue::String(arg)) = error.get(ContextKind::InvalidArg)
+            {
+                // Git names the word as typed: `--bogus=3`, or a bundle like `-xy`.
+                let typed = args
+                    .iter()
+                    .filter_map(|a| a.to_str())
+                    .find(|a| a.starts_with(arg.as_str()))
+                    .unwrap_or(arg);
+                eprintln!("fatal: unrecognized argument: {typed}");
+                return ExitCode::from(cmd::EXIT_FATAL as u8);
+            }
+            error.exit()
+        }
+    };
     match cmd::dispatch(cli) {
         Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
         Err(error) => {

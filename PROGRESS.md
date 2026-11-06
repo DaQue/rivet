@@ -2405,3 +2405,5 @@ Gate: fmt, clippy `-D warnings`, doc clean; `cargo test --workspace` 278 passed 
 * **UNIT 50-1** — `config` (default scope) reads `config.worktree` after `config` once `extensions.worktreeConfig` is on; `--local` stays the shared file. Mined from GAPS §2 (sparse-checkout bullet). Scenario `s_config_worktree_read` fails on 40e45b0. Gate: 352 tests / 0 failed, 438 scenarios / 0 failures.
 
 * **UNIT 52-1** — `ls-remote --sort=refname:short` shortens against the local refs as git does; `refname:dir`/`:base` are git's `unrecognized %(refname) argument` fatal. `s_ls_remote_sort_short` compares with `/usr/bin/git` and fails on `ca3ca00`. Gate: 352 tests / 0 failed, 439 scenarios / 0 failures.
+
+* **UNIT 53-1** — `log` (and so `bisect visualize`/`view`) reports an unknown option as `fatal: unrecognized argument: <word as typed>`, exit 128, not a clap usage error. Mined from the GAPS §2 clause under `bisect`. `s_log_unrecognized` compares with `/usr/bin/git` and fails on `f72318b`. Gate: 352 tests / 0 failed, 440 scenarios / 0 failures.

@@ -7194,6 +7194,20 @@ s_bisect_visualize() {
     v bisect reset
 }
 
+s_log_unrecognized() {
+    bisect_repo
+    unset DISPLAY SESSIONNAME MSYSTEM SECURITYSESSIONID
+    v log --bogus
+    v log -x
+    v log --bogus=3
+    v log -xy
+    v log --oneline --bogus main
+    v bisect start main main~3
+    v bisect visualize --bogus
+    v bisect view --oneline --bogus=1
+    v bisect reset
+}
+
 s_cherry() {
     v init -q repo; cd repo
     tick; printf 'a\nb\nc\nd\ne\nf\n' >f; v add f; v commit -q -m base
