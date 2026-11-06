@@ -200,12 +200,23 @@ pub fn run_ls_remote(global: &GlobalArgs, args: &LsRemoteArgs) -> Result<i32> {
             .as_ref()
             .map(super::foreachref::version_suffixes)
             .unwrap_or_default();
+        let local_names: Vec<String> = match repository.as_ref() {
+            Some(repo) => repo
+                .refs()
+                .list(b"refs/")?
+                .into_iter()
+                .map(|(n, _)| n.to_string())
+                .collect(),
+            None => Vec::new(),
+        };
+        let local: std::collections::HashSet<&str> =
+            local_names.iter().map(String::as_str).collect();
         entries.sort_by(|a, b| {
             // The last `--sort` is the most significant; ties fall back to the plain name.
             sort_keys
                 .iter()
                 .rev()
-                .map(|key| key.compare(&a.0, &b.0, &suffixes))
+                .map(|key| key.compare(&a.0, &b.0, &suffixes, &local))
                 .find(|ordering| ordering.is_ne())
                 .unwrap_or_else(|| a.0.cmp(&b.0))
         });
@@ -250,6 +261,8 @@ struct SortKey {
     /// `version:` / `v:` prefix: compare with git's `versioncmp` instead of bytewise.
     version: bool,
     strip: Option<Strip>,
+    /// `refname:short`: the name shortened against the local repository's refs.
+    short: bool,
 }
 
 enum Strip {
@@ -266,7 +279,7 @@ enum SortError {
 
 impl SortKey {
     /// Parse a key the way git's `ref-filter` does, with its error texts. Keys that need object
-    /// data, `*` (ignore case) and `:short` are refused by name.
+    /// data and `*` (ignore case) are refused by name.
     fn parse(key: &str) -> Result<SortKey, SortError> {
         let (reverse, atom) = match key.strip_prefix('-') {
             Some(rest) => (true, rest),
@@ -282,11 +295,7 @@ impl SortKey {
         if atom.is_empty() {
             return Err(SortError::Fatal("malformed field name: ".to_string()));
         }
-        if atom.starts_with('*')
-            || atom.starts_with("refname:short")
-            || atom.starts_with("refname:dir")
-            || atom.starts_with("refname:base")
-        {
+        if atom.starts_with('*') {
             return Err(SortError::Refused(key.to_string()));
         }
         let Some(modifiers) = atom
@@ -298,11 +307,17 @@ impl SortKey {
         let unrecognized =
             |m: &str| SortError::Fatal(format!("unrecognized %(refname) argument: {m}"));
         let mut strip = None;
+        let mut short = false;
         for modifier in modifiers
             .strip_prefix(':')
             .into_iter()
             .filter(|m| !m.is_empty())
         {
+            if modifier == "short" {
+                short = true;
+                strip = None;
+                continue;
+            }
             let (name, value) = match modifier.split_once('=') {
                 Some((name, value)) => (name, Some(value)),
                 None => (modifier, None),
@@ -319,16 +334,24 @@ impl SortKey {
                 SortError::Fatal(format!("Integer value expected refname:{modifier}"))
             })?;
             strip = Some(build(count));
+            short = false;
         }
         Ok(SortKey {
             reverse,
             version,
+            short,
             strip,
         })
     }
 
-    fn compare(&self, a: &[u8], b: &[u8], suffixes: &[String]) -> std::cmp::Ordering {
-        let (left, right) = (self.value(a), self.value(b));
+    fn compare(
+        &self,
+        a: &[u8],
+        b: &[u8],
+        suffixes: &[String],
+        local: &std::collections::HashSet<&str>,
+    ) -> std::cmp::Ordering {
+        let (left, right) = (self.value(a, local), self.value(b, local));
         let ordering = if self.version {
             super::foreachref::versioncmp(
                 &String::from_utf8_lossy(&left),
@@ -345,7 +368,10 @@ impl SortKey {
         }
     }
 
-    fn value(&self, name: &[u8]) -> Vec<u8> {
+    fn value(&self, name: &[u8], local: &std::collections::HashSet<&str>) -> Vec<u8> {
+        if self.short {
+            return super::query::shorten(&String::from_utf8_lossy(name), local).into_bytes();
+        }
         let parts: Vec<&[u8]> = name.split(|&c| c == b'/').collect();
         let kept: &[&[u8]] = match self.strip {
             None => &parts,

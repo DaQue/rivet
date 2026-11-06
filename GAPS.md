@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 438 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 439 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-06, gate: 352 tests / 0 failed, 438 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-06, gate: 352 tests / 0 failed, 439 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -72,7 +72,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   unreachable URI does in git. Bundle lists (`bundle.*` config), `fetch.bundleURI` and the `bundle-uri` protocol command are not
   implemented; a file that is not a bundle gets git's two warnings but not the `bad config line` error naming a random temp file.
   `ls-remote --sort=<key>` works for `refname` (also `lstrip`/`rstrip`/`strip`, a leading `-`, several `--sort`, `s_ls_remote_sort`);
-  `version:`/`v:` over `refname` (`s_ls_remote_version_sort`) works too; `*` (ignore case), `refname:short`/`:dir`/`:base` and the object-data keys are refused by name, and git's own
+  `version:`/`v:` over `refname` (`s_ls_remote_version_sort`) works too (`refname:short` shortens against the local refs, `s_ls_remote_sort_short`); `*` (ignore case) and the object-data keys are refused by name, and git's own
   error texts are matched for unknown keys. `--upload-pack` and `--server-option` are refused by name (Rust test
   `ls_remote_refusals`). A local path that is a subdirectory of a repository is listed as that repository (rivet's discovery walks
   upwards; git says "does not appear to be a git repository"; a path that does not exist is matched); its patterns follow `wildmatch` (`*`, `?`, `[...]` with ranges, negation and `[:class:]`, `\` escapes, `s_ls_remote_patterns`).

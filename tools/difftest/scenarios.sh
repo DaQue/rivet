@@ -10989,6 +10989,25 @@ s_ls_remote_sort() {
     v ls-remote --sort=-refname ../src
 }
 
+# `ls-remote --sort=refname:short` shortens against the local refs; `:dir`/`:base` are git's unrecognized argument.
+s_ls_remote_sort_short() {
+    g init -q src; cd src
+    tick; echo a >f; g add .; g commit -q -m c1
+    g branch zeta; g branch ann; g branch a/b/c
+    g tag zeta; g tag v1; tick; g tag -a -m ann ann
+    for k in refname:short -refname:short v:refname:short refname:dir refname:base -refname:base \
+        refname:short:strip=1 refname:dir:rstrip=1 refname:short,x; do
+        v ls-remote --sort="$k" ../src
+    done
+    v ls-remote --sort=refname:short --sort=-refname:strip=2 ../src
+    v ls-remote --tags --sort=-refname:short ../src
+    cd ..; g init -q other; cd other
+    v ls-remote --sort=refname:short ../src
+    v ls-remote --sort=-refname:short ../src
+    g commit -q --allow-empty -m x; g tag v1; g branch ann
+    v ls-remote --sort=refname:short ../src
+}
+
 # `ls-remote --sort=version:<key>` / `v:<key>` use git's versioncmp, reversed by a leading `-`.
 s_ls_remote_version_sort() {
     g init -q src; cd src
@@ -15085,6 +15104,7 @@ for s in "$@"; do
         s_ls_remote) run_scenario "$s" none ;;
         s_ls_remote_patterns) run_scenario "$s" none ;;
         s_ls_remote_sort) run_scenario "$s" none ;;
+        s_ls_remote_sort_short) run_scenario "$s" none ;;
         s_ls_remote_version_sort) run_scenario "$s" none ;;
         s_ls_remote_version_suffix) run_scenario "$s" none ;;
         s_clone_filter) run_scenario "$s" local viafile bare.git limit ;;

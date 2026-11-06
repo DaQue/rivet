@@ -23,14 +23,7 @@ fn unsupported_options_are_refused_by_name() {
 #[test]
 fn sort_keys_beyond_refname_are_refused_by_name() {
     let rivet = env!("CARGO_BIN_EXE_rivet");
-    for key in [
-        "v:*refname",
-        "-version:refname:short",
-        "*refname",
-        "refname:short",
-        "refname:dirname",
-        "refname:basename",
-    ] {
+    for key in ["v:*refname", "*refname"] {
         let out = Command::new(rivet)
             .args(["ls-remote", &format!("--sort={key}"), "."])
             .output()
