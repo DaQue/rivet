@@ -93,8 +93,67 @@ fn base85_line(line: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// What git says about a base85 line it cannot decode, when it says anything: a character outside
+/// the alphabet, or a group of five that does not fit 32 bits.
+fn base85_reason(line: &[u8]) -> Option<String> {
+    const ALPHABET: &[u8] =
+        b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~";
+    let (&first, rest) = line.split_first()?;
+    let len = match first {
+        b'A'..=b'Z' => usize::from(first - b'A') + 1,
+        b'a'..=b'z' => usize::from(first - b'a') + 27,
+        _ => return None,
+    };
+    if rest.len() != len.div_ceil(4) * 5 {
+        return None;
+    }
+    for group in rest.chunks(5) {
+        let mut acc: u64 = 0;
+        for c in group {
+            let Some(digit) = ALPHABET.iter().position(|a| a == c) else {
+                return Some(format!("invalid base85 alphabet {}", char::from(*c)));
+            };
+            acc = acc * 85 + digit as u64;
+        }
+        if u32::try_from(acc).is_err() {
+            return Some(format!(
+                "invalid base85 sequence {}",
+                String::from_utf8_lossy(group)
+            ));
+        }
+    }
+    None
+}
+
 /// Inflate a zlib stream (RFC 1950/1951); `None` when it is damaged.
 fn zlib_inflate(data: &[u8]) -> Option<Vec<u8>> {
+    zlib_inflate_checked(data).ok()
+}
+
+/// [`zlib_inflate`], naming what is wrong with a damaged stream in zlib's own words: a bad header,
+/// an Adler-32 that does not match the data, or (`""`) a damaged deflate stream.
+fn zlib_inflate_checked(data: &[u8]) -> Result<Vec<u8>, &'static str> {
+    if data.len() < 2
+        || data[0] & 0x0f != 8
+        || (u32::from(data[0]) * 256 + u32::from(data[1])) % 31 != 0
+    {
+        return Err("incorrect header check");
+    }
+    let (out, end) = zlib_inflate_body(data).ok_or("")?;
+    let trailer = data.get(end..end + 4).ok_or("")?;
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in &out {
+        a = (a + u32::from(*byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    if trailer != ((b << 16) | a).to_be_bytes() {
+        return Err("incorrect data check");
+    }
+    Ok(out)
+}
+
+/// The deflate stream after the two header bytes: the data and the offset just past it.
+fn zlib_inflate_body(data: &[u8]) -> Option<(Vec<u8>, usize)> {
     struct Bits<'a> {
         data: &'a [u8],
         pos: usize,
@@ -264,7 +323,7 @@ fn zlib_inflate(data: &[u8]) -> Option<Vec<u8>> {
             _ => return None,
         }
         if last == 1 {
-            return Some(out);
+            return Some((out, bits.pos + usize::from(bits.bit != 0)));
         }
     }
 }
@@ -370,6 +429,37 @@ fn mark_no_newline(hunk: &mut Hunk) {
 ///
 /// A malformed hunk, a binary patch, or a header without a file name.
 pub fn parse(text: &[u8], strip_n: usize) -> Result<Vec<FilePatch>> {
+    let (patches, corrupt) = parse_partial(text, strip_n)?;
+    if let Some(corrupt) = corrupt {
+        bail!(
+            "corrupt binary patch at line {}: {}",
+            corrupt.line,
+            String::from_utf8_lossy(&corrupt.text)
+        );
+    }
+    Ok(patches)
+}
+
+/// A `GIT binary patch` that cannot be decoded: the 1-based line where git notices it and that
+/// line's text. Git reports it, drops the patch and everything after it, and applies the rest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CorruptBinary {
+    pub line: usize,
+    pub text: Vec<u8>,
+    /// What git says first, when it knows more than "corrupt": a base85 or zlib complaint.
+    pub reason: Option<String>,
+}
+
+/// [`parse`], but a damaged binary block ends the input instead of failing it: the patches before
+/// it come back with the damage.
+///
+/// # Errors
+///
+/// A malformed hunk or a header without a file name.
+pub fn parse_partial(
+    text: &[u8],
+    strip_n: usize,
+) -> Result<(Vec<FilePatch>, Option<CorruptBinary>)> {
     let lines: Vec<&[u8]> = text.split(|b| *b == b'\n').collect();
     let mut patches: Vec<FilePatch> = Vec::new();
     let mut i = 0;
@@ -473,28 +563,41 @@ pub fn parse(text: &[u8], strip_n: usize) -> Result<Vec<FilePatch>> {
                         } else {
                             break;
                         };
+                        let corrupt = |at: usize, reason: Option<String>| CorruptBinary {
+                            line: at + 1,
+                            text: lines.get(at).map(|l| l.to_vec()).unwrap_or_default(),
+                            reason,
+                        };
                         let Some(size) = std::str::from_utf8(count)
                             .ok()
                             .and_then(|n| n.parse::<usize>().ok())
                         else {
-                            bail!(
-                                "corrupt binary patch at line {}: {}",
-                                i + 1,
-                                String::from_utf8_lossy(head)
-                            );
+                            return Ok((patches, Some(corrupt(i, None))));
                         };
                         i += 1;
                         let mut data = Vec::new();
                         while i < lines.len() && !lines[i].is_empty() {
                             match base85_line(lines[i]) {
                                 Some(bytes) => data.extend(bytes),
-                                None => bail!(
-                                    "corrupt binary patch at line {}: {}",
-                                    i + 1,
-                                    String::from_utf8_lossy(lines[i])
-                                ),
+                                None => {
+                                    return Ok((
+                                        patches,
+                                        Some(corrupt(i, base85_reason(lines[i]))),
+                                    ));
+                                }
                             }
                             i += 1;
+                        }
+                        // git inflates the block and wants exactly the size it announced; it
+                        // notices at the line that ends the data.
+                        match zlib_inflate_checked(&data) {
+                            Ok(bytes) if bytes.len() == size => {}
+                            Ok(_) => return Ok((patches, Some(corrupt(i, None)))),
+                            Err(why) => {
+                                let reason = (!why.is_empty())
+                                    .then(|| format!("inflate: data stream error ({why})"));
+                                return Ok((patches, Some(corrupt(i, reason))));
+                            }
                         }
                         i += 1;
                         patch.binary_blocks.push(BinaryBlock { delta, size, data });
@@ -607,7 +710,7 @@ pub fn parse(text: &[u8], strip_n: usize) -> Result<Vec<FilePatch>> {
         }
         patches.push(patch);
     }
-    Ok(patches)
+    Ok((patches, None))
 }
 
 /// A file split into lines, remembering whether the last one ends in a newline.

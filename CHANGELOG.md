@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-06 — `apply` reports a damaged `GIT binary patch` block as git does (`error: invalid base85 alphabet <c>` / `inflate: data stream error (...)`, then `error: corrupt binary patch at <file>:<line>: <text>`; `<stdin>` for standard input), applies the patches before it and exits 0, or says `No valid patches in input` (128) when its input had none (`s_apply_binary_corrupt`).
 * 2026-11-06 — `gc` keeps every pack at least `gc.bigPackThreshold` bytes (`k`/`m`/`g` suffixes) like a `.keep` pack, and a bad value is git's `bad numeric config value ... invalid unit` fatal (`s_gc_big_pack_threshold`).
 * 2026-11-06 — `gc --auto` runs the `pre-auto-gc` hook before it says anything (a failing hook cancels silently), prints its notice on stderr as git does, treats `gc.auto=0` as off for the pack limit too, and leaves loose refs unpacked (`s_gc_pre_auto_gc`).
 * 2026-11-06 — `log` (and `bisect visualize`/`view`, which run it) reports an unknown option as `fatal: unrecognized argument: <word as typed>`, exit 128, instead of a clap usage error (`s_log_unrecognized`).

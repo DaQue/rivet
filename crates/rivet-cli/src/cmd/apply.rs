@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use super::patch::{ApplyOptions, FilePatch, apply_to_repo, parse};
+use super::patch::{ApplyOptions, FilePatch, apply_to_repo, parse_partial};
 use crate::cli::GlobalArgs;
 
 /// Arguments of `apply`.
@@ -90,10 +90,24 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
     }
     let mut repository = super::open(global)?;
     let mut text = Vec::new();
+    // Where each input starts in `text` (its line count so far) and what git calls it.
+    let mut sources: Vec<(usize, usize, String)> = vec![(0, 0, "<stdin>".to_string())];
+    if !args.patches.is_empty() {
+        sources.clear();
+    }
     if args.patches.is_empty() {
         std::io::stdin().read_to_end(&mut text)?;
     } else {
         for path in &args.patches {
+            sources.push((
+                text.iter().filter(|b| **b == b'\n').count(),
+                text.len(),
+                if path.as_os_str() == "-" {
+                    "<stdin>".to_string()
+                } else {
+                    path.display().to_string()
+                },
+            ));
             if path.as_os_str() == "-" {
                 std::io::stdin().read_to_end(&mut text)?;
             } else {
@@ -113,16 +127,39 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
             text.push(b'\n');
         }
     }
-    let patches = match parse(&text, args.strip) {
-        Ok(patches) => patches,
+    let (patches, corrupt) = match parse_partial(&text, args.strip) {
+        Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("error: {error}");
             return Ok(128);
         }
     };
-    if patches.is_empty() {
+    // Git reads each input on its own: a damaged binary block ends that input, and an input that
+    // had no patch before it is "no valid patches" even when earlier inputs applied.
+    let mut dead_input = false;
+    if let Some(corrupt) = corrupt {
+        let at = sources
+            .iter()
+            .rposition(|(start, _, _)| *start < corrupt.line)
+            .unwrap_or(0);
+        let (start, from, name) = &sources[at];
+        let to = sources.get(at + 1).map_or(text.len(), |next| next.1);
+        if let Some(reason) = &corrupt.reason {
+            eprintln!("error: {reason}");
+        }
+        eprintln!(
+            "error: corrupt binary patch at {name}:{}: {}",
+            corrupt.line - start,
+            String::from_utf8_lossy(&corrupt.text)
+        );
+        dead_input =
+            parse_partial(&text[*from..to], args.strip).is_ok_and(|(own, _)| own.is_empty());
+    }
+    if patches.is_empty() || dead_input {
         eprintln!("error: No valid patches in input (allow with \"--allow-empty\")");
-        return Ok(128);
+        if patches.is_empty() {
+            return Ok(128);
+        }
     }
     let options = ApplyOptions {
         reverse: args.reverse,
@@ -182,7 +219,7 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
             for line in warnings {
                 eprintln!("{line}");
             }
-            Ok(0)
+            Ok(if dead_input { 128 } else { 0 })
         }
         Err(lines) => {
             for line in lines {

@@ -4395,6 +4395,42 @@ s_apply_binary() {
     v status --short
 }
 
+s_apply_binary_corrupt() {
+    g init -q src; cd src
+    printf '\000a\n' >f.bin; printf 'x\n' >t.txt; g add .; g commit -q -m base
+    printf '\000c\nlong\n' >f.bin; g diff --binary f.bin >../bin.patch
+    printf 'y\n' >t.txt; g diff t.txt >../txt.patch
+    g reset -q --hard
+    cd ..
+    # line 5 is the first data line of the forward block
+    sed '5s/...$/,,,/' bin.patch >bad-char.patch
+    sed '5s/...$/!!!/' bin.patch >bad-adler.patch
+    sed '5s/^./z/' bin.patch >bad-len.patch
+    sed '5s/.....$//' bin.patch >bad-short.patch
+    sed '4s/.*/literal 99/' bin.patch >bad-size.patch
+    cat txt.patch bad-char.patch >mixed.patch
+    v init -q dst; cd dst
+    printf '\000a\n' >f.bin; printf 'x\n' >t.txt; v add .; v commit -q -m base
+    for p in bad-char bad-adler bad-len bad-short bad-size; do
+        v apply ../$p.patch
+        v apply --check ../$p.patch
+        v apply --stat ../$p.patch
+        v apply - <../$p.patch
+        v status --short
+    done
+    # the patch before the damaged one still applies, and the exit status is 0
+    v apply --check ../mixed.patch
+    v apply ../mixed.patch
+    v status --short
+    g reset -q --hard
+    v apply --stat ../mixed.patch
+    v apply ../txt.patch ../bad-char.patch
+    v status --short
+    g reset -q --hard
+    v apply - <../mixed.patch
+    v status --short
+}
+
 s_apply_fuzz() {
     g init -q src; cd src
     seq 1 20 >f; seq 1 6 >g.txt; ln -s target l; ln -s gone-link gl; echo reg >typ
