@@ -286,6 +286,8 @@ pub struct Entry<'a> {
     pub message: &'a [u8],
     /// Ref names pointing at the commit, already in display order (`HEAD -> main`, `tag: v1`).
     pub decorations: &'a [Decoration],
+    /// `<` for a commit on the left of a symmetric difference, `>` otherwise (`%m`, `--left-right`).
+    pub mark: u8,
 }
 
 /// Rendering settings that do not depend on the commit.
@@ -300,6 +302,8 @@ pub struct Style<'a> {
     pub abbrev_commit: bool,
     /// Paint the `commit` line (or the oneline id) and its decorations; `None` prints plain text.
     pub palette: Option<&'a Palette>,
+    /// `--left-right`: the mark and a space go in front of the id.
+    pub left_right: bool,
 }
 
 impl Style<'_> {
@@ -386,6 +390,9 @@ pub fn render(layout: &Layout, e: &Entry<'_>, style: &Style<'_>) -> Vec<u8> {
     };
     match layout {
         Layout::Oneline => {
+            if style.left_right {
+                out.extend_from_slice(&[e.mark, b' ']);
+            }
             push_commit_id(&mut out, id(&e.oid).as_bytes(), style);
             push_decorations(&mut out, e.decorations, style);
             out.push(b' ');
@@ -399,7 +406,12 @@ pub fn render(layout: &Layout, e: &Entry<'_>, style: &Style<'_>) -> Vec<u8> {
             } else {
                 e.oid.to_string()
             };
-            push_commit_id(&mut out, format!("commit {head}").as_bytes(), style);
+            let mark = if style.left_right {
+                format!("{} ", e.mark as char)
+            } else {
+                String::new()
+            };
+            push_commit_id(&mut out, format!("commit {mark}{head}").as_bytes(), style);
             push_decorations(&mut out, e.decorations, style);
             out.push(b'\n');
             if e.parents.len() > 1 {
@@ -616,6 +628,7 @@ fn placeholder(rest: &[u8], e: &Entry<'_>, style: &Style<'_>) -> Option<(usize, 
         b'D' => plain_labels(e.decorations).join(", ").into_bytes(),
         b'd' if e.decorations.is_empty() => Vec::new(),
         b'd' => format!(" ({})", plain_labels(e.decorations).join(", ")).into_bytes(),
+        b'm' => vec![e.mark],
         b'n' => b"\n".to_vec(),
         b'%' => b"%".to_vec(),
         _ => return None,

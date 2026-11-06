@@ -159,6 +159,10 @@ pub struct LogArgs {
     /// Show only the commits not reachable from the left side of `A...B`.
     #[arg(long = "right-only")]
     pub right_only: bool,
+
+    /// Mark each commit of a symmetric difference `<` (left side) or `>` (right side).
+    #[arg(long = "left-right")]
+    pub left_right: bool,
 }
 
 /// Arguments to `rivet show`.
@@ -523,6 +527,16 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         Some(DiffMode::Stat) if palette.is_some() => Some(DiffMode::ColorStat),
         other => other,
     };
+    if args.left_right && args.graph {
+        anyhow::bail!("not implemented: --left-right together with --graph");
+    }
+    let wants_mark = args.left_right
+        || matches!(&layout, pretty::Layout::Format { template, .. } if template.contains("%m"));
+    let left_set = if wants_mark {
+        Some(left_commits(&repository, args.first_parent, &specs, &oids)?)
+    } else {
+        None
+    };
     let shifts = if args.graph {
         root_shifts(&repository, &oids, args.first_parent)?
     } else {
@@ -568,6 +582,8 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 abbrev_commit: args.oneline && !args.no_abbrev_commit,
                 decorations: &decorations,
                 palette: palette.as_ref(),
+                left: left_set.as_ref(),
+                left_right: args.left_right,
             },
         );
         missing_newline = !text.ends_with(b"\n");
@@ -614,15 +630,13 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     Ok(0)
 }
 
-/// `--cherry-pick`, `--left-only` and `--right-only` as `rev-list` applies them: the left side is
-/// every listed commit reachable from the left end of an `A...B`; with `--cherry-pick` a non-merge
-/// commit whose patch id appears on both sides is dropped. `--skip` and `-n` come last.
-fn filter_sides(
+/// The listed commits reachable from the left end of an `A...B` argument.
+fn left_commits(
     repository: &Repository,
-    args: &LogArgs,
+    first_parent: bool,
     specs: &[&str],
-    oids: Vec<ObjectId>,
-) -> Result<Vec<ObjectId>> {
+    oids: &[ObjectId],
+) -> Result<HashSet<ObjectId>> {
     let mut left_tips = Vec::new();
     for spec in specs {
         if let Some((left, _)) = spec.split_once("...") {
@@ -633,16 +647,28 @@ fn filter_sides(
         }
     }
     let mut walk = WalkOptions::new();
-    walk.first_parent(args.first_parent);
+    walk.first_parent(first_parent);
     let reachable: HashSet<ObjectId> =
         rivet_core::revwalk::walk_oids(repository.odb(), &left_tips, &walk)?
             .into_iter()
             .collect();
-    let left: HashSet<ObjectId> = oids
+    Ok(oids
         .iter()
         .filter(|oid| reachable.contains(oid))
         .copied()
-        .collect();
+        .collect())
+}
+
+/// `--cherry-pick`, `--left-only` and `--right-only` as `rev-list` applies them: the left side is
+/// every listed commit reachable from the left end of an `A...B`; with `--cherry-pick` a non-merge
+/// commit whose patch id appears on both sides is dropped. `--skip` and `-n` come last.
+fn filter_sides(
+    repository: &Repository,
+    args: &LogArgs,
+    specs: &[&str],
+    oids: Vec<ObjectId>,
+) -> Result<Vec<ObjectId>> {
+    let left = left_commits(repository, args.first_parent, specs, &oids)?;
     let mut same: HashSet<ObjectId> = HashSet::new();
     if args.cherry_pick && !left.is_empty() && left.len() < oids.len() {
         let mut sides: HashMap<Vec<u8>, [bool; 2]> = HashMap::new();
@@ -710,6 +736,8 @@ pub(super) fn squash_message(
                 abbrev_commit: false,
                 decorations: &Default::default(),
                 palette: None,
+                left: None,
+                left_right: false,
             },
         ));
     }
@@ -1693,6 +1721,10 @@ struct Look<'a> {
     abbrev_commit: bool,
     decorations: &'a std::collections::HashMap<ObjectId, Vec<pretty::Decoration>>,
     palette: Option<&'a pretty::Palette>,
+    /// The commits on the left of an `A...B`, when `--left-right` or `%m` needs them.
+    left: Option<&'a HashSet<ObjectId>>,
+    /// `--left-right`: put the mark in front of the id of the block layouts and `--oneline`.
+    left_right: bool,
 }
 
 fn render_commit(
@@ -1713,6 +1745,11 @@ fn render_commit(
         committer_presence: &commit.committer_presence,
         message: &commit.message,
         decorations: look.decorations.get(oid).map_or(&[], Vec::as_slice),
+        mark: if look.left.is_some_and(|left| left.contains(oid)) {
+            b'<'
+        } else {
+            b'>'
+        },
     };
     let style = pretty::Style {
         date: look.date,
@@ -1721,6 +1758,7 @@ fn render_commit(
         full_ids: look.full_ids,
         abbrev_commit: look.abbrev_commit,
         palette: look.palette,
+        left_right: look.left_right,
     };
     let mut out = pretty::render(layout, &entry, &style);
     // An empty `tformat:` prints nothing at all, not even the terminator.
@@ -1944,6 +1982,8 @@ fn show_object(
                     abbrev_commit: args.oneline,
                     decorations: &decorations,
                     palette,
+                    left: None,
+                    left_right: false,
                 },
             ));
             let diff_mode = if args.no_patch {

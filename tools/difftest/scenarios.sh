@@ -5527,6 +5527,25 @@ s_log_cherry_pick() {
     v log --format=%s --left-only --right-only main...side
 }
 
+s_log_left_right() {
+    v init -q repo; cd repo
+    tick; echo 0 >f; v add f; v commit -q -m base
+    v switch -q -c side
+    for i in a b; do tick; echo $i >$i; v add $i; v commit -q -m side-$i; done
+    v switch -q main
+    for i in x y; do tick; echo $i >$i; v add $i; v commit -q -m main-$i; done
+    v log --left-right main...side
+    v log --left-right --oneline main...side
+    v log --left-right --pretty=short main...side
+    v log --left-right --format='%m %s' main...side
+    v log --left-right --format=%m%s side...main
+    v log --format='[%m] %s' main...side
+    v log --format='[%m] %s' main
+    v log --left-right --oneline main
+    v log --left-right --oneline --left-only main...side
+    v log --left-right --format='%m %s' --cherry-pick main...side
+}
+
 s_rev_list_children() {
     rl_repo
     v rev-list --children main
