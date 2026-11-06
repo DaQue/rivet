@@ -7587,6 +7587,42 @@ s_checkout_unmerged_noop() {
     v status -s
 }
 
+# A cherry-pick or revert in progress: `checkout -b`, `-B` and `-f -B` leave the pick state the
+# way git does (switching branches cancels it, with a warning), and the index is left alone.
+s_checkout_pick_state() {
+    v init -q repo; cd repo
+    tick; seq 1 3 >a; v add a; v commit -q -m base
+    v branch side
+    tick; echo ours >>a; v commit -q -a -m ours
+    v switch -q side; tick; echo theirs >>a; v commit -q -a -m theirs
+    v switch -q main
+    pick_state() { v cherry-pick side; echo mod >c; v add c; v status -s; }
+    pick_state
+    v checkout -b topic
+    test -e .git/CHERRY_PICK_HEAD && echo pick-head-kept
+    v status -s; v branch
+    v reset -q --hard; v checkout -q main
+    pick_state
+    v checkout -B main
+    test -e .git/CHERRY_PICK_HEAD && echo pick-head-kept
+    v status -s
+    v reset -q --hard
+    pick_state
+    v checkout -f -B again
+    test -e .git/CHERRY_PICK_HEAD && echo pick-head-kept
+    v status -s; v branch
+    v checkout -q -f main; v reset -q --hard
+    pick_state
+    v checkout -f -B main
+    test -e .git/CHERRY_PICK_HEAD && echo pick-head-kept
+    v status -s
+    v reset -q --hard
+    v revert HEAD
+    v checkout -b rtopic
+    test -e .git/REVERT_HEAD && echo revert-head-kept
+    v status -s
+}
+
 # Abbreviated ids: a prefix whose last two digits are `00` is not fill, an odd count of digits
 # counts every digit, and the ids in an `index` line of a patch are resolved the same way.
 s_abbrev_zero() {

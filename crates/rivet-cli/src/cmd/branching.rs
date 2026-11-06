@@ -2069,6 +2069,9 @@ fn checkout_new_branch(
     quiet: bool,
 ) -> Result<i32> {
     let branch = valid_branch_name(name)?;
+    let cancelled = ["CHERRY_PICK_HEAD", "REVERT_HEAD"]
+        .into_iter()
+        .find(|state| repository.git_dir().join(state).exists());
     let exists = repository.refs().exists(&branch);
     if exists && !reset {
         anyhow::bail!("a branch named '{name}' already exists");
@@ -2184,6 +2187,11 @@ fn checkout_new_branch(
     {
         println!("{message}");
     }
+    if cancelled.is_some() {
+        for state in ["CHERRY_PICK_HEAD", "REVERT_HEAD"] {
+            let _ = std::fs::remove_file(repository.git_dir().join(state));
+        }
+    }
     remove_merge_state(repository);
     if !quiet {
         if unmerged.is_none() {
@@ -2200,6 +2208,13 @@ fn checkout_new_branch(
             eprintln!("Switched to and reset branch '{name}'");
         } else {
             eprintln!("Switched to a new branch '{name}'");
+        }
+        match cancelled {
+            Some("CHERRY_PICK_HEAD") => {
+                eprintln!("warning: cancelling a cherry picking in progress")
+            }
+            Some(_) => eprintln!("warning: cancelling a revert in progress"),
+            None => {}
         }
     }
     Ok(post_checkout_hook(
