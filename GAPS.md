@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 437 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 438 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-06, gate: 352 tests / 0 failed, 437 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-06, gate: 352 tests / 0 failed, 438 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -34,8 +34,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   sparse index is expanded in memory on every command, never operated on sparsely, so there is no
   speed-up and git's `advice.sparseIndexExpanded` hint is never printed; the raw `Index::load` and
   `Index::parse` still refuse `sdir` by name (only `Repository` expands); a directory holding an unmerged
-  entry stays expanded in the file; `rivet config --get` does not read `config.worktree` (where `index.sparse` and
-  `core.sparseCheckout*` live), so it reports them unset.
+  entry stays expanded in the file.
   In cone mode `set`/`add` take command-line paths relative to the current directory (`..` resolved,
   `outside repository` refused) and `--stdin` lines relative to the root; `--no-cone` from a
   subdirectory is refused as in git. `ls-files --sparse` is accepted (the index is never sparse, so it

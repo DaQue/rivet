@@ -686,6 +686,26 @@ pub fn run_config(global: &GlobalArgs, args: &ConfigArgs) -> Result<i32> {
                 anyhow::bail!("--local can only be used inside a git repository");
             }
         }
+        // `config.worktree` is read after `config` (default scope only: `--local` is the
+        // shared file) once `extensions.worktreeConfig` is on.
+        if scope_count == 0
+            && let Some(repository) = repository.as_ref()
+            && let Some(local) = sources.last().map(|(_, c)| c)
+            && local_path.as_ref().is_some_and(|p| p.is_file())
+            && local
+                .get_bool(bstr::BStr::new("extensions.worktreeConfig"))
+                .ok()
+                .flatten()
+                .unwrap_or(false)
+        {
+            let path = repository.git_dir().join("config.worktree");
+            if path.is_file() {
+                sources.push((
+                    origin_name(&path, Some(repository)),
+                    rivet_core::Config::load(&path)?,
+                ));
+            }
+        }
         Ok(sources)
     };
     let terminator: &[u8] = if args.null_terminated { b"\0" } else { b"\n" };

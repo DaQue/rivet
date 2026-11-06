@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-06 — `config` (default scope: `--get`, `--get-all`, `--get-regexp`, `--list`) reads `config.worktree` after `config` once `extensions.worktreeConfig` is on; `--local` stays the shared file (`s_config_worktree_read`)
 * 2026-11-06 — `checkout -b <new>` and `checkout -B`/`-f -B` over a cherry-pick or revert in progress drop `CHERRY_PICK_HEAD`/`REVERT_HEAD` and print `warning: cancelling a cherry picking in progress` (or `a revert`) after the switch message, as git does (`s_checkout_pick_state`).
 * 2026-11-05 — `stash push`/`save`/bare `stash` read `-U<n>`, `--unified=<n>` and `--inter-hunk-context=<n>` as git reads an integer option (`k`/`m`/`g`, range, `requires a value`, `expects a numerical value`; `-1` is unset) and, without `--patch`, fail with `fatal: the option '--unified' requires '--patch'` (`s_stash_diff_context`).
 * 2026-11-05 — `update-ref --stdin` reads a C-quoted field in line mode (refname, ids, symref words) and fails as git does: `badly quoted argument: <rest>`, `unexpected character after quoted argument: <rest>` (`s_update_ref_quoted`).

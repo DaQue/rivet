@@ -14580,6 +14580,19 @@ s_config_file() {
     v config --list --local
 }
 
+s_config_worktree_read() {
+    g init -q repo; cd repo
+    g config extensions.worktreeConfig true
+    g config --worktree wt.key fromworktree
+    g config shared.key fromlocal
+    v config --get wt.key
+    v config --get-regexp '^wt\.'
+    v config --list
+    v config --local --get wt.key
+    v config --local --list
+    v config --get-all shared.key
+}
+
 s_clone_branch_tag() {
     g init -q src
     (cd src && echo 1 >f && g add f && g commit -qm one && g tag light && tick && echo 2 >f && g commit -qam two)
