@@ -7194,6 +7194,30 @@ s_bisect_visualize() {
     v bisect reset
 }
 
+s_gc_pre_auto_gc() {
+    g config --global gc.cruftPacks false
+    v init -q repo; cd repo
+    tick; echo 1 >f; v add f; v commit -q -m one
+    v repack -q
+    tick; echo 2 >f; v commit -q -a -m two
+    v repack -q
+    v config gc.autoPackLimit 1
+    v config gc.autoDetach false
+    install_hooks pre-auto-gc
+    # gc.auto=0 disables --auto altogether, the pack limit and the hook with it
+    v gc --auto
+    ls .git/objects/pack | wc -l
+    v config gc.auto 6700
+    # a failing hook cancels the auto gc before git says anything
+    echo 3 >hook-fail-pre-auto-gc
+    v gc --auto
+    ls .git/objects/pack | wc -l
+    rm hook-fail-pre-auto-gc
+    v gc --auto
+    ls .git/objects/pack | wc -l
+    dump_hooklog
+}
+
 s_log_unrecognized() {
     bisect_repo
     unset DISPLAY SESSIONNAME MSYSTEM SECURITYSESSIONID

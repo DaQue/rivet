@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 440 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 441 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-06, gate: 352 tests / 0 failed, 440 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-06, gate: 352 tests / 0 failed, 441 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -184,7 +184,7 @@ The command works for the common case; the listed options or edge cases are miss
   lacks the `#` status template git puts there (the scenario hides those lines). `stash` runs none (as in git, which
   creates its commits without hooks; only `stash branch` runs `post-checkout`, through its checkout). `post-checkout` for `clone` (the
   status becomes the exit status) and `worktree add`; `core.hooksPath` is also read from the global and
-  system config. Not run yet: `pre-auto-gc`, `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` lists the hooks directory only (`-z`, `--show-scope`); a repository with `hook.<name>.command`/`.event` in its config is refused by name (`fatal: hooks defined in the configuration ... not supported`, exit 128), and `hook run` still ignores such hooks. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
+  system config. Not run yet: `post-index-change`, and every server-side hook. `hook run` runs one hook (`--ignore-missing`, `--allow-unknown-hook-name`, `--to-stdin`; `-j` is accepted and ignored); `hook list` lists the hooks directory only (`-z`, `--show-scope`); a repository with `hook.<name>.command`/`.event` in its config is refused by name (`fatal: hooks defined in the configuration ... not supported`, exit 128), and `hook run` still ignores such hooks. Only `commit -m/-F` exists, so `prepare-commit-msg` only ever sees the `message`
   source (and `merge`). `GIT_DIR`/`GIT_WORK_TREE` are not exported to hooks (git does not either
   for the common layout; linked work trees are untested).
 * **`reference-transaction`** — deliberately not implemented: git 2.56 runs it for every ref write with

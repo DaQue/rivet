@@ -198,17 +198,30 @@ pub fn run_gc(global: &GlobalArgs, args: &GcArgs) -> Result<i32> {
                     .count()
             })
             .unwrap_or(0);
-        let too_many_loose = threshold > 0 && sample > threshold.div_ceil(256);
+        // `gc.auto=0` turns the whole of `--auto` off, the pack limit included.
+        if threshold == 0 {
+            return Ok(0);
+        }
+        let too_many_loose = sample > threshold.div_ceil(256);
         let too_many_packs = pack_limit > 0 && repository.odb().packs().len() > pack_limit;
         if !too_many_loose && !too_many_packs {
             return Ok(0);
         }
+        // Git asks the `pre-auto-gc` hook before it says anything; a failing hook cancels.
+        if rivet_core::hooks::Hook::new(&repository, "pre-auto-gc")
+            .run()
+            .is_some_and(|status| status != 0)
+        {
+            return Ok(0);
+        }
         if !global.quiet {
-            println!("Auto packing the repository for optimum performance.");
-            println!("See \"git help gc\" for manual housekeeping.");
+            eprintln!("Auto packing the repository for optimum performance.");
+            eprintln!("See \"git help gc\" for manual housekeeping.");
         }
     }
     let mut options = rivet_core::gc::GcOptions::new();
+    // Git's `gc --auto` repacks but leaves the loose refs where they are.
+    options.pack_refs = !args.auto;
     options.prune_before = if args.no_prune {
         None
     } else {
