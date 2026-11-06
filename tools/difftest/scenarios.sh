@@ -13162,11 +13162,12 @@ s_split_index_expire() {
     age_stale_keep_newest "$OLD"
     echo n >>f3; v add f3; nshared
     g config splitIndex.sharedIndexExpire 1.second.ago
+    sleep 2   # every shared index written so far is now past the cutoff in both runs, wherever the second boundary falls
     echo l >>f3; v add f3; nshared
     vg ls-files -s; vg status --short; vg fsck --strict --no-dangling
     # git writes a new shared index with its own rules; rivet reads what is left and goes on
     g config splitIndex.sharedIndexExpire never
-    g update-index --split-index; nshared
+    g update-index --split-index   # git's own write: how many shared indexes it leaves depends on the hash names
     g config splitIndex.sharedIndexExpire now
     g config splitIndex.maxPercentChange 0
     echo k >>f3; v add f3; issplit; nshared
