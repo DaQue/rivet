@@ -1130,6 +1130,37 @@ fn precious_objects(repo: &Repository) -> Result<bool> {
     }
 }
 
+/// `gc.bigPackThreshold` in bytes (0 when unset or not positive), or git's numeric-value fatal.
+fn big_pack_threshold(repo: &Repository) -> Result<u64> {
+    let Some(value) = repo.config_value(bstr::BStr::new(b"gc.bigPackThreshold"))? else {
+        return Ok(0);
+    };
+    match crate::config::parse_int(bstr::BStr::new(&value[..])) {
+        Ok(n) => Ok(u64::try_from(n).unwrap_or(0)),
+        Err(_) => {
+            let text = String::from_utf8_lossy(&value).into_owned();
+            let digits = text.strip_prefix('-').unwrap_or(&text);
+            let digits = digits
+                .strip_suffix(['k', 'K', 'm', 'M', 'g', 'G'])
+                .unwrap_or(digits);
+            let why = if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+                "out of range"
+            } else {
+                "invalid unit"
+            };
+            let config = repo.common_dir().join("config");
+            let shown = std::env::current_dir()
+                .ok()
+                .and_then(|cwd| config.strip_prefix(cwd).ok().map(Path::to_path_buf))
+                .unwrap_or(config);
+            Err(crate::error::Error::Message(format!(
+                "bad numeric config value '{text}' for 'gc.bigpackthreshold' in file {}: {why}",
+                shown.display()
+            )))
+        }
+    }
+}
+
 /// What [`write_cruft_pack`] needs to know about the repository.
 struct CruftInput<'a> {
     reachable: &'a HashSet<ObjectId>,
@@ -1343,6 +1374,7 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
     }
 
     // Classify packs: `.keep` packs are left alone and their objects are not repacked.
+    let big_pack_threshold = big_pack_threshold(repo)?;
     let mut keep_objects: HashSet<ObjectId> = HashSet::new();
     let mut removable: Vec<(PathBuf, ObjectId, Vec<ObjectId>, i64)> = Vec::new();
     let mut cruft: HashMap<ObjectId, i64> = HashMap::new();
@@ -1351,7 +1383,10 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
         let stem = format!("pack-{}", pack.checksum());
         let pack_path = pack_dir.join(format!("{stem}.pack"));
         let oids = pack.oids()?;
-        if pack_dir.join(format!("{stem}.keep")).exists() {
+        // `gc.bigPackThreshold`: a pack at least that large is kept like a `.keep` pack.
+        let big = big_pack_threshold > 0
+            && std::fs::metadata(&pack_path).map_or(0, |m| m.len()) >= big_pack_threshold;
+        if big || pack_dir.join(format!("{stem}.keep")).exists() {
             keep_objects.extend(oids);
         } else {
             let mtime = mtime_seconds(&pack_path)?;

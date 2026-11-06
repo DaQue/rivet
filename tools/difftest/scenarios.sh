@@ -7218,6 +7218,27 @@ s_gc_pre_auto_gc() {
     dump_hooklog
 }
 
+s_gc_big_pack_threshold() {
+    g config --global gc.cruftPacks false
+    v init -q repo; cd repo
+    tick; seq 1 6000 >big; v add big; v commit -q -m big
+    v repack -q
+    tick; echo 2 >small; v add small; v commit -q -m small
+    v repack -q
+    tick; echo 3 >small; v commit -q -a -m small2
+    v config gc.bigPackThreshold 8k
+    v gc -q
+    ls .git/objects/pack | wc -l
+    v count-objects
+    v fsck 2>&1
+    v config gc.bigPackThreshold 1m
+    v gc -q
+    ls .git/objects/pack | wc -l
+    v config gc.bigPackThreshold 8x
+    v gc -q
+    echo "rc=$?"
+}
+
 s_log_unrecognized() {
     bisect_repo
     unset DISPLAY SESSIONNAME MSYSTEM SECURITYSESSIONID
