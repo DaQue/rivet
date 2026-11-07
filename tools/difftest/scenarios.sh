@@ -5546,6 +5546,43 @@ s_log_left_right() {
     v log --left-right --format='%m %s' --cherry-pick main...side
 }
 
+s_log_cherry_mark() {
+    v init -q repo; cd repo
+    tick; echo 0 >f; v add f; v commit -q -m base
+    v switch -q -c other
+    tick; echo o >o; v add o; v commit -q -m other-o
+    v switch -q -c side main
+    for i in a b; do tick; echo $i >$i; v add $i; v commit -q -m side-$i; done
+    tick; v merge -q --no-ff -m side-merge other
+    v switch -q main
+    tick; echo x >x; v add x; v commit -q -m main-x
+    tick; v cherry-pick side~2 >/dev/null
+    tick; echo y >y; v add y; v commit -q -m main-y
+    v log --oneline --cherry-mark main...side
+    v log --format='[%m] %s' --cherry-mark main...side
+    v log --cherry-mark main...side
+    v log --pretty=short --cherry-mark side...main
+    v log --oneline --cherry-mark --left-right main...side
+    v log --oneline --cherry-mark --left-only main...side
+    v log --oneline --cherry-mark --right-only main...side
+    v log --oneline --cherry main...side
+    v log --oneline --cherry --left-right main...side
+    v log --format='[%m] %s' --cherry side...main
+    v log --oneline --cherry-mark --skip=1 -n 2 main...side
+    v log --oneline --cherry-mark main
+    v log --format='[%m] %s' --cherry-mark main
+    v log --oneline --cherry-pick --cherry main...side
+    v log --oneline --cherry --right-only main...side
+    v log --oneline --right-only --cherry main...side
+    v log --oneline --cherry-pick --cherry-mark main...side
+    v log --oneline --cherry-mark --cherry-pick main...side
+    v log --oneline --cherry --cherry-pick main...side
+    v log --oneline --cherry --left-only main...side
+    v log --oneline --left-only --cherry main...side
+    v log --oneline --left-only --right-only main...side
+    v log --oneline --right-only --left-only main...side
+}
+
 s_rev_list_children() {
     rl_repo
     v rev-list --children main

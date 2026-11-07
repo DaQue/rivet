@@ -163,6 +163,14 @@ pub struct LogArgs {
     /// Mark each commit of a symmetric difference `<` (left side) or `>` (right side).
     #[arg(long = "left-right")]
     pub left_right: bool,
+
+    /// Like `--cherry-pick`, but mark the commits whose patch the other side has with `=`.
+    #[arg(long = "cherry-mark")]
+    pub cherry_mark: bool,
+
+    /// A synonym for `--right-only --cherry-mark --no-merges`.
+    #[arg(long = "cherry")]
+    pub cherry: bool,
 }
 
 /// Arguments to `rivet show`.
@@ -427,11 +435,9 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         add_revision(&repository, spec, &mut starts, &mut options)?;
     }
 
-    if args.left_only && args.right_only {
-        anyhow::bail!("options '--right-only' and '--left-only' cannot be used together");
-    }
+    let cherry = cherry_options(&std::env::args().collect::<Vec<_>>())?;
     // These filters run before `--skip` / `-n`, so the walk itself is left unlimited.
-    let side_filter = args.cherry_pick || args.left_only || args.right_only;
+    let side_filter = cherry.pick || cherry.mark || cherry.left_only || cherry.right_only;
     options.first_parent(args.first_parent);
     if !side_filter {
         if let Some(n) = args.max_count {
@@ -467,8 +473,9 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     }
 
     let mut oids = rivet_core::revwalk::walk_oids(repository.odb(), &starts, &options)?;
+    let mut same = HashSet::new();
     if side_filter {
-        oids = filter_sides(&repository, args, &specs, oids)?;
+        (oids, same) = filter_sides(&repository, args, &cherry, &specs, oids)?;
     }
     let diff_options = rivet_core::DiffOptions::new();
     // The last of `--oneline`, `--pretty` and `--format` on the command line wins, as in git.
@@ -530,6 +537,9 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     if args.left_right && args.graph {
         anyhow::bail!("not implemented: --left-right together with --graph");
     }
+    if cherry.mark && args.graph {
+        anyhow::bail!("not implemented: --cherry-mark together with --graph");
+    }
     let wants_mark = args.left_right
         || matches!(&layout, pretty::Layout::Format { template, .. } if template.contains("%m"));
     let left_set = if wants_mark {
@@ -583,7 +593,9 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 decorations: &decorations,
                 palette: palette.as_ref(),
                 left: left_set.as_ref(),
+                same: cherry.mark.then_some(&same),
                 left_right: args.left_right,
+                cherry_mark: cherry.mark,
             },
         );
         missing_newline = !text.ends_with(b"\n");
@@ -659,18 +671,81 @@ fn left_commits(
         .collect())
 }
 
-/// `--cherry-pick`, `--left-only` and `--right-only` as `rev-list` applies them: the left side is
-/// every listed commit reachable from the left end of an `A...B`; with `--cherry-pick` a non-merge
-/// commit whose patch id appears on both sides is dropped. `--skip` and `-n` come last.
+/// The `--cherry-pick` / `--cherry-mark` / `--cherry` / `--left-only` / `--right-only` state of a
+/// command line, with git's clashes reported as the option is parsed.
+#[derive(Default)]
+struct Cherry {
+    pick: bool,
+    mark: bool,
+    left_only: bool,
+    right_only: bool,
+    no_merges: bool,
+}
+
+/// Reads the options in the order given (`--cherry` is `--right-only --cherry-mark --no-merges`),
+/// since git words each clash with the later option first.
+fn cherry_options(argv: &[String]) -> Result<Cherry> {
+    let mut c = Cherry::default();
+    for word in argv.iter().skip(1) {
+        let clash = |a: &str, b: &str| -> Result<()> {
+            anyhow::bail!("options '{a}' and '{b}' cannot be used together")
+        };
+        match word.as_str() {
+            "--" => break,
+            "--cherry-pick" => {
+                if c.mark {
+                    clash("--cherry-pick", "--cherry-mark")?;
+                }
+                c.pick = true;
+            }
+            "--cherry-mark" => {
+                if c.pick {
+                    clash("--cherry-mark", "--cherry-pick")?;
+                }
+                c.mark = true;
+            }
+            "--cherry" => {
+                if c.left_only {
+                    clash("--cherry", "--left-only")?;
+                }
+                // git keeps the twins (marked `=`) even after an earlier `--cherry-pick`.
+                c.pick = false;
+                c.mark = true;
+                c.right_only = true;
+                c.no_merges = true;
+            }
+            "--left-only" => {
+                if c.right_only {
+                    clash("--left-only", "--right-only/--cherry")?;
+                }
+                c.left_only = true;
+            }
+            "--right-only" => {
+                if c.left_only {
+                    clash("--right-only", "--left-only")?;
+                }
+                c.right_only = true;
+            }
+            _ => {}
+        }
+    }
+    Ok(c)
+}
+
+/// The side options as `rev-list` applies them: the left side is every listed commit reachable
+/// from the left end of an `A...B`; with `--cherry-pick` a non-merge commit whose patch id appears
+/// on both sides is dropped, with `--cherry-mark` it is returned in the second set to be marked.
+/// `--skip` and `-n` come last.
 fn filter_sides(
     repository: &Repository,
     args: &LogArgs,
+    cherry: &Cherry,
     specs: &[&str],
     oids: Vec<ObjectId>,
-) -> Result<Vec<ObjectId>> {
+) -> Result<(Vec<ObjectId>, HashSet<ObjectId>)> {
     let left = left_commits(repository, args.first_parent, specs, &oids)?;
     let mut same: HashSet<ObjectId> = HashSet::new();
-    if args.cherry_pick && !left.is_empty() && left.len() < oids.len() {
+    if (cherry.pick || cherry.mark) && !left.is_empty() && left.len() < oids.len() {
         let mut sides: HashMap<Vec<u8>, [bool; 2]> = HashMap::new();
         let mut ids = Vec::new();
         for oid in &oids {
@@ -690,9 +765,10 @@ fn filter_sides(
     let mut kept = Vec::new();
     let mut skipped = 0usize;
     for oid in oids {
-        if same.contains(&oid)
-            || (args.left_only && !left.contains(&oid))
-            || (args.right_only && left.contains(&oid))
+        if (cherry.pick && same.contains(&oid))
+            || (cherry.left_only && !left.contains(&oid))
+            || (cherry.right_only && left.contains(&oid))
+            || (cherry.no_merges && repository.commit_parents(oid)?.len() > 1)
         {
             continue;
         }
@@ -708,7 +784,7 @@ fn filter_sides(
     if args.max_count == Some(0) {
         kept.clear();
     }
-    Ok(kept)
+    Ok((kept, same))
 }
 
 /// The text of `SQUASH_MSG`: every commit reachable from `theirs` but not from `ours`, newest
@@ -737,7 +813,9 @@ pub(super) fn squash_message(
                 decorations: &Default::default(),
                 palette: None,
                 left: None,
+                same: None,
                 left_right: false,
+                cherry_mark: false,
             },
         ));
     }
@@ -1723,8 +1801,12 @@ struct Look<'a> {
     palette: Option<&'a pretty::Palette>,
     /// The commits on the left of an `A...B`, when `--left-right` or `%m` needs them.
     left: Option<&'a HashSet<ObjectId>>,
-    /// `--left-right`: put the mark in front of the id of the block layouts and `--oneline`.
+    /// `--cherry-mark`: the commits whose patch the other side has too (`=`).
+    same: Option<&'a HashSet<ObjectId>>,
+    /// `--left-right`: put the side in front of the id of the block layouts and `--oneline`.
     left_right: bool,
+    /// `--cherry-mark`: put `+` in front of a commit that has no twin.
+    cherry_mark: bool,
 }
 
 fn render_commit(
@@ -1745,7 +1827,9 @@ fn render_commit(
         committer_presence: &commit.committer_presence,
         message: &commit.message,
         decorations: look.decorations.get(oid).map_or(&[], Vec::as_slice),
-        mark: if look.left.is_some_and(|left| left.contains(oid)) {
+        mark: if look.same.is_some_and(|same| same.contains(oid)) {
+            b'='
+        } else if look.left.is_some_and(|left| left.contains(oid)) {
             b'<'
         } else {
             b'>'
@@ -1758,7 +1842,15 @@ fn render_commit(
         full_ids: look.full_ids,
         abbrev_commit: look.abbrev_commit,
         palette: look.palette,
-        left_right: look.left_right,
+        lead: if look.same.is_some_and(|same| same.contains(oid)) {
+            Some(b'=')
+        } else if look.left_right {
+            Some(entry.mark)
+        } else if look.cherry_mark {
+            Some(b'+')
+        } else {
+            None
+        },
     };
     let mut out = pretty::render(layout, &entry, &style);
     // An empty `tformat:` prints nothing at all, not even the terminator.
@@ -1983,7 +2075,9 @@ fn show_object(
                     decorations: &decorations,
                     palette,
                     left: None,
+                    same: None,
                     left_right: false,
+                    cherry_mark: false,
                 },
             ));
             let diff_mode = if args.no_patch {

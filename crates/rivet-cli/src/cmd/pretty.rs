@@ -302,8 +302,8 @@ pub struct Style<'a> {
     pub abbrev_commit: bool,
     /// Paint the `commit` line (or the oneline id) and its decorations; `None` prints plain text.
     pub palette: Option<&'a Palette>,
-    /// `--left-right`: the mark and a space go in front of the id.
-    pub left_right: bool,
+    /// `--left-right` / `--cherry-mark`: this mark and a space go in front of the id.
+    pub lead: Option<u8>,
 }
 
 impl Style<'_> {
@@ -390,8 +390,8 @@ pub fn render(layout: &Layout, e: &Entry<'_>, style: &Style<'_>) -> Vec<u8> {
     };
     match layout {
         Layout::Oneline => {
-            if style.left_right {
-                out.extend_from_slice(&[e.mark, b' ']);
+            if let Some(lead) = style.lead {
+                out.extend_from_slice(&[lead, b' ']);
             }
             push_commit_id(&mut out, id(&e.oid).as_bytes(), style);
             push_decorations(&mut out, e.decorations, style);
@@ -406,11 +406,9 @@ pub fn render(layout: &Layout, e: &Entry<'_>, style: &Style<'_>) -> Vec<u8> {
             } else {
                 e.oid.to_string()
             };
-            let mark = if style.left_right {
-                format!("{} ", e.mark as char)
-            } else {
-                String::new()
-            };
+            let mark = style
+                .lead
+                .map_or_else(String::new, |lead| format!("{} ", lead as char));
             push_commit_id(&mut out, format!("commit {mark}{head}").as_bytes(), style);
             push_decorations(&mut out, e.decorations, style);
             out.push(b'\n');
