@@ -15393,6 +15393,34 @@ s_format_patch_paths() {
     v log --format=%s HEAD~4.. -- b d >>"$TRANSCRIPT" 2>&1
 }
 
+s_format_patch_attach() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m "base"
+    echo b >>a; tick; v commit -q -a -m "one: x
+
+body line
+
+second"
+    echo c >>a; tick; v commit -q -a -m "$(printf 'tw\303\253')"
+    local n=0 args cfg
+    for args in "-1 --attach=B" "-1 --inline=B" "-1 --attach=B --inline=C" "-1 --inline=B --attach=C" "-1 --attach=B --no-attach --no-signature" "-1 --attach=" "-2 --attach=B -n" "--cover-letter -2 --attach=B --no-signature" "-1 --attach=B -k" "-1 --attach=B --signature=SIG" "-1 --attach=B -v2" "-1 --attach"; do
+        # The default boundary is the version string, which differs between the programs.
+        DROP_OUT='^(--)?------------[0-9]+\.[0-9]+|boundary="------------[0-9]+\.[0-9]'
+        n=$((n + 1))
+        echo "-- format-patch $args" >>"$TRANSCRIPT"
+        v format-patch --stdout $args 2>&1 \
+            | sed -e 's/\.[0-9]\{9,11\}\.git\./.NOW.git./g' >>"$TRANSCRIPT"
+        echo "rc=${PIPESTATUS[0]}" >>"$TRANSCRIPT"
+        DROP_OUT=
+    done
+    for cfg in "Q" "" "false"; do
+        v config format.attach "$cfg"
+        v format-patch --stdout -1 --no-signature
+        v format-patch --stdout -1 --no-signature --inline=Z
+        v format-patch --stdout -1 --no-signature --no-attach
+    done
+}
+
 s_format_patch_description_file() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m "base"

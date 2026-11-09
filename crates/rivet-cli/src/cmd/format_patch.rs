@@ -145,6 +145,33 @@ pub struct FormatPatchArgs {
     /// Accepted and ignored, as git does.
     #[arg(long = "no-description-file")]
     pub no_description_file: bool,
+
+    /// Send each patch as an attachment, with this MIME boundary (default: the version).
+    #[arg(
+        long = "attach",
+        num_args = 0..=1,
+        require_equals = true,
+        value_name = "BOUNDARY",
+        overrides_with_all = ["attach", "inline", "no_attach"]
+    )]
+    pub attach: Option<Option<String>>,
+
+    /// Send each patch inline as a MIME part, with this boundary (default: the version).
+    #[arg(
+        long = "inline",
+        num_args = 0..=1,
+        require_equals = true,
+        value_name = "BOUNDARY",
+        overrides_with_all = ["attach", "inline", "no_attach"]
+    )]
+    pub inline: Option<Option<String>>,
+
+    /// Do not send the patches as MIME parts.
+    #[arg(
+        long = "no-attach",
+        overrides_with_all = ["attach", "inline", "no_attach"]
+    )]
+    pub no_attach: bool,
 }
 
 /// The cover letter body git builds from a `--description-file`: leading blank lines dropped, the
@@ -408,6 +435,15 @@ fn config_cover_letter(repository: &rivet_core::Repository) -> Result<Option<Opt
     Ok(Some(Some(config_bool(&value, "format.coverletter")?)))
 }
 
+/// `format.attach`: the boundary (a bare key is the default one, an empty value turns it off).
+fn config_attach(repository: &rivet_core::Repository) -> Result<Option<String>> {
+    let key = bstr::BStr::new(b"format.attach");
+    let Some(value) = repository.config_value(key)? else {
+        return Ok(None);
+    };
+    Ok(Some(String::from_utf8_lossy(&value).into_owned()).filter(|v| !v.is_empty()))
+}
+
 /// Git's boolean config value, an integer counting as true when nonzero.
 fn config_bool(value: &[u8], key: &str) -> Result<bool> {
     let value = bstr::BStr::new(value);
@@ -441,6 +477,24 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
     let odb = repository.odb();
     let config_thread = config_thread(&repository)?;
     let config_cover = config_cover_letter(&repository)?;
+    // (boundary, disposition): the last of `--attach`/`--inline`/`--no-attach` wins over
+    // `format.attach`.
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    let mime: Option<(String, &str)> = if args.no_attach {
+        None
+    } else if let Some(boundary) = &args.attach {
+        Some((
+            boundary.clone().unwrap_or_else(|| version.clone()),
+            "attachment",
+        ))
+    } else if let Some(boundary) = &args.inline {
+        Some((
+            boundary.clone().unwrap_or_else(|| version.clone()),
+            "inline",
+        ))
+    } else {
+        config_attach(&repository)?.map(|boundary| (boundary, "attachment"))
+    };
 
     let bad = |result: Result<ObjectId>, spec: &str| -> Result<ObjectId> {
         result.map_err(|_| {
@@ -753,12 +807,22 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         .unwrap_or_default();
         out.extend_from_slice(format!("Date: {date}\n").as_bytes());
         out.extend_from_slice(&subject_header(tag.as_deref(), title));
-        if needs_rfc2047(title) || needs_rfc2047(body_raw) {
+        if let Some((boundary, _)) = &mime {
+            out.extend_from_slice(
+                format!(
+                    "MIME-Version: 1.0\nContent-Type: multipart/mixed; boundary=\"------------{boundary}\"\n\nThis is a multi-part message in MIME format.\n--------------{boundary}\nContent-Type: text/plain; charset=UTF-8; format=fixed\nContent-Transfer-Encoding: 8bit\n"
+                )
+                .as_bytes(),
+            );
+        } else if needs_rfc2047(title) || needs_rfc2047(body_raw) {
             out.extend_from_slice(MIME_HEADERS);
         }
         out.push(b'\n');
         let body = body_raw.trim_end();
         if !body.is_empty() {
+            if mime.is_some() {
+                out.push(b'\n');
+            }
             out.extend_from_slice(body);
             out.push(b'\n');
         }
@@ -790,15 +854,27 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         rivet_core::diff::unified::format_stat_width(&diff, Some(odb), 72, &mut out)?;
         super::print_summary(&diff, &mut out);
         out.push(b'\n');
-        rivet_core::format_unified(&diff, repository.format(), &mut out)?;
-        signature_text(&mut out);
-        ids.push(id);
         let file = format!(
             "{file_prefix}{number:04}-{}.patch",
             slug(&String::from_utf8_lossy(
                 subject_raw.lines().next().unwrap_or_default()
             ))
         );
+        if let Some((boundary, disposition)) = &mime {
+            // The text part, then the patch as a part of its own; git prints no signature.
+            out.extend_from_slice(
+                format!(
+                    "\n--------------{boundary}\nContent-Type: text/x-patch; name=\"{file}\"\nContent-Transfer-Encoding: 8bit\nContent-Disposition: {disposition}; filename=\"{file}\"\n\n"
+                )
+                .as_bytes(),
+            );
+            rivet_core::format_unified(&diff, repository.format(), &mut out)?;
+            out.extend_from_slice(format!("\n--------------{boundary}--\n\n\n").as_bytes());
+        } else {
+            rivet_core::format_unified(&diff, repository.format(), &mut out)?;
+            signature_text(&mut out);
+        }
+        ids.push(id);
         outputs.push((file, out, index > 0));
     }
 
