@@ -25,25 +25,26 @@ fn scratch(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn a_one_level_target_is_refused_by_name_and_nothing_is_written() {
+fn a_one_level_target_is_written_read_and_deleted() {
     let dir = scratch("symref-one-level");
     let rivet = env!("CARGO_BIN_EXE_rivet");
     assert!(run(rivet, &dir, &["init", "-q"]).status.success());
 
     let out = run(rivet, &dir, &["symbolic-ref", "FOO", "foo"]);
-    assert_eq!(out.status.code(), Some(128));
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("not implemented") && stderr.contains("'foo'"),
-        "unexpected stderr: {stderr}"
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    assert!(!dir.join(".git/FOO").exists());
-
-    // A multi-level target still works, so the refusal is not a blanket one.
-    let ok = run(rivet, &dir, &["symbolic-ref", "FOO", "refs/heads/main"]);
-    assert!(ok.status.success());
     assert_eq!(
         std::fs::read_to_string(dir.join(".git/FOO")).unwrap(),
-        "ref: refs/heads/main\n"
+        "ref: foo\n"
     );
+    let read = run(rivet, &dir, &["symbolic-ref", "FOO"]);
+    assert_eq!(String::from_utf8_lossy(&read.stdout), "foo\n");
+    assert!(!dir.join(".git/FOO.lock").exists());
+
+    let del = run(rivet, &dir, &["symbolic-ref", "--delete", "FOO"]);
+    assert!(del.status.success());
+    assert!(!dir.join(".git/FOO").exists());
 }

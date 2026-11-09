@@ -14786,6 +14786,28 @@ s_rerere_gc_dates() {
     done
 }
 
+s_symbolic_ref_one_level() {
+    v init -q repo; cd repo
+    echo a >a; v add a; v commit -q -m one
+    # a one-level lowercase target is accepted, read, shortened and deleted
+    v symbolic-ref FOO foo
+    cat .git/FOO >>"$TRANSCRIPT"
+    v symbolic-ref FOO
+    v symbolic-ref --short FOO
+    v symbolic-ref --no-recurse FOO
+    v symbolic-ref -q FOO
+    v symbolic-ref -m why FOO bar
+    cat .git/FOO >>"$TRANSCRIPT"
+    v symbolic-ref refs/heads/alias baz
+    cat .git/refs/heads/alias >>"$TRANSCRIPT"
+    v symbolic-ref refs/heads/alias
+    v symbolic-ref --delete FOO
+    ls .git/FOO >>"$TRANSCRIPT" 2>&1
+    v symbolic-ref --delete FOO
+    v symbolic-ref --delete refs/heads/alias
+    v symbolic-ref HEAD foo
+}
+
 s_commit_date_env() {
     v init -q repo; cd repo
     echo a >a; v add a

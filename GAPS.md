@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 450 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 451 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-09, gate: 352 tests / 0 failed, 450 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-09, gate: 352 tests / 0 failed, 451 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -162,9 +162,7 @@ The command works for the common case; the listed options or edge cases are miss
   `Repository::open_or_discover` (`core.worktree` variants) and the
   `submodule.<name>.active` setting is not consulted (`submodule.<name>.ignore` is, for `--for-status`, as `status` uses it).
 * **`symbolic-ref`** — read, `--short`, `-q`, `--[no-]recurse`, write (with `-m`) and
-  `--delete` work. A one-level lowercase *target* (`symbolic-ref FOO foo`) is refused by name
-  (`not implemented: symbolic-ref to the one-level target …`, exit 128, nothing written; Rust test
-  `a_one_level_target_is_refused_by_name_and_nothing_is_written`) because `RefName` cannot hold it.
+  `--delete` work, one-level lowercase targets included (`s_symbolic_ref_one_level`).
 * **Hooks** — `core.hooksPath`, the executable-bit rule (with git's once-per-hook hint) and the
   runner exist (`rivet_core::hooks`). Run today: `pre-commit`, `prepare-commit-msg`, `commit-msg`,
   `post-commit` and `post-rewrite amend` for `commit` (`-n/--no-verify`); `pre-merge-commit`,

@@ -61,6 +61,28 @@ fn git_valid(name: &str) -> bool {
         || RefName::from_bytes(format!("refs/{name}").as_bytes()).is_ok()
 }
 
+/// The target of a symbolic ref whose file names a one-level lowercase ref (`ref: foo`), which
+/// [`RefName`] cannot hold, read straight from the file.
+fn raw_one_level_target(repository: &rivet_core::Repository, name: &RefName) -> Option<String> {
+    let text = name.to_string();
+    let path = raw_ref_path(repository, &text);
+    let bytes = std::fs::read(path).ok()?;
+    let rest = bytes.strip_prefix(b"ref:")?;
+    let target = String::from_utf8_lossy(rest).trim().to_string();
+    (!target.is_empty() && !target.contains('/')).then_some(target)
+}
+
+/// Where the loose file of `name` lives: `refs/` in the common directory, pseudo-refs in the
+/// work tree's own git directory.
+fn raw_ref_path(repository: &rivet_core::Repository, name: &str) -> std::path::PathBuf {
+    let base = if name.starts_with("refs/") {
+        repository.common_dir()
+    } else {
+        repository.git_dir()
+    };
+    base.join(name)
+}
+
 /// Handler for `rivet symbolic-ref`.
 ///
 /// Reads (`<name>`), writes (`<name> <ref>`) or deletes (`--delete <name>`) a symbolic ref with
@@ -73,8 +95,9 @@ fn git_valid(name: &str) -> bool {
 ///
 /// # Caveats
 ///
-/// * A one-level lowercase *target* (`symbolic-ref FOO foo`) is refused: [`RefName`] cannot hold
-///   one, and Git accepts it.
+/// * A one-level lowercase *target* (`symbolic-ref FOO foo`) is written, read and deleted through
+///   the loose file itself, because [`RefName`] cannot hold one; it never resolves, so no reflog
+///   entry is made.
 pub fn run_symbolic_ref(global: &GlobalArgs, args: &SymbolicRefArgs) -> Result<i32> {
     let count_ok = if args.delete {
         args.names.len() == 1
@@ -94,15 +117,19 @@ pub fn run_symbolic_ref(global: &GlobalArgs, args: &SymbolicRefArgs) -> Result<i
             bail!("deleting 'HEAD' is not allowed");
         }
         let parsed = RefName::from_bytes(name.as_bytes()).ok();
-        let symbolic = parsed.as_ref().is_some_and(|p| {
-            matches!(
-                repository.refs().try_read(p),
-                Ok(Some(RefTarget::Symbolic(_)))
-            )
-        });
+        let symbolic = parsed
+            .as_ref()
+            .is_some_and(|p| match repository.refs().try_read(p) {
+                Ok(read) => matches!(read, Some(RefTarget::Symbolic(_))),
+                Err(_) => raw_one_level_target(&repository, p).is_some(),
+            });
         let Some(parsed) = parsed.filter(|_| symbolic) else {
             bail!("Cannot delete {name}, not a symbolic ref");
         };
+        if repository.refs().try_read(&parsed).is_err() {
+            std::fs::remove_file(raw_ref_path(&repository, name))?;
+            return Ok(0);
+        }
         repository.refs().delete(&parsed)?;
         return Ok(0);
     }
@@ -120,7 +147,23 @@ pub fn run_symbolic_ref(global: &GlobalArgs, args: &SymbolicRefArgs) -> Result<i
             return Ok(1);
         };
         let Ok(target_ref) = RefName::from_bytes(target.as_bytes()) else {
-            bail!("not implemented: symbolic-ref to the one-level target '{target}'");
+            let path = raw_ref_path(&repository, name);
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let mut lock = path.clone().into_os_string();
+            lock.push(".lock");
+            let lock = std::path::PathBuf::from(lock);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock)
+                .and_then(|mut f| {
+                    std::io::Write::write_all(&mut f, format!("ref: {target}\n").as_bytes())
+                })
+                .map_err(|e| anyhow::anyhow!("Unable to create '{}': {e}", lock.display()))?;
+            std::fs::rename(&lock, &path)?;
+            return Ok(0);
         };
         // Git logs the update (empty message unless `-m`) when the new target resolves to an
         // object, and only for refs that keep a reflog.
@@ -140,16 +183,26 @@ pub fn run_symbolic_ref(global: &GlobalArgs, args: &SymbolicRefArgs) -> Result<i
         bail!("No such ref: {name}");
     }
     let mut current = RefName::from_bytes(name.as_bytes()).ok();
-    let mut last = None;
+    let mut last: Option<String> = None;
     let mut hops = 0;
     while let Some(ref_name) = current.take() {
-        match repository.refs().try_read(&ref_name)? {
+        let read = match repository.refs().try_read(&ref_name) {
+            Ok(read) => read,
+            Err(e) => match raw_one_level_target(&repository, &ref_name) {
+                Some(target) => {
+                    last = Some(target);
+                    break;
+                }
+                None => return Err(e.into()),
+            },
+        };
+        match read {
             Some(RefTarget::Symbolic(next)) => {
                 hops += 1;
                 if hops > 5 + 5 {
                     bail!("No such ref: {name}");
                 }
-                last = Some(next.clone());
+                last = Some(next.to_string());
                 if args.no_recurse {
                     break;
                 }
@@ -164,7 +217,7 @@ pub fn run_symbolic_ref(global: &GlobalArgs, args: &SymbolicRefArgs) -> Result<i
         }
         bail!("ref {name} is not a symbolic ref");
     };
-    let full = result.to_string();
+    let full = result;
     if args.short {
         let names: Vec<String> = repository
             .refs()
