@@ -197,6 +197,12 @@ fn needs_rfc2047(text: &[u8]) -> bool {
     text.iter().any(|b| *b >= 0x80 || *b == 0x1b)
 }
 
+/// Whether a title needs RFC 2047: as `needs_rfc2047`, and a line break (a kept `-k` subject) or
+/// an `=?` that would read as an encoded word.
+fn title_needs_rfc2047(text: &[u8]) -> bool {
+    needs_rfc2047(text) || text.contains(&b'\n') || text.windows(2).any(|pair| pair == b"=?")
+}
+
 /// Append `text` as RFC 2047 `q` encoded words, one UTF-8 character at a time, folding with a
 /// single leading blank so that no line passes 76 columns.
 fn add_rfc2047(buf: &mut Vec<u8>, text: &[u8], kind: Rfc2047) {
@@ -271,7 +277,7 @@ fn from_header(name: &[u8], email: &[u8]) -> Vec<u8> {
 
 /// A `Subject:` line with its `[PATCH n/m]` tag, the title encoded when it is not ASCII.
 fn subject_header(tag: Option<&str>, title: &[u8]) -> Vec<u8> {
-    if !needs_rfc2047(title) {
+    if !title_needs_rfc2047(title) {
         return fold_subject(tag, &String::from_utf8_lossy(title)).into_bytes();
     }
     let mut out = match tag {
@@ -321,6 +327,12 @@ fn fold_subject(tag: Option<&str>, subject: &str) -> String {
         None => "Subject: ".to_string(),
     };
     let mut line_len = out.len();
+    if line_len + subject.len() <= 78 {
+        // Nothing to wrap: the subject goes out as written, runs of blanks included.
+        out.push_str(subject);
+        out.push('\n');
+        return out;
+    }
     for (index, word) in subject.split(' ').filter(|w| !w.is_empty()).enumerate() {
         if index == 0 {
             if line_len + word.len() > 78 {
@@ -700,14 +712,13 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         let body_raw = paragraphs.next().unwrap_or_default();
         let subject_bytes: Vec<u8> = subject_raw
             .lines()
-            .map(|line| line.trim().to_vec())
+            .map(|line| line.trim_end().to_vec())
             .collect::<Vec<_>>()
             .join(&b' ');
-        let subject = String::from_utf8_lossy(&subject_bytes).into_owned();
         // With `-k` the title is kept as written, line breaks included; only a non-ASCII one can
         // be sent that way (as encoded words).
         let raw_title = subject_raw.trim_end();
-        let title: &[u8] = if args.keep_subject && needs_rfc2047(raw_title) {
+        let title: &[u8] = if args.keep_subject && title_needs_rfc2047(raw_title) {
             raw_title
         } else {
             &subject_bytes
@@ -720,16 +731,6 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         } else {
             Some(subject_prefix.clone())
         };
-        if args.keep_subject
-            && !needs_rfc2047(title)
-            && (subject_raw.trim_end().contains(&b'\n')
-                || subject.contains("  ")
-                || subject.contains('\t'))
-        {
-            anyhow::bail!(
-                "format-patch: -k with a multi-line subject or runs of blanks (RFC 2047 encoding) is not implemented"
-            );
-        }
         let mut out: Vec<u8> = Vec::new();
         out.extend_from_slice(format!("From {oid} Mon Sep 17 00:00:00 2001\n").as_bytes());
         let id = message_id(&oid.to_string());

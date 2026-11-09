@@ -15318,6 +15318,31 @@ s_format_patch_reroll() {
     v format-patch -v4 --stdout --no-signature HEAD~2 >>"$TRANSCRIPT" 2>&1
 }
 
+s_format_patch_keep_subject() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m "base"
+    local msg
+    for msg in "line one
+line two
+
+body" "a  b" "a	b" "p
+q
+r" "a=?b" "one
+ two  three
+four" "this is a rather long subject line that goes past the seventy-eight column limit for sure
+and a second line of it" "x
+
+y"; do
+        echo "$msg" >>a; tick; v commit -q -a -m "$msg"
+    done
+    local k
+    for k in -k ""; do
+        echo "-- format-patch $k" >>"$TRANSCRIPT"
+        v format-patch $k --stdout --no-signature HEAD~8 2>&1 \
+            | sed -e 's/\.[0-9]\{9,11\}\.git\./.NOW.git./g' >>"$TRANSCRIPT"
+    done
+}
+
 s_format_patch_description_file() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m "base"

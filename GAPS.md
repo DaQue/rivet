@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 451 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 452 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-09, gate: 352 tests / 0 failed, 451 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-09, gate: 351 tests / 0 failed, 452 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -132,8 +132,7 @@ The command works for the common case; the listed options or edge cases are miss
   (`Message-ID`, `In-Reply-To`, `References`; a deep thread lists every earlier message), and RFC 2047 encoding of
   non-ASCII names and subjects (folded at 76 columns, the address moved to its own line past 78, the MIME headers
   added for a non-ASCII subject or message, ASCII names with a special quoted) are compared with git
-  (`s_format_patch_cover`; the message ids carry the clock, so the scenario normalises them). `-k` with a
-  multi-line or blank-run ASCII subject is still refused, as are attachments, path limiting, `--range-diff`, scissors. `format.coverLetter` (`true`, `false`, `auto`: only for more than one patch) and `format.thread` (`true`, `deep`, `shallow`) set the defaults the command line overrides, a bad boolean is `fatal: bad boolean config value '<v>' for 'format.coverletter'` (`s_format_patch_config`). An identity's name and email lose leading and trailing crud as git's ident cleanup does, and a run of whitespace in a reflog message is one space (`s_ident_crud_reflog`). `-v <n>` / `--reroll-count=<n>` (any text; `[PATCH v<n>]` after the prefix, a sanitised `v<n>-` in front of every file name, the cover letter included; the last one wins, `--no-reroll-count` drops it; `s_format_patch_reroll`). `am --3way`/`-3`, `--no-3way`, `am.threeWay` and `--[no-]rerere-autoupdate` work (`s_am_3way`, `s_am_3way_rerere`); `am --show-current-patch[=raw|diff]` prints the stored message (with its `From ` line) or patch, with git's refusals for no operation in progress, a bad value and a clash with `--continue`/`--skip`/`--abort` (exit 129; `s_am_show_current_patch`).
+  (`s_format_patch_cover`; the message ids carry the clock, so the scenario normalises them). Attachments, path limiting, `--range-diff` and scissors are refused. `format.coverLetter` (`true`, `false`, `auto`: only for more than one patch) and `format.thread` (`true`, `deep`, `shallow`) set the defaults the command line overrides, a bad boolean is `fatal: bad boolean config value '<v>' for 'format.coverletter'` (`s_format_patch_config`). An identity's name and email lose leading and trailing crud as git's ident cleanup does, and a run of whitespace in a reflog message is one space (`s_ident_crud_reflog`). `-v <n>` / `--reroll-count=<n>` (any text; `[PATCH v<n>]` after the prefix, a sanitised `v<n>-` in front of every file name, the cover letter included; the last one wins, `--no-reroll-count` drops it; `s_format_patch_reroll`). `am --3way`/`-3`, `--no-3way`, `am.threeWay` and `--[no-]rerere-autoupdate` work (`s_am_3way`, `s_am_3way_rerere`); `am --show-current-patch[=raw|diff]` prints the stored message (with its `From ` line) or patch, with git's refusals for no operation in progress, a bad value and a clash with `--continue`/`--skip`/`--abort` (exit 129; `s_am_show_current_patch`).
 * **`stash`** — `create`, `store` and `save` exist (`s_stash_stack`), as does `branch`
   (`s_stash_branch`), and `save`/`store` error text matches (`s_stash_errors`). `push`/`save` `-S`/`--staged` (the stash is the index; the staged changes leave the work tree through a
   reverse `apply` with one line of context and are reset in the index, `-k` keeps the index, a pathspec
