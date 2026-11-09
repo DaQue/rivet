@@ -164,9 +164,7 @@ The command works for the common case; the listed options or edge cases are miss
 * **`symbolic-ref`** — read, `--short`, `-q`, `--[no-]recurse`, write (with `-m`) and
   `--delete` work. A one-level lowercase *target* (`symbolic-ref FOO foo`) is refused by name
   (`not implemented: symbolic-ref to the one-level target …`, exit 128, nothing written; Rust test
-  `a_one_level_target_is_refused_by_name_and_nothing_is_written`) because `RefName` cannot hold it,
-  and git's quirk of writing a ref with a malformed *name*
-  (`refs/heads/a..b`) is not reproduced (rivet reports `error: refusing to update ref`).
+  `a_one_level_target_is_refused_by_name_and_nothing_is_written`) because `RefName` cannot hold it.
 * **Hooks** — `core.hooksPath`, the executable-bit rule (with git's once-per-hook hint) and the
   runner exist (`rivet_core::hooks`). Run today: `pre-commit`, `prepare-commit-msg`, `commit-msg`,
   `post-commit` and `post-rewrite amend` for `commit` (`-n/--no-verify`); `pre-merge-commit`,
