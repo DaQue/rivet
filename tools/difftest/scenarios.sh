@@ -15373,6 +15373,26 @@ y"; do
     done
 }
 
+s_format_patch_paths() {
+    v init -q repo; cd repo
+    mkdir d; echo a >a; echo b >b; echo x >d/x; v add a b d; tick; v commit -q -m "base"
+    echo a2 >>a; tick; v commit -q -a -m "touch a"
+    echo b2 >>b; tick; v commit -q -a -m "touch b"
+    echo x2 >>d/x; echo a3 >>a; tick; v commit -q -a -m "touch d and a"
+    echo b3 >>b; tick; v commit -q -a -m "touch b again"
+    local n=0 args
+    for args in "HEAD~4 -- a" "HEAD~4 -- b d" "HEAD~4 -- d" "-2 HEAD -- a" "--root HEAD -- b" "HEAD~4 -- nothing" "--cover-letter HEAD~4 -- a"; do
+        n=$((n + 1))
+        echo "-- format-patch $args" >>"$TRANSCRIPT"
+        v format-patch --stdout --no-signature $args 2>&1 \
+            | sed -e 's/\.[0-9]\{9,11\}\.git\./.NOW.git./g' >>"$TRANSCRIPT"
+        echo "rc=${PIPESTATUS[0]}" >>"$TRANSCRIPT"
+    done
+    # A boundary parent still decides whether a commit touches the paths.
+    echo "-- log boundary" >>"$TRANSCRIPT"
+    v log --format=%s HEAD~4.. -- b d >>"$TRANSCRIPT" 2>&1
+}
+
 s_format_patch_description_file() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m "base"

@@ -909,8 +909,20 @@ pub fn walk_oids(odb: &Odb, starts: &[ObjectId], options: &WalkOptions) -> Resul
             if let Some(parent) = same_as {
                 show = false;
                 parents = vec![parent];
-            } else if parents.is_empty() || parents.iter().all(|p| excluded.contains(p)) {
+            } else if parents.is_empty() {
                 show = paths_differ(info.tree, None)?;
+            } else if parents.iter().all(|p| excluded.contains(p)) {
+                // Every parent is a boundary: git still compares with its tree, so a commit
+                // that leaves the paths alone is not shown.
+                let mut differs = true;
+                for parent in &parents {
+                    let parent_info = load(parent)?;
+                    if !paths_differ(info.tree, Some(parent_info.tree))? {
+                        differs = false;
+                        break;
+                    }
+                }
+                show = differs;
             }
         }
         for parent in parents.iter().rev() {

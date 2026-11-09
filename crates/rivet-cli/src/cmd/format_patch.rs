@@ -11,7 +11,7 @@
 //!
 //! * **The signature line carries Rivet's version**, where Git's carries its own; scripts that
 //!   compare patches byte for byte should pass `--no-signature`.
-//! * Attachments, path limiting and `-k` with a multi-line subject (which needs RFC 2047 encoding
+//! * Attachments and `-k` with a multi-line subject (which needs RFC 2047 encoding
 //!   of an ASCII string) are not implemented and are refused.
 //! * `-v <n>` / `--reroll-count=<n>` add ` v<n>` to the subject prefix and `v<n>-` to every file name.
 //! * `--description-file=<file>` is the cover letter's body (`*** BLURB HERE ***` for an empty file).
@@ -78,7 +78,7 @@ pub struct FormatPatchArgs {
     #[arg(long = "signature", value_name = "TEXT")]
     pub signature: Option<String>,
 
-    /// Limit to commits touching these paths. Not implemented.
+    /// Limit to commits touching these paths, and to those paths within each patch.
     #[arg(last = true, value_name = "PATH")]
     pub paths: Vec<String>,
 
@@ -429,9 +429,6 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
             None => anyhow::bail!("unrecognized argument: --directory"),
         }
     }
-    if !args.paths.is_empty() {
-        anyhow::bail!("format-patch: path limiting is not implemented");
-    }
     if args.keep_subject {
         if args.subject_prefix.is_some() {
             anyhow::bail!("options '--subject-prefix/--rfc' and '-k' cannot be used together");
@@ -454,6 +451,15 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
     };
     let mut options = WalkOptions::new();
     options.sort(SortOrder::Topo);
+    let mut specs: Vec<bstr::BString> = Vec::new();
+    for path in &args.paths {
+        specs.push(super::worktree_path(
+            &repository,
+            std::path::Path::new(path),
+            "format-patch",
+        )?);
+    }
+    options.paths = specs.clone();
     let starts: Vec<ObjectId>;
     match (args.revs.as_slice(), args.max_count) {
         // Git would use the branch's upstream; with nothing configured it writes nothing.
@@ -682,8 +688,10 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         out.extend_from_slice(b"\n");
         out.extend_from_slice(&shortlog);
         let first = selected[0];
-        // A range that starts at a root commit has no base to compare with: git prints no stat.
-        if let Some(parent) = repository.commit_parents(first)?.first() {
+        // A range that starts at a root commit has no base to compare with: git prints no stat,
+        // and none either when the patches are limited to paths.
+        let base_parent = repository.commit_parents(first)?.first().copied();
+        if let Some(parent) = base_parent.as_ref().filter(|_| specs.is_empty()) {
             let base = repository.commit_tree(*parent)?;
             let head_tree = repository.commit_tree(*newest)?;
             let diff_options = rivet_core::DiffOptions::new();
@@ -764,6 +772,21 @@ pub fn run_format_patch(global: &GlobalArgs, args: &FormatPatchArgs) -> Result<i
         let mut diff =
             rivet_core::tree_diff(repository.format(), base, commit.tree, odb, &diff_options)?;
         super::detect_renames(&repository, &mut diff, &diff_options)?;
+        if !specs.is_empty() {
+            let keep: Vec<bool> = diff
+                .files
+                .iter()
+                .map(|f| {
+                    specs.iter().any(|s| {
+                        rivet_core::ops::pathspec_matches(f.path(), bstr::BStr::new(&s[..]))
+                    })
+                })
+                .collect();
+            let mut flags = keep.iter();
+            diff.files.retain(|_| *flags.next().unwrap_or(&true));
+            let mut flags = keep.iter();
+            diff.stats.retain(|_| *flags.next().unwrap_or(&true));
+        }
         rivet_core::diff::unified::format_stat_width(&diff, Some(odb), 72, &mut out)?;
         super::print_summary(&diff, &mut out);
         out.push(b'\n');
