@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-09 — `grep` takes `--and`, `--or`, `--not`, `(`, `)` and `--all-match`: a boolean expression over `-e` patterns compiled with git's grammar (`--and` binds tighter, adjacent patterns are an implicit or) and git's fatals for a malformed one, and the words are options only before the first non-option word (`s_grep_boolean`).
 * 2026-11-09 — `format-patch -k` keeps a multi-line subject (sent as an RFC 2047 word with `=0A`), a subject with an `=?` is encoded, and runs of blanks or a leading blank in a subject are kept as written instead of refused or collapsed (`s_format_patch_keep_subject`).
 * 2026-11-09 — `symbolic-ref` accepts a one-level lowercase target (`symbolic-ref FOO foo`), reads it back (`--short`, `--no-recurse`, `-q`) and deletes it, instead of refusing by name (`s_symbolic_ref_one_level`).
 * 2026-11-09 — `rerere gc` reads `gc.rerereResolved`/`gc.rerereUnresolved` as git does: a number is days, `all` prunes everything, any other value is a cut-off date (`2.months.ago`, `yesterday`); `parse_expiry_ago` knows `yesterday` (`s_rerere_gc_dates`).

@@ -1,8 +1,10 @@
 //! `grep`: search tracked files in the work tree, the index (`--cached`) or a tree.
 //!
 //! Patterns are POSIX basic regular expressions by default, `-E` extended ones, `-F` fixed
-//! strings. `-P` (Perl), `--and`/`--not` boolean patterns are not
-//! implemented and are refused at the command line. `--threads` is validated and ignored.
+//! strings. `-P` (Perl) is not implemented and is refused at the command line. `--and`, `--or`,
+//! `--not`, `(`, `)` and `--all-match` build a boolean expression over the patterns, parsed from the
+//! raw command line (the order of the words matters) with git's grammar and error texts.
+//! `--threads` is validated and ignored.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -28,6 +30,22 @@ pub struct GrepArgs {
     /// A pattern; may be given several times (a line matching any of them is a match).
     #[arg(short = 'e', value_name = "PATTERN")]
     pub patterns: Vec<String>,
+
+    /// Both patterns must match the line (read from the raw command line, see `scan_expression`).
+    #[arg(long = "and", action = clap::ArgAction::Count)]
+    pub and_: u8,
+
+    /// A line matching either side is a match (the default between patterns; ignored).
+    #[arg(long = "or", action = clap::ArgAction::Count)]
+    pub or_: u8,
+
+    /// Negate the next pattern or group.
+    #[arg(long = "not", action = clap::ArgAction::Count)]
+    pub not_: u8,
+
+    /// With several top-level patterns, a file must match every one of them.
+    #[arg(long = "all-match")]
+    pub all_match: bool,
 
     /// Search the index instead of the work tree.
     #[arg(long = "cached")]
@@ -174,6 +192,214 @@ fn parse_git_int(text: &str) -> Option<i64> {
     digits.parse::<i64>().ok()?.checked_mul(factor)
 }
 
+/// One word of the pattern expression, in command-line order.
+enum Tok {
+    Pattern(String),
+    And,
+    Not,
+    Open,
+    Close,
+}
+
+/// A compiled pattern expression; `Atom` indexes the list of regexes.
+enum Expr {
+    Atom(usize),
+    Not(Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
+    Or(Box<Expr>, Box<Expr>),
+}
+
+impl Expr {
+    fn eval(&self, regexes: &[Regex], line: &[u8], word: bool) -> bool {
+        match self {
+            Expr::Atom(i) => regexes[*i].is_match(line, word),
+            Expr::Not(x) => !x.eval(regexes, line, word),
+            Expr::And(x, y) => x.eval(regexes, line, word) && y.eval(regexes, line, word),
+            Expr::Or(x, y) => x.eval(regexes, line, word) || y.eval(regexes, line, word),
+        }
+    }
+
+    /// The alternatives of the outermost `Or` chain (what `--all-match` requires of a file).
+    fn alternatives<'a>(&'a self, out: &mut Vec<&'a Expr>) {
+        match self {
+            Expr::Or(x, y) => {
+                x.alternatives(out);
+                y.alternatives(out);
+            }
+            other => out.push(other),
+        }
+    }
+}
+
+/// Recursive descent over `toks` with the grammar and fatal texts of git's `grep.c`.
+struct ExprParser<'a> {
+    toks: &'a [Tok],
+    pos: usize,
+    atoms: usize,
+}
+
+impl ExprParser<'_> {
+    fn text(tok: &Tok) -> &str {
+        match tok {
+            Tok::Pattern(p) => p,
+            Tok::And => "--and",
+            Tok::Not => "--not",
+            Tok::Open => "(",
+            Tok::Close => ")",
+        }
+    }
+
+    fn atom(&mut self) -> Result<Option<Expr>, String> {
+        match self.toks.get(self.pos) {
+            Some(Tok::Pattern(_)) => {
+                self.pos += 1;
+                self.atoms += 1;
+                Ok(Some(Expr::Atom(self.atoms - 1)))
+            }
+            Some(Tok::Open) => {
+                self.pos += 1;
+                let inner = self.or()?;
+                if !matches!(self.toks.get(self.pos), Some(Tok::Close)) {
+                    return Err("unmatched ( for expression group".into());
+                }
+                self.pos += 1;
+                Ok(inner)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn not(&mut self) -> Result<Option<Expr>, String> {
+        if matches!(self.toks.get(self.pos), Some(Tok::Not)) {
+            if self.pos + 1 >= self.toks.len() {
+                return Err("--not not followed by pattern expression".into());
+            }
+            self.pos += 1;
+            return match self.not()? {
+                Some(x) => Ok(Some(Expr::Not(Box::new(x)))),
+                None => Err("--not followed by non pattern expression".into()),
+            };
+        }
+        self.atom()
+    }
+
+    fn and(&mut self) -> Result<Option<Expr>, String> {
+        let x = self.not()?;
+        if matches!(self.toks.get(self.pos), Some(Tok::And)) {
+            let Some(x) = x else {
+                return Err("--and not preceded by pattern expression".into());
+            };
+            if self.pos + 1 >= self.toks.len() {
+                return Err("--and not followed by pattern expression".into());
+            }
+            self.pos += 1;
+            return match self.and()? {
+                Some(y) => Ok(Some(Expr::And(Box::new(x), Box::new(y)))),
+                None => Err("--and not followed by pattern expression".into()),
+            };
+        }
+        Ok(x)
+    }
+
+    fn or(&mut self) -> Result<Option<Expr>, String> {
+        let Some(x) = self.and()? else {
+            return Ok(None);
+        };
+        let Some(next) = self.toks.get(self.pos) else {
+            return Ok(Some(x));
+        };
+        if matches!(next, Tok::Close) {
+            return Ok(Some(x));
+        }
+        match self.or()? {
+            Some(y) => Ok(Some(Expr::Or(Box::new(x), Box::new(y)))),
+            None => Err(format!("not a pattern expression {}", Self::text(next))),
+        }
+    }
+}
+
+/// The expression words of `grep`, read from the raw command line the way git's option parser sees
+/// them: they are only options before the first non-option word (after it git says `option '<w>'
+/// must come before non-option arguments`). `--or` is a no-op, as in git. Returns `None` when the
+/// line holds no expression word.
+fn scan_expression(raw: &[String]) -> Result<Option<Vec<Tok>>, String> {
+    let Some(start) = raw.iter().position(|a| a == "grep") else {
+        return Ok(None);
+    };
+    let mut toks: Vec<Tok> = Vec::new();
+    let mut special = false;
+    let mut positional = false;
+    let mut i = start + 1;
+    while i < raw.len() {
+        let word = raw[i].as_str();
+        i += 1;
+        if word == "--" {
+            break;
+        }
+        let known = matches!(word, "--and" | "--or" | "--not" | "--all-match");
+        if positional {
+            if known {
+                return Err(format!(
+                    "option '{word}' must come before non-option arguments"
+                ));
+            }
+            continue;
+        }
+        match word {
+            "--and" => {
+                toks.push(Tok::And);
+                special = true;
+            }
+            "--not" => {
+                toks.push(Tok::Not);
+                special = true;
+            }
+            "--all-match" => special = true,
+            "(" => {
+                toks.push(Tok::Open);
+                special = true;
+            }
+            ")" => {
+                toks.push(Tok::Close);
+                special = true;
+            }
+            "--or" => {}
+            "--after-context" | "--before-context" | "--context" => i += 1,
+            "--threads" => {
+                if raw.get(i).is_some_and(|n| parse_git_int(n).is_some()) {
+                    i += 1;
+                }
+            }
+            _ if word.starts_with("--") => {}
+            _ if word.starts_with('-') && word.len() > 1 => {
+                // A cluster of short options: `e`, `A`, `B`, `C` take the rest or the next word.
+                for (at, c) in word.char_indices().skip(1) {
+                    if matches!(c, 'e' | 'A' | 'B' | 'C') {
+                        let rest = &word[at + 1..];
+                        let value = if rest.is_empty() {
+                            i += 1;
+                            raw.get(i - 1).cloned().unwrap_or_default()
+                        } else {
+                            rest.to_string()
+                        };
+                        if c == 'e' {
+                            toks.push(Tok::Pattern(value));
+                        }
+                        break;
+                    }
+                }
+            }
+            _ => {
+                positional = true;
+                if toks.is_empty() {
+                    toks.push(Tok::Pattern(word.to_string()));
+                }
+            }
+        }
+    }
+    Ok(special.then_some(toks))
+}
+
 struct Source {
     /// The name as printed: `path`, or `rev:path` when searching a tree.
     shown: Vec<u8>,
@@ -214,8 +440,21 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
         // `grep -- <pattern> <paths>`: the dashes only end the options.
         positional.push(after_dashes.remove(0));
     }
+    let scanned = match scan_expression(&std::env::args().collect::<Vec<_>>()) {
+        Ok(toks) => toks.filter(|t| !t.is_empty()),
+        Err(message) => {
+            eprintln!("fatal: {message}");
+            return Ok(128);
+        }
+    };
+    if scanned.is_some() {
+        positional.retain(|a| a != "(" && a != ")");
+    }
     let mut patterns: Vec<String> = args.patterns.clone();
-    if patterns.is_empty() {
+    let positional_pattern = scanned
+        .as_ref()
+        .is_none_or(|toks| toks.iter().any(|t| matches!(t, Tok::Pattern(_))));
+    if patterns.is_empty() && positional_pattern {
         if positional.is_empty() {
             eprintln!("fatal: no pattern given");
             return Ok(128);
@@ -272,6 +511,38 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
             }
         }
     }
+
+    // The expression over the regexes, when the line has `--and`/`--not`/parentheses/`--all-match`.
+    let mut expression: Option<Option<Expr>> = None;
+    if let Some(toks) = &scanned {
+        let mut parser = ExprParser {
+            toks,
+            pos: 0,
+            atoms: 0,
+        };
+        let built = match parser.or() {
+            Ok(built) => built,
+            Err(message) => {
+                eprintln!("fatal: {message}");
+                return Ok(128);
+            }
+        };
+        if let Some(rest) = toks.get(parser.pos) {
+            eprintln!(
+                "fatal: incomplete pattern expression group: {}",
+                ExprParser::text(rest)
+            );
+            return Ok(128);
+        }
+        expression = Some(built);
+    }
+    let alternatives: Vec<&Expr> = {
+        let mut out = Vec::new();
+        if let Some(Some(root)) = &expression {
+            root.alternatives(&mut out);
+        }
+        out
+    };
 
     let cwd_prefix = {
         let root = repository.worktree()?.root().map(|p| p.to_path_buf());
@@ -377,9 +648,19 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
         if source.data.ends_with(b"\n") || source.data.is_empty() {
             lines.pop();
         }
+        let matches_line = |line: &[u8]| match &expression {
+            Some(Some(root)) => root.eval(&regexes, line, args.word),
+            Some(None) => false,
+            None => regexes.iter().any(|r| r.is_match(line, args.word)),
+        };
+        // `--all-match`: a file only counts when every top-level alternative hits some line.
+        let file_ok = !args.all_match
+            || alternatives
+                .iter()
+                .all(|alt| lines.iter().any(|l| alt.eval(&regexes, l, args.word)));
         let hits: Vec<bool> = lines
             .iter()
-            .map(|line| regexes.iter().any(|r| r.is_match(line, args.word)) != invert)
+            .map(|line| file_ok && matches_line(line) != invert)
             .collect();
         let count = hits.iter().filter(|h| **h).count();
         if count > 0 {

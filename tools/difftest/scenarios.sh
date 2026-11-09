@@ -10169,6 +10169,36 @@ s_grep_threads() {
     echo "rc=$?"
 }
 
+# `grep` builds a boolean expression from `--and`, `--not`, `(`, `)` (`--or` is a no-op, adjacent patterns
+# are an implicit or, `--and` binds tighter), `--all-match` wants every top-level alternative in a file,
+# and a malformed expression dies with git's own text.
+s_grep_boolean() {
+    v init -q repo; cd repo
+    printf 'foo bar\nfoo\nbar\nbaz foo bar\nqux\n' >a
+    printf 'foo only\n' >b
+    v add .; v commit -q -m one
+    local args
+    for args in '-e foo --and -e bar' '-e foo --and --not -e bar' '--not -e foo' '-e foo --or -e qux' \
+        '--not --not -e foo' '-e foo --and --or -e bar' '-e foo --and -e bar -o' '-v -e foo --and -e bar' \
+        '-c -e foo --and -e bar' '-e foo --and -e bar -n -C1' '-e foo --not -e bar' \
+        '-e foo -e bar --and -e baz' '-e foo --and -e bar -e qux' '-F -e foo --and -e bar' '-e foo --or' \
+        '-w -e fo --or -e bar' '-e foo --and -e bar -- a' '--not -e foo --not -e bar' \
+        '-e foo --and --not --not -e bar' '-L -e foo --and -e bar' '-e foo --and -e bar -l' \
+        '-e foo --all-match' '-e foo -e bar --all-match' '-e foo --and -e bar --all-match' \
+        '-e foo --and' '--and -e foo' '-e foo --not' '--and' '--not' '-e foo --not --and -e bar' \
+        '-e foo a --and' '-e foo a --not' 'foo --or'; do
+        v grep $args
+        echo "rc=$?"
+    done
+    local paren
+    for paren in '( -e foo -e bar )' '( -e foo --or -e qux --and -e bar' '-e foo )' '-e a --and ( -e foo --or -e qux )' \
+        '( )' '-e foo --not ( -e bar )' '(' ')' '-e foo --and ( )' '-e foo ( )' '--not ( -e foo --and -e bar )' \
+        '( -e foo --and -e bar ) --and ( -e foo --or -e qux )' '-e foo --and ( -e bar --or -e qux ) -n'; do
+        v grep $paren
+        echo "rc=$?"
+    done
+}
+
 # `grep -o` prints each match on a line of its own (leftmost across patterns, the longest on a tie, an
 # empty match ends the line, `-v` switches it off, context lines are silent but still draw `--`);
 # `--heading` names the file once above its lines, `-h` does not hide it, the last of
