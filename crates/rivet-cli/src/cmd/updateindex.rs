@@ -46,6 +46,78 @@ const REFUSED: [&str; 12] = [
     "no-again",
 ];
 
+/// git's long options in the order of its option table; the flag is `PARSE_OPT_NONEG`.
+const LONG_OPTIONS: [(&str, bool); 32] = [
+    ("ignore-submodules", false),
+    ("add", false),
+    ("replace", false),
+    ("remove", false),
+    ("unmerged", false),
+    ("refresh", true),
+    ("really-refresh", true),
+    ("cacheinfo", true),
+    ("chmod", true),
+    ("assume-unchanged", true),
+    ("no-assume-unchanged", true),
+    ("skip-worktree", true),
+    ("no-skip-worktree", true),
+    ("ignore-skip-worktree-entries", false),
+    ("info-only", false),
+    ("force-remove", false),
+    ("stdin", true),
+    ("index-info", true),
+    ("unresolve", true),
+    ("again", true),
+    ("ignore-missing", false),
+    ("verbose", false),
+    ("clear-resolve-undo", true),
+    ("index-version", false),
+    ("show-index-version", false),
+    ("split-index", false),
+    ("untracked-cache", false),
+    ("test-untracked-cache", false),
+    ("force-untracked-cache", false),
+    ("force-write-index", false),
+    ("fsmonitor", false),
+    ("fsmonitor-valid", true),
+];
+
+/// Resolves a possibly abbreviated long option the way git's `parse_long_opt` does: an exact
+/// name wins, otherwise a unique prefix (of the name or of its `no-` form), otherwise git's
+/// `ambiguous option` text naming the last two candidates in table order. A word that
+/// matches nothing comes back unchanged for the caller's unknown-option path.
+fn resolve_long_option(name: &str) -> std::result::Result<String, String> {
+    let mut candidates: Vec<String> = Vec::new();
+    let mut table: Vec<(&str, bool)> = LONG_OPTIONS.to_vec();
+    table.push(("no-fsmonitor-valid", true));
+    for (long, noneg) in table {
+        if name == long {
+            return Ok(long.to_string());
+        }
+        if !noneg && name.strip_prefix("no-") == Some(long) {
+            return Ok(name.to_string());
+        }
+        if long.starts_with(name) {
+            candidates.push(long.to_string());
+        } else if !noneg {
+            let negated_prefix = "no-".starts_with(name)
+                || name
+                    .strip_prefix("no-")
+                    .is_some_and(|rest| long.starts_with(rest));
+            if negated_prefix {
+                candidates.push(format!("no-{long}"));
+            }
+        }
+    }
+    match candidates.as_slice() {
+        [] => Ok(name.to_string()),
+        [only] => Ok(only.clone()),
+        [.., first, second] => Err(format!(
+            "error: ambiguous option: {name} (could be --{first} or --{second})"
+        )),
+    }
+}
+
 /// A tri-state mark option (`--assume-unchanged` / `--no-assume-unchanged`).
 type Mark = Option<bool>;
 
@@ -196,6 +268,15 @@ fn run(global: &GlobalArgs, args: &[String]) -> std::result::Result<i32, Exit> {
             Some((name, value)) => (name, Some(value)),
             None => (long, None),
         };
+        let resolved = match resolve_long_option(name) {
+            Ok(full) => full,
+            Err(message) => {
+                eprintln!("{message}");
+                eprint!("{USAGE}");
+                return Err(129);
+            }
+        };
+        let name = resolved.as_str();
         let (negated, base) = match name.strip_prefix("no-") {
             Some(base) => (true, base),
             None => (false, name),

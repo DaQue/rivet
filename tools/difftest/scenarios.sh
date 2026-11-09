@@ -14721,6 +14721,35 @@ s_update_index_again() {
     vg fsck --strict --no-dangling
 }
 
+s_update_index_abbrev() {
+    v init -q repo; cd repo
+    echo a >a; echo b >b
+    # an unambiguous prefix of a long option is that option, as in parse-options
+    v update-index --ad a
+    v update-index --cache "100644,$(vg rev-parse :a),c"
+    v ls-files -s
+    v update-index --ass a; v ls-files -t
+    v update-index --no-ass a; v ls-files -t
+    v update-index --skip a; v ls-files -t
+    v update-index --no-skip a; v ls-files -t
+    v update-index --chm=+x a; v ls-files -s
+    v update-index --no-ad --info a b; v ls-files -s
+    v update-index --index-v=3 --force-w; v update-index --show-index-v
+    v update-index --no-index-v --show
+    # two candidates are ambiguous: git names the last two of its option table
+    v update-index --a a
+    v update-index --un a
+    v update-index --force a
+    v update-index --index a
+    v update-index --s a
+    v update-index --ignore-s a
+    v update-index --no-a a
+    # an exact name beats a longer one
+    v update-index --remove a; v ls-files -s
+    v update-index --nothing a
+    vg fsck --strict --no-dangling
+}
+
 s_commit_date_env() {
     v init -q repo; cd repo
     echo a >a; v add a

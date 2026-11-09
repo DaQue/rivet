@@ -50,3 +50,4 @@
 * 2026-11-05 — `mktree` reads a mode as git's `strtoul` into an `unsigned int` does (sign negates modulo 2^64, low 32 bits kept) instead of refusing signed or wide modes (`s_mktree_wrap`, tree ids compared).
 * 2026-11-06 — `log --cherry-mark` and `--cherry` mark the commits of a symmetric difference `=`/`+` (and `%m`) as git does (`s_log_cherry_mark`).
 * 2026-11-09 — `log --boundary` lists the excluded parents after the commits marked `-` (`o` with `--graph`, `%m` is `-`), ordered as `rev-list --boundary` does (`s_log_boundary`).
+* 2026-11-09 — `update-index` takes unambiguous abbreviations of its long options (`--cache`, `--no-ass`) and reports an ambiguous one as git's `error: ambiguous option: <w> (could be --a or --b)`, exit 129 (`s_update_index_abbrev`).
