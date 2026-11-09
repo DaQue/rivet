@@ -108,6 +108,8 @@ pub struct Graph {
     mapping: Vec<i32>,
     old_mapping: Vec<i32>,
     default_column_color: usize,
+    /// What the commit line draws for the commit: `*`, or its `--left-right` / `--cherry-mark` mark.
+    pub commit_char: char,
 }
 
 impl Graph {
@@ -136,6 +138,7 @@ impl Graph {
             mapping: Vec::new(),
             old_mapping: Vec::new(),
             default_column_color: COLUMN_COLORS.len() - 1,
+            commit_char: '*',
         }
     }
 
@@ -527,7 +530,7 @@ impl Graph {
             if col_commit == commit {
                 seen_this = true;
                 line.addchars(' ', 2 * self.shift);
-                line.addch('*');
+                line.addch(self.commit_char);
                 if self.num_parents > 2 {
                     self.draw_octopus_merge(line);
                 }

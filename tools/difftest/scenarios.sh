@@ -5583,6 +5583,24 @@ s_log_cherry_mark() {
     v log --oneline --right-only --left-only main...side
 }
 
+s_log_graph_marks() {
+    v init -q repo; cd repo
+    tick; echo 0 >f; v add f; v commit -q -m base
+    v switch -q -c side
+    tick; echo a >a; v add a; v commit -q -m side-a
+    tick; echo b >b; v add b; v commit -q -m side-b
+    v switch -q main
+    tick; echo y >y; v add y; v commit -q -m main-y
+    tick; v cherry-pick side~1 >/dev/null
+    v log --graph --oneline --left-right main...side
+    v log --graph --left-right main...side
+    v log --graph --format='[%m] %s' --left-right main...side
+    v log --graph --oneline --cherry-mark main...side
+    v log --graph --format='[%m] %s' --cherry-mark main...side
+    v log --graph --oneline --cherry main...side
+    v log --graph --oneline --left-only --left-right main...side
+}
+
 s_rev_list_children() {
     rl_repo
     v rev-list --children main

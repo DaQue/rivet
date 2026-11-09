@@ -534,12 +534,6 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         Some(DiffMode::Stat) if palette.is_some() => Some(DiffMode::ColorStat),
         other => other,
     };
-    if args.left_right && args.graph {
-        anyhow::bail!("not implemented: --left-right together with --graph");
-    }
-    if cherry.mark && args.graph {
-        anyhow::bail!("not implemented: --cherry-mark together with --graph");
-    }
     let wants_mark = args.left_right
         || matches!(&layout, pretty::Layout::Format { template, .. } if template.contains("%m"));
     let left_set = if wants_mark {
@@ -547,8 +541,20 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     } else {
         None
     };
+    let shown: HashSet<ObjectId> = oids.iter().copied().collect();
+    let walked_parents = |parents: &[ObjectId]| -> Vec<ObjectId> {
+        if side_filter || specs.iter().any(|s| s.contains("..") || s.starts_with('^')) {
+            parents
+                .iter()
+                .filter(|p| shown.contains(p))
+                .copied()
+                .collect()
+        } else {
+            parents.to_vec()
+        }
+    };
     let shifts = if args.graph {
-        root_shifts(&repository, &oids, args.first_parent)?
+        root_shifts(&repository, &oids, args.first_parent, &walked_parents)?
     } else {
         Vec::new()
     };
@@ -561,7 +567,17 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     for (position, oid) in oids.iter().enumerate() {
         let commit = read_commit(&repository, oid)?;
         if let Some(graph) = graph.as_mut() {
-            graph.update(*oid, &commit.parents, shifts[position]);
+            graph.update(*oid, &walked_parents(&commit.parents), shifts[position]);
+            // With a graph the mark replaces the `*` instead of leading the line.
+            graph.commit_char = if cherry.mark && same.contains(oid) {
+                '='
+            } else if args.left_right {
+                left_set
+                    .as_ref()
+                    .map_or('>', |l| if l.contains(oid) { '<' } else { '>' })
+            } else {
+                '*'
+            };
         }
         if position > 0 {
             let separated = match &layout {
@@ -594,8 +610,8 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 palette: palette.as_ref(),
                 left: left_set.as_ref(),
                 same: cherry.mark.then_some(&same),
-                left_right: args.left_right,
-                cherry_mark: cherry.mark,
+                left_right: args.left_right && graph.is_none(),
+                cherry_mark: cherry.mark && graph.is_none(),
             },
         );
         missing_newline = !text.ends_with(b"\n");
@@ -1179,6 +1195,7 @@ fn root_shifts(
     repository: &Repository,
     oids: &[ObjectId],
     first_parent: bool,
+    walked_parents: &dyn Fn(&[ObjectId]) -> Vec<ObjectId>,
 ) -> Result<Vec<usize>> {
     let mut layout = super::graph::Graph::new(false, first_parent);
     let mut is_root = Vec::with_capacity(oids.len());
@@ -1187,12 +1204,13 @@ fn root_shifts(
     let mut merge_parents = std::collections::HashSet::new();
     for oid in oids {
         let commit = read_commit(repository, oid)?;
-        layout.update(*oid, &commit.parents, 0);
+        let parents = walked_parents(&commit.parents);
+        layout.update(*oid, &parents, 0);
         rows.push(layout.row_layout());
-        is_root.push(commit.parents.is_empty());
+        is_root.push(parents.is_empty());
         merge_parent.push(merge_parents.contains(oid));
         if !first_parent {
-            merge_parents.extend(commit.parents.iter().skip(1).copied());
+            merge_parents.extend(parents.iter().skip(1).copied());
         }
         // Drive the state machine to the end of the commit as the real pass will.
         let mut scratch = Vec::new();
@@ -1842,7 +1860,7 @@ fn render_commit(
         full_ids: look.full_ids,
         abbrev_commit: look.abbrev_commit,
         palette: look.palette,
-        lead: if look.same.is_some_and(|same| same.contains(oid)) {
+        lead: if look.cherry_mark && look.same.is_some_and(|same| same.contains(oid)) {
             Some(b'=')
         } else if look.left_right {
             Some(entry.mark)
