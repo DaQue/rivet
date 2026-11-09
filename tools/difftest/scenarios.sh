@@ -14750,6 +14750,42 @@ s_update_index_abbrev() {
     vg fsck --strict --no-dangling
 }
 
+s_rerere_gc_dates() {
+    v init -q repo; cd repo
+    v config rerere.enabled true
+    printf 'a\nb\nc\nd\ne\n' >f; printf '1\n2\n3\n' >g
+    v add f g; tick; v commit -q -m base
+    v checkout -q -b side
+    printf 'a\nb\nSIDE\nd\ne\n' >f; printf '1\n2\nS\n' >g
+    v add f g; tick; v commit -q -m side
+    v checkout -q main
+    printf 'a\nb\nMAIN\nd\ne\n' >f; printf '1\n2\nM\n' >g
+    v add f g; tick; v commit -q -m main
+    v merge side
+    # f is resolved (postimage), g stays unresolved (preimage only); both are 40 days old
+    printf 'a\nb\nRES\nd\ne\n' >f
+    v rerere
+    for d in .git/rr-cache/*/; do touch -d '40 days ago' "$d"preimage "$d"postimage 2>/dev/null; done
+    cp -a .git/rr-cache ../rrsave
+    local val
+    # a date expression is a cut-off timestamp, a number is days, as in git_config_get_expiry_in_days
+    for val in '2.months.ago' '5.weeks.ago' '1 week ago' '3.days.ago' 'yesterday' '60' '39' '41' 'never' 'now' 'false' 'all' 'garbage' ''; do
+        cp -a ../rrsave/. .git/rr-cache/
+        v config gc.rerereResolved "$val"
+        v config gc.rerereUnresolved "$val"
+        echo "== [$val]" >>"$TRANSCRIPT"
+        v rerere gc
+        ls .git/rr-cache | wc -l >>"$TRANSCRIPT"
+    done
+    v config --unset gc.rerereUnresolved
+    for val in '5.weeks.ago' '2.months.ago'; do
+        cp -a ../rrsave/. .git/rr-cache/
+        v config gc.rerereResolved "$val"
+        v rerere gc
+        ls .git/rr-cache/*/ >>"$TRANSCRIPT"
+    done
+}
+
 s_commit_date_env() {
     v init -q repo; cd repo
     echo a >a; v add a

@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-09 — `rerere gc` reads `gc.rerereResolved`/`gc.rerereUnresolved` as git does: a number is days, `all` prunes everything, any other value is a cut-off date (`2.months.ago`, `yesterday`); `parse_expiry_ago` knows `yesterday` (`s_rerere_gc_dates`).
 * 2026-11-09 — `log --graph` with `--left-right`, `--cherry-mark` or `--cherry` draws the mark (`<`, `>`, `=`) in place of the `*`, and a range (`A..B`, `A...B`, `^A`) or side filter drops the parents outside the walk from the graph as git does (`s_log_graph_marks`).
 * 2026-11-06 — `log --left-right` puts `<`/`>` in front of the id (`commit <` lines, `--oneline`) and `%m` expands to the mark of a symmetric difference (`s_log_left_right`).
 * 2026-11-06 — `apply` reports a damaged `GIT binary patch` block as git does (`error: invalid base85 alphabet <c>` / `inflate: data stream error (...)`, then `error: corrupt binary patch at <file>:<line>: <text>`; `<stdin>` for standard input), applies the patches before it and exits 0, or says `No valid patches in input` (128) when its input had none (`s_apply_binary_corrupt`).

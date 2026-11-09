@@ -1210,6 +1210,10 @@ pub fn now_seconds() -> i64 {
 /// `false`, `now` or `all`: `N.unit.ago` (also `N unit ago`) or anything
 /// [`parse_approxidate`] knows.
 pub fn parse_expiry_ago(text: &str) -> Option<i64> {
+    // `yesterday` is a day back at this time of day (git's `date_yesterday`).
+    if text.trim() == "yesterday" {
+        return Some(now_seconds() - 86_400);
+    }
     let words: Vec<&str> = text
         .split(|c: char| c == '.' || c.is_whitespace())
         .filter(|w| !w.is_empty() && *w != "ago")

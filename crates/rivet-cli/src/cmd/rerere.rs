@@ -922,24 +922,31 @@ fn gc(repository: &Repository, autoupdate: AutoUpdate) -> Result<()> {
     let Some(mut state) = Rerere::setup(repository, autoupdate)? else {
         return Ok(());
     };
-    let days = |key: &str, default: i64| -> i64 {
-        match repository.config().get(BStr::new(key)) {
-            Ok(Some(value)) => match value.to_str().unwrap_or("") {
-                "now" => 0,
-                "never" | "false" => i64::MAX / 86400 / 2,
-                other => other.parse::<i64>().unwrap_or(default),
-            },
-            _ => default,
-        }
-    };
-    let resolved_days = days("gc.rerereresolved", 60);
-    let unresolved_days = days("gc.rerereunresolved", 15);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let cutoff_resolve = now.saturating_sub(resolved_days.saturating_mul(86400));
-    let cutoff_noresolve = now.saturating_sub(unresolved_days.saturating_mul(86400));
+    // `git_config_get_expiry_in_days`: a number is days, anything else a cut-off date as
+    // `parse_expiry_date` reads it; a value that is neither leaves the default.
+    let cutoff = |key: &str, default: i64| -> i64 {
+        let default = now.saturating_sub(default.saturating_mul(86400));
+        let Ok(Some(value)) = repository.config().get(BStr::new(key)) else {
+            return default;
+        };
+        let text = value.to_str().unwrap_or("");
+        match text {
+            "now" => now,
+            "all" => i64::MAX,
+            "never" | "false" => 0,
+            other => match other.parse::<i64>() {
+                Ok(n) => now.saturating_sub(n.saturating_mul(86400)),
+                Err(_) if other.trim().is_empty() => default,
+                Err(_) => rivet_core::ops::parse_expiry_ago(other).unwrap_or(default),
+            },
+        }
+    };
+    let cutoff_resolve = cutoff("gc.rerereresolved", 60);
+    let cutoff_noresolve = cutoff("gc.rerereunresolved", 15);
     let mtime = |path: PathBuf| -> i64 {
         std::fs::metadata(path)
             .and_then(|m| m.modified())
