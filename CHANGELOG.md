@@ -49,3 +49,4 @@
 * 2026-11-05 — `log --graph --format=format:<fmt>` draws no extra graph rows: the padding before the separator newline is skipped when the entry has no newline of its own, as git's `missing_newline` (`s_log_graph_format_separator`).
 * 2026-11-05 — `mktree` reads a mode as git's `strtoul` into an `unsigned int` does (sign negates modulo 2^64, low 32 bits kept) instead of refusing signed or wide modes (`s_mktree_wrap`, tree ids compared).
 * 2026-11-06 — `log --cherry-mark` and `--cherry` mark the commits of a symmetric difference `=`/`+` (and `%m`) as git does (`s_log_cherry_mark`).
+* 2026-11-09 — `log --boundary` lists the excluded parents after the commits marked `-` (`o` with `--graph`, `%m` is `-`), ordered as `rev-list --boundary` does (`s_log_boundary`).

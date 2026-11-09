@@ -5601,6 +5601,31 @@ s_log_graph_marks() {
     v log --graph --oneline --left-only --left-right main...side
 }
 
+s_log_boundary() {
+    v init -q repo; cd repo
+    tick; echo 0 >f; v add f; v commit -q -m base
+    tick; echo 1 >f; v commit -q -a -m one
+    v switch -q -c side
+    tick; echo a >a; v add a; v commit -q -m side-a
+    v switch -q main
+    tick; echo 2 >f; v commit -q -a -m two
+    tick; v merge -q --no-edit side >/dev/null
+    tick; echo 3 >f; v commit -q -a -m three
+    v log --boundary main~3..main
+    v log --boundary --oneline main~3..main
+    v log --boundary --format='[%m] %h %s' main~2..main
+    v log --boundary --oneline --left-right main...side
+    v log --boundary --oneline --graph main~2..main
+    v log --boundary --graph main~1..main
+    v log --boundary --oneline --reverse main~2..main
+    v log --boundary --oneline -n1 main
+    v log --boundary --oneline --first-parent main~2..main
+    v log --boundary --oneline --author-date-order main~3..main
+    v log --boundary --oneline --stat main~2..main
+    v log --boundary --oneline --cherry-pick --right-only main...side
+    v log --boundary --oneline --cherry-mark main...side
+}
+
 s_rev_list_children() {
     rl_repo
     v rev-list --children main

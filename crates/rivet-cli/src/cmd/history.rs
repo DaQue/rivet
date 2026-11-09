@@ -171,6 +171,10 @@ pub struct LogArgs {
     /// A synonym for `--right-only --cherry-mark --no-merges`.
     #[arg(long = "cherry")]
     pub cherry: bool,
+
+    /// After the commits, list the excluded parents they stop at, marked `-`.
+    #[arg(long = "boundary")]
+    pub boundary: bool,
 }
 
 /// Arguments to `rivet show`.
@@ -477,6 +481,48 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     if side_filter {
         (oids, same) = filter_sides(&repository, args, &cherry, &specs, oids)?;
     }
+    // `--boundary`: the parents of the listed commits that are not listed (once each, most
+    // recently discovered first) follow them, ordered topologically.
+    let mut boundary: HashSet<ObjectId> = HashSet::new();
+    if args.boundary {
+        // Commits `--cherry-pick` dropped count as shown, so they never become boundaries.
+        let mut shown: HashSet<ObjectId> = if cherry.pick {
+            same.clone()
+        } else {
+            HashSet::new()
+        };
+        let mut candidates: Vec<ObjectId> = Vec::new();
+        let mut seen: HashSet<ObjectId> = HashSet::new();
+        for oid in &oids {
+            shown.insert(*oid);
+            for parent in repository.commit_parents(*oid)? {
+                if shown.contains(&parent) || !seen.insert(parent) {
+                    continue;
+                }
+                candidates.push(parent);
+            }
+        }
+        let pending: Vec<ObjectId> = candidates
+            .into_iter()
+            .rev()
+            .filter(|oid| !shown.contains(oid))
+            .collect();
+        let parsed: HashSet<ObjectId> = oids.iter().chain(pending.iter()).copied().collect();
+        let order = if args.author_date_order {
+            super::gitwalk::TopoOrder::AuthorDate
+        } else {
+            super::gitwalk::TopoOrder::Graph
+        };
+        let sorted = super::gitwalk::sort_topologically(&repository, pending, order, &parsed)?;
+        boundary.extend(sorted.iter().copied());
+        if args.reverse {
+            let mut all: Vec<ObjectId> = sorted.into_iter().rev().collect();
+            all.extend(oids.iter().copied());
+            oids = all;
+        } else {
+            oids.extend(sorted);
+        }
+    }
     let diff_options = rivet_core::DiffOptions::new();
     // The last of `--oneline`, `--pretty` and `--format` on the command line wins, as in git.
     let layout = match last_layout_option(&std::env::args().collect::<Vec<_>>()) {
@@ -569,7 +615,9 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         if let Some(graph) = graph.as_mut() {
             graph.update(*oid, &walked_parents(&commit.parents), shifts[position]);
             // With a graph the mark replaces the `*` instead of leading the line.
-            graph.commit_char = if cherry.mark && same.contains(oid) {
+            graph.commit_char = if boundary.contains(oid) {
+                'o'
+            } else if cherry.mark && same.contains(oid) {
                 '='
             } else if args.left_right {
                 left_set
@@ -612,6 +660,7 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 same: cherry.mark.then_some(&same),
                 left_right: args.left_right && graph.is_none(),
                 cherry_mark: cherry.mark && graph.is_none(),
+                boundary: (args.boundary && graph.is_none()).then_some(&boundary),
             },
         );
         missing_newline = !text.ends_with(b"\n");
@@ -832,6 +881,7 @@ pub(super) fn squash_message(
                 same: None,
                 left_right: false,
                 cherry_mark: false,
+                boundary: None,
             },
         ));
     }
@@ -1825,6 +1875,8 @@ struct Look<'a> {
     left_right: bool,
     /// `--cherry-mark`: put `+` in front of a commit that has no twin.
     cherry_mark: bool,
+    /// `--boundary`: the commits that get `-` in front (and for `%m`).
+    boundary: Option<&'a HashSet<ObjectId>>,
 }
 
 fn render_commit(
@@ -1845,7 +1897,9 @@ fn render_commit(
         committer_presence: &commit.committer_presence,
         message: &commit.message,
         decorations: look.decorations.get(oid).map_or(&[], Vec::as_slice),
-        mark: if look.same.is_some_and(|same| same.contains(oid)) {
+        mark: if look.boundary.is_some_and(|b| b.contains(oid)) {
+            b'-'
+        } else if look.same.is_some_and(|same| same.contains(oid)) {
             b'='
         } else if look.left.is_some_and(|left| left.contains(oid)) {
             b'<'
@@ -1860,7 +1914,9 @@ fn render_commit(
         full_ids: look.full_ids,
         abbrev_commit: look.abbrev_commit,
         palette: look.palette,
-        lead: if look.cherry_mark && look.same.is_some_and(|same| same.contains(oid)) {
+        lead: if look.boundary.is_some_and(|b| b.contains(oid)) {
+            Some(b'-')
+        } else if look.cherry_mark && look.same.is_some_and(|same| same.contains(oid)) {
             Some(b'=')
         } else if look.left_right {
             Some(entry.mark)
@@ -2096,6 +2152,7 @@ fn show_object(
                     same: None,
                     left_right: false,
                     cherry_mark: false,
+                    boundary: None,
                 },
             ));
             let diff_mode = if args.no_patch {
