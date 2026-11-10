@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 459 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 460 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-10, gate: 351 tests / 0 failed, 459 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-10, gate: 351 tests / 0 failed, 460 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -91,8 +91,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   "commit or discard" hint; `s_status_moved_submodule`, `s_status_dirty_submodule`). A submodule nested in a changed submodule counts as `modified content`; `--ignore-submodules[=all|dirty|untracked|none]`,
   `submodule.<name>.ignore` (config over `.gitmodules`), `diff.ignoreSubmodules`, `-uno` (hides a submodule's untracked content) and
   `status.submoduleSummary` (true or a limit: the `Submodule changes to be committed:` / `Submodules changed but not updated:` blocks)
-  are compared (`s_submodule_status_dirty`). Not compared: the summary blocks in `commit`'s editor template and `--short`/`--porcelain` (git prints none there), and
-  `status.showUntrackedFiles` is not read by `status`. `diff`/`commit -a`/`add -u`
+  are compared (`s_submodule_status_dirty`). Not compared: the summary blocks in `commit`'s editor template and `--short`/`--porcelain` (git prints none there). `diff`/`commit -a`/`add -u`
   still skip gitlinks. `status` takes several literal pathspecs and reports their union (`s_status_multi_pathspec`); pathspec magic works there too (`:(exclude)`/`:!`/`:^`, `:(top)`/`:/`, `:(glob)`, `:(literal)`, `:(icase)`, bare wildcards, `..` in patterns, git's errors; `s_status_pathspec_magic`); `:(attr:...)` is refused by name. A wholly untracked directory named by a literal pathspec is reported as `dir/` (`s_status_untracked_dir_pathspec`). A pathspec outside the tree gets git's `outside repository at` error, plain or magic (`s_status_outside_pathspec`).
 
 ## 2. Implemented, but partial

@@ -970,6 +970,55 @@ fn clean_commit_message(message: &str) -> String {
     cleaned
 }
 
+/// `status.showUntrackedFiles`: `no`, `normal` or `all` (compared as written); anything else is
+/// git's `error: Invalid untracked files mode` and a fatal naming the setting's file and line.
+fn status_show_untracked(repository: &rivet_core::Repository) -> Result<Option<UntrackedModeArg>> {
+    let Some(value) = repository.config_value(BStr::new("status.showUntrackedFiles"))? else {
+        return Ok(None);
+    };
+    match &value[..] {
+        b"no" => return Ok(Some(UntrackedModeArg::No)),
+        b"normal" => return Ok(Some(UntrackedModeArg::Normal)),
+        b"all" => return Ok(Some(UntrackedModeArg::All)),
+        _ => {}
+    }
+    eprintln!("error: Invalid untracked files mode '{value}'");
+    let config = repository.common_dir().join("config");
+    let line = std::fs::read(&config).ok().and_then(|data| {
+        let mut found = None;
+        let mut in_section = false;
+        for (n, raw) in data.split(|b| *b == b'\n').enumerate() {
+            let text = String::from_utf8_lossy(raw);
+            let text = text.trim();
+            if let Some(header) = text.strip_prefix('[') {
+                let name = header.split([']', ' ', '"']).next().unwrap_or("");
+                in_section = name.eq_ignore_ascii_case("status");
+            } else if in_section
+                && text
+                    .split('=')
+                    .next()
+                    .is_some_and(|k| k.trim().eq_ignore_ascii_case("showuntrackedfiles"))
+            {
+                found = Some(n + 1);
+            }
+        }
+        found
+    });
+    let shown = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| config.strip_prefix(cwd).ok().map(|p| p.to_path_buf()))
+        .unwrap_or(config);
+    match line {
+        Some(line) => anyhow::bail!(
+            "bad config variable 'status.showuntrackedfiles' in file '{}' at line {line}",
+            shown.display()
+        ),
+        None => {
+            anyhow::bail!("unable to parse 'status.showuntrackedfiles' from command-line config")
+        }
+    }
+}
+
 /// Phase 3 — report the state of the work tree and the index.
 ///
 /// # Purpose
@@ -1011,8 +1060,11 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     }
     let mut repository = super::open(global)?;
 
+    // The setting is parsed (and a bad one fatal) even when `-u` overrides it.
+    let configured = status_show_untracked(&repository)?;
+    let untracked = args.untracked.or(configured);
     let mut options = StatusOptions::new();
-    options.untracked_files = match args.untracked {
+    options.untracked_files = match untracked {
         Some(UntrackedModeArg::No) => UntrackedMode::No,
         Some(UntrackedModeArg::All) => UntrackedMode::All,
         Some(UntrackedModeArg::Normal) | None => UntrackedMode::Normal,
@@ -1202,7 +1254,7 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
                 .or_else(|| diff_ignore.clone()),
         };
         // `-uno` also leaves the untracked files of a submodule out.
-        let no_untracked = matches!(args.untracked, Some(UntrackedModeArg::No));
+        let no_untracked = matches!(untracked, Some(UntrackedModeArg::No));
         match when.as_deref() {
             Some("all") => SubIgnore::All,
             _ if no_untracked && !matches!(when.as_deref(), Some("dirty")) => SubIgnore::Untracked,
@@ -1602,6 +1654,8 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
     if !wrote_section {
         if matches!(head, HeadState::Unborn { .. }) {
             println!("nothing to commit (create/copy files and use \"git add\" to track)");
+        } else if matches!(untracked, Some(UntrackedModeArg::No)) {
+            println!("nothing to commit (use -u to show untracked files)");
         } else {
             println!("nothing to commit, working tree clean");
         }
@@ -1621,7 +1675,7 @@ pub fn run_status(global: &GlobalArgs, args: &StatusArgs) -> Result<i32> {
         // Every section ends with a blank line; with changes staged there is no advice after it,
         // only the reminder that untracked files were not looked for.
         println!();
-        if matches!(args.untracked, Some(UntrackedModeArg::No)) {
+        if matches!(untracked, Some(UntrackedModeArg::No)) {
             println!("Untracked files not listed (use -u option to show untracked files)");
         }
     }

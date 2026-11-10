@@ -12366,6 +12366,23 @@ s_update_ref_quoted() {
     qr "symref-create refs/heads/s refs/heads/q\nsymref-update \"refs/heads/s\" \"refs/heads/r\" \"ref\" \"refs/heads/q\"\n"
 }
 
+# `status.showUntrackedFiles` (`no`, `normal`, `all`) sets the default the command line overrides;
+# `no` changes the clean-tree wording; a bad value is fatal even when `-u` is given.
+s_status_show_untracked() {
+    v init -q repo; cd repo
+    echo a >f; v add f; tick; v commit -q -m one
+    mkdir d; echo 1 >d/u; echo 2 >v
+    for m in no normal all; do
+        v config status.showUntrackedFiles $m
+        v status; v status -s; v status --porcelain; v status --untracked-files=all; v status --untracked-files=no
+    done
+    v config status.showUntrackedFiles no
+    echo b >>f; v add f; v status; v status -s
+    v commit -q -m two; v clean -fdq; v status; v status -s
+    v config status.showUntrackedFiles bogus
+    v status; v status -s; v status --untracked-files=all
+}
+
 s_commit_tree_encoding() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m one
