@@ -84,6 +84,24 @@ pub struct ApplyArgs {
     #[arg(long = "no-add")]
     pub no_add: bool,
 
+    /// Ignore changes in whitespace when finding context (the last of the four spellings wins).
+    #[arg(long = "ignore-whitespace", overrides_with_all = ["ignore_space_change", "no_ignore_whitespace", "no_ignore_space_change", "ignore_whitespace"])]
+    #[arg(num_args = 0..=1, require_equals = true, default_missing_value = "")]
+    pub ignore_whitespace: Option<String>,
+
+    /// Same as `--ignore-whitespace`.
+    #[arg(long = "ignore-space-change", overrides_with_all = ["ignore_whitespace", "no_ignore_whitespace", "no_ignore_space_change", "ignore_space_change"])]
+    #[arg(num_args = 0..=1, require_equals = true, default_missing_value = "")]
+    pub ignore_space_change: Option<String>,
+
+    /// Match context exactly again.
+    #[arg(long = "no-ignore-whitespace", overrides_with_all = ["ignore_whitespace", "ignore_space_change", "no_ignore_space_change", "no_ignore_whitespace"])]
+    pub no_ignore_whitespace: bool,
+
+    /// Match context exactly again.
+    #[arg(long = "no-ignore-space-change", overrides_with_all = ["ignore_whitespace", "ignore_space_change", "no_ignore_whitespace", "no_ignore_space_change"])]
+    pub no_ignore_space_change: bool,
+
     /// What to do with whitespace errors in added lines.
     #[arg(long = "whitespace", value_name = "ACTION", action = clap::ArgAction::Append)]
     pub whitespace: Vec<String>,
@@ -120,6 +138,33 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
             Some(action) => explicit = Some(action),
             None => {
                 eprintln!("error: unrecognized whitespace option '{word}'");
+                return Ok(128);
+            }
+        }
+    }
+    for (name, value) in [
+        ("ignore-whitespace", &args.ignore_whitespace),
+        ("ignore-space-change", &args.ignore_space_change),
+    ] {
+        if value.as_deref().is_some_and(|v| !v.is_empty()) {
+            eprintln!("error: option `{name}' takes no value");
+            return Ok(129);
+        }
+    }
+    let mut ignore_ws = args.ignore_whitespace.is_some() || args.ignore_space_change.is_some();
+    if !(ignore_ws || args.no_ignore_whitespace || args.no_ignore_space_change)
+        && let Ok(Some(word)) = repository
+            .config()
+            .get(bstr::BStr::new("apply.ignorewhitespace"))
+    {
+        match word.as_bytes() {
+            b"change" => ignore_ws = true,
+            b"none" => {}
+            other => {
+                eprintln!(
+                    "error: unrecognized whitespace ignore option '{}'",
+                    String::from_utf8_lossy(other)
+                );
                 return Ok(128);
             }
         }
@@ -234,6 +279,7 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
         min_context: args.context,
         reject: args.reject,
         three_way: args.three_way,
+        ignore_ws,
     };
     if let Some(pass) = whitespace.take() {
         // Git reports blank lines at the end of a file, and sums up, once every hunk is placed.

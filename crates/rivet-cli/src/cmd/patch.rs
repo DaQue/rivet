@@ -774,6 +774,82 @@ pub fn apply_hunks_collect(
     min_context: usize,
     notes: &mut Vec<String>,
 ) -> (Vec<u8>, Vec<HunkFailure>) {
+    apply_hunks_ws(
+        data,
+        hunks,
+        reverse,
+        unidiff_zero,
+        keep_going,
+        min_context,
+        false,
+        notes,
+    )
+}
+
+/// Git's `fuzzy_matchlines`: two lines are the same when they differ only in the amount of
+/// whitespace between words (leading whitespace counts only when both lines have some).
+fn fuzzy_match_lines(a: &[u8], b: &[u8]) -> bool {
+    let trim = |l: &[u8]| {
+        l.len()
+            - l.iter()
+                .rev()
+                .take_while(|c| **c == b'\r' || **c == b'\n')
+                .count()
+    };
+    let (a, b) = (&a[..trim(a)], &b[..trim(b)]);
+    let space = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r');
+    let (mut i, mut j) = (0, 0);
+    if a.first().is_some_and(|c| space(*c)) && b.first().is_some_and(|c| space(*c)) {
+        while i < a.len() && space(a[i]) {
+            i += 1;
+        }
+        while j < b.len() && space(b[j]) {
+            j += 1;
+        }
+    }
+    if i >= a.len() && j >= b.len() {
+        return true;
+    }
+    loop {
+        let (x, y) = (
+            a.get(i).copied().unwrap_or(0),
+            b.get(j).copied().unwrap_or(0),
+        );
+        i += 1;
+        j += 1;
+        if x != y {
+            return false;
+        }
+        if a.get(i).is_some_and(|c| space(*c)) && b.get(j).is_some_and(|c| space(*c)) {
+            while i < a.len() && space(a[i]) {
+                i += 1;
+            }
+            while j < b.len() && space(b[j]) {
+                j += 1;
+            }
+        }
+        if (i >= a.len()) != (j >= b.len()) {
+            return false;
+        }
+        if i >= a.len() {
+            return true;
+        }
+    }
+}
+
+/// `apply_hunks_collect`, optionally matching context with `fuzzy_match_lines`
+/// (`--ignore-whitespace`): the context lines then keep the file's own spelling.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_hunks_ws(
+    data: &[u8],
+    hunks: &[Hunk],
+    reverse: bool,
+    unidiff_zero: bool,
+    keep_going: bool,
+    min_context: usize,
+    ignore_ws: bool,
+    notes: &mut Vec<String>,
+) -> (Vec<u8>, Vec<HunkFailure>) {
     let mut content = split_content(data);
     let mut drift: isize = 0;
     let mut failures = Vec::new();
@@ -830,7 +906,9 @@ pub fn apply_hunks_collect(
                     return false;
                 }
                 for (k, line) in pre.iter().enumerate() {
-                    if content.lines[at + k] != *line {
+                    let same = content.lines[at + k] == *line
+                        || (ignore_ws && fuzzy_match_lines(&content.lines[at + k], line));
+                    if !same {
                         return false;
                     }
                 }
@@ -893,6 +971,24 @@ pub fn apply_hunks_collect(
             break;
         };
         let (cut_front, cut_back) = (leading_all - leading, trailing_all - trailing);
+        let mut post_all = post_all;
+        if ignore_ws {
+            // Context lines of the post-image take the file's spelling.
+            let (mut pre_at, mut post_at) = (0usize, 0usize);
+            for (kind, _) in &hunk.lines {
+                if *kind == b' ' {
+                    if pre_at >= cut_front && pre_at < pre_all.len() - cut_back {
+                        post_all[post_at] = content.lines[at + pre_at - cut_front].clone();
+                    }
+                    pre_at += 1;
+                    post_at += 1;
+                } else if *kind == pre_kind {
+                    pre_at += 1;
+                } else if *kind == post_kind {
+                    post_at += 1;
+                }
+            }
+        }
         if (leading, trailing) != (leading_all, trailing_all) {
             notes.push(format!(
                 "Context reduced to ({leading}/{trailing}) to apply fragment at {}",
@@ -931,6 +1027,8 @@ pub struct ApplyOptions {
     pub reject: bool,
     /// Merge the patch into the current content when it does not apply by content (`--3way`).
     pub three_way: bool,
+    /// Match context ignoring changes in whitespace (`--ignore-whitespace`).
+    pub ignore_ws: bool,
 }
 
 use bstr::{BStr, BString};
@@ -1142,13 +1240,14 @@ pub fn apply_to_repo(
         } else if let Some(done) = direct {
             done
         } else {
-            apply_hunks_collect(
+            apply_hunks_ws(
                 &base_data,
                 &patch.hunks,
                 options.reverse,
                 options.unidiff_zero,
                 options.reject,
                 options.min_context.unwrap_or(usize::MAX),
+                options.ignore_ws,
                 &mut notes,
             )
         };
@@ -1379,13 +1478,14 @@ fn three_way_merge(
         };
         (Some(oid), object.into_data())
     };
-    let (post, failures) = apply_hunks_collect(
+    let (post, failures) = apply_hunks_ws(
         &pre,
         &patch.hunks,
         options.reverse,
         options.unidiff_zero,
         false,
         options.min_context.unwrap_or(usize::MAX),
+        options.ignore_ws,
         &mut Vec::new(),
     );
     if let Some(failure) = failures.first() {
@@ -1885,6 +1985,22 @@ mod fuzz_tests {
             &mut notes,
         );
         (out, failures.len(), notes)
+    }
+
+    #[test]
+    fn fuzzy_lines_follow_git() {
+        use super::fuzzy_match_lines as f;
+        assert!(f(b"b  c", b"b c"));
+        assert!(f(b"  b", b"\tb"));
+        assert!(f(b" ", b"  "));
+        assert!(!f(b"", b"  "));
+        assert!(!f(b"b", b"  b"), "leading space on one side only differs");
+        assert!(
+            !f(b"b c", b"b c "),
+            "trailing space on one side only differs"
+        );
+        assert!(!f(b"bc", b"b c"));
+        assert!(!f(b"b c", b"b d"));
     }
 
     #[test]

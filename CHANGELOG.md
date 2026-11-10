@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-10 — `apply --ignore-whitespace` / `--ignore-space-change` (and the `--no-` forms, `apply.ignorewhitespace=change|none`): context lines match as git's `fuzzy_matchlines` does, the post-image keeps the file's own spelling of them, a value is `error: option `ignore-whitespace' takes no value` (exit 129) (`s_apply_ignore_whitespace`).
 * 2026-11-10 — `apply --no-add` ignores the additions of the patch, forward, `-R`, `--cached` and for a new file (`s_apply_no_add`).
 * 2026-11-10 — `apply --whitespace=<nowarn|warn|error|error-all|fix|strip>` and `apply.whitespace`: added lines are checked against `core.whitespace` / the `whitespace` attribute (`blank-at-eol`, `space-before-tab`, `indent-with-non-tab`, `tab-in-indent`, `cr-at-eol`, `blank-at-eof`, `tabwidth=`), reported as `<patch>:<line>: <reason>.` with git's squelching, summary and exit status, and repaired under `fix` (`s_apply_whitespace`).
 * 2026-11-10 — `diff -M[<n>]` / `--find-renames[=<n>]` / `--no-renames`: the last one wins, `-M` forces detection over `diff.renames=false`, the score is git's `parse_rename_score` (`-M.5`, `-M50%`, `-M5.`), and a bad score is `error: invalid argument to find-renames` (exit 129) instead of clap's unknown-argument error (`s_diff_find_renames`).

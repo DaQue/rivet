@@ -4503,6 +4503,35 @@ s_apply_no_add() {
     v apply --no-add ../new.patch; echo "rc=$?"; cat -A new; v status --short; g clean -q -f
 }
 
+s_apply_ignore_whitespace() {
+    g init -q src; cd src
+    printf 'a\n  b  c\nd\ne\nf\n' >f; g add f; g commit -q -m base
+    printf 'a\n  b  c\nD\ne\nf\n' >f; g diff >../exact.patch; g reset -q --hard
+    cd ..
+    # the same patch, context spelled with other whitespace
+    printf -- '--- a/f\n+++ b/f\n@@ -1,4 +1,4 @@\n a\n \tb c \n-d\n+D\n e\n' >drift.patch
+    printf -- '--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n a\n b  c\n-d\n+D\n' >lead.patch
+    printf -- '--- a/f\n+++ b/f\n@@ -2,2 +2,3 @@\n   b c\n d\n+new  line \n' >add.patch
+    v init -q dst; cd dst
+    printf 'a\n  b  c\nd\ne\nf\n' >f; v add f; v commit -q -m base
+    for opt in "" --ignore-whitespace --ignore-space-change "--ignore-whitespace --no-ignore-whitespace" "--no-ignore-space-change --ignore-space-change"; do
+        echo "== [$opt]"
+        for p in exact drift lead add; do
+            v apply $opt --check ../$p.patch; echo "$p rc=$?"
+        done
+    done
+    v apply --ignore-whitespace ../drift.patch; echo "rc=$?"; cat -A f; g reset -q --hard
+    v apply --ignore-space-change --index ../add.patch; echo "rc=$?"; cat -A f; v diff --cached | cat -A; g reset -q --hard
+    v apply --ignore-whitespace -R ../drift.patch; echo "rc=$?"
+    printf 'a\n  b  c\nD\ne\nf\n' >f; v apply --ignore-whitespace -R ../drift.patch; echo "rc=$?"; cat -A f; g reset -q --hard
+    v config apply.ignorewhitespace change; v apply --check ../drift.patch; echo "cfg rc=$?"
+    v apply --check --no-ignore-whitespace ../drift.patch; echo "cfg-no rc=$?"
+    v config apply.ignorewhitespace none; v apply --check ../drift.patch; echo "none rc=$?"
+    v config apply.ignorewhitespace bogus; v apply --check ../drift.patch; echo "bogus rc=$?"
+    v config --unset apply.ignorewhitespace
+    v apply --ignore-whitespace=1 ../drift.patch; echo "value rc=$?"
+}
+
 s_apply_fuzz() {
     g init -q src; cd src
     seq 1 20 >f; seq 1 6 >g.txt; ln -s target l; ln -s gone-link gl; echo reg >typ
