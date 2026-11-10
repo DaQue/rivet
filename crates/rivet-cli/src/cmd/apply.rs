@@ -80,6 +80,10 @@ pub struct ApplyArgs {
     #[arg(long = "reject")]
     pub reject: bool,
 
+    /// Ignore the additions made by the patch.
+    #[arg(long = "no-add")]
+    pub no_add: bool,
+
     /// What to do with whitespace errors in added lines.
     #[arg(long = "whitespace", value_name = "ACTION", action = clap::ArgAction::Append)]
     pub whitespace: Vec<String>,
@@ -212,6 +216,14 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
         args.reverse,
         args.unidiff_zero,
     );
+    for patch in &mut patches {
+        for hunk in &mut patch.hunks {
+            if args.no_add {
+                let added = if args.reverse { b'-' } else { b'+' };
+                hunk.lines.retain(|(k, _)| *k != added);
+            }
+        }
+    }
     let options = ApplyOptions {
         reverse: args.reverse,
         // `--3way` stages what it merges, like `--index`.

@@ -4485,6 +4485,24 @@ s_apply_whitespace() {
     done
 }
 
+s_apply_no_add() {
+    g init -q src; cd src
+    printf 'a\nb\nc\nd\n' >f; g add f; g commit -q -m base
+    printf 'a\nB\nc\nd\n' >f; g diff >../p; g reset -q --hard
+    printf 'a\nb\nc\nd\ne\n' >f; g add f; printf 'a\nb\nX\nc\nd\ne\n' >f; g diff >../add.patch; g reset -q --hard
+    printf 'n1\nn2\n' >new; g add -N new; g diff new >../new.patch; g reset -q --hard; g clean -q -f
+    cd ..
+    v init -q dst; cd dst
+    printf 'a\nb\nc\nd\n' >f; v add f; v commit -q -m base
+    v apply --no-add ../p; echo "rc=$?"; cat -A f; v status --short; g reset -q --hard
+    v apply --check --no-add ../p; echo "rc=$?"; v apply --no-add --stat ../p
+    v apply --no-add -R ../p; echo "rc=$?"; cat -A f; g reset -q --hard
+    printf 'a\nB\nc\nd\n' >f; v apply --no-add -R ../p; echo "rc=$?"; cat -A f; g reset -q --hard
+    v apply --no-add --cached ../p; v diff --cached; g reset -q --hard
+    v apply --no-add ../add.patch; echo "rc=$?"; cat -A f; g reset -q --hard
+    v apply --no-add ../new.patch; echo "rc=$?"; cat -A new; v status --short; g clean -q -f
+}
+
 s_apply_fuzz() {
     g init -q src; cd src
     seq 1 20 >f; seq 1 6 >g.txt; ln -s target l; ln -s gone-link gl; echo reg >typ

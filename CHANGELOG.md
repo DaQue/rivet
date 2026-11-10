@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-10 — `apply --no-add` ignores the additions of the patch, forward, `-R`, `--cached` and for a new file (`s_apply_no_add`).
 * 2026-11-10 — `apply --whitespace=<nowarn|warn|error|error-all|fix|strip>` and `apply.whitespace`: added lines are checked against `core.whitespace` / the `whitespace` attribute (`blank-at-eol`, `space-before-tab`, `indent-with-non-tab`, `tab-in-indent`, `cr-at-eol`, `blank-at-eof`, `tabwidth=`), reported as `<patch>:<line>: <reason>.` with git's squelching, summary and exit status, and repaired under `fix` (`s_apply_whitespace`).
 * 2026-11-10 — `diff -M[<n>]` / `--find-renames[=<n>]` / `--no-renames`: the last one wins, `-M` forces detection over `diff.renames=false`, the score is git's `parse_rename_score` (`-M.5`, `-M50%`, `-M5.`), and a bad score is `error: invalid argument to find-renames` (exit 129) instead of clap's unknown-argument error (`s_diff_find_renames`).
 * 2026-11-10 — `mv` keeps an intent-to-add (or skip-worktree) entry's flags, and `stash push`/`create` over an intent-to-add path fail as git does (`error: Entry '<path>' not uptodate. Cannot merge.`, `Cannot save the current worktree state`; exit 1, or 128 with a pathspec/`create`) (`s_ita_mv_stash`).
