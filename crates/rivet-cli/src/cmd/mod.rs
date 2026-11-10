@@ -608,6 +608,147 @@ pub fn detect_renames(
     Ok(())
 }
 
+/// What `diff` was told about rename detection on the command line (the last word wins).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameChoice {
+    /// `--no-renames`.
+    Off,
+    /// `-M[<n>]` / `--find-renames[=<n>]` with the score a pair needs.
+    At(u64),
+}
+
+/// Git's `parse_rename_score`: digits and at most one `.`, an optional `%`, nothing after.
+pub fn parse_rename_score(text: &str) -> Option<u64> {
+    let (mut num, mut scale, mut dot) = (0u64, 1u64, false);
+    let mut rest = text;
+    while let Some(ch) = rest.chars().next() {
+        if !dot && ch == '.' {
+            scale = 1;
+            dot = true;
+        } else if ch == '%' {
+            scale = if dot { scale * 100 } else { 100 };
+            rest = &rest[1..];
+            break;
+        } else if ch.is_ascii_digit() {
+            if scale < 100_000 {
+                scale *= 10;
+                num = num * 10 + u64::from(ch as u8 - b'0');
+            }
+        } else {
+            break;
+        }
+        rest = &rest[ch.len_utf8()..];
+    }
+    if !rest.is_empty() {
+        return None;
+    }
+    let max = rivet_core::diff::MAX_SCORE;
+    Some(if num >= scale { max } else { num * max / scale })
+}
+
+/// The last of `-M[<n>]`, `--find-renames[=<n>]` and `--no-renames` among the words before `--`;
+/// `Err` is git's one-line error for a bad score.
+pub fn rename_choice(args: &[String]) -> Result<Option<RenameChoice>, String> {
+    let mut choice = None;
+    for word in args.iter().skip(1) {
+        if word == "--" {
+            break;
+        }
+        let score = word
+            .strip_prefix("--find-renames=")
+            .or_else(|| (word == "--find-renames").then_some(""))
+            .or_else(|| word.strip_prefix("-M"));
+        if word == "--no-renames" {
+            choice = Some(RenameChoice::Off);
+        } else if let Some(score) = score {
+            let Some(score) = parse_rename_score(score) else {
+                return Err("error: invalid argument to find-renames".to_owned());
+            };
+            choice = Some(RenameChoice::At(score));
+        }
+    }
+    Ok(choice)
+}
+
+/// Detect renames as `choice` says, falling back to configuration when it is `None`.
+pub fn detect_renames_as(
+    repository: &Repository,
+    diff: &mut rivet_core::TreeDiff,
+    options: &rivet_core::DiffOptions,
+    choice: Option<RenameChoice>,
+) -> Result<()> {
+    match choice {
+        None => detect_renames(repository, diff, options),
+        Some(RenameChoice::Off) => Ok(()),
+        Some(RenameChoice::At(minimum)) => {
+            if minimum == rivet_core::diff::rename::MINIMUM_SCORE {
+                return rivet_core::diff::detect_renames(diff, repository.odb(), options)
+                    .map_err(Into::into);
+            }
+            detect_renames_at(repository, diff, options, minimum)
+        }
+    }
+}
+
+/// [`rivet_core::diff::detect_renames`] with the similarity a pair needs given.
+fn detect_renames_at(
+    repository: &Repository,
+    diff: &mut rivet_core::TreeDiff,
+    options: &rivet_core::DiffOptions,
+    minimum: u64,
+) -> Result<()> {
+    let (mut sources, mut source_files) = (Vec::new(), Vec::new());
+    let (mut destinations, mut destination_files) = (Vec::new(), Vec::new());
+    for (index, file) in diff.files.iter().enumerate() {
+        if file.is_deleted {
+            if let (Some(oid), Some(mode)) = (file.old_oid, file.old_mode) {
+                sources.push(rivet_core::RenameSide {
+                    path: file.path().to_owned(),
+                    oid,
+                    mode,
+                });
+                source_files.push(index);
+            }
+        } else if file.is_new
+            && let (Some(oid), Some(mode)) = (file.new_oid, file.new_mode)
+        {
+            destinations.push(rivet_core::RenameSide {
+                path: file.path().to_owned(),
+                oid,
+                mode,
+            });
+            destination_files.push(index);
+        }
+    }
+    let odb = repository.odb();
+    let pairs = rivet_core::diff::pair_renames_at(&sources, &destinations, odb, minimum)?;
+    let mut remove = Vec::new();
+    for pair in pairs {
+        let (source, destination) = (&sources[pair.source], &destinations[pair.destination]);
+        let mut renamed = rivet_core::diff::blob_diff(
+            odb.format(),
+            bstr::BStr::new(&destination.path[..]),
+            Some((source.oid, source.mode)),
+            Some((destination.oid, destination.mode)),
+            odb,
+            options,
+        )?;
+        renamed.old_path = Some(source.path.clone());
+        renamed.new_path = Some(destination.path.clone());
+        renamed.is_new = false;
+        renamed.is_deleted = false;
+        renamed.similarity = Some(pair.percent());
+        diff.files[destination_files[pair.destination]] = renamed;
+        remove.push(source_files[pair.source]);
+    }
+    remove.sort_unstable();
+    for index in remove.into_iter().rev() {
+        diff.files.remove(index);
+    }
+    diff.stats = diff.files.iter().map(rivet_core::FileDiff::stat).collect();
+    Ok(())
+}
+
 /// The `merge.conflictStyle` setting: `merge`, `diff3` or `zdiff3`; anything else is ignored.
 pub fn config_conflict_style(repository: &Repository) -> Option<rivet_core::ConflictStyle> {
     let value = repository

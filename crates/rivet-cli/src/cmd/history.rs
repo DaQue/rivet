@@ -367,6 +367,15 @@ pub struct DiffArgs {
     /// Print a word-diff instead of a line diff. Not implemented in v1 (plan §8).
     #[arg(long = "word-diff", value_name = "MODE")]
     pub word_diff: Option<Option<String>>,
+
+    /// Detect renames, needing `<n>` similarity (`-M<n>` is rewritten to this before parsing).
+    #[arg(long = "find-renames", value_name = "N", num_args = 0..=1,
+        require_equals = true, default_missing_value = "", action = clap::ArgAction::Append)]
+    pub find_renames: Vec<String>,
+
+    /// Do not detect renames; read from the raw command line.
+    #[arg(long = "no-renames")]
+    pub no_renames: bool,
 }
 
 /// Phase 4 — walk and print commit history.
@@ -1041,6 +1050,13 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
         options.algorithm = algorithm.into();
     }
     options.detect_binary = !args.text;
+    let rename_choice = match super::rename_choice(&std::env::args().collect::<Vec<_>>()) {
+        Ok(choice) => choice,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(129);
+        }
+    };
 
     // `A B -- paths` versus `A -- paths`: revisions come first, anything else is a path.
     let mut revisions = args.revisions.clone();
@@ -1098,7 +1114,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
             &options,
         )?
     };
-    super::detect_renames(&repository, &mut diff, &options)?;
+    super::detect_renames_as(&repository, &mut diff, &options, rename_choice)?;
     if !specs.is_empty() {
         let keep: Vec<bool> = diff
             .files

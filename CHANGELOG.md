@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-10 — `diff -M[<n>]` / `--find-renames[=<n>]` / `--no-renames`: the last one wins, `-M` forces detection over `diff.renames=false`, the score is git's `parse_rename_score` (`-M.5`, `-M50%`, `-M5.`), and a bad score is `error: invalid argument to find-renames` (exit 129) instead of clap's unknown-argument error (`s_diff_find_renames`).
 * 2026-11-10 — `mv` keeps an intent-to-add (or skip-worktree) entry's flags, and `stash push`/`create` over an intent-to-add path fail as git does (`error: Entry '<path>' not uptodate. Cannot merge.`, `Cannot save the current worktree state`; exit 1, or 128 with a pathspec/`create`) (`s_ita_mv_stash`).
 * 2026-11-10 — `bisect visualize`/`view <word> ...` treats the word as git does: nothing bisected is silent exit 1 first, `log` is the `log` form, and a word that names no command is `git: '<word>' is not a git command. See 'git --help'.` (exit 255) instead of a refusal (`s_bisect_visualize`).
 * 2026-11-10 — `commit-tree` honours a non-UTF-8 `i18n.commitEncoding`: the commit gets git's `encoding <value>` header and the message bytes are left alone instead of the refusal (`s_commit_tree_encoding`).

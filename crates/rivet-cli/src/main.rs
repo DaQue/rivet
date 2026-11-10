@@ -59,6 +59,7 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
     let mut in_format_patch = false;
     let mut in_blame = false;
     let mut in_config = false;
+    let mut in_diff = false;
     let mut after_dashes = false;
     while let Some(mut arg) = iter.next() {
         let mut text = arg.to_string_lossy().into_owned();
@@ -83,6 +84,7 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                 in_format_patch = text == "format-patch";
                 in_blame = text == "blame";
                 in_config = text == "config";
+                in_diff = text == "diff";
             }
         } else if in_format_patch && !after_dashes {
             if text == "--" {
@@ -228,6 +230,14 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                 None => out.push(arg),
             }
             continue;
+        } else if in_diff && !after_dashes {
+            // `-M<n>` is `--find-renames=<n>`: clap cannot take an attached optional value.
+            if text == "--" {
+                after_dashes = true;
+            } else if let Some(score) = text.strip_prefix("-M") {
+                out.push(format!("--find-renames={score}").into());
+                continue;
+            }
         } else if in_log && !after_dashes {
             if text == "--" {
                 after_dashes = true;

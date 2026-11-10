@@ -14894,6 +14894,33 @@ s_config_regexp_glibc() {
     v config --get-regexp '^foo\.b)'
 }
 
+s_diff_find_renames() {
+    v init -q repo; cd repo
+    seq 1 24 | sed 's/^/beta line /' >b.txt
+    seq 1 20 | sed 's/^/alpha line /' >a.txt
+    seq 1 10 | sed 's/^/c line /' >c.txt
+    v add .; tick; v commit -q -m one
+    sed '1,6s/beta/BETA/' b.txt >b2.txt; v rm -q -f b.txt
+    v mv a.txt a2.txt
+    sed '1,3s/c line/C line/' c.txt >c2.txt; v rm -q -f c.txt
+    v add -A
+    for o in "" "-M" "-M90%" "-M50%" "-M20%" "-M5" "-M.5" "-M5." "-M50.5" "-M100%" "-M101%" "-M0" "-M1.5%" "-M.%" \
+        "--find-renames" "--find-renames=40%" "--find-renames=" "--no-renames" "-M --no-renames" "--no-renames -M30%" \
+        "-M90% -M20%" "-M20% -M90%" "-Mx" "--find-renames=x" "-M-1" "-M5%%" "-M5%x"; do
+        for f in "--stat" "--name-status" "--name-only" ""; do
+            v diff --cached $o $f
+        done
+        v diff $o --cached --name-status -- a.txt a2.txt
+        v diff $o HEAD~0 --name-status
+    done
+    tick; v commit -q -m two
+    v config diff.renames false
+    for o in "" "-M" "-M90%" "--find-renames=20%" "--no-renames"; do
+        v diff $o --name-status HEAD~1 HEAD
+        v diff $o --stat HEAD~1 HEAD
+    done
+}
+
 s_update_index_again() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c; echo e >e
