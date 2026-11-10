@@ -12366,6 +12366,25 @@ s_update_ref_quoted() {
     qr "symref-create refs/heads/s refs/heads/q\nsymref-update \"refs/heads/s\" \"refs/heads/r\" \"ref\" \"refs/heads/q\"\n"
 }
 
+s_commit_tree_encoding() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    T=$(g rev-parse HEAD^{tree}); P=$(g rev-parse HEAD)
+    v config i18n.commitEncoding ISO-8859-1
+    v commit-tree $T -m one
+    v commit-tree $T -p $P -m 'two' -m 'more'
+    printf 'caf\351\n' >latin.txt
+    v commit-tree $T -F latin.txt
+    v config i18n.commitEncoding utf8
+    v commit-tree $T -F latin.txt
+    v config i18n.commitEncoding UTF-8
+    v commit-tree $T -F latin.txt
+    v config i18n.commitEncoding Shift_JIS
+    v commit-tree $T -m sj
+    v config i18n.commitEncoding latin1
+    v commit-tree $T -m l1
+}
+
 s_commit_tree() {
     v init -q repo; cd repo
     echo a >a; v add a; tick; v commit -q -m one

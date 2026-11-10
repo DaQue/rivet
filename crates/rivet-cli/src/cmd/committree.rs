@@ -40,8 +40,9 @@ variable i18n.commitEncoding to the encoding your project uses.
 /// * **The message is not cleaned up.** Each `-m` adds a line-completed paragraph, separated from
 ///   the previous text by one blank line; `-F` appends the file (or standard input for `-`)
 ///   verbatim. A message that is still empty afterwards is read from standard input, as Git does.
-/// * **`-S`/`--gpg-sign` and a non-UTF-8 `i18n.commitEncoding` are refused by name**: both would
-///   change the bytes of the object and neither is implemented.
+/// * **`-S`/`--gpg-sign` is refused by name**: signing would change the bytes of the object and is
+///   not implemented. A non-UTF-8 `i18n.commitEncoding` adds an `encoding` header and leaves the
+///   message bytes alone, as in Git.
 /// * **Parents and the tree are checked as they are named**, so the first bad argument decides
 ///   the error, as in Git. A repeated parent is reported once and dropped.
 pub fn run_commit_tree(global: &GlobalArgs, args: &CommitTreeArgs) -> Result<i32> {
@@ -170,12 +171,16 @@ pub fn run_commit_tree(global: &GlobalArgs, args: &CommitTreeArgs) -> Result<i32
     if sign {
         anyhow::bail!("commit-tree: signing (-S) is not supported");
     }
-    if let Ok(Some(encoding)) = repository.config().get(BStr::new("i18n.commitEncoding")) {
-        let lowered = encoding.to_ascii_lowercase();
-        if lowered != b"utf-8" && lowered != b"utf8" {
-            anyhow::bail!("commit-tree: i18n.commitEncoding other than UTF-8 is not supported");
+    // Git records a non-UTF-8 `i18n.commitEncoding` in an `encoding` header and leaves the message
+    // bytes alone; with UTF-8 it checks the message instead.
+    let encoding = match repository.config().get(BStr::new("i18n.commitEncoding")) {
+        Ok(Some(value))
+            if !value.eq_ignore_ascii_case(b"utf-8") && !value.eq_ignore_ascii_case(b"utf8") =>
+        {
+            Some(value.to_vec())
         }
-    }
+        _ => None,
+    };
 
     // `resolve_identity` falls back to the clock on a date it cannot read; Git dies instead.
     for variable in ["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"] {
@@ -187,11 +192,30 @@ pub fn run_commit_tree(global: &GlobalArgs, args: &CommitTreeArgs) -> Result<i32
         }
     }
 
-    if !verify_utf8(&mut message) {
+    if encoding.is_none() && !verify_utf8(&mut message) {
         eprint!("{UTF8_WARNING}");
     }
 
-    let oid = repository.write_commit_object(tree, &parents, BStr::new(&message))?;
+    let oid = match encoding {
+        None => repository.write_commit_object(tree, &parents, BStr::new(&message))?,
+        Some(encoding) => {
+            let mut builder = rivet_core::object::CommitBuilder::new();
+            builder.tree(tree);
+            for parent in &parents {
+                builder.parent(*parent);
+            }
+            builder.author(repository.author_signature()?);
+            builder.committer(repository.committer_signature()?);
+            builder.message(&message);
+            let mut body = builder.build(repository.format())?;
+            if let Some(at) = body.windows(2).position(|w| w == b"\n\n") {
+                let mut header = b"\nencoding ".to_vec();
+                header.extend_from_slice(&encoding);
+                body.splice(at..at, header);
+            }
+            repository.odb().write_raw(ObjectKind::Commit, &body)?
+        }
+    };
     println!("{oid}");
     Ok(0)
 }

@@ -1,6 +1,5 @@
-//! `commit-tree` refuses `-S` and a non-UTF-8 `i18n.commitEncoding` by name and writes no
-//! object. Git signs, or adds an `encoding` header, so there is no differential scenario for the
-//! refusal; the rest of `commit-tree` is the scenario `s_commit_tree`.
+//! `commit-tree` refuses `-S` by name and writes no object. Git signs, so there is no
+//! differential scenario for the refusal; the rest of `commit-tree` is the scenario `s_commit_tree`.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -53,19 +52,6 @@ fn signing_and_foreign_encodings_are_refused_by_name_and_write_nothing() {
         String::from_utf8_lossy(&signed.stderr)
     );
 
-    assert!(
-        run(&dir, &["config", "i18n.commitEncoding", "latin1"])
-            .status
-            .success()
-    );
-    let encoded = run(&dir, &["commit-tree", &tree, "-m", "x"]);
-    assert_eq!(encoded.status.code(), Some(128));
-    assert!(
-        String::from_utf8_lossy(&encoded.stderr)
-            .contains("i18n.commitEncoding other than UTF-8 is not supported"),
-        "{}",
-        String::from_utf8_lossy(&encoded.stderr)
-    );
     assert_eq!(object_count(&dir), before);
     let _ = std::fs::remove_dir_all(&dir);
 }
