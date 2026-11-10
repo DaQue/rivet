@@ -2,16 +2,19 @@
 //!
 //! The patch comes from the named files or standard input. It is applied to every file or to
 //! none. `--stat`, `--numstat` and `--summary` print and leave the tree alone unless `--apply` is
-//! given. `--3way` and `--reject` are supported, and so is the data of a `GIT binary patch`;
-//! whitespace handling is not, and is refused rather than ignored. `-C<n>` gives up context lines
+//! given. `--3way` and `--reject` are supported, and so is the data of a `GIT binary patch`.
+//! `--whitespace=<action>` (and `apply.whitespace`) checks, and with `fix` repairs, the added
+//! lines under `core.whitespace` and the `whitespace` attribute. `-C<n>` gives up context lines
 //! like git does.
 
 use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
 
 use anyhow::Result;
+use bstr::ByteSlice as _;
 
 use super::patch::{ApplyOptions, FilePatch, apply_to_repo, parse_partial};
+use super::whitespace::{self, Action};
 use crate::cli::GlobalArgs;
 
 /// Arguments of `apply`.
@@ -76,6 +79,10 @@ pub struct ApplyArgs {
     /// Leave rejected hunks in `.rej` files.
     #[arg(long = "reject")]
     pub reject: bool,
+
+    /// What to do with whitespace errors in added lines.
+    #[arg(long = "whitespace", value_name = "ACTION", action = clap::ArgAction::Append)]
+    pub whitespace: Vec<String>,
 }
 
 /// Handler for `rivet apply`.
@@ -88,7 +95,31 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
         eprintln!("error: options '--reject' and '--3way' cannot be used together");
         return Ok(128);
     }
+    // The last `--whitespace` wins; a bad word is usage error 129 on the command line and an
+    // ordinary error 128 from `apply.whitespace`.
+    let mut explicit = None;
+    if let Some(word) = args.whitespace.last() {
+        match Action::parse(word) {
+            Some(action) => explicit = Some(action),
+            None => {
+                eprintln!("error: unrecognized whitespace option '{word}'");
+                return Ok(129);
+            }
+        }
+    }
     let mut repository = super::open(global)?;
+    if explicit.is_none()
+        && let Ok(Some(word)) = repository.config().get(bstr::BStr::new("apply.whitespace"))
+    {
+        let word = String::from_utf8_lossy(word.as_bytes()).into_owned();
+        match Action::parse(&word) {
+            Some(action) => explicit = Some(action),
+            None => {
+                eprintln!("error: unrecognized whitespace option '{word}'");
+                return Ok(128);
+            }
+        }
+    }
     let mut text = Vec::new();
     // Where each input starts in `text` (its line count so far) and what git calls it.
     let mut sources: Vec<(usize, usize, String)> = vec![(0, 0, "<stdin>".to_string())];
@@ -127,7 +158,7 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
             text.push(b'\n');
         }
     }
-    let (patches, corrupt) = match parse_partial(&text, args.strip) {
+    let (mut patches, corrupt) = match parse_partial(&text, args.strip) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("error: {error}");
@@ -161,6 +192,26 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
             return Ok(128);
         }
     }
+    let inspect = args.stat || args.numstat || args.summary;
+    let applies = !args.check && (!inspect || args.apply);
+    let action = explicit.unwrap_or(if applies {
+        Action::Warn
+    } else {
+        Action::NoWarn
+    });
+    let starts: Vec<(usize, String)> = sources
+        .iter()
+        .map(|(line, _, name)| (*line, name.clone()))
+        .collect();
+    let mut whitespace = whitespace::begin(
+        &repository,
+        &mut patches,
+        &starts,
+        action,
+        applies,
+        args.reverse,
+        args.unidiff_zero,
+    );
     let options = ApplyOptions {
         reverse: args.reverse,
         // `--3way` stages what it merges, like `--index`.
@@ -172,7 +223,24 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
         reject: args.reject,
         three_way: args.three_way,
     };
-    let inspect = args.stat || args.numstat || args.summary;
+    if let Some(pass) = whitespace.take() {
+        // Git reports blank lines at the end of a file, and sums up, once every hunk is placed.
+        if (args.check || applies) && !(args.reject || args.three_way) {
+            let probe = ApplyOptions {
+                check: true,
+                ..options
+            };
+            if let Err(lines) = apply_to_repo(&mut repository, &patches, probe) {
+                for line in lines {
+                    eprintln!("{line}");
+                }
+                return Ok(1);
+            }
+        }
+        if let Some(code) = pass.finish(&mut patches) {
+            return Ok(code);
+        }
+    }
     if inspect {
         // Git checks the patch first (with `--check` or `--apply`) and prints nothing when it
         // does not fit.

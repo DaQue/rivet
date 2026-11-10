@@ -77,6 +77,7 @@ pub mod symbolicref;
 pub mod tag;
 pub mod updateindex;
 pub mod updateref;
+pub mod whitespace;
 pub mod worktree;
 
 use std::path::Path;

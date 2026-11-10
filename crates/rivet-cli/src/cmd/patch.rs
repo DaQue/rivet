@@ -13,12 +13,14 @@
 //!
 //! A binary patch applies only when its `index` line has full ids; the post-image comes from the
 //! object database when the blob is there, else from the `literal`/`delta` block of a `GIT binary
-//! patch`. Whitespace fixing and fuzz are not implemented and are refused.
+//! patch`. Fuzz is not implemented and is refused; whitespace handling is in `whitespace`.
 
 use anyhow::{Result, bail};
 
 #[derive(Clone, Debug, Default)]
 pub struct Hunk {
+    /// Index (0-based, in the patch text) of the `@@` line.
+    pub first_line: usize,
     pub old_start: usize,
     pub new_start: usize,
     /// `(' ' | '-' | '+', content without the newline)`
@@ -655,6 +657,7 @@ pub fn parse_partial(
             let hunk_first = i;
             i += 1;
             let mut hunk = Hunk {
+                first_line: hunk_first,
                 old_start,
                 new_start,
                 ..Hunk::default()

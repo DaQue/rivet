@@ -4431,6 +4431,60 @@ s_apply_binary_corrupt() {
     v status --short
 }
 
+s_apply_whitespace() {
+    g init -q src; cd src
+    printf 'a\nb\nc\n' >f; printf 'x\n' >g.txt; g add .; g commit -q -m base
+    printf 'a\nb  \n \tc\n        d\n\te\nf\r\n\n\n' >f
+    printf 'x\ny \n \t\n' >g.txt
+    g diff >../ws.patch
+    printf '1 \n2 \n3 \n4 \n5 \n6 \n7 \n8 \n' >new.txt; g add -N new.txt
+    g diff new.txt >../new.patch
+    g reset -q --hard; g clean -q -f
+    printf 'a\nb\n\n\n' >f; g diff f >../eof.patch; g reset -q --hard
+    printf 'a\nb' >f; g commit -q -a -m noeol; printf 'a\nb  ' >f
+    g diff f >../noeol.patch; g reset -q --hard
+    cd ..
+    v init -q dst; cd dst
+    printf 'a\nb\nc\n' >f; printf 'x\n' >g.txt; v add .; v commit -q -m base
+    for opt in '' --whitespace=warn --whitespace=nowarn --whitespace=error --whitespace=error-all \
+        --whitespace=fix --whitespace=strip --whitespace=bogus '--whitespace=error --whitespace=nowarn'; do
+        v apply $opt ../ws.patch; echo "rc=$?"
+        cat -A f g.txt; v status --short; g reset -q --hard
+    done
+    v apply --check ../ws.patch; v apply --check --whitespace=error ../ws.patch
+    v apply --check --whitespace=fix ../ws.patch; v apply --stat ../ws.patch
+    v apply --stat --apply ../ws.patch; g reset -q --hard
+    v apply --cached ../ws.patch; v status --short; g reset -q --hard
+    v apply - <../ws.patch; g reset -q --hard
+    v apply ../ws.patch ../new.patch; g reset -q --hard; g clean -q -f
+    v apply --whitespace=fix ../ws.patch ../new.patch; cat -A f g.txt new.txt; g reset -q --hard; g clean -q -f
+    v apply --whitespace=error ../new.patch; v apply --whitespace=error-all ../new.patch
+    v apply ../new.patch; g clean -q -f
+    v apply ../eof.patch; v apply --whitespace=error ../eof.patch
+    v apply --whitespace=fix ../eof.patch; cat -A f; g reset -q --hard
+    v apply --reverse ../ws.patch; v apply --reverse --whitespace=fix ../ws.patch
+    v apply ../noeol.patch; g reset -q --hard
+    v apply --whitespace=fix ../noeol.patch; cat -A f; g reset -q --hard
+    # core.whitespace and apply.whitespace
+    g config core.whitespace indent-with-non-tab,tabwidth=4
+    v apply ../ws.patch; v apply --whitespace=fix ../ws.patch; cat -A f; g reset -q --hard
+    g config core.whitespace tab-in-indent,-space-before-tab
+    v apply --whitespace=fix ../ws.patch; cat -A f; g reset -q --hard
+    g config core.whitespace cr-at-eol,-trailing-space
+    v apply ../ws.patch; v apply --whitespace=fix ../ws.patch; cat -A f; g reset -q --hard
+    g config --unset core.whitespace
+    g config apply.whitespace error; v apply ../ws.patch; v apply --whitespace=warn ../ws.patch
+    g reset -q --hard
+    g config apply.whitespace fix; v apply ../ws.patch; cat -A f; g reset -q --hard
+    g config apply.whitespace bogus; v apply ../ws.patch; v apply --check ../ws.patch
+    g config --unset apply.whitespace
+    # the whitespace attribute: set, unset, a rule list, unspecified
+    for attr in whitespace -whitespace whitespace=tab-in-indent whitespace=-trailing-space,tabwidth=2 '!whitespace'; do
+        printf 'f %s\n' "$attr" >.gitattributes
+        v apply ../ws.patch; v apply --whitespace=fix ../ws.patch; cat -A f; g reset -q --hard
+    done
+}
+
 s_apply_fuzz() {
     g init -q src; cd src
     seq 1 20 >f; seq 1 6 >g.txt; ln -s target l; ln -s gone-link gl; echo reg >typ
