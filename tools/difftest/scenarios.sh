@@ -12372,6 +12372,16 @@ s_update_ref_quoted() {
 
 # `status.showUntrackedFiles` (`no`, `normal`, `all`) sets the default the command line overrides;
 # `no` changes the clean-tree wording; a bad value is fatal even when `-u` is given.
+s_ita_mv_stash() {
+    v init -q repo; cd repo
+    echo a >a; v add a; tick; v commit -q -m one
+    echo n >n; v add -N n
+    v mv n m; iver; v status --short; v ls-files -s
+    v stash; g prune --expire=now; v stash push -- a; v stash create; v stash -u; v stash list
+    echo o >o; v add -N o
+    v stash push -- o; v stash push -- a; v status --short; g prune --expire=now
+}
+
 s_status_show_untracked() {
     v init -q repo; cd repo
     echo a >f; v add f; tick; v commit -q -m one

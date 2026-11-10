@@ -900,6 +900,25 @@ fn push_impl(
         eprintln!("error: could not write index");
         return Ok(1);
     }
+    // git cannot save a tree that holds an intent-to-add entry; it names the first one whatever the
+    // pathspec, but only when the pathspec reaches an intent-to-add path.
+    let intent_to_add: Vec<&rivet_core::index::IndexEntry> = repository
+        .index()
+        .entries()
+        .iter()
+        .filter(|e| e.is_intent_to_add())
+        .collect();
+    if let Some(first) = intent_to_add.first()
+        && (specs.is_empty() || intent_to_add.iter().any(|e| matches(&specs, &e.path)))
+    {
+        eprintln!("error: Entry '{}' not uptodate. Cannot merge.", first.path);
+        eprintln!("Cannot save the current worktree state");
+        return Ok(if specs.is_empty() && matches!(mode, Mode::Push { .. }) {
+            1
+        } else {
+            128
+        });
+    }
     let head_tree = repository.commit_tree(head_oid)?;
     let index_tree = repository.write_tree()?;
     let full_work_tree = repository.worktree_tree()?;

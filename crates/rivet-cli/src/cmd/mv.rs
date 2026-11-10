@@ -231,14 +231,14 @@ fn update_index(repository: &mut Repository, moves: &[Move]) -> Result<()> {
         let path = BStr::new(&dst[..]);
         repository.index_mut().remove_path(path);
         let stat = repository.worktree()?.stat(path)?;
-        repository
-            .index_mut()
-            .insert(rivet_core::ops::make_index_entry(
-                path,
-                entry.mode,
-                entry.oid,
-                stat.as_ref(),
-            ));
+        let mut moved_entry =
+            rivet_core::ops::make_index_entry(path, entry.mode, entry.oid, stat.as_ref());
+        // git renames the entry in place, so intent-to-add and skip-worktree survive the move.
+        if entry.flags.is_extended() {
+            moved_entry.extended_flags = entry.extended_flags;
+            moved_entry.flags = moved_entry.flags.set_extended(true);
+        }
+        repository.index_mut().insert(moved_entry);
     }
     repository.index_mut().sort();
     repository.write_index()?;
