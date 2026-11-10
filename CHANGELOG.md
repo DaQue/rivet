@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-10 — `ls-remote --sort=*refname` / `-*refname` / `v:*refname` / `*refname:short` sort as git does, with its `malformed field name: *` and `unrecognized %(*refname) argument` fatals (`s_ls_remote_sort_deref`).
 * 2026-11-10 — `apply --ignore-whitespace` / `--ignore-space-change` (and the `--no-` forms, `apply.ignorewhitespace=change|none`): context lines match as git's `fuzzy_matchlines` does, the post-image keeps the file's own spelling of them, a value is `error: option `ignore-whitespace' takes no value` (exit 129) (`s_apply_ignore_whitespace`).
 * 2026-11-10 — `apply --no-add` ignores the additions of the patch, forward, `-R`, `--cached` and for a new file (`s_apply_no_add`).
 * 2026-11-10 — `apply --whitespace=<nowarn|warn|error|error-all|fix|strip>` and `apply.whitespace`: added lines are checked against `core.whitespace` / the `whitespace` attribute (`blank-at-eol`, `space-before-tab`, `indent-with-non-tab`, `tab-in-indent`, `cr-at-eol`, `blank-at-eof`, `tabwidth=`), reported as `<patch>:<line>: <reason>.` with git's squelching, summary and exit status, and repaired under `fix` (`s_apply_whitespace`).

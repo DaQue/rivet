@@ -279,7 +279,7 @@ enum SortError {
 
 impl SortKey {
     /// Parse a key the way git's `ref-filter` does, with its error texts. Keys that need object
-    /// data and `*` (ignore case) are refused by name.
+    /// data are reported as unknown, and `*refname` with a strip modifier is refused by name.
     fn parse(key: &str) -> Result<SortKey, SortError> {
         let (reverse, atom) = match key.strip_prefix('-') {
             Some(rest) => (true, rest),
@@ -295,17 +295,23 @@ impl SortKey {
         if atom.is_empty() {
             return Err(SortError::Fatal("malformed field name: ".to_string()));
         }
-        if atom.starts_with('*') {
-            return Err(SortError::Refused(key.to_string()));
+        // `*<atom>` reads the atom of the peeled object; a remote ref has the same name either way.
+        let (deref, bare) = match atom.strip_prefix('*') {
+            Some(rest) => (true, rest),
+            None => (false, atom),
+        };
+        if deref && bare.is_empty() {
+            return Err(SortError::Fatal("malformed field name: *".to_string()));
         }
-        let Some(modifiers) = atom
+        let Some(modifiers) = bare
             .strip_prefix("refname")
             .filter(|m| m.is_empty() || m.starts_with(':'))
         else {
             return Err(SortError::Fatal(format!("unknown field name: {atom}")));
         };
+        let star = if deref { "*" } else { "" };
         let unrecognized =
-            |m: &str| SortError::Fatal(format!("unrecognized %(refname) argument: {m}"));
+            |m: &str| SortError::Fatal(format!("unrecognized %({star}refname) argument: {m}"));
         let mut strip = None;
         let mut short = false;
         for modifier in modifiers
@@ -333,6 +339,9 @@ impl SortKey {
             let count: i64 = count.parse().map_err(|_| {
                 SortError::Fatal(format!("Integer value expected refname:{modifier}"))
             })?;
+            if deref {
+                return Err(SortError::Refused(key.to_string()));
+            }
             strip = Some(build(count));
             short = false;
         }

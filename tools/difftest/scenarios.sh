@@ -11452,6 +11452,19 @@ s_ls_remote_sort_short() {
     v ls-remote --sort=refname:short ../src
 }
 
+# `ls-remote --sort=*refname`: the key of the peeled object, the same name for a remote ref.
+s_ls_remote_sort_deref() {
+    g init -q src; cd src
+    tick; echo a >f; g add .; g commit -q -m c1
+    g branch B; g branch aa; g tag Alpha; tick; g tag -a -m t T; g tag -a -m z Zed; g tag -a -m m b/Mid
+    for k in '*refname' '-*refname' 'v:*refname' 'version:*refname' '*refname:short' '-*refname:short' \
+        '*refname:bogus' '*' '-*' '**refname' '*version:refname' '*-refname' '*bogus' '*refname,x'; do
+        v ls-remote --sort="$k" ../src
+    done
+    v ls-remote --sort='*refname' --sort=-refname --tags ../src
+    v ls-remote --sort=-refname --sort='*refname:short' ../src
+}
+
 # `ls-remote --sort=version:<key>` / `v:<key>` use git's versioncmp, reversed by a leading `-`.
 s_ls_remote_version_sort() {
     g init -q src; cd src
@@ -15818,6 +15831,7 @@ for s in "$@"; do
         s_ls_remote_patterns) run_scenario "$s" none ;;
         s_ls_remote_sort) run_scenario "$s" none ;;
         s_ls_remote_sort_short) run_scenario "$s" none ;;
+        s_ls_remote_sort_deref) run_scenario "$s" none ;;
         s_ls_remote_version_sort) run_scenario "$s" none ;;
         s_ls_remote_version_suffix) run_scenario "$s" none ;;
         s_clone_filter) run_scenario "$s" local viafile bare.git limit ;;
