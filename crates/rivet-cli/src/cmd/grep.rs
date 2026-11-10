@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use bstr::{BStr, BString};
+use rivet_core::ignore::{IgnoreStack, PathKind};
 use rivet_core::{ObjectId, ObjectKind, Repository};
 
 use super::regex::Regex;
@@ -58,6 +59,14 @@ pub struct GrepArgs {
     /// Search the files of the current directory, tracked or not, in or out of a repository.
     #[arg(long = "no-index")]
     pub no_index: bool,
+
+    /// Honour the standard ignore files (the default for `--untracked`, off for `--no-index`).
+    #[arg(long = "exclude-standard")]
+    pub exclude_standard: bool,
+
+    /// Also search ignored files (only with `--untracked` or `--no-index`).
+    #[arg(long = "no-exclude-standard")]
+    pub no_exclude_standard: bool,
 
     /// Ignore case differences.
     #[arg(short = 'i', long = "ignore-case")]
@@ -483,6 +492,16 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
             return Ok(128);
         }
     }
+    // The last of `--exclude-standard` / `--no-exclude-standard` on the line wins.
+    let exclude_flag = std::env::args()
+        .skip_while(|a| a != "grep")
+        .take_while(|a| a != "--")
+        .filter_map(|a| match a.as_str() {
+            "--exclude-standard" => Some(true),
+            "--no-exclude-standard" => Some(false),
+            _ => None,
+        })
+        .last();
     // `rev... -- paths`: everything before `--` that names a revision is one; the rest are paths.
     let mut revs: Vec<String> = Vec::new();
     let mut path_args: Vec<PathBuf> = Vec::new();
@@ -510,6 +529,10 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
         }
     }
     path_args.extend(after_dashes.iter().map(PathBuf::from));
+    if exclude_flag.is_some() && !args.untracked && !args.no_index {
+        eprintln!("fatal: --[no-]exclude-standard cannot be used for tracked contents");
+        return Ok(128);
+    }
 
     let mut regexes: Vec<Regex> = Vec::new();
     for pattern in &patterns {
@@ -607,7 +630,21 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
     let mut sources: Vec<Source> = Vec::new();
     if args.no_index {
         let mut found = Vec::new();
-        walk_directory(std::path::Path::new("."), &mut Vec::new(), &mut found);
+        let stack = if exclude_flag == Some(true) {
+            standard_excludes()
+        } else {
+            None
+        };
+        let base = stack
+            .as_ref()
+            .map(|(_, base)| base.clone())
+            .unwrap_or_default();
+        walk_directory(
+            std::path::Path::new("."),
+            &mut Vec::new(),
+            &mut found,
+            stack.as_ref().map(|(stack, _)| (stack, &base[..])),
+        );
         for (shown, file) in found {
             if !selected(&shown) {
                 continue;
@@ -654,7 +691,32 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
             };
             sources.push(Source { shown, data });
         }
-        if args.untracked {
+        if args.untracked && exclude_flag == Some(false) {
+            // Ignored files are searched too: every file of the work tree the index lacks.
+            let tracked: std::collections::BTreeSet<Vec<u8>> = repository
+                .index()
+                .entries()
+                .iter()
+                .map(|entry| entry.path.to_vec())
+                .collect();
+            let root = repository.worktree()?.root().map(|p| p.to_path_buf());
+            let mut found = Vec::new();
+            if let Some(root) = root {
+                walk_directory(&root, &mut Vec::new(), &mut found, None);
+            }
+            for (path, file) in found {
+                if tracked.contains(&path) || !selected(&path) {
+                    continue;
+                }
+                if let Ok(data) = std::fs::read(&file) {
+                    sources.push(Source {
+                        shown: relative_to(&cwd_prefix, &path),
+                        data,
+                    });
+                }
+            }
+            sources.sort_by(|a, b| a.shown.cmp(&b.shown));
+        } else if args.untracked {
             let mut options = rivet_core::worktree::StatusOptions::new();
             options.untracked(rivet_core::worktree::UntrackedMode::All);
             for path in &repository.status(&options)?.untracked {
@@ -914,8 +976,42 @@ fn no_index_spec(arg: &std::path::Path) -> Option<BString> {
     Some(BString::from(parts.join(&b'/')))
 }
 
+/// The standard ignore rules for a `--no-index` walk from the current directory, and the current
+/// directory relative to the rules' root: the enclosing work tree when there is one, else itself.
+fn standard_excludes() -> Option<(IgnoreStack, Vec<u8>)> {
+    let here = std::env::current_dir().ok()?;
+    let root = here
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(&here)
+        .to_path_buf();
+    let relative = super::path_arg(here.strip_prefix(&root).ok()?)
+        .ok()?
+        .to_vec();
+    let mut stack = IgnoreStack::new(&root);
+    if root.join(".git").is_dir() {
+        stack.push_info_exclude(&root.join(".git")).ok()?;
+    }
+    let mut dir = Vec::new();
+    stack.push_dir(BStr::new(&dir[..])).ok()?;
+    for part in relative.split(|b| *b == b'/').filter(|c| !c.is_empty()) {
+        if !dir.is_empty() {
+            dir.push(b'/');
+        }
+        dir.extend_from_slice(part);
+        stack.push_dir(BStr::new(&dir[..])).ok()?;
+    }
+    Some((stack, relative))
+}
+
 /// Every regular file below `dir` (a `.git` entry is skipped), as (path below the start, real path).
-fn walk_directory(dir: &std::path::Path, prefix: &mut Vec<u8>, out: &mut Vec<(Vec<u8>, PathBuf)>) {
+/// With `ignore` (the rules and the start's path below their root), ignored paths are left out.
+fn walk_directory(
+    dir: &std::path::Path,
+    prefix: &mut Vec<u8>,
+    out: &mut Vec<(Vec<u8>, PathBuf)>,
+    ignore: Option<(&IgnoreStack, &[u8])>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -932,11 +1028,45 @@ fn walk_directory(dir: &std::path::Path, prefix: &mut Vec<u8>, out: &mut Vec<(Ve
         };
         let mark = prefix.len();
         prefix.extend_from_slice(&bytes);
+        // The path below the rules' root, for the ignore decision.
+        let below_root = ignore.as_ref().map(|(_, base)| {
+            let mut path = base.to_vec();
+            if !path.is_empty() {
+                path.push(b'/');
+            }
+            path.extend_from_slice(prefix.strip_suffix(b"/").unwrap_or(prefix));
+            path
+        });
         if kind.is_dir() {
+            let child = match (&ignore, &below_root) {
+                (Some((stack, base)), Some(path)) => {
+                    if !stack.should_descend(BStr::new(&path[..])).unwrap_or(true) {
+                        prefix.truncate(mark);
+                        continue;
+                    }
+                    let mut child = (*stack).clone();
+                    let _ = child.push_dir(BStr::new(&path[..]));
+                    Some((child, *base))
+                }
+                _ => None,
+            };
             prefix.push(b'/');
-            walk_directory(&entry.path(), prefix, out);
+            walk_directory(
+                &entry.path(),
+                prefix,
+                out,
+                child.as_ref().map(|(stack, base)| (stack, *base)),
+            );
         } else if kind.is_file() {
-            out.push((prefix.clone(), entry.path()));
+            let ignored = match (&ignore, &below_root) {
+                (Some((stack, _)), Some(path)) => stack
+                    .is_ignored(BStr::new(&path[..]), PathKind::File)
+                    .unwrap_or(false),
+                _ => false,
+            };
+            if !ignored {
+                out.push((prefix.clone(), entry.path()));
+            }
         }
         prefix.truncate(mark);
     }

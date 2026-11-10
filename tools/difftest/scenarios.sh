@@ -10359,6 +10359,60 @@ s_grep_no_index() {
     v grep foo
 }
 
+# `grep --[no-]exclude-standard`: `--untracked` honours the ignore files unless told not to,
+# `--no-index` ignores them unless asked to (per-directory `.gitignore`, in or out of a repository),
+# the last flag wins, and a tracked search refuses both.
+s_grep_exclude_standard() {
+    mkdir out; cd out
+    mkdir sub keep
+    printf 'foo\n' >a.txt
+    printf 'foo\n' >z.log
+    printf 'foo\n' >sub/b.txt
+    printf 'foo\n' >sub/b.log
+    printf 'foo\n' >keep/k.log
+    printf '*.log\n!keep/k.log\n' >.gitignore
+    printf 'b.txt\n' >sub/.gitignore
+    v grep --no-index foo
+    v grep --no-index --exclude-standard foo
+    v grep --no-index --exclude-standard --no-exclude-standard foo
+    v grep --no-index --no-exclude-standard --exclude-standard foo
+    v grep --no-index --exclude-standard -l foo sub
+    cd sub
+    v grep --no-index --exclude-standard foo
+    cd ../..
+    v init -q repo; cd repo
+    mkdir sub
+    printf 'foo t\n' >t
+    printf 'foo\n' >sub/c.txt
+    printf '*.log\nsub/c.txt\n' >.gitignore
+    printf 'foo u\n' >u
+    printf 'foo l\n' >x.log
+    printf 'u\n' >.git/info/exclude
+    v add t .gitignore
+    v grep --untracked foo
+    v grep --untracked --exclude-standard foo
+    v grep --untracked --no-exclude-standard foo
+    v grep --untracked --no-exclude-standard --exclude-standard foo
+    v grep --untracked --exclude-standard --no-exclude-standard -l foo
+    v grep --no-index foo
+    v grep --no-index --exclude-standard foo
+    cd sub
+    v grep --no-index --exclude-standard foo
+    v grep --untracked --no-exclude-standard foo
+    cd ..
+    v grep --exclude-standard foo
+    echo "rc=$?"
+    v grep --no-exclude-standard foo
+    echo "rc=$?"
+    v grep --cached --exclude-standard foo
+    echo "rc=$?"
+    v commit -q -m one
+    v grep --exclude-standard foo HEAD
+    echo "rc=$?"
+    v grep --untracked --exclude-standard foo HEAD
+    echo "rc=$?"
+}
+
 # `label` / `reset` todo lines: a label is a ref under refs/rewritten that lives until the rebase ends
 # (finished or aborted), `reset` moves HEAD and the work tree there (reflog `rebase (reset): '<arg>'`, none
 # when HEAD does not move), a name that does not resolve reschedules the line. `merge` and `update-ref`
