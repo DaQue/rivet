@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-10 — `grep --no-index` searches the current directory in or out of a repository (`.git` skipped, no ignore file consulted, `--cached`/`--untracked` clash, revisions are paths that must exist) as git does (`s_grep_no_index`).
 * 2026-11-10 — GAPS no longer lists `apply --reject` together with `--3way` as missing: it already prints git's `options '--reject' and '--3way' cannot be used together` (`s_apply_three_way`).
 * 2026-11-10 — `blame -M`/`-C` (any number, with `-w`/`-L`) work over a file with uncommitted changes instead of failing: lines the work tree moved or copied are traced to their commits, the rest are `Not Committed Yet` (`s_blame_worktree_move`).
 * 2026-11-09 — `format-patch --attach[=<boundary>]`, `--inline[=<boundary>]`, `--no-attach` and `format.attach` send each patch as a `multipart/mixed` message (text part, then the patch as `text/x-patch` with its file name), the last option wins, the default boundary is the version string, an attached patch carries no signature (`s_format_patch_attach`).

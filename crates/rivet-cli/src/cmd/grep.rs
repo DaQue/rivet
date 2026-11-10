@@ -55,6 +55,10 @@ pub struct GrepArgs {
     #[arg(long = "untracked")]
     pub untracked: bool,
 
+    /// Search the files of the current directory, tracked or not, in or out of a repository.
+    #[arg(long = "no-index")]
+    pub no_index: bool,
+
     /// Ignore case differences.
     #[arg(short = 'i', long = "ignore-case")]
     pub ignore_case: bool,
@@ -430,7 +434,11 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
         Some((_, Some(n))) => Some(n),
         None => None,
     };
-    let mut repository = super::open(global)?;
+    let mut repository = if args.no_index {
+        None
+    } else {
+        Some(super::open(global)?)
+    };
     // `-v` and `-q` are the grammar's global flags; here they mean invert and quiet.
     let invert = args.invert || global.verbose;
     let quiet = global.quiet;
@@ -469,11 +477,17 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
         eprintln!("fatal: options '--untracked' and '--cached' cannot be used together");
         return Ok(128);
     }
+    for (set, name) in [(args.cached, "--cached"), (args.untracked, "--untracked")] {
+        if args.no_index && set {
+            eprintln!("fatal: options '--no-index' and '{name}' cannot be used together");
+            return Ok(128);
+        }
+    }
     // `rev... -- paths`: everything before `--` that names a revision is one; the rest are paths.
     let mut revs: Vec<String> = Vec::new();
     let mut path_args: Vec<PathBuf> = Vec::new();
     for arg in positional {
-        if args.untracked
+        if (args.untracked || args.no_index)
             && !arg.starts_with(':')
             && !arg.contains(['*', '?', '['])
             && std::fs::symlink_metadata(&arg).is_err()
@@ -486,8 +500,9 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
         }
         if path_args.is_empty()
             && !args.untracked
+            && let Some(repository) = &repository
             && !std::path::Path::new(&arg).exists()
-            && super::resolve_rev(&repository, &arg).is_ok()
+            && super::resolve_rev(repository, &arg).is_ok()
         {
             revs.push(arg);
         } else {
@@ -545,7 +560,10 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
     };
 
     let cwd_prefix = {
-        let root = repository.worktree()?.root().map(|p| p.to_path_buf());
+        let root = match &repository {
+            Some(repository) => repository.worktree()?.root().map(|p| p.to_path_buf()),
+            None => None,
+        };
         match (root, std::env::current_dir()) {
             (Some(root), Ok(here)) => {
                 let relative = here.strip_prefix(&root).unwrap_or(std::path::Path::new(""));
@@ -561,7 +579,20 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
     };
     let mut specs: Vec<BString> = Vec::new();
     for path in &path_args {
-        specs.push(super::worktree_path(&repository, path, "grep")?);
+        match &repository {
+            Some(repository) => specs.push(super::worktree_path(repository, path, "grep")?),
+            None => match no_index_spec(path) {
+                Some(spec) => specs.push(spec),
+                None => {
+                    eprintln!("fatal: '{}' is outside the directory tree", path.display());
+                    return Ok(128);
+                }
+            },
+        }
+    }
+    // A bare `.` selects the whole directory.
+    if args.no_index && specs.iter().any(|spec| spec.is_empty()) {
+        specs.clear();
     }
     let selected = |path: &[u8]| -> bool {
         if specs.is_empty() {
@@ -574,9 +605,21 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
 
     // The files to search, in path order.
     let mut sources: Vec<Source> = Vec::new();
-    if !revs.is_empty() {
+    if args.no_index {
+        let mut found = Vec::new();
+        walk_directory(std::path::Path::new("."), &mut Vec::new(), &mut found);
+        for (shown, file) in found {
+            if !selected(&shown) {
+                continue;
+            }
+            if let Ok(data) = std::fs::read(&file) {
+                sources.push(Source { shown, data });
+            }
+        }
+        sources.sort_by(|a, b| a.shown.cmp(&b.shown));
+    } else if let Some(repository) = repository.as_ref().filter(|_| !revs.is_empty()) {
         for rev in &revs {
-            let oid = super::resolve_rev(&repository, rev)?;
+            let oid = super::resolve_rev(repository, rev)?;
             let tree = repository.commit_tree(oid)?;
             for (path, (mode, blob)) in rivet_core::ops::flatten_tree(repository.odb(), tree)? {
                 if mode == rivet_core::object::EntryMode::Commit || !selected(&path) {
@@ -587,11 +630,11 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
                 shown.extend_from_slice(&path);
                 sources.push(Source {
                     shown,
-                    data: read_blob(&repository, &blob)?,
+                    data: read_blob(repository, &blob)?,
                 });
             }
         }
-    } else {
+    } else if let Some(repository) = &mut repository {
         let mut seen = std::collections::BTreeSet::new();
         for entry in repository.index().entries() {
             if entry.mode == rivet_core::object::EntryMode::Commit
@@ -602,7 +645,7 @@ pub fn run_grep(global: &GlobalArgs, args: &GrepArgs) -> Result<i32> {
             }
             let shown = relative_to(&cwd_prefix, &entry.path);
             let data = if args.cached {
-                read_blob(&repository, &entry.oid)?
+                read_blob(repository, &entry.oid)?
             } else {
                 match repository.worktree()?.read_file(BStr::new(&entry.path[..])) {
                     Ok(data) => data,
@@ -850,4 +893,51 @@ fn relative_to(cwd: &[u8], path: &[u8]) -> Vec<u8> {
     }
     out.extend_from_slice(&target[shared..].join(&b'/'));
     out
+}
+
+/// The path `arg` as a pattern relative to the current directory for `--no-index`: no leading `./`,
+/// no trailing `/`; `None` when it climbs out of the current directory.
+fn no_index_spec(arg: &std::path::Path) -> Option<BString> {
+    let mut parts: Vec<Vec<u8>> = Vec::new();
+    for component in arg.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                parts.pop()?;
+            }
+            std::path::Component::Normal(name) => {
+                parts.push(super::path_arg(std::path::Path::new(name)).ok()?.to_vec());
+            }
+            _ => return None,
+        }
+    }
+    Some(BString::from(parts.join(&b'/')))
+}
+
+/// Every regular file below `dir` (a `.git` entry is skipped), as (path below the start, real path).
+fn walk_directory(dir: &std::path::Path, prefix: &mut Vec<u8>, out: &mut Vec<(Vec<u8>, PathBuf)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+        let Ok(bytes) = super::path_arg(std::path::Path::new(&name)) else {
+            continue;
+        };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let mark = prefix.len();
+        prefix.extend_from_slice(&bytes);
+        if kind.is_dir() {
+            prefix.push(b'/');
+            walk_directory(&entry.path(), prefix, out);
+        } else if kind.is_file() {
+            out.push((prefix.clone(), entry.path()));
+        }
+        prefix.truncate(mark);
+    }
 }

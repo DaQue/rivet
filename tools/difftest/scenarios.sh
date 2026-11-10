@@ -10320,6 +10320,45 @@ s_grep_untracked() {
     v grep --untracked needle
 }
 
+# `grep --no-index` searches the files of the current directory, tracked or not, in or out of a
+# repository: `.git` is skipped, ignore files are not consulted, `--cached`/`--untracked` clash, and a
+# revision is a path that must exist.
+s_grep_no_index() {
+    mkdir out; cd out
+    mkdir sub .hid
+    printf 'foo\nbar\n' >a.txt
+    printf 'foo x\n' >sub/b.txt
+    printf 'foo h\n' >.hid/c
+    printf '*.log\n' >.gitignore
+    printf 'foo log\n' >z.log
+    printf 'foo\0bin\n' >bin.dat
+    v grep --no-index foo
+    v grep --no-index -n foo -- sub
+    v grep --no-index -l foo .
+    v grep --no-index -c foo a.txt sub
+    v grep --no-index nomatch
+    echo "rc=$?"
+    v grep --no-index --cached foo
+    echo "rc=$?"
+    v grep --no-index --untracked foo
+    echo "rc=$?"
+    v grep --no-index foo HEAD
+    echo "rc=$?"
+    v grep --no-index foo nosuch
+    echo "rc=$?"
+    cd sub
+    v grep --no-index foo
+    v grep --no-index foo ..
+    echo "rc=$?"
+    cd ../..
+    v init -q repo; cd repo
+    printf 'foo t\n' >t
+    printf 'foo u\n' >u
+    v add t
+    v grep --no-index foo
+    v grep foo
+}
+
 # `label` / `reset` todo lines: a label is a ref under refs/rewritten that lives until the rebase ends
 # (finished or aborted), `reset` moves HEAD and the work tree there (reflog `rebase (reset): '<arg>'`, none
 # when HEAD does not move), a name that does not resolve reschedules the line. `merge` and `update-ref`

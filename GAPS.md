@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 456 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 457 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-10, gate: 351 tests / 0 failed, 456 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-10, gate: 351 tests / 0 failed, 457 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -122,7 +122,7 @@ The command works for the common case; the listed options or edge cases are miss
 * **`grep`** — `-o`, `--heading`, `-z`/`--null`, `--break` and `--untracked` work (`s_grep_output_modes`, `s_grep_null_break`, `s_grep_untracked`; `--untracked` searches the non-ignored untracked files merged in path order, refuses `--cached`, and reads a revision as a path);
   `--break` over a binary file that matches is refused by name (git drops or keeps the notice depending on
   its worker threads; Rust test `grep_break_refuses_binary`). `--threads=<n>` / `--no-threads` are validated like git's and
-  otherwise ignored (`s_grep_threads`). No `-P`, `--no-index`.
+  otherwise ignored (`s_grep_threads`). `--no-index` searches the current directory in or out of a repository, `.git` skipped, no ignore file consulted (`s_grep_no_index`). No `-P`, `--exclude-standard`.
 * **`apply`** — `GIT binary patch` (`diff --binary`, literal and delta blocks) is decoded, with `-R`
   taking the reverse block. `am --3way` still refuses binary patches. `-C<n>` reduces
   context like git (with its `Context reduced to (l/t) to apply fragment at N` note), symlinks can be created,
