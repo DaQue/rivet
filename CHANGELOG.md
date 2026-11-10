@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-10 — `bisect visualize`/`view <word> ...` treats the word as git does: nothing bisected is silent exit 1 first, `log` is the `log` form, and a word that names no command is `git: '<word>' is not a git command. See 'git --help'.` (exit 255) instead of a refusal (`s_bisect_visualize`).
 * 2026-11-10 — `commit-tree` honours a non-UTF-8 `i18n.commitEncoding`: the commit gets git's `encoding <value>` header and the message bytes are left alone instead of the refusal (`s_commit_tree_encoding`).
 * 2026-11-10 — `grep --exclude-standard` / `--no-exclude-standard`: `--untracked --no-exclude-standard` also searches ignored files, `--no-index --exclude-standard` skips them (`.gitignore` files and `info/exclude`), the last flag wins, and a tracked search is `fatal: --[no-]exclude-standard cannot be used for tracked contents` (`s_grep_exclude_standard`).
 * 2026-11-10 — `grep --no-index` searches the current directory in or out of a repository (`.git` skipped, no ignore file consulted, `--cached`/`--untracked` clash, revisions are paths that must exist) as git does (`s_grep_no_index`).

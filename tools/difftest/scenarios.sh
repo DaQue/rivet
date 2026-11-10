@@ -7330,6 +7330,7 @@ s_bisect_visualize() {
     bisect_repo
     unset DISPLAY SESSIONNAME MSYSTEM SECURITYSESSIONID
     v bisect visualize
+    v bisect view nonexist
     v bisect start
     v bisect visualize
     v bisect bad main
@@ -7339,6 +7340,9 @@ s_bisect_visualize() {
     v bisect view --oneline --reverse
     v bisect view -n2 --format=%s
     v bisect view --oneline -- f
+    v bisect view log --oneline
+    v bisect view log -n1 --format=%s -- f
+    v bisect view nonexist foo
     bisect_snap
     v bisect good
     v bisect view --oneline

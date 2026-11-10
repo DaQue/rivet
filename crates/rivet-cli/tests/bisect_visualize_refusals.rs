@@ -1,6 +1,6 @@
 //! `bisect visualize` / `view` run `git log` over the suspect range; the two forms that start another
 //! program are refused by name: no arguments with a display and `gitk` on `PATH`, and a first argument
-//! that is not an option (git runs it as a command). (The `log` form is the differential scenario
+//! that names another command of rivet (git runs it over the range). (The `log` form is the differential scenario
 //! `s_bisect_visualize`.)
 
 use std::path::Path;
@@ -30,12 +30,25 @@ fn gitk_and_command_forms_are_refused_by_name() {
     std::fs::create_dir_all(&repo).unwrap();
     assert!(run(&repo, &["init", "-q"], &[]).status.success());
 
+    // Nothing is being bisected: git is silent before it looks at the word.
     let out = run(&repo, &["bisect", "view", "tig"], &[]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    let c = |args: &[&str]| assert!(run(&repo, args, &[]).status.success());
+    c(&["config", "user.name", "n"]);
+    c(&["config", "user.email", "e@x"]);
+    for n in ["a", "b", "c"] {
+        std::fs::write(repo.join("f"), n).unwrap();
+        c(&["add", "f"]);
+        c(&["commit", "-q", "-m", n]);
+    }
+    c(&["bisect", "start", "HEAD", "HEAD~2"]);
+    let out = run(&repo, &["bisect", "view", "show"], &[]);
     assert_eq!(out.status.code(), Some(128));
     assert!(out.stdout.is_empty());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
-        err.contains("visualize running 'tig' as a command is not implemented"),
+        err.contains("visualize running 'show' as a command is not implemented"),
         "{err}"
     );
 
@@ -50,12 +63,12 @@ fn gitk_and_command_forms_are_refused_by_name() {
         "{err}"
     );
 
-    // With no gitk on PATH git falls back to `git log`; nothing is being bisected, so it is silent.
+    // With no gitk on PATH git falls back to `git log` over the range.
     let none = dir.join("empty");
     std::fs::create_dir_all(&none).unwrap();
     let envs: [(&str, &std::ffi::OsStr); 2] =
         [("DISPLAY", ":0".as_ref()), ("PATH", none.as_os_str())];
     let out = run(&repo, &["bisect", "visualize"], &envs);
-    assert_eq!(out.status.code(), Some(1));
-    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    assert_eq!(out.status.code(), Some(0));
+    assert!(!out.stdout.is_empty() && out.stderr.is_empty());
 }

@@ -149,8 +149,8 @@ The command works for the common case; the listed options or edge cases are miss
   different order from git.
 * **`bisect`** — `start --first-parent`, path arguments to `start` (commits that leave the paths alone are never tested; a merge identical to one parent follows only that parent) and `--reset-when-found[=original|found]` on `start` and `run` are compared with git, by hand and with `run` (`s_bisect_flags`: `BISECT_FIRST_PARENT`, `BISECT_NAMES`, `BISECT_RESET_WHEN_FOUND`, `Bisecting: -1 revisions left`, `No testable commit found` ending the bisection, a silent reset to the start or to the commit found, and the `BISECT_TERMS` file git leaves after a hand-driven finish). Not matched: a path that selects only part of a merge's history is simplified like git's default only for the cases in the scenario (no `--full-history`, no parent rewriting across non-merge commits).
   `visualize`/`view` run `log` over the bad commit and `^` each good one, with git's quirk that
-  `--bisect` is appended after the caller's words (`s_bisect_visualize`); the `gitk` form (a display
-  and `gitk` on `PATH`) and a first argument that is not an option are refused by name
+  `--bisect` is appended after the caller's words (`s_bisect_visualize`); a first word `log` is the `log` form and a word that names no command is git's `is not a git command` (`s_bisect_visualize`); the `gitk` form (a display
+  and `gitk` on `PATH`) and a first word naming another command (git runs it with `--bisect` appended) are refused by name
   (`bisect_visualize_refusals.rs`).
 * **`archive`** — `export-subst` is refused (deliberate); gzip and deflated-zip bytes are not
   byte-identical to git's (decompressed content is); `--remote` works for local repositories

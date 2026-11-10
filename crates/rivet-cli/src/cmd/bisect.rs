@@ -282,13 +282,11 @@ pub fn run_bisect(global: &GlobalArgs, args: &BisectArgs) -> Result<i32> {
 ///
 /// Silent with status 1 until both a bad and a good commit are known, as git's check is.
 /// Without arguments git starts `gitk` when a display is available; that, and an argument
-/// that is not an option (git runs it as a command), are refused by name.
+/// that is not an option (git runs it as a git command) is `log` or git's own error for a
+/// word that names no command; another rivet command is refused by name.
 fn bisect_visualize(repository: &Repository, terms: &Terms, args: &[String]) -> Result<i32> {
     if args.is_empty() && wants_gitk() {
         anyhow::bail!("bisect: visualize with gitk is not implemented");
-    }
-    if let Some(word) = args.first().filter(|a| !a.starts_with('-')) {
-        anyhow::bail!("bisect: visualize running '{word}' as a command is not implemented");
     }
     if !started(repository) {
         return Ok(FAILED);
@@ -299,6 +297,23 @@ fn bisect_visualize(repository: &Repository, terms: &Terms, args: &[String]) -> 
     };
     if known.good.is_empty() {
         return Ok(FAILED);
+    }
+    // A first word that is no option names the git command to run over the range; `log` is
+    // the form rivet has, any other command of rivet is refused by name and a word that is
+    // no command at all is git's own error.
+    let mut args = args;
+    if let Some(word) = args.first().filter(|a| !a.starts_with('-')) {
+        if word != "log" {
+            if <crate::cli::Cli as clap::CommandFactory>::command()
+                .find_subcommand(word)
+                .is_none()
+            {
+                eprintln!("git: '{word}' is not a git command. See 'git --help'.");
+                return Ok(255);
+            }
+            anyhow::bail!("bisect: visualize running '{word}' as a command is not implemented");
+        }
+        args = &args[1..];
     }
     use std::io::Write as _;
     let _ = std::io::stdout().flush();
