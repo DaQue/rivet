@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-10 — `blame -M`/`-C` (any number, with `-w`/`-L`) work over a file with uncommitted changes instead of failing: lines the work tree moved or copied are traced to their commits, the rest are `Not Committed Yet` (`s_blame_worktree_move`).
 * 2026-11-09 — `format-patch --attach[=<boundary>]`, `--inline[=<boundary>]`, `--no-attach` and `format.attach` send each patch as a `multipart/mixed` message (text part, then the patch as `text/x-patch` with its file name), the last option wins, the default boundary is the version string, an attached patch carries no signature (`s_format_patch_attach`).
 * 2026-11-09 — `format-patch <range> -- <path>...` keeps the commits that touch the paths and only those paths in each patch (no diffstat in a cover letter, as git); `log <range> -- <path>` no longer lists a commit whose only parent is the range boundary when it leaves the paths alone (`s_format_patch_paths`).
 * 2026-11-09 — `grep` takes `--and`, `--or`, `--not`, `(`, `)` and `--all-match`: a boolean expression over `-e` patterns compiled with git's grammar (`--and` binds tighter, adjacent patterns are an implicit or) and git's fatals for a malformed one, and the words are options only before the first non-option word (`s_grep_boolean`).

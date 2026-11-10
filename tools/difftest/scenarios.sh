@@ -13947,6 +13947,29 @@ s_blame_contents() {
     v blame -s --contents alt f
 }
 
+# blame -M/-C over a file with uncommitted changes: the work tree's lines are found moved or copied
+# from the committed ones (the change the work tree made is "Not Committed Yet", the rest is traced).
+s_blame_worktree_move() {
+    v init -q repo; cd repo
+    seq 101 130 | sed 's/^/alpha line /' >f
+    seq 1 30 | sed 's/^/other line /' >g
+    v add f g; tick; v commit -q -m c1
+    sed -i '1,10d' f; tick; v commit -q -a -m c2
+    { tail -n +11 f; head -10 f; } >f2; mv f2 f
+    sed -n 5,16p g >>f
+    v blame -s -M f
+    v blame -s -M20 f
+    v blame -s -C f
+    v blame -s -C5 f
+    v blame -s -C -C f
+    v blame -s -C -C -C f
+    v blame -s -M -C f
+    v blame -s -w -M f
+    v blame -s -l -C f
+    v blame -s -C -L 3,12 f
+    v blame -s -M -L 18,24 f
+}
+
 # blame takes git's rev-list limits and does not act on them: --until/--before take any text, the
 # counts and ages are validated as integers / seconds with git's fatal.
 s_blame_revlist_limits() {

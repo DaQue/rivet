@@ -14,7 +14,7 @@
 //!
 //! `--contents <file>` blames that file (`-` is standard input) in place of the work tree's.
 //!
-//! Not implemented: `--reverse`, `-M`/`-C` while the work tree differs from the commit.
+//! Not implemented: `--reverse`.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
@@ -1186,9 +1186,6 @@ pub fn run_blame(global: &GlobalArgs, args: &BlameArgs) -> Result<i32> {
         move_score: args.move_score.last().copied().unwrap_or(20),
         copy_score: args.copy_score.last().copied().unwrap_or(40),
     };
-    if top_is_worktree && (options.mov || options.copy) {
-        anyhow::bail!("blame: -M/-C with uncommitted changes in the file is not implemented");
-    }
 
     let mut wanted = vec![false; total];
     if args.ranges.is_empty() {
