@@ -14881,6 +14881,19 @@ s_config_get_regexp_words() {
     v config --get-regexp -z -- '^foo\.ba' '1'
 }
 
+s_config_regexp_glibc() {
+    v init -q repo; cd repo
+    printf '[foo]\n\tbar = 1\n\tbaz = 2\n' >.git/config
+    # glibc's ERE: a bad interval and an operator after an anchor are errors, a lone `)` is a literal
+    for p in 'a{2' 'a{1' 'a{x}' '{1}' '^{1}' 'a|{1}' '^*' 'a^*' '$*' 'a$*' '(^*)' '^+' '^?' \
+        'ba)' ')' 'a)b' '()' 'a{1}{2}' 'a{,2}' 'a{1,2}' 'a**' '(a|b)*' 'o{2}' ; do
+        v config --get-regexp "$p"
+    done
+    v config --get-regexp '^foo\.b{1'
+    v config --get-regexp '^foo\.b[)]'
+    v config --get-regexp '^foo\.b)'
+}
+
 s_update_index_again() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c; echo e >e

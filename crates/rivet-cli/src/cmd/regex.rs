@@ -137,7 +137,7 @@ impl<'a> Parser<'a> {
             if depth > 0 && self.at_close() {
                 break;
             }
-            if depth == 0 && self.at_close() {
+            if depth == 0 && !self.extended && self.at_close() {
                 bail!("Unmatched ) or \\)");
             }
             let atom = self.parse_atom(first)?;
@@ -154,6 +154,13 @@ impl<'a> Parser<'a> {
 
     fn parse_repeats(&mut self, mut atom: Node) -> Result<Node> {
         loop {
+            // glibc's ERE refuses an operator right after an anchor (`^*`, `a$+`, `^{1}`).
+            if self.extended
+                && matches!(atom, Node::LineStart | Node::LineEnd)
+                && matches!(self.peek(), Some(b'*' | b'+' | b'?' | b'{'))
+            {
+                bail!("Invalid preceding regular expression");
+            }
             let (min, max, used) = match self.peek() {
                 Some(b'*') => (0, None, 1),
                 Some(b'+') if self.extended => (1, None, 1),
@@ -169,7 +176,10 @@ impl<'a> Parser<'a> {
                 },
                 Some(b'{') if self.extended => match self.parse_bound(self.pos + 1, b"}") {
                     Some((min, max, end)) => (min, max, end - self.pos),
-                    None => break,
+                    None if self.text[self.pos..].contains(&b'}') => {
+                        bail!("Invalid content of \\{{\\}}")
+                    }
+                    None => bail!("Unmatched \\{{"),
                 },
                 _ => break,
             };
@@ -224,7 +234,7 @@ impl<'a> Parser<'a> {
                 Node::LineEnd
             }
             b'*' if first && !self.extended => self.literal(b'*'),
-            b'*' | b'+' | b'?' if self.extended && first => {
+            b'*' | b'+' | b'?' | b'{' if self.extended && (first || byte == b'{') => {
                 bail!("Invalid preceding regular expression")
             }
             b'(' if self.extended => {
@@ -604,13 +614,22 @@ mod tests {
     }
 
     #[test]
+    fn extended_follows_glibc() {
+        for bad in ["a{2", "a{x}", "{1}", "^{1}", "a|{1}", "^*", "a$+", "(^?)"] {
+            assert!(Regex::new(bad.as_bytes(), true, false).is_err(), "{bad}");
+        }
+        assert!(m("a)b", true, "xa)b"));
+        assert!(Regex::new(b"a\\)", false, false).is_err());
+    }
+
+    #[test]
     fn extended_syntax() {
         assert!(m("(foo|bar)+x", true, "barfoox"));
         assert!(m("a{2,3}", true, "caad"));
         assert!(!m("^a{2,3}$", true, "aaaa"));
         assert!(m("a|b", true, "b"));
         assert!(m("a+?", true, "a"));
-        assert!(m("x{", true, "x{"));
+        assert!(Regex::new(b"x{", true, false).is_err()); // glibc: Unmatched {
         assert!(m("\\<is\\>", true, "this is it"));
         assert!(!m("\\<is\\>", true, "this"));
     }
