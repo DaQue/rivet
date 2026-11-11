@@ -52,6 +52,24 @@ pub struct LogArgs {
     #[arg(value_name = "PATHSPEC", last = true)]
     pub paths: Vec<PathBuf>,
 
+    /// Detect renames, needing `<n>` similarity (`-M<n>` is rewritten to this before parsing).
+    #[arg(long = "find-renames", value_name = "N", num_args = 0..=1,
+        require_equals = true, default_missing_value = "", action = clap::ArgAction::Append)]
+    pub find_renames: Vec<String>,
+
+    /// Detect renames and copies, needing `<n>` similarity (`-C<n>` is rewritten to this).
+    #[arg(long = "find-copies", value_name = "N", num_args = 0..=1,
+        require_equals = true, default_missing_value = "", action = clap::ArgAction::Append)]
+    pub find_copies: Vec<String>,
+
+    /// Copy sources include unmodified files; read from the raw command line.
+    #[arg(long = "find-copies-harder")]
+    pub find_copies_harder: bool,
+
+    /// Do not detect renames; read from the raw command line.
+    #[arg(long = "no-renames")]
+    pub no_renames: bool,
+
     /// Stop after this many commits, applied after `--skip`.
     #[arg(short = 'n', long = "max-count", value_name = "NUMBER")]
     pub max_count: Option<usize>,
@@ -205,6 +223,24 @@ pub struct ShowArgs {
     /// The paths to show, as an alternative to the `REV:path` spelling.
     #[arg(value_name = "PATHSPEC", last = true)]
     pub paths: Vec<PathBuf>,
+
+    /// Detect renames, needing `<n>` similarity (`-M<n>` is rewritten to this before parsing).
+    #[arg(long = "find-renames", value_name = "N", num_args = 0..=1,
+        require_equals = true, default_missing_value = "", action = clap::ArgAction::Append)]
+    pub find_renames: Vec<String>,
+
+    /// Detect renames and copies, needing `<n>` similarity (`-C<n>` is rewritten to this).
+    #[arg(long = "find-copies", value_name = "N", num_args = 0..=1,
+        require_equals = true, default_missing_value = "", action = clap::ArgAction::Append)]
+    pub find_copies: Vec<String>,
+
+    /// Copy sources include unmodified files; read from the raw command line.
+    #[arg(long = "find-copies-harder")]
+    pub find_copies_harder: bool,
+
+    /// Do not detect renames; read from the raw command line.
+    #[arg(long = "no-renames")]
+    pub no_renames: bool,
 
     /// Print the object's raw bytes rather than a formatted view.
     #[arg(long = "pretty", value_name = "FORMAT")]
@@ -422,6 +458,10 @@ pub struct DiffArgs {
 ///   `--all`-with-no-refs case rather than both returning early.
 pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     let repository = super::open(global)?;
+    if let Err(message) = history_rename_choice() {
+        eprintln!("{message}");
+        return Ok(129);
+    }
     if args.graph && args.reverse {
         anyhow::bail!("options '--graph' and '--reverse' cannot be used together");
     }
@@ -700,7 +740,7 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
             None => out.extend_from_slice(&text),
         }
         if let Some(mode) = diff_mode {
-            let diff = commit_diff(
+            let (diff, copied) = commit_diff(
                 &repository,
                 &commit,
                 &diff_options,
@@ -711,7 +751,7 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
                 if layout.blank_before_diff() {
                     chunk.push(b'\n');
                 }
-                write_diff(&repository, mode, &diff, &mut chunk)?;
+                write_diff(&repository, mode, &diff, &copied, &mut chunk)?;
                 match graph.as_mut() {
                     Some(graph) => {
                         push_with_graph(graph, &chunk, false, &mut out);
@@ -960,6 +1000,10 @@ fn push_with_graph(
 ///   `%an`, `%ad`, `%n`, `%%`) and not a name. An unknown directive is not a formatting error to
 ///   be swallowed; Git leaves it verbatim and so must Rivet, or a script's output changes shape.
 pub fn run_show(global: &GlobalArgs, args: &ShowArgs) -> Result<i32> {
+    if let Err(message) = history_rename_choice() {
+        eprintln!("{message}");
+        return Ok(129);
+    }
     let mut repository = super::open(global)?;
     let format = repository.format();
     let spec = args.object.as_str();
@@ -1263,7 +1307,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
             one.stats.push(file.stat());
             one.files.push(file.clone());
             let mut bytes = Vec::new();
-            write_diff(&repository, mode, &one, &mut bytes)?;
+            write_diff(&repository, mode, &one, &[], &mut bytes)?;
             chunks.push((true, bstr::BString::from(file.path()), bytes));
         }
         for path in &unmerged_paths {
@@ -1645,6 +1689,7 @@ fn write_diff(
     repository: &Repository,
     mode: DiffMode,
     diff: &rivet_core::TreeDiff,
+    copied: &[bstr::BString],
     out: &mut Vec<u8>,
 ) -> Result<()> {
     match mode {
@@ -1654,17 +1699,26 @@ fn write_diff(
                 out.push(b'\n');
             }
         }
-        DiffMode::NameStatus => rivet_core::format_name_status(diff, out)?,
+        DiffMode::NameStatus => {
+            let mut plain = Vec::new();
+            rivet_core::format_name_status(diff, &mut plain)?;
+            out.extend_from_slice(&super::name_status_copies(&plain, copied));
+        }
         DiffMode::Stat => rivet_core::format_stat_sized(diff, Some(repository.odb()), out)?,
         DiffMode::ColorStat => {
             let mut plain = Vec::new();
             rivet_core::format_stat_sized(diff, Some(repository.odb()), &mut plain)?;
             out.extend_from_slice(&colorize_stat(&plain, diff));
         }
-        DiffMode::Patch => rivet_core::format_unified(diff, repository.format(), out)?,
+        DiffMode::Patch => {
+            let mut plain = Vec::new();
+            rivet_core::format_unified(diff, repository.format(), &mut plain)?;
+            out.extend_from_slice(&super::difftree::name_copies(&plain, copied));
+        }
         DiffMode::ColorPatch => {
             let mut plain = Vec::new();
             rivet_core::format_unified(diff, repository.format(), &mut plain)?;
+            let plain = super::difftree::name_copies(&plain, copied);
             out.extend_from_slice(&colorize_patch(&plain)?);
         }
     }
@@ -1784,7 +1838,7 @@ fn unmerged_chunk(
             let mut one = rivet_core::TreeDiff::new();
             one.stats.push(file.stat());
             one.files.push(file);
-            write_diff(repository, mode, &one, &mut out)?;
+            write_diff(repository, mode, &one, &[], &mut out)?;
         }
     }
     Ok((out, false))
@@ -2085,13 +2139,25 @@ fn add_revision(
     Ok(())
 }
 
+/// The rename options of a `log` / `show` command line: the last of `-M`, `-C`,
+/// `--find-renames`, `--find-copies`, `--find-copies-harder` and `--no-renames`.
+fn history_rename_choice() -> Result<Option<super::RenameChoice>, String> {
+    let argv: Vec<String> = std::env::args().collect();
+    // Words before the command name (`--repo <dir>`, global flags) are not the command's own.
+    let start = argv
+        .iter()
+        .position(|w| w == "log" || w == "show")
+        .unwrap_or(0);
+    super::rename_choice(&argv[start..])
+}
+
 /// The diff a commit introduces against its first parent (or the empty tree).
 fn commit_diff(
     repository: &Repository,
     commit: &LogCommit,
     options: &rivet_core::DiffOptions,
     specs: &[bstr::BString],
-) -> Result<rivet_core::TreeDiff> {
+) -> Result<(rivet_core::TreeDiff, Vec<bstr::BString>)> {
     let base = match commit.parents.first() {
         Some(parent) => repository.commit_tree(*parent)?,
         None => super::empty_tree(repository)?,
@@ -2103,7 +2169,6 @@ fn commit_diff(
         repository.odb(),
         options,
     )?;
-    super::detect_renames(repository, &mut diff, options)?;
     if !specs.is_empty() {
         let keep: Vec<bool> = diff
             .files
@@ -2125,7 +2190,19 @@ fn commit_diff(
             keep[i - 1]
         });
     }
-    Ok(diff)
+    let choice = history_rename_choice().ok().flatten();
+    let mut unmodified = Vec::new();
+    if matches!(choice, Some(super::RenameChoice::CopiesHarder(_))) && !commit.parents.is_empty() {
+        super::difftree::all_blobs(repository, base, b"", &mut unmodified)?;
+        unmodified.retain(|side| {
+            specs.is_empty()
+                || specs.iter().any(|s| {
+                    rivet_core::ops::pathspec_matches(BStr::new(&side.path[..]), BStr::new(&s[..]))
+                })
+        });
+    }
+    let copied = super::detect_renames_as(repository, &mut diff, options, choice, &unmodified)?;
+    Ok((diff, copied))
 }
 
 fn show_object(
@@ -2258,12 +2335,12 @@ fn show_object(
                 for path in &args.paths {
                     specs.push(super::worktree_path(repository, path, "show")?);
                 }
-                let diff = commit_diff(repository, &commit, &options, &specs)?;
+                let (diff, copied) = commit_diff(repository, &commit, &options, &specs)?;
                 if !diff.is_empty() {
                     if layout.blank_before_diff() {
                         out.push(b'\n');
                     }
-                    write_diff(repository, mode, &diff, out)?;
+                    write_diff(repository, mode, &diff, &copied, out)?;
                 }
             }
         }

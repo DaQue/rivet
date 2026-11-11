@@ -48,6 +48,11 @@ use clap::Parser;
 
 use crate::cli::Cli;
 
+/// `-M[<n>]` or `-C[<n>]`: the rename switches `log` shares with `diff`.
+fn is_rename_short(text: &str) -> bool {
+    text.starts_with("-M") || text.starts_with("-C")
+}
+
 /// Git's `log -<N>` shorthand for `-n <N>`: clap cannot declare a numeric short flag, so the
 /// argument vector is rewritten before parsing. Only `log` and `reflog` arguments before `--` are touched; for `format-patch` the same shorthand becomes `--max-count=<N>`.
 fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
@@ -60,6 +65,7 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
     let mut in_blame = false;
     let mut in_config = false;
     let mut in_diff = false;
+    let mut in_show = false;
     let mut after_dashes = false;
     while let Some(mut arg) = iter.next() {
         let mut text = arg.to_string_lossy().into_owned();
@@ -85,6 +91,7 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                 in_blame = text == "blame";
                 in_config = text == "config";
                 in_diff = text == "diff";
+                in_show = text == "show";
             }
         } else if in_format_patch && !after_dashes {
             if text == "--" {
@@ -230,7 +237,9 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
                 None => out.push(arg),
             }
             continue;
-        } else if in_diff && !after_dashes {
+        } else if (in_diff || in_show || (in_log && text.len() > 1 && is_rename_short(&text)))
+            && !after_dashes
+        {
             // `-M<n>` is `--find-renames=<n>`: clap cannot take an attached optional value.
             if text == "--" {
                 after_dashes = true;

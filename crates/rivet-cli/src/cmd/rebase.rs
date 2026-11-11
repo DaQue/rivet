@@ -370,6 +370,10 @@ pub fn run_rebase(global: &GlobalArgs, args: &RebaseArgs) -> Result<i32> {
                     date: None,
                     color: None,
                     no_color: false,
+                    find_renames: Vec::new(),
+                    find_copies: Vec::new(),
+                    find_copies_harder: false,
+                    no_renames: false,
                 },
             );
         }

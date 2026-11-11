@@ -1384,6 +1384,10 @@ fn show_diff_tree(global: &GlobalArgs, repository: &Repository, commit: ObjectId
             date: None,
             color: None,
             no_color: false,
+            find_renames: Vec::new(),
+            find_copies: Vec::new(),
+            find_copies_harder: false,
+            no_renames: false,
         },
     )?;
     let parents = repository.commit_parents(commit)?;

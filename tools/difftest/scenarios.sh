@@ -15164,6 +15164,32 @@ s_diff_find_copies_harder() {
     v diff -C --name-status --cached
 }
 
+s_log_show_renames() {
+    v init -q repo; cd repo
+    seq 1 24 | sed 's/^/alpha line /' >a.txt
+    seq 1 12 | sed 's/^/stay line /' >s.txt
+    v add .; tick; v commit -q -m one
+    cp s.txt s_exact.txt
+    echo more >>a.txt
+    sed '1,3s/alpha/ALPHA/' a.txt >a_copy.txt
+    v add -A; tick; v commit -q -m two
+    v mv a.txt moved.txt; tick; v commit -q -m three
+    for o in "" "-M" "-M90%" "--find-renames=50%" "--no-renames" "-C" "-C90%" "--find-copies=60%" \
+        "--find-copies-harder" "-C --find-copies-harder" "--find-copies-harder --no-renames" "-M --no-renames" "--no-renames -M"; do
+        for f in "--stat" "--name-status" "-p" "--name-only"; do
+            v log --oneline $o $f
+            v log --oneline $o $f -- a_copy.txt s_exact.txt
+            v log --oneline $o $f -- moved.txt
+            if [ "$f" = "-p" ]; then g=""; else g=$f; fi
+            v show $o $g HEAD~1
+            v show $o $g HEAD
+        done
+    done
+    v log -Mx --oneline
+    v show -C1x%
+    v log --find-renames=zz
+}
+
 s_update_index_again() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c; echo e >e
