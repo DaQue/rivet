@@ -378,6 +378,10 @@ pub struct DiffArgs {
         require_equals = true, default_missing_value = "", action = clap::ArgAction::Append)]
     pub find_copies: Vec<String>,
 
+    /// Copy sources include unmodified files; read from the raw command line.
+    #[arg(long = "find-copies-harder")]
+    pub find_copies_harder: bool,
+
     /// Do not detect renames; read from the raw command line.
     #[arg(long = "no-renames")]
     pub no_renames: bool,
@@ -1087,6 +1091,9 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
         specs.push(super::worktree_path(&repository, path, "diff")?);
     }
 
+    // The old side of the comparison, for `--find-copies-harder`: a tree, or the index.
+    let mut old_tree: Option<ObjectId> = None;
+    let mut old_is_index = false;
     let mut diff = if revisions.len() == 2 || (revisions.len() == 1 && revisions[0].contains(".."))
     {
         let (left, right) = if revisions.len() == 2 {
@@ -1103,6 +1110,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
             &repository,
             if right.is_empty() { "HEAD" } else { &right },
         )?)?;
+        old_tree = Some(left);
         rivet_core::tree_diff(format, left, right, repository.odb(), &options)?
     } else if args.cached {
         let tree = match revisions.first() {
@@ -1114,11 +1122,14 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
                 .map(|_| ())
                 .and(repository.head_tree_oid()?),
         };
+        old_tree = tree;
         rivet_core::index_diff(repository.index(), tree, repository.odb(), &options)?
     } else if let Some(rev) = revisions.first() {
         let tree = repository.commit_tree(super::resolve_rev(&repository, rev)?)?;
+        old_tree = Some(tree);
         tree_vs_worktree(&repository, tree, &options)?
     } else {
+        old_is_index = true;
         let worktree = repository.worktree()?.clone();
         let mut cache = rivet_core::StatCache::new();
         rivet_core::work_tree_diff(
@@ -1129,7 +1140,33 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
             &options,
         )?
     };
-    let copied = super::detect_renames_as(&repository, &mut diff, &options, rename_choice)?;
+    let mut unmodified = Vec::new();
+    if matches!(rename_choice, Some(super::RenameChoice::CopiesHarder(_))) {
+        if let Some(tree) = old_tree {
+            super::difftree::all_blobs(&repository, tree, b"", &mut unmodified)?;
+        } else if old_is_index {
+            for entry in repository.index().entries() {
+                if entry.stage() == rivet_core::Stage::Normal
+                    && entry.mode != rivet_core::object::EntryMode::Commit
+                {
+                    unmodified.push(rivet_core::RenameSide {
+                        path: entry.path.clone(),
+                        oid: entry.oid,
+                        mode: entry.mode,
+                    });
+                }
+            }
+        }
+    }
+    // git limits the extra sources to the paths asked for.
+    unmodified.retain(|side| {
+        specs.is_empty()
+            || specs.iter().any(|s| {
+                rivet_core::ops::pathspec_matches(BStr::new(&side.path[..]), BStr::new(&s[..]))
+            })
+    });
+    let copied =
+        super::detect_renames_as(&repository, &mut diff, &options, rename_choice, &unmodified)?;
     if !specs.is_empty() {
         let keep: Vec<bool> = diff
             .files

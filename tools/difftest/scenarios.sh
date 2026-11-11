@@ -15129,6 +15129,41 @@ s_diff_find_copies() {
     done
 }
 
+s_diff_find_copies_harder() {
+    v init -q repo; cd repo
+    seq 1 24 | sed 's/^/alpha line /' >a.txt
+    seq 1 20 | sed 's/^/gone line /' >d.txt
+    seq 1 12 | sed 's/^/stay line /' >s.txt
+    mkdir sub; seq 1 16 | sed 's/^/deep line /' >sub/x.txt
+    v add .; tick; v commit -q -m one
+    cp s.txt s_exact.txt
+    sed '1,2s/stay/STAY/' s.txt >s_near.txt
+    cp sub/x.txt x_copy.txt
+    echo more >>a.txt
+    sed '1,3s/alpha/ALPHA/' a.txt >a_copy.txt
+    v add -A
+    for o in "-C" "--find-copies-harder" "--find-copies-harder -C90%" "-C90% --find-copies-harder" \
+        "--no-renames --find-copies-harder" "--find-copies-harder --no-renames" "-M --find-copies-harder" \
+        "-M99% --find-copies-harder"; do
+        for f in "--stat" "--name-status" "--name-only" ""; do
+            v diff --cached $o $f
+        done
+        v diff $o --cached --name-status -- s_exact.txt x_copy.txt
+        v diff $o HEAD --name-status
+    done
+    v diff --find-copies-harder --name-status
+    v reset -q
+    v add -N s_exact.txt
+    v diff --find-copies-harder --name-status
+    v add -A
+    tick; v commit -q -m two
+    cp s.txt s_again.txt; v add -A
+    v diff --find-copies-harder --name-status HEAD~1 HEAD
+    v diff --find-copies-harder --cached --name-status
+    v diff --find-copies-harder --stat HEAD~1..HEAD
+    v diff -C --name-status --cached
+}
+
 s_update_index_again() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c; echo e >e

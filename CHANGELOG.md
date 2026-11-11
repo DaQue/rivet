@@ -76,3 +76,4 @@
 * 2026-11-10 — `status` reads `status.showUntrackedFiles` (`no`, `normal`, `all`; `-u`/`--untracked-files` override it), prints `nothing to commit (use -u to show untracked files)` for `no`, and a bad value is git's `error: Invalid untracked files mode` + `fatal: bad config variable` (`s_status_show_untracked`).
 * 2026-11-10 — the ERE matcher behind `config --get-regexp` and `grep -E` follows glibc: a bad interval (`a{2`, `{1}`) and an operator after an anchor (`^*`, `a$+`) are errors, a lone `)` is a literal (`s_config_regexp_glibc`).
 * 2026-11-11 — `apply --inaccurate-eof` treats a hunk whose last line lost its `\ No newline at end of file` marker as ending without a newline on both sides, as git does (`s_apply_inaccurate_eof`).
+* 2026-11-11 — `diff --find-copies-harder` makes every unmodified file of the old side (tree, `HEAD` or index, limited by the pathspecs) a copy source and turns copy detection on whatever else was said (`s_diff_find_copies_harder`).

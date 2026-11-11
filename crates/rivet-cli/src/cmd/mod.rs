@@ -618,6 +618,8 @@ pub enum RenameChoice {
     At(u64),
     /// `-C[<n>]` / `--find-copies[=<n>]`: renames, and copies from modified files.
     Copies(u64),
+    /// `--find-copies-harder`: as `Copies`, and every unmodified file of the old side is a source.
+    CopiesHarder(u64),
 }
 
 /// Git's `parse_rename_score`: digits and at most one `.`, an optional `%`, nothing after.
@@ -653,9 +655,14 @@ pub fn parse_rename_score(text: &str) -> Option<u64> {
 /// `Err` is git's one-line error for a bad score.
 pub fn rename_choice(args: &[String]) -> Result<Option<RenameChoice>, String> {
     let mut choice = None;
+    let mut harder = false;
     for word in args.iter().skip(1) {
         if word == "--" {
             break;
+        }
+        if word == "--find-copies-harder" {
+            harder = true;
+            continue;
         }
         if let Some(score) = word
             .strip_prefix("--find-copies=")
@@ -687,6 +694,15 @@ pub fn rename_choice(args: &[String]) -> Result<Option<RenameChoice>, String> {
             choice = Some(RenameChoice::At(score));
         }
     }
+    // As in git, `--find-copies-harder` turns copy detection on whatever else was said; the
+    // score is the last `-M`/`-C` one.
+    if harder {
+        choice = Some(RenameChoice::CopiesHarder(match choice {
+            // `-M` alone is a score of 0, which means the default.
+            Some(RenameChoice::At(score) | RenameChoice::Copies(score)) if score > 0 => score,
+            _ => rivet_core::diff::rename::MINIMUM_SCORE,
+        }));
+    }
     Ok(choice)
 }
 
@@ -696,12 +712,18 @@ pub fn detect_renames_as(
     diff: &mut rivet_core::TreeDiff,
     options: &rivet_core::DiffOptions,
     choice: Option<RenameChoice>,
+    unmodified: &[rivet_core::RenameSide],
 ) -> Result<Vec<bstr::BString>> {
     let plain = |result: Result<()>| result.map(|()| Vec::new());
     match choice {
         None => plain(detect_renames(repository, diff, options)),
         Some(RenameChoice::Off) => Ok(Vec::new()),
-        Some(RenameChoice::Copies(minimum)) => detect_copies_at(repository, diff, options, minimum),
+        Some(RenameChoice::Copies(minimum)) => {
+            detect_copies_at(repository, diff, options, minimum, &[])
+        }
+        Some(RenameChoice::CopiesHarder(minimum)) => {
+            detect_copies_at(repository, diff, options, minimum, unmodified)
+        }
         Some(RenameChoice::At(minimum)) => {
             if minimum == rivet_core::diff::rename::MINIMUM_SCORE {
                 return plain(
@@ -722,6 +744,7 @@ fn detect_copies_at(
     diff: &mut rivet_core::TreeDiff,
     options: &rivet_core::DiffOptions,
     minimum: u64,
+    unmodified: &[rivet_core::RenameSide],
 ) -> Result<Vec<bstr::BString>> {
     let (mut sources, mut source_file, mut deleted) = (Vec::new(), Vec::new(), Vec::new());
     let (mut destinations, mut destination_file) = (Vec::new(), Vec::new());
@@ -743,6 +766,17 @@ fn detect_copies_at(
             });
             source_file.push(index);
             deleted.push(file.is_deleted);
+        }
+    }
+    // `--find-copies-harder`: files the diff does not list can be copied from too. They have no
+    // entry of their own to remove, so `source_file` points past the list.
+    let listed: std::collections::HashSet<&bstr::BStr> =
+        diff.files.iter().map(|f| f.path()).collect();
+    for side in unmodified {
+        if !listed.contains(bstr::BStr::new(&side.path[..])) {
+            sources.push(side.clone());
+            source_file.push(usize::MAX);
+            deleted.push(false);
         }
     }
     let odb = repository.odb();

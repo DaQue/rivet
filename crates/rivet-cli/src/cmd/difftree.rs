@@ -829,7 +829,7 @@ fn old_path_field(rec: &Rec, opts: &Opts) -> Vec<u8> {
 }
 
 /// Every blob of `tree` under `prefix`: the sources `--find-copies-harder` looks at.
-fn all_blobs(
+pub(super) fn all_blobs(
     repository: &Repository,
     tree: ObjectId,
     prefix: &[u8],
