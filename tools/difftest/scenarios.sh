@@ -4504,6 +4504,37 @@ s_apply_inaccurate_eof() {
     v apply --inaccurate-eof ../p; echo "rc=$?"; cat -A f; g reset -q --hard
 }
 
+s_apply_whitespace_fix_context() {
+    g init -q src; cd src
+    printf 'one\ntwo\nthree\nfour\n' >f; g add f; g commit -q -m base
+    cd ..
+    # Context with trailing blanks the file lacks, and the reverse; a removed line; a clean fit.
+    printf 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,4 +1,5 @@\n one\n two \n+new\n three\n four\n' >ctx.patch
+    printf 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,4 +1,5 @@\n one\n two \n+new \n three\n four\n' >both.patch
+    printf 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,4 +1,4 @@\n one\n-two \n+TWO\n three\n four\n' >del.patch
+    printf 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,4 +1,5 @@\n one\n two\n+new\n three\n four\n' >clean.patch
+    printf 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,4 +1,5 @@\n one\n  two\n+new\n three\n four\n' >lead.patch
+    v init -q dst; cd dst
+    printf 'one\ntwo\nthree\nfour\n' >f; v add f; v commit -q -m base
+    for patch in ctx both del clean lead; do
+        for opt in --whitespace=fix --whitespace=warn --whitespace=error --whitespace=nowarn; do
+            echo "== $patch $opt"
+            v apply $opt ../$patch.patch; echo "rc=$?"; cat -A f; g reset -q --hard
+        done
+    done
+    printf 'one\ntwo \nthree\nfour\n' >f
+    for patch in ctx both clean; do
+        echo "== trailing file $patch"
+        v apply --whitespace=fix ../$patch.patch; echo "rc=$?"; cat -A f
+        printf 'one\ntwo \nthree\nfour\n' >f
+    done
+    v apply --whitespace=fix --check ../ctx.patch; echo "rc=$?"
+    v apply --whitespace=fix --reverse ../ctx.patch; echo "rc=$?"
+    printf 'one\ntwo\nthree\nfour\n' >f
+    g config core.whitespace -blank-at-eol
+    v apply --whitespace=fix ../ctx.patch; echo "rc=$?"
+}
+
 s_apply_no_add() {
     g init -q src; cd src
     printf 'a\nb\nc\nd\n' >f; g add f; g commit -q -m base

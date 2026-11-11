@@ -270,7 +270,7 @@ impl Action {
 pub type Sources = [(usize, String)];
 
 /// The rules for one path: `core.whitespace`, then the `whitespace` attribute.
-fn rule_for(repository: &Repository, path: &[u8]) -> Rule {
+pub fn rule_for(repository: &Repository, path: &[u8]) -> Rule {
     let base = match repository.config().get(BStr::new("core.whitespace")) {
         Ok(Some(value)) => Rule::DEFAULT.parse(value.as_bytes()),
         _ => Rule::DEFAULT,
@@ -321,6 +321,12 @@ pub struct Pass {
 }
 
 impl Pass {
+    /// True when whitespace errors were found under `error`/`error-all`: git dies on them before
+    /// it looks for a place for any hunk.
+    pub fn refuses(&self) -> bool {
+        self.die() && self.errors > 0
+    }
+
     fn die(&self) -> bool {
         matches!(self.action, Action::Error | Action::ErrorAll)
     }
@@ -462,7 +468,10 @@ pub fn begin(
             let at = offsets(hunk);
             let last = hunk.lines.len();
             for (n, (kind, text)) in hunk.lines.iter_mut().enumerate() {
-                if *kind != added {
+                // Under `fix` git also reports the context lines, which it may have to repair
+                // to find the place for the hunk.
+                let context = *kind == b' ' && action == Action::Fix && !reverse;
+                if *kind != added && !context {
                     continue;
                 }
                 let result = check(text, *rule);
@@ -477,7 +486,7 @@ pub fn begin(
                     &text[..]
                 };
                 state.say(hunk.first_line + at[n], &reason(result), shown);
-                if action == Action::Fix && !reverse {
+                if action == Action::Fix && !reverse && !context {
                     if counts_as_fixed(text, result, *rule) {
                         state.rewritten += 1;
                     }

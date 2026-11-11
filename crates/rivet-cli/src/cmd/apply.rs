@@ -294,6 +294,7 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
         reject: args.reject,
         three_way: args.three_way,
         ignore_ws,
+        ws_fix: action == Action::Fix,
     };
     if let Some(pass) = whitespace.take() {
         // Git reports blank lines at the end of a file, and sums up, once every hunk is placed.
@@ -302,7 +303,9 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
                 check: true,
                 ..options
             };
-            if let Err(lines) = apply_to_repo(&mut repository, &patches, probe) {
+            if let Err(lines) = apply_to_repo(&mut repository, &patches, probe)
+                && !pass.refuses()
+            {
                 for line in lines {
                     eprintln!("{line}");
                 }

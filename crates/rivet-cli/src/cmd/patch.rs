@@ -782,6 +782,7 @@ pub fn apply_hunks_collect(
         keep_going,
         min_context,
         false,
+        None,
         notes,
     )
 }
@@ -848,6 +849,7 @@ pub fn apply_hunks_ws(
     keep_going: bool,
     min_context: usize,
     ignore_ws: bool,
+    ws_fix: Option<super::whitespace::Rule>,
     notes: &mut Vec<String>,
 ) -> (Vec<u8>, Vec<HunkFailure>) {
     let mut content = split_content(data);
@@ -907,7 +909,13 @@ pub fn apply_hunks_ws(
                 }
                 for (k, line) in pre.iter().enumerate() {
                     let same = content.lines[at + k] == *line
-                        || (ignore_ws && fuzzy_match_lines(&content.lines[at + k], line));
+                        || (ignore_ws && fuzzy_match_lines(&content.lines[at + k], line))
+                        || ws_fix.is_some_and(|rule| {
+                            // Git's `match_fragment` after whitespace correction: both sides
+                            // repaired alike.
+                            super::whitespace::fix(&content.lines[at + k], rule)
+                                == super::whitespace::fix(line, rule)
+                        });
                     if !same {
                         return false;
                     }
@@ -972,6 +980,31 @@ pub fn apply_hunks_ws(
         };
         let (cut_front, cut_back) = (leading_all - leading, trailing_all - trailing);
         let mut post_all = post_all;
+        if let Some(rule) = ws_fix {
+            // A hunk that only fits after correction: its context lines take the repaired
+            // spelling of the file's lines (`update_pre_post_images`).
+            let exact = (0..pre_all.len() - cut_back - cut_front)
+                .all(|k| content.lines[at + k] == pre_all[cut_front + k]);
+            if !exact {
+                let (mut pre_at, mut post_at) = (0usize, 0usize);
+                for (kind, _) in &hunk.lines {
+                    if *kind == b' ' {
+                        if pre_at >= cut_front && pre_at < pre_all.len() - cut_back {
+                            post_all[post_at] = super::whitespace::fix(
+                                &content.lines[at + pre_at - cut_front],
+                                rule,
+                            );
+                        }
+                        pre_at += 1;
+                        post_at += 1;
+                    } else if *kind == pre_kind {
+                        pre_at += 1;
+                    } else if *kind == post_kind {
+                        post_at += 1;
+                    }
+                }
+            }
+        }
         if ignore_ws {
             // Context lines of the post-image take the file's spelling.
             let (mut pre_at, mut post_at) = (0usize, 0usize);
@@ -1029,6 +1062,8 @@ pub struct ApplyOptions {
     pub three_way: bool,
     /// Match context ignoring changes in whitespace (`--ignore-whitespace`).
     pub ignore_ws: bool,
+    /// Match context after repairing whitespace errors on both sides (`--whitespace=fix`).
+    pub ws_fix: bool,
 }
 
 use bstr::{BStr, BString};
@@ -1248,6 +1283,9 @@ pub fn apply_to_repo(
                 options.reject,
                 options.min_context.unwrap_or(usize::MAX),
                 options.ignore_ws,
+                options
+                    .ws_fix
+                    .then(|| super::whitespace::rule_for(repository, &target)),
                 &mut notes,
             )
         };
@@ -1486,6 +1524,7 @@ fn three_way_merge(
         false,
         options.min_context.unwrap_or(usize::MAX),
         options.ignore_ws,
+        None,
         &mut Vec::new(),
     );
     if let Some(failure) = failures.first() {
