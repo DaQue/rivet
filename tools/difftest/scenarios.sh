@@ -4485,6 +4485,25 @@ s_apply_whitespace() {
     done
 }
 
+s_apply_inaccurate_eof() {
+    g init -q src; cd src
+    printf 'a\nb\nc' >f; g add f; g commit -q -m base
+    printf 'a\nB\nc' >f; g diff >../p; g reset -q --hard
+    printf 'a\nb\nc' >f; g add f; printf 'a\nb\nc\nd' >f; g diff >../tail.patch; g reset -q --hard
+    cd ..
+    sed '/^\\ No newline/d' p >p2; sed '/^\\ No newline/d' tail.patch >tail2
+    v init -q dst; cd dst
+    printf 'a\nb\nc' >f; v add f; v commit -q -m base
+    v apply ../p2; echo "rc=$?"; cat -A f; g reset -q --hard
+    v apply --inaccurate-eof ../p2; echo "rc=$?"; cat -A f; v status --short; g reset -q --hard
+    v apply --check --inaccurate-eof ../p2; echo "rc=$?"; v apply --inaccurate-eof --stat ../p2
+    v apply --inaccurate-eof -R ../p2; echo "rc=$?"; cat -A f; g reset -q --hard
+    printf 'a\nB\nc' >f; v apply --inaccurate-eof -R ../p2; echo "rc=$?"; cat -A f; g reset -q --hard
+    v apply --inaccurate-eof ../tail2; echo "rc=$?"; cat -A f; g reset -q --hard
+    v apply --inaccurate-eof --no-add ../p2; echo "rc=$?"; cat -A f; g reset -q --hard
+    v apply --inaccurate-eof ../p; echo "rc=$?"; cat -A f; g reset -q --hard
+}
+
 s_apply_no_add() {
     g init -q src; cd src
     printf 'a\nb\nc\nd\n' >f; g add f; g commit -q -m base

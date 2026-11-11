@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 467 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 468 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-10, gate: 356 tests / 0 failed, 467 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-11, gate: 356 tests / 0 failed, 468 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -125,7 +125,7 @@ The command works for the common case; the listed options or edge cases are miss
 * **`apply`** — `GIT binary patch` (`diff --binary`, literal and delta blocks) is decoded, with `-R`
   taking the reverse block. `am --3way` still refuses binary patches. `-C<n>` reduces
   context like git (with its `Context reduced to (l/t) to apply fragment at N` note), symlinks can be created,
-  deleted and retargeted (`wrong type` as git); `--reject` with `--3way` is git's `options '--reject' and '--3way' cannot be used together` (`s_apply_three_way`). `--whitespace=<action>` / `apply.whitespace` check and repair the added lines (`s_apply_whitespace`); `--no-add` drops the additions (`s_apply_no_add`); `--ignore-whitespace`/`--ignore-space-change` (and `--no-` forms, `apply.ignorewhitespace`) match context as git's `fuzzy_matchlines` does (`s_apply_ignore_whitespace`); `--inaccurate-eof` is unknown, and `--whitespace=fix` still needs the context lines to match exactly where git forgives whitespace-only differences.
+  deleted and retargeted (`wrong type` as git); `--reject` with `--3way` is git's `options '--reject' and '--3way' cannot be used together` (`s_apply_three_way`). `--whitespace=<action>` / `apply.whitespace` check and repair the added lines (`s_apply_whitespace`); `--no-add` drops the additions (`s_apply_no_add`); `--ignore-whitespace`/`--ignore-space-change` (and `--no-` forms, `apply.ignorewhitespace`) match context as git's `fuzzy_matchlines` does (`s_apply_ignore_whitespace`); `--inaccurate-eof` works (`s_apply_inaccurate_eof`), but `--whitespace=fix` still needs the context lines to match exactly where git forgives whitespace-only differences.
 * **`format-patch` / `am`** — `--cover-letter` (`0000-cover-letter.patch`: shortlog wrapped at 72 columns,
   the range's diffstat and summary, numbering `0/N`), `--thread[=shallow|deep]`, `--no-thread` and `--in-reply-to`
   (`Message-ID`, `In-Reply-To`, `References`; a deep thread lists every earlier message), and RFC 2047 encoding of

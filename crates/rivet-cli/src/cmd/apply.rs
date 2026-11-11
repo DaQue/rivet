@@ -84,6 +84,10 @@ pub struct ApplyArgs {
     #[arg(long = "no-add")]
     pub no_add: bool,
 
+    /// Fix up diffs whose last line lost its "No newline" marker.
+    #[arg(long = "inaccurate-eof")]
+    pub inaccurate_eof: bool,
+
     /// Ignore changes in whitespace when finding context (the last of the four spellings wins).
     #[arg(long = "ignore-whitespace", overrides_with_all = ["ignore_space_change", "no_ignore_whitespace", "no_ignore_space_change", "ignore_whitespace"])]
     #[arg(num_args = 0..=1, require_equals = true, default_missing_value = "")]
@@ -266,6 +270,16 @@ pub fn run_apply(global: &GlobalArgs, args: &ApplyArgs) -> Result<i32> {
             if args.no_add {
                 let added = if args.reverse { b'-' } else { b'+' };
                 hunk.lines.retain(|(k, _)| *k != added);
+            }
+            if args.inaccurate_eof
+                && !hunk.old_no_newline
+                && !hunk.new_no_newline
+                && hunk.lines.iter().any(|(k, _)| *k != b'+')
+                && hunk.lines.iter().any(|(k, _)| *k != b'-')
+            {
+                // Git drops the final newline of both images when neither says it has one.
+                hunk.old_no_newline = true;
+                hunk.new_no_newline = true;
             }
         }
     }
