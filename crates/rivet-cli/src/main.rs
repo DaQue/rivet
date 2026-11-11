@@ -237,6 +237,9 @@ fn expand_count_shorthand(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsStri
             } else if let Some(score) = text.strip_prefix("-M") {
                 out.push(format!("--find-renames={score}").into());
                 continue;
+            } else if let Some(score) = text.strip_prefix("-C") {
+                out.push(format!("--find-copies={score}").into());
+                continue;
             }
         } else if in_log && !after_dashes {
             if text == "--" {

@@ -373,6 +373,11 @@ pub struct DiffArgs {
         require_equals = true, default_missing_value = "", action = clap::ArgAction::Append)]
     pub find_renames: Vec<String>,
 
+    /// Detect renames and copies, needing `<n>` similarity (`-C<n>` is rewritten to this).
+    #[arg(long = "find-copies", value_name = "N", num_args = 0..=1,
+        require_equals = true, default_missing_value = "", action = clap::ArgAction::Append)]
+    pub find_copies: Vec<String>,
+
     /// Do not detect renames; read from the raw command line.
     #[arg(long = "no-renames")]
     pub no_renames: bool,
@@ -1065,6 +1070,16 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
         if super::resolve_rev(&repository, last).is_ok() {
             break;
         }
+        // `A..B` names two revisions, each empty side meaning `HEAD`.
+        if revisions.len() == 1
+            && last.split_once("..").is_some_and(|(left, right)| {
+                [left, right]
+                    .iter()
+                    .all(|side| side.is_empty() || super::resolve_rev(&repository, side).is_ok())
+            })
+        {
+            break;
+        }
         pathspecs.insert(0, PathBuf::from(revisions.pop().expect("non-empty")));
     }
     let mut specs = Vec::new();
@@ -1114,7 +1129,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
             &options,
         )?
     };
-    super::detect_renames_as(&repository, &mut diff, &options, rename_choice)?;
+    let copied = super::detect_renames_as(&repository, &mut diff, &options, rename_choice)?;
     if !specs.is_empty() {
         let keep: Vec<bool> = diff
             .files
@@ -1178,6 +1193,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
             }
         } else if args.name_status {
             rivet_core::format_name_status(&diff, &mut out)?;
+            out = super::name_status_copies(&out, &copied);
         } else if args.stat {
             rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
             if color {
@@ -1185,6 +1201,9 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
             }
         } else {
             rivet_core::format_unified(&diff, format, &mut out)?;
+            if !copied.is_empty() {
+                out = super::difftree::name_copies(&out, &copied);
+            }
             if color {
                 out = colorize_patch(&out)?;
             }

@@ -1078,7 +1078,7 @@ fn pair_files(
 
 /// A patch's `rename from` / `rename to` headers of the files in `copies`, spelled `copy from` /
 /// `copy to` (the formatter knows only renames).
-fn name_copies(patch: &[u8], copies: &[BString]) -> Vec<u8> {
+pub(super) fn name_copies(patch: &[u8], copies: &[BString]) -> Vec<u8> {
     let targets: Vec<Vec<u8>> = copies
         .iter()
         .map(|path| {

@@ -616,6 +616,8 @@ pub enum RenameChoice {
     Off,
     /// `-M[<n>]` / `--find-renames[=<n>]` with the score a pair needs.
     At(u64),
+    /// `-C[<n>]` / `--find-copies[=<n>]`: renames, and copies from modified files.
+    Copies(u64),
 }
 
 /// Git's `parse_rename_score`: digits and at most one `.`, an optional `%`, nothing after.
@@ -655,6 +657,23 @@ pub fn rename_choice(args: &[String]) -> Result<Option<RenameChoice>, String> {
         if word == "--" {
             break;
         }
+        if let Some(score) = word
+            .strip_prefix("--find-copies=")
+            .or_else(|| (word == "--find-copies").then_some(""))
+            .or_else(|| word.strip_prefix("-C"))
+        {
+            let Some(score) = parse_rename_score(score) else {
+                return Err("error: invalid argument to find-copies".to_owned());
+            };
+            // As in git, a score of 0 (`-C`, `-C0`) means the default.
+            let score = if score == 0 {
+                rivet_core::diff::rename::MINIMUM_SCORE
+            } else {
+                score
+            };
+            choice = Some(RenameChoice::Copies(score));
+            continue;
+        }
         let score = word
             .strip_prefix("--find-renames=")
             .or_else(|| (word == "--find-renames").then_some(""))
@@ -677,18 +696,116 @@ pub fn detect_renames_as(
     diff: &mut rivet_core::TreeDiff,
     options: &rivet_core::DiffOptions,
     choice: Option<RenameChoice>,
-) -> Result<()> {
+) -> Result<Vec<bstr::BString>> {
+    let plain = |result: Result<()>| result.map(|()| Vec::new());
     match choice {
-        None => detect_renames(repository, diff, options),
-        Some(RenameChoice::Off) => Ok(()),
+        None => plain(detect_renames(repository, diff, options)),
+        Some(RenameChoice::Off) => Ok(Vec::new()),
+        Some(RenameChoice::Copies(minimum)) => detect_copies_at(repository, diff, options, minimum),
         Some(RenameChoice::At(minimum)) => {
             if minimum == rivet_core::diff::rename::MINIMUM_SCORE {
-                return rivet_core::diff::detect_renames(diff, repository.odb(), options)
-                    .map_err(Into::into);
+                return plain(
+                    rivet_core::diff::detect_renames(diff, repository.odb(), options)
+                        .map_err(Into::into),
+                );
             }
-            detect_renames_at(repository, diff, options, minimum)
+            plain(detect_renames_at(repository, diff, options, minimum))
         }
     }
+}
+
+/// `-C`: pair every added file with the best deleted or modified file; a source that stays, or
+/// one several destinations come from, is copied (git's `C<nnn>`), the rest is renamed. Returns
+/// the copy destinations.
+fn detect_copies_at(
+    repository: &Repository,
+    diff: &mut rivet_core::TreeDiff,
+    options: &rivet_core::DiffOptions,
+    minimum: u64,
+) -> Result<Vec<bstr::BString>> {
+    let (mut sources, mut source_file, mut deleted) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut destinations, mut destination_file) = (Vec::new(), Vec::new());
+    for (index, file) in diff.files.iter().enumerate() {
+        if file.is_new
+            && let (Some(oid), Some(mode)) = (file.new_oid, file.new_mode)
+        {
+            destinations.push(rivet_core::RenameSide {
+                path: file.path().to_owned(),
+                oid,
+                mode,
+            });
+            destination_file.push(index);
+        } else if let (Some(oid), Some(mode)) = (file.old_oid, file.old_mode) {
+            sources.push(rivet_core::RenameSide {
+                path: file.path().to_owned(),
+                oid,
+                mode,
+            });
+            source_file.push(index);
+            deleted.push(file.is_deleted);
+        }
+    }
+    let odb = repository.odb();
+    let pairs = rivet_core::diff::pair_copies(&sources, &destinations, odb, minimum)?;
+    let mut uses = vec![0usize; sources.len()];
+    for pair in &pairs {
+        uses[pair.source] += 1;
+    }
+    let (mut remove, mut copies) = (Vec::new(), Vec::new());
+    for pair in pairs {
+        uses[pair.source] -= 1;
+        let copy = !deleted[pair.source] || uses[pair.source] > 0;
+        let (from, to) = (&sources[pair.source], &destinations[pair.destination]);
+        let mut paired = rivet_core::diff::blob_diff(
+            odb.format(),
+            bstr::BStr::new(&to.path[..]),
+            Some((from.oid, from.mode)),
+            Some((to.oid, to.mode)),
+            odb,
+            options,
+        )?;
+        paired.old_path = Some(from.path.clone());
+        paired.new_path = Some(to.path.clone());
+        paired.is_new = false;
+        paired.is_deleted = false;
+        paired.similarity = Some(pair.percent());
+        diff.files[destination_file[pair.destination]] = paired;
+        if copy {
+            copies.push(to.path.clone());
+        } else {
+            remove.push(source_file[pair.source]);
+        }
+    }
+    remove.sort_unstable();
+    for index in remove.into_iter().rev() {
+        diff.files.remove(index);
+    }
+    diff.stats = diff.files.iter().map(rivet_core::FileDiff::stat).collect();
+    Ok(copies)
+}
+
+/// `format_name_status` output with `R<nnn>` turned into `C<nnn>` for the paths in `copies`.
+pub fn name_status_copies(text: &[u8], copies: &[bstr::BString]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    for line in text.split_inclusive(|b| *b == b'\n') {
+        let target = line
+            .strip_suffix(b"\n")
+            .and_then(|l| l.rsplit(|b| *b == b'\t').next());
+        let copy = line.starts_with(b"R")
+            && target.is_some_and(|t| {
+                copies.iter().any(|c| {
+                    rivet_core::ops::quote_path(bstr::BStr::new(&c[..]), false).as_ref() as &[u8]
+                        == t
+                })
+            });
+        if copy {
+            out.push(b'C');
+            out.extend_from_slice(&line[1..]);
+        } else {
+            out.extend_from_slice(line);
+        }
+    }
+    out
 }
 
 /// [`rivet_core::diff::detect_renames`] with the similarity a pair needs given.

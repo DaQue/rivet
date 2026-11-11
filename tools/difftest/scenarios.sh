@@ -15100,6 +15100,35 @@ s_diff_find_renames() {
     done
 }
 
+s_diff_find_copies() {
+    v init -q repo; cd repo
+    seq 1 24 | sed 's/^/alpha line /' >a.txt
+    seq 1 20 | sed 's/^/gone line /' >d.txt
+    seq 1 12 | sed 's/^/stay line /' >s.txt
+    v add .; tick; v commit -q -m one
+    echo more >>a.txt
+    sed '1,3s/alpha/ALPHA/' a.txt >a_copy.txt
+    cp s.txt s_exact.txt
+    v rm -q -f d.txt
+    sed '1,2s/gone/GONE/' <(seq 1 20 | sed 's/^/gone line /') >d2.txt
+    sed '3,4s/gone/GONE/' <(seq 1 20 | sed 's/^/gone line /') >d3.txt
+    v add -A
+    for o in "" "-M" "-C" "-C90%" "-C50%" "-C5" "--find-copies" "--find-copies=40%" "--find-copies=" "--no-renames" \
+        "-C --no-renames" "-M -C" "-C -M" "-C30% -M" "-Cx" "--find-copies=x" "-C5%x"; do
+        for f in "--stat" "--name-status" "--name-only" ""; do
+            v diff --cached $o $f
+        done
+        v diff $o --cached --name-status -- a.txt a_copy.txt
+        v diff $o HEAD~0 --name-status
+    done
+    tick; v commit -q -m two
+    for o in "-C" "-C90%" "--find-copies=20%"; do
+        v diff $o --name-status HEAD~1 HEAD
+        v diff $o --stat HEAD~1 HEAD
+        v diff $o HEAD~1..HEAD
+    done
+}
+
 s_update_index_again() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c; echo e >e
