@@ -78,3 +78,4 @@
 * 2026-11-11 — `apply --inaccurate-eof` treats a hunk whose last line lost its `\ No newline at end of file` marker as ending without a newline on both sides, as git does (`s_apply_inaccurate_eof`).
 * 2026-11-11 — `diff --find-copies-harder` makes every unmodified file of the old side (tree, `HEAD` or index, limited by the pathspecs) a copy source and turns copy detection on whatever else was said (`s_diff_find_copies_harder`).
 * 2026-11-11 — `log` and `show` take `-M[<n>]`, `-C[<n>]`, `--find-renames`, `--find-copies`, `--find-copies-harder` and `--no-renames`, and a path limit applies before rename detection (`s_log_show_renames`).
+* 2026-11-11 — `am -c`/`--scissors`, `--no-scissors` and `mailinfo.scissors` drop the body above a scissors line (git's `is_scissors_line`) and take `From:`/`Subject:`/`Date:` lines right below it as the author, subject and date; a bad `mailinfo.scissors` is git's boolean fatal (`s_am_scissors`).

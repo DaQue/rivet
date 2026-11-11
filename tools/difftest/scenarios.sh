@@ -15190,6 +15190,75 @@ s_log_show_renames() {
     v log --find-renames=zz
 }
 
+s_am_scissors() {
+    v init -q repo; cd repo
+    printf 'one\n' >f
+    v add f; tick; v commit -q -m base
+    base=$(g rev-parse HEAD)
+    # one message whose body is $1 (printf format), applied with the options after it
+    try() {
+        body=$1; shift
+        {
+            printf 'From 1111111111111111111111111111111111111111 Mon Sep 17 00:00:00 2001\n'
+            printf 'From: Mail Author <mail@example.com>\nDate: Tue, 14 Nov 2023 23:15:20 +0100\n'
+            printf 'Subject: [PATCH] mail subject\n\n'
+            printf "$body"
+            printf '\n---\n f | 1 +\n 1 file changed, 1 insertion(+)\n\n'
+            printf 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1,2 @@\n one\n+two\n'
+        } >../m.mbox
+        echo "== $body $*"
+        v am "$@" ../m.mbox
+        v log -1 --format='%H|%an <%ae> %ad|%s|%b' --date=raw
+        v reset -q --hard "$base"
+        if [ -d .git/rebase-apply ]; then v am --abort; fi
+    }
+    try 'before\n\n-- >8 --\n\nafter\n'
+    try 'before\n\n-- >8 --\n\nafter\n' -c
+    try 'before\n\n-- >8 --\n\nafter\n' --scissors
+    try 'before\n\n-- >8 --\n\nafter\n' --no-scissors
+    try 'before\n\n-- >8 --\n\nafter\n' -c --no-scissors
+    try 'before\n\n-- >8 --\n\nafter\n' --no-scissors -c
+    try 'before\n\n-- >8 --\nSubject: new subject\nFrom: Other One <other@example.com>\n\nafter\n' -c
+    try 'before\n\n-- >8 --\nsubject: [PATCH 2/3] Re: wrapped\n  subject\nDATE: Mon, 1 Jan 2024 00:00:00 +0000\n\nafter\n' -c
+    try 'before\n\n-- >8 --\nFoo: bar\nSubject: not a header here\n\nafter\n' -c
+    try 'one\n-- >8 --\nSubject: first\n\ntwo\n-- >8 --\nafter\n' -c
+    try 'one\n-- >8 --\nSubject: first\n\ntwo\n-- >8 --\nDate: Mon, 1 Jan 2024 00:00:00 +0000\nafter\n' -c
+    try 'before\n-- >8 --\n' -c
+    try 'before\n-- >8 --\nSubject: only\n' -c
+    try 'before\n\n\n-- >8 --\n\n\nSubject: after blanks\n\n\nbody\n' -c
+    for line in '-->8--' '-- >8 --' '- - - >8 - - -' '-  -  >8  -  -' '-     >8     -' '>8' '8<-------' \
+        '-------8<' '- - - - >8' '-- %< --' '-- >% --' '=== 8< ===' '___ 8< ___' '-8<-' '  -- 8< --  ' \
+        'a -- >8 --' '-- >8 -- foo --' '------ - -8<' '>8 -  - -' '8<     ---------'; do
+        try "before\n$line\nafter\n" -c
+    done
+    # mailinfo.scissors, and the command line over it
+    v config mailinfo.scissors true
+    try 'before\n-- >8 --\nafter\n'
+    try 'before\n-- >8 --\nafter\n' --no-scissors
+    try 'before\n-- >8 --\nafter\n' -c
+    v config mailinfo.scissors 0
+    try 'before\n-- >8 --\nafter\n'
+    try 'before\n-- >8 --\nafter\n' --scissors
+    v config mailinfo.scissors maybe
+    try 'before\n-- >8 --\nafter\n'
+    try 'before\n-- >8 --\nafter\n' --no-scissors
+    v config --unset mailinfo.scissors
+    # a patch that stops keeps the setting for --continue
+    printf 'changed\n' >f; v commit -q -am main; main=$(g rev-parse HEAD)
+    try 'before\n-- >8 --\nafter\n' -c
+    v reset -q --hard "$main"
+    {
+        printf 'From 1111111111111111111111111111111111111111 Mon Sep 17 00:00:00 2001\n'
+        printf 'From: Mail Author <mail@example.com>\nDate: Tue, 14 Nov 2023 23:15:20 +0100\n'
+        printf 'Subject: [PATCH] mail subject\n\nbefore\n-- >8 --\nSubject: kept subject\n\nafter\n---\n'
+        printf 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1,2 @@\n one\n+two\n'
+    } >../stop.mbox
+    v am -c ../stop.mbox
+    printf 'one\ntwo\n' >f; v add f
+    v am --continue
+    v log -1 --format='%an <%ae> %s|%b'
+}
+
 s_update_index_again() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c; echo e >e

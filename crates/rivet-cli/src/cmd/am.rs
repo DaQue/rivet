@@ -12,7 +12,10 @@
 //! `--3way` falls back, when a patch does not apply, to merging the post-image of the blobs named on
 //! its `index` lines into the current tree, as git does; the conflict is then stopped like any other.
 //!
-//! Not implemented: `--signoff`, `--keep`, `--directory`, `--whitespace`, scissors,
+//! `-c`/`--scissors` (and `mailinfo.scissors`) drop everything above a scissors line, and the
+//! `From:`, `Subject:` and `Date:` lines right below it replace the mail's own.
+//!
+//! Not implemented: `--signoff`, `--keep`, `--directory`, `--whitespace`,
 //! mailbox formats other than plain mbox, RFC 2047 encoded headers.
 
 use std::io::{Read as _, Write as _};
@@ -74,6 +77,14 @@ pub struct AmArgs {
     /// Leave the files `rerere` resolves unstaged.
     #[arg(long = "no-rerere-autoupdate", overrides_with = "rerere_autoupdate")]
     pub no_rerere_autoupdate: bool,
+
+    /// Drop everything in the body above a scissors line.
+    #[arg(short = 'c', long = "scissors", overrides_with = "no_scissors")]
+    pub scissors: bool,
+
+    /// Do not look for a scissors line.
+    #[arg(long = "no-scissors", overrides_with = "scissors")]
+    pub no_scissors: bool,
 }
 
 fn dir_of(repository: &Repository) -> PathBuf {
@@ -180,7 +191,63 @@ fn strip_subject_tags(subject: &str) -> String {
     text.to_string()
 }
 
-fn parse_message(raw: &[u8], fallback: &Signature) -> Result<Message> {
+/// git's `is_scissors_line` (mailinfo.c): a perforation of dashes with a `>8`, `8<`, `>%` or `%<`
+/// mark in it. `line` carries its newline, which counts like any other blank.
+fn is_scissors_line(line: &[u8]) -> bool {
+    let (mut scissors, mut gap, mut perforation) = (0usize, 0usize, 0usize);
+    let mut in_perforation = false;
+    let (mut first, mut last) = (None, 0usize);
+    let mut at = 0;
+    while at < line.len() {
+        let c = line[at];
+        if c.is_ascii_whitespace() || c == 0x0b {
+            if in_perforation {
+                perforation += 1;
+                gap += 1;
+            }
+            at += 1;
+            continue;
+        }
+        last = at;
+        first.get_or_insert(at);
+        if c == b'-' {
+            in_perforation = true;
+            perforation += 1;
+            at += 1;
+            continue;
+        }
+        if matches!(line.get(at..at + 2), Some(b">8" | b"8<" | b">%" | b"%<")) {
+            in_perforation = true;
+            perforation += 2;
+            scissors += 2;
+            at += 2;
+            continue;
+        }
+        in_perforation = false;
+        at += 1;
+    }
+    let Some(first) = first else {
+        return false;
+    };
+    let visible = last - first + 1;
+    scissors > 0 && visible >= 8 && visible < perforation * 3 && gap * 2 < perforation
+}
+
+/// The name and address of a `From:` value.
+fn split_from(from: &str) -> Result<(String, String)> {
+    if !from.is_ascii() {
+        anyhow::bail!("am: encoded or non-ASCII headers are not implemented");
+    }
+    Ok(match (from.find('<'), from.rfind('>')) {
+        (Some(open), Some(close)) if open < close => (
+            from[..open].trim().trim_matches('"').to_string(),
+            from[open + 1..close].to_string(),
+        ),
+        _ => (from.to_string(), from.to_string()),
+    })
+}
+
+fn parse_message(raw: &[u8], fallback: &Signature, scissors: bool) -> Result<Message> {
     let split = raw
         .windows(2)
         .position(|w| w == b"\n\n")
@@ -207,31 +274,22 @@ fn parse_message(raw: &[u8], fallback: &Signature) -> Result<Message> {
             .map(|(_, v)| v.clone())
     };
     let from = header("from").unwrap_or_default();
-    let (name, email) = match (from.find('<'), from.rfind('>')) {
-        (Some(open), Some(close)) if open < close => (
-            from[..open].trim().trim_matches('"').to_string(),
-            from[open + 1..close].to_string(),
-        ),
-        _ => (from.clone(), from.clone()),
-    };
-    if !from.is_ascii() || header("subject").is_some_and(|s| s.contains("=?")) {
+    let (mut name, mut email) = split_from(&from)?;
+    if header("subject").is_some_and(|s| s.contains("=?")) {
         anyhow::bail!("am: encoded or non-ASCII headers are not implemented");
     }
-    let (when, tz) = header("date")
-        .and_then(|d| parse_rfc2822(&d))
-        .unwrap_or((fallback.when, fallback.tz_offset_minutes));
-    let author = Signature {
-        name: BString::from(name),
-        email: BString::from(email),
-        when,
-        tz_offset_minutes: tz,
-    };
-    let subject = strip_subject_tags(&header("subject").unwrap_or_default());
+    let mut date = header("date").and_then(|d| parse_rfc2822(&d));
+    let mut subject = strip_subject_tags(&header("subject").unwrap_or_default());
 
-    // The body ends where the patch starts: the `---` line, or the first `diff` header.
+    // The body ends where the patch starts: the `---` line, or the first `diff` header. With
+    // scissors, a scissors line drops what came before it and the header lines right after it
+    // (`From:`, `Subject:`, `Date:`, with continuation lines) replace the mail's own.
     let mut body: Vec<u8> = Vec::new();
     let mut patch_start = rest.len();
     let mut offset = 0;
+    let mut header_stage = false;
+    let mut accum: Option<(String, String)> = None;
+    let mut inbody: Vec<(String, String)> = Vec::new();
     for line in rest.split_inclusive(|b| *b == b'\n') {
         if line.starts_with(b"---") && (line.len() == 4 || line[3] == b' ' || line[3] == b'\n') {
             patch_start = offset;
@@ -241,9 +299,64 @@ fn parse_message(raw: &[u8], fallback: &Signature) -> Result<Message> {
             patch_start = offset;
             break;
         }
-        body.extend_from_slice(line);
         offset += line.len();
+        if scissors && is_scissors_line(line) {
+            body.clear();
+            inbody.clear();
+            accum = None;
+            header_stage = true;
+            continue;
+        }
+        if header_stage {
+            let text = String::from_utf8_lossy(line.trim_end_with(|c| c == '\n' || c == '\r'))
+                .into_owned();
+            if text.is_empty() {
+                if let Some(done) = accum.take() {
+                    inbody.push(done);
+                    header_stage = false;
+                }
+                continue;
+            }
+            if (text.starts_with(' ') || text.starts_with('\t'))
+                && let Some((_, value)) = accum.as_mut()
+            {
+                value.push(' ');
+                value.push_str(text.trim());
+                continue;
+            }
+            if let Some((key, value)) = text.split_once(':')
+                && ["from", "subject", "date"].contains(&key.to_ascii_lowercase().as_str())
+            {
+                if let Some(done) = accum.take() {
+                    inbody.push(done);
+                }
+                accum = Some((key.to_ascii_lowercase(), value.trim().to_string()));
+                continue;
+            }
+            if let Some(done) = accum.take() {
+                inbody.push(done);
+            }
+            header_stage = false;
+        }
+        body.extend_from_slice(line);
     }
+    if let Some(done) = accum.take() {
+        inbody.push(done);
+    }
+    for (key, value) in inbody {
+        match key.as_str() {
+            "from" => (name, email) = split_from(&value)?,
+            "subject" => subject = strip_subject_tags(&value),
+            _ => date = parse_rfc2822(&value).or(date),
+        }
+    }
+    let (when, tz) = date.unwrap_or((fallback.when, fallback.tz_offset_minutes));
+    let author = Signature {
+        name: BString::from(name),
+        email: BString::from(email),
+        when,
+        tz_offset_minutes: tz,
+    };
     let body = body.trim().to_vec();
     Ok(Message {
         author,
@@ -393,6 +506,30 @@ pub fn run_am(global: &GlobalArgs, args: &AmArgs) -> Result<i32> {
         });
     let three_way = args.three_way || (configured && !args.no_three_way);
     write(&dir, "threeway", if three_way { "t\n" } else { "f\n" })?;
+    // `git mailinfo` reads the setting whatever the command line says; a bad value stops the
+    // run with the state left for `--abort`.
+    let configured_scissors = match repository.config_value(BStr::new("mailinfo.scissors"))? {
+        Some(value) => match rivet_core::parse_bool(BStr::new(&value))
+            .or_else(|_| rivet_core::parse_int(BStr::new(&value)).map(|n| n != 0))
+        {
+            Ok(on) => on,
+            Err(_) => {
+                write(&dir, "applying", "")?;
+                eprintln!(
+                    "fatal: bad boolean config value '{}' for 'mailinfo.scissors'",
+                    String::from_utf8_lossy(&value)
+                );
+                return Ok(128);
+            }
+        },
+        None => false,
+    };
+    let scissors = match (args.scissors, args.no_scissors) {
+        (true, _) => true,
+        (_, true) => false,
+        _ => configured_scissors,
+    };
+    write(&dir, "scissors", if scissors { "t\n" } else { "f\n" })?;
     run_patches(global, &mut repository, &dir, args.no_verify)
 }
 
@@ -487,7 +624,7 @@ fn run_patches(
             false => &stored[..],
         };
         let fallback = repository.author_signature()?;
-        let message = parse_message(raw, &fallback)?;
+        let message = parse_message(raw, &fallback, read(dir, "scissors") == "t")?;
         let number = format!("{next:04}");
         // Remember the message for `--continue`.
         write(dir, "applying", "")?;
