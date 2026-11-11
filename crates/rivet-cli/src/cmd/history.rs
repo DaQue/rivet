@@ -348,6 +348,14 @@ pub struct DiffArgs {
     #[arg(long = "name-only")]
     pub name_only: bool,
 
+    /// Print the raw format: modes, abbreviated object names, a status letter and the path.
+    #[arg(long = "raw")]
+    pub raw: bool,
+
+    /// Print the patch (the default, but `--raw` and `--stat` suppress it unless asked for).
+    #[arg(short = 'p', short_alias = 'u', long = "patch")]
+    pub patch: bool,
+
     /// Exit `1` when there are differences, as `--quiet` does, without suppressing output.
     #[arg(long = "exit-code")]
     pub exit_code: bool,
@@ -1036,6 +1044,83 @@ pub fn run_show(global: &GlobalArgs, args: &ShowArgs) -> Result<i32> {
     Ok(0)
 }
 
+/// The raw format of `diff --raw`, one line per file. On the work-tree side git does not hash
+/// the file: the new id is zeros unless the index entry already holds that content.
+fn raw_lines(
+    repository: &Repository,
+    diff: &rivet_core::TreeDiff,
+    copied: &[bstr::BString],
+    worktree_side: bool,
+    full: bool,
+) -> Vec<u8> {
+    let hex_len = repository.format().hex_len();
+    let minimum = abbrev_minimum(repository, None);
+    let show = |oid: Option<ObjectId>| -> String {
+        match oid {
+            None => "0".repeat(if full { hex_len } else { minimum }),
+            Some(oid) if full => oid.to_string(),
+            Some(oid) => repository
+                .odb()
+                .abbreviate(&oid, minimum)
+                .unwrap_or_else(|_| oid.to_string()),
+        }
+    };
+    let mut out = Vec::new();
+    for file in &diff.files {
+        let new_oid = if worktree_side {
+            file.new_oid.filter(|oid| {
+                repository.index().entries().iter().any(|e| {
+                    e.stage() == rivet_core::Stage::Normal
+                        && e.path.as_slice() == file.path().as_ref() as &[u8]
+                        && e.oid == *oid
+                })
+            })
+        } else {
+            file.new_oid
+        };
+        let mode = |m: Option<rivet_core::object::EntryMode>| m.map_or(0, |m| m.to_u32());
+        let status = if file.is_rename() {
+            let letter = if copied
+                .iter()
+                .any(|c| c.as_slice() == file.path().as_ref() as &[u8])
+            {
+                'C'
+            } else {
+                'R'
+            };
+            format!("{letter}{:03}", file.similarity.unwrap_or(100))
+        } else if file.is_new {
+            "A".to_string()
+        } else if file.is_deleted {
+            "D".to_string()
+        } else if file.is_type_change() {
+            "T".to_string()
+        } else {
+            "M".to_string()
+        };
+        out.extend_from_slice(
+            format!(
+                ":{:06o} {:06o} {} {} {status}\t",
+                mode(file.old_mode),
+                mode(file.new_mode),
+                show(file.old_oid),
+                show(new_oid)
+            )
+            .as_bytes(),
+        );
+        if file.is_rename() {
+            out.extend_from_slice(&rivet_core::ops::quote_path(
+                file.old_path.as_ref().map(|p| &p[..]).unwrap_or(&b""[..]),
+                false,
+            ));
+            out.push(b'\t');
+        }
+        out.extend_from_slice(&rivet_core::ops::quote_path(file.path(), false));
+        out.push(b'\n');
+    }
+    out
+}
+
 /// Phase 8 — show changes between two states.
 ///
 /// # Purpose
@@ -1275,10 +1360,43 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
         } else if args.name_status {
             rivet_core::format_name_status(&diff, &mut out)?;
             out = super::name_status_copies(&out, &copied);
-        } else if args.stat {
-            rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut out)?;
-            if color {
-                out = colorize_stat(&out, &diff);
+        } else if args.raw || args.stat {
+            if args.raw {
+                let worktree_side = !args.cached
+                    && revisions.len() < 2
+                    && !revisions.iter().any(|r| r.contains(".."));
+                out.extend_from_slice(&raw_lines(
+                    &repository,
+                    &diff,
+                    &copied,
+                    worktree_side,
+                    args.no_abbrev,
+                ));
+                if args.patch && !args.stat {
+                    out.push(b'\n');
+                }
+            }
+            if args.stat {
+                let mut stat = Vec::new();
+                rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut stat)?;
+                if color {
+                    stat = colorize_stat(&stat, &diff);
+                }
+                out.extend_from_slice(&stat);
+                if args.patch {
+                    out.push(b'\n');
+                }
+            }
+            if args.patch {
+                let mut patch = Vec::new();
+                rivet_core::format_unified(&diff, format, &mut patch)?;
+                if !copied.is_empty() {
+                    patch = super::difftree::name_copies(&patch, &copied);
+                }
+                if color {
+                    patch = colorize_patch(&patch)?;
+                }
+                out.extend_from_slice(&patch);
             }
         } else {
             rivet_core::format_unified(&diff, format, &mut out)?;

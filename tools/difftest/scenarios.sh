@@ -15164,6 +15164,34 @@ s_diff_find_copies_harder() {
     v diff -C --name-status --cached
 }
 
+s_diff_raw() {
+    v init -q repo; cd repo
+    seq 1 24 | sed 's/^/alpha line /' >a.txt
+    seq 1 12 | sed 's/^/stay line /' >s.txt
+    seq 1 6 | sed 's/^/old line /' >old.txt
+    printf 'x\n' >gone.txt
+    ln -s a.txt link
+    v add .; tick; v commit -q -m one
+    echo more >>a.txt
+    v rm -q --cached gone.txt
+    rm gone.txt
+    mv old.txt new.txt
+    rm link; echo plain >link
+    echo fresh >fresh.txt
+    v add fresh.txt old.txt new.txt
+    for o in "" "--cached" "HEAD" "--cached HEAD~0" "--no-abbrev" "--cached --no-abbrev" "-p" "--stat" "--name-status" "--name-only"; do
+        v diff --raw $o
+    done
+    v diff --raw --stat
+    v diff --raw -p --cached
+    v diff --stat --raw --cached
+    v diff --raw -- a.txt
+    v add -A; tick; v commit -q -m two
+    v diff --raw HEAD~1 HEAD
+    v diff --raw HEAD~1..HEAD
+    v diff --raw --no-abbrev HEAD~1 HEAD
+}
+
 s_log_show_renames() {
     v init -q repo; cd repo
     seq 1 24 | sed 's/^/alpha line /' >a.txt
