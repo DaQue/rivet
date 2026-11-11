@@ -7,7 +7,7 @@ fn unsupported_options_are_refused_by_name() {
     let rivet = env!("CARGO_BIN_EXE_rivet");
     for args in [
         &["ls-remote", "--upload-pack=x", "."][..],
-        &["ls-remote", "-o", "x", "."],
+        &["ls-remote", "-o", "x", "http://127.0.0.1:1/x"],
     ] {
         let out = Command::new(rivet).args(args).output().unwrap();
         assert!(!out.status.success(), "{args:?}");

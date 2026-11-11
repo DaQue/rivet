@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 469 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 470 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-11, gate: 356 tests / 0 failed, 469 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-11, gate: 356 tests / 0 failed, 470 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -73,7 +73,7 @@ The command or subsystem is absent; it either fails at the argument parser or re
   implemented; a file that is not a bundle gets git's two warnings but not the `bad config line` error naming a random temp file.
   `ls-remote --sort=<key>` works for `refname` (also `lstrip`/`rstrip`/`strip`, a leading `-`, several `--sort`, `s_ls_remote_sort`);
   `version:`/`v:` over `refname` (`s_ls_remote_version_sort`) works too (`refname:short` shortens against the local refs, `s_ls_remote_sort_short`); `*refname` with a `lstrip`/`rstrip`/`strip` modifier is refused by name (git's order for it is not a function of the stripped name) and the object-data keys are unknown to rivet, and git's own
-  error texts are matched for unknown keys. `--upload-pack` and `--server-option` are refused by name (Rust test
+  error texts are matched for unknown keys. `--upload-pack` is refused by name, and so is `-o`/`--server-option` for a network URL or a bundle file; a local repository takes server options and ignores them (`s_ls_remote_server_option`; Rust test
   `ls_remote_refusals`). A local path that is a subdirectory of a repository is listed as that repository (rivet's discovery walks
   upwards; git says "does not appear to be a git repository"; a path that does not exist is matched); its patterns follow `wildmatch` (`*`, `?`, `[...]` with ranges, negation and `[:class:]`, `\` escapes, `s_ls_remote_patterns`).
 * **Submodule clone flags** — `update --depth` works only for a local-path source (git ignores it with

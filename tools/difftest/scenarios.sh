@@ -11515,6 +11515,21 @@ s_ls_remote_sort_deref() {
     v ls-remote --sort=-refname --sort='*refname:short' ../src
 }
 
+# `ls-remote -o` / `--server-option`: a local repository takes the options and ignores them.
+s_ls_remote_server_option() {
+    g init -q src; cd src
+    tick; echo a >f; g add .; g commit -q -m c1
+    g branch B; g tag T
+    v ls-remote -o x ../src
+    v ls-remote -ox ../src
+    v ls-remote --server-option=x --server-option=y ../src
+    v ls-remote --server-option x --tags ../src
+    v ls-remote -o x "file://$PWD"
+    v ls-remote -o x ../src HEAD
+    v ls-remote -o
+    v ls-remote --server-option
+}
+
 # `ls-remote --sort=version:<key>` / `v:<key>` use git's versioncmp, reversed by a leading `-`.
 s_ls_remote_version_sort() {
     g init -q src; cd src
@@ -15882,6 +15897,7 @@ for s in "$@"; do
         s_ls_remote_sort) run_scenario "$s" none ;;
         s_ls_remote_sort_short) run_scenario "$s" none ;;
         s_ls_remote_sort_deref) run_scenario "$s" none ;;
+        s_ls_remote_server_option) run_scenario "$s" none ;;
         s_ls_remote_version_sort) run_scenario "$s" none ;;
         s_ls_remote_version_suffix) run_scenario "$s" none ;;
         s_clone_filter) run_scenario "$s" local viafile bare.git limit ;;

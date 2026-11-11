@@ -44,8 +44,13 @@ pub struct LsRemoteArgs {
     #[arg(long = "upload-pack", visible_alias = "exec", value_name = "PATH")]
     pub upload_pack: Option<String>,
 
-    /// Accepted so the error can name it.
-    #[arg(short = 'o', long = "server-option", value_name = "OPTION")]
+    /// Sent to the server; a local repository ignores them.
+    #[arg(
+        short = 'o',
+        long = "server-option",
+        value_name = "OPTION",
+        num_args = 0..=1
+    )]
     pub server_option: Vec<String>,
 
     /// The repository: a url, a path, a bundle file or a configured remote.
@@ -59,7 +64,17 @@ pub struct LsRemoteArgs {
 
 /// Run `rivet ls-remote`.
 pub fn run_ls_remote(global: &GlobalArgs, args: &LsRemoteArgs) -> Result<i32> {
-    if args.upload_pack.is_some() || !args.server_option.is_empty() {
+    // Git's parse-options text for an option left without its value at the end of the line.
+    let last = std::env::args().next_back().unwrap_or_default();
+    if last == "-o" || last == "--server-option" {
+        if last == "-o" {
+            eprintln!("error: switch `o' requires a value");
+        } else {
+            eprintln!("error: option `server-option' requires a value");
+        }
+        return Ok(129);
+    }
+    if args.upload_pack.is_some() {
         anyhow::bail!("ls-remote: --upload-pack and --server-option are not implemented");
     }
     let start = super::base_dir(global)?;
@@ -122,6 +137,12 @@ pub fn run_ls_remote(global: &GlobalArgs, args: &LsRemoteArgs) -> Result<i32> {
             "'{name}' does not appear to be a git repository"
         )));
     };
+    // A local repository takes server options and ignores them (protocol v2 has no server to tell).
+    let local_dir = url.scheme == rivet_core::remote::RemoteScheme::File
+        && !std::path::Path::new(&*String::from_utf8_lossy(&url.path)).is_file();
+    if !args.server_option.is_empty() && !local_dir {
+        anyhow::bail!("ls-remote: --upload-pack and --server-option are not implemented");
+    }
     if url.scheme == rivet_core::remote::RemoteScheme::File {
         let path = std::path::PathBuf::from(String::from_utf8_lossy(&url.path).into_owned());
         if path.is_file() && !rivet_core::bundle::looks_like_bundle(&path) {

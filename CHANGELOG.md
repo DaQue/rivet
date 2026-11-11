@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-11 — `ls-remote -o` / `--server-option` against a local repository is accepted and ignored as in git (a missing value is git's `switch `o' requires a value` / `option `server-option' requires a value`, exit 129); a network URL or bundle file is still refused by name (`s_ls_remote_server_option`).
 * 2026-11-11 — `apply --whitespace=fix` finds a hunk whose context differs from the file only by whitespace errors (both sides repaired alike, the post-image keeps the repaired file lines), reports the context lines it checks, and `--whitespace=error` dies on its whitespace errors before a hunk that does not fit is reported (`s_apply_whitespace_fix_context`).
 * 2026-11-10 — `ls-remote --sort=*refname` / `-*refname` / `v:*refname` / `*refname:short` sort as git does, with its `malformed field name: *` and `unrecognized %(*refname) argument` fatals (`s_ls_remote_sort_deref`).
 * 2026-11-10 — `apply --ignore-whitespace` / `--ignore-space-change` (and the `--no-` forms, `apply.ignorewhitespace=change|none`): context lines match as git's `fuzzy_matchlines` does, the post-image keeps the file's own spelling of them, a value is `error: option `ignore-whitespace' takes no value` (exit 129) (`s_apply_ignore_whitespace`).
