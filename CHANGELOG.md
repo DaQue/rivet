@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-12 — `diff-tree -c`/`--cc` with `--patch-with-raw`/`--raw -p` (raw lines, blank line, patch; the blank line stays when `--cc` leaves no hunk) and with `--name-only`/`--name-status` (they silence the patch and the stat), as git does (`s_diff_tree_combined_formats`).
 * 2026-11-12 — `repack --geometric=` with an empty value is git's `option `geometric' expects a numerical value` (exit 129), not the k/m/g text (`s_repack_geometric_empty`).
 * 2026-11-12 — `diff-tree -c -p` / `-u` over a merge prints `diff --combined` with every hunk some parent differs in; `--full-index` works with `-c`/`--cc`, the `index` line ignores `--abbrev`, and a merge whose combined patch is empty still prints its commit id as git does (`s_diff_tree_combined_patch`).
 * 2026-11-12 — `gc --auto`: when the packs `gc.bigPackThreshold` keeps number `gc.autoPackLimit` or more, only the largest pack is kept out of the repack, as git does (`s_gc_auto_big_pack_fallback`).

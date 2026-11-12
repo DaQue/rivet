@@ -13075,6 +13075,32 @@ s_diff_tree_combined_stat() {
     v diff-tree --cc --raw HEAD
 }
 
+# diff-tree -c / --cc with raw + patch, and name formats: raw lines, a blank line, then the patch;
+# a name format silences the patch and the stat.
+s_diff_tree_combined_formats() {
+    v init -q -b main repo; cd repo
+    seq 1 12 >f; echo x >g; v add .; tick; v commit -q -m base
+    v checkout -q -b side
+    sed -i 's/^2$/two/;s/^11$/eleven-s/' f; tick; v commit -q -a -m side
+    v checkout -q main
+    sed -i 's/^6$/six/;s/^11$/eleven-m/' f; tick; v commit -q -a -m main
+    tick; v merge -q side >/dev/null 2>&1 || true
+    sed -i '/^<<<<<<<\|^=======\|^>>>>>>>/d;/eleven-s/d' f; v add -A; tick; v commit -q -m conflicted
+    v diff-tree -c --patch-with-raw HEAD
+    v diff-tree -c -p --raw HEAD
+    v diff-tree --cc --patch-with-raw HEAD
+    v diff-tree --cc --patch-with-raw -z HEAD
+    v diff-tree --cc --raw -p --stat HEAD
+    v diff-tree --cc --name-only HEAD
+    v diff-tree --cc --name-status HEAD
+    v diff-tree -c -p --name-only HEAD
+    v diff-tree --cc -p --name-status HEAD
+    v diff-tree -c --name-only --stat HEAD
+    v diff-tree -c --name-status --numstat -p HEAD
+    v diff-tree -c -z --name-only -p HEAD
+    v diff-tree --cc -p --raw -s HEAD
+}
+
 # diff-tree -M / -C / --find-copies-harder, scores and thresholds, against git.
 s_diff_tree_renames() {
     v init -q repo; cd repo

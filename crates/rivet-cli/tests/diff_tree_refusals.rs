@@ -1,4 +1,5 @@
-//! `diff-tree` refuses the combined-diff formats it does not implement by name and prints nothing.
+//! `diff-tree` refuses the combined patch of an added, deleted or mode-changed path (and of a binary
+//! file) by name and prints nothing.
 //! Git would print them, so there is no differential scenario for the refusal; `-c` and `--cc`
 //! themselves are the scenario `s_diff_tree_combined`, the rest of `diff-tree` `s_diff_tree`.
 
@@ -43,19 +44,28 @@ fn unimplemented_combined_formats_are_refused_by_name_and_print_nothing() {
     std::fs::write(dir.join("b"), "b\n").unwrap();
     assert!(run(&dir, &["add", "b"]).status.success());
     assert!(run(&dir, &["commit", "-q", "-m", "main"]).status.success());
-    assert!(run(&dir, &["merge", "-q", "side"]).status.success());
+    assert!(
+        run(&dir, &["merge", "-q", "--no-commit", "side"])
+            .status
+            .success()
+    );
+    std::fs::write(dir.join("c"), "c\n").unwrap();
+    assert!(run(&dir, &["add", "c"]).status.success());
+    assert!(run(&dir, &["commit", "-q", "-m", "merge"]).status.success());
 
     for args in [
+        ["diff-tree", "-c", "-p", "HEAD"],
+        ["diff-tree", "--cc", "-p", "HEAD"],
         ["diff-tree", "-c", "--patch-with-raw", "HEAD"],
-        ["diff-tree", "--cc", "--name-only", "HEAD"],
-        ["diff-tree", "--cc", "--name-status", "HEAD"],
     ] {
         let out = run(&dir, &args);
         assert_eq!(out.status.code(), Some(128), "{args:?}");
         assert!(out.stdout.is_empty(), "{args:?}: stdout must stay empty");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(
-            err.contains("with a combined diff is not implemented"),
+            err.contains(
+                "combined diff of an added, deleted or mode-changed path is not implemented"
+            ),
             "{args:?}: {err}"
         );
     }

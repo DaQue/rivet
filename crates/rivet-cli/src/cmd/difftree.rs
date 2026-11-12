@@ -1184,11 +1184,6 @@ fn combined_body(
     zero_id: &dyn Fn(&Option<ObjectId>) -> String,
 ) -> Result<(Vec<u8>, bool)> {
     let dense = opts.combined == 2;
-    if dense && (opts.name_only || opts.name_status)
-        || opts.patch && (opts.raw || opts.name_only || opts.name_status)
-    {
-        anyhow::bail!("diff-tree: this output format with a combined diff is not implemented");
-    }
     let mut per: Vec<Vec<Rec>> = Vec::new();
     for tree in trees {
         let mut walker = Walker {
@@ -1204,13 +1199,15 @@ fn combined_body(
     let mut body: Vec<u8> = Vec::new();
     let end = if opts.nul { b'\0' } else { b'\n' };
     // `--stat` and `--numstat` are the diff against the first parent, shown ahead of the rest.
-    if (opts.stat || opts.numstat) && !opts.silent {
+    // A name format silences them.
+    if (opts.stat || opts.numstat) && !opts.silent && !(opts.name_only || opts.name_status) {
         let (diff, _) = text_diff(repository, opts, specs, Some(trees[0]), new)?;
         if !diff.is_empty() {
             write_stats(repository, opts, &diff, &mut body)?;
         }
     }
-    let mut separate = !body.is_empty();
+    let mut raw: Vec<u8> = Vec::new();
+    let mut patches: Vec<u8> = Vec::new();
     for first in &per[0] {
         let mut recs: Vec<&Rec> = vec![first];
         for other in &per[1..] {
@@ -1232,7 +1229,42 @@ fn combined_body(
             rivet_core::ops::quote_path(first.path.as_bstr(), false).to_vec()
         };
         let statuses: Vec<u8> = recs.iter().map(|rec| rec.status).collect();
-        if opts.patch {
+        // The stat formats stand in for the raw lines unless `--raw` asks for them too; a patch
+        // stands in for them unless `--raw` (or `--patch-with-raw`) asks, and a name format
+        // silences the patch.
+        let names = opts.name_only || opts.name_status;
+        let patch_on = opts.patch && !names;
+        let raw_on = if patch_on {
+            opts.raw
+        } else {
+            !((opts.stat || opts.numstat) && !(opts.raw || names))
+        };
+        if raw_on {
+            if opts.name_only {
+                raw.extend_from_slice(&path);
+            } else if opts.name_status {
+                raw.extend_from_slice(&statuses);
+                raw.push(if opts.nul { b'\0' } else { b'\t' });
+                raw.extend_from_slice(&path);
+            } else {
+                let mode = |mode: Option<EntryMode>| mode.map_or(0, EntryMode::to_u32);
+                raw.push(b':');
+                for (at, rec) in recs.iter().enumerate() {
+                    let lead = if at == 0 { ':' } else { ' ' };
+                    raw.extend_from_slice(format!("{lead}{:06o}", mode(rec.omode)).as_bytes());
+                }
+                raw.extend_from_slice(format!(" {:06o}", mode(first.nmode)).as_bytes());
+                for rec in &recs {
+                    raw.extend_from_slice(format!(" {}", zero_id(&rec.ooid)).as_bytes());
+                }
+                raw.extend_from_slice(format!(" {} ", zero_id(&first.noid)).as_bytes());
+                raw.extend_from_slice(&statuses);
+                raw.push(if opts.nul { b'\0' } else { b'\t' });
+                raw.extend_from_slice(&path);
+            }
+            raw.push(end);
+        }
+        if patch_on {
             let all_modes_equal = recs
                 .iter()
                 .all(|rec| rec.omode.is_some() && rec.omode == first.nmode);
@@ -1264,10 +1296,6 @@ fn combined_body(
             if hunks.is_empty() {
                 continue;
             }
-            // A blank line (NUL under `-z`) sets the patch off from the stat before it.
-            if std::mem::take(&mut separate) {
-                body.push(end);
-            }
             // The `index` line of a combined patch ignores `--abbrev`, as in git.
             let minimum = super::history::abbrev_minimum(repository, None);
             let short = |oid: &ObjectId| {
@@ -1284,13 +1312,13 @@ fn combined_body(
                 .map(|rec| short(&rec.ooid.expect("checked with the mode")))
                 .collect();
             let quoted = rivet_core::ops::quote_path(first.path.as_bstr(), false);
-            body.extend_from_slice(if dense {
+            patches.extend_from_slice(if dense {
                 b"diff --cc "
             } else {
                 b"diff --combined "
             });
-            body.extend_from_slice(&quoted);
-            body.extend_from_slice(
+            patches.extend_from_slice(&quoted);
+            patches.extend_from_slice(
                 format!(
                     "\nindex {}..{}\n--- a/",
                     olds.join(","),
@@ -1298,41 +1326,23 @@ fn combined_body(
                 )
                 .as_bytes(),
             );
-            body.extend_from_slice(&quoted);
-            body.extend_from_slice(b"\n+++ b/");
-            body.extend_from_slice(&quoted);
-            body.push(b'\n');
-            body.extend_from_slice(&hunks);
-            continue;
+            patches.extend_from_slice(&quoted);
+            patches.extend_from_slice(b"\n+++ b/");
+            patches.extend_from_slice(&quoted);
+            patches.push(b'\n');
+            patches.extend_from_slice(&hunks);
         }
-        // The stat formats stand in for the raw lines unless `--raw` asks for them too.
-        if (opts.stat || opts.numstat) && !(opts.raw || opts.name_only || opts.name_status) {
-            continue;
-        }
-        if opts.name_only {
-            body.extend_from_slice(&path);
-        } else if opts.name_status {
-            body.extend_from_slice(&statuses);
-            body.push(if opts.nul { b'\0' } else { b'\t' });
-            body.extend_from_slice(&path);
-        } else {
-            let mode = |mode: Option<EntryMode>| mode.map_or(0, EntryMode::to_u32);
-            body.push(b':');
-            for (at, rec) in recs.iter().enumerate() {
-                let lead = if at == 0 { ':' } else { ' ' };
-                body.extend_from_slice(format!("{lead}{:06o}", mode(rec.omode)).as_bytes());
-            }
-            body.extend_from_slice(format!(" {:06o}", mode(first.nmode)).as_bytes());
-            for rec in &recs {
-                body.extend_from_slice(format!(" {}", zero_id(&rec.ooid)).as_bytes());
-            }
-            body.extend_from_slice(format!(" {} ", zero_id(&first.noid)).as_bytes());
-            body.extend_from_slice(&statuses);
-            body.push(if opts.nul { b'\0' } else { b'\t' });
-            body.extend_from_slice(&path);
-        }
+    }
+    body.extend_from_slice(&raw);
+    // A blank line (NUL under `-z`) sets the patch off from the stat or raw lines before it, even
+    // when every hunk of a `--cc` patch was left out.
+    if !body.is_empty()
+        && (!patches.is_empty()
+            || (opts.patch && !(opts.name_only || opts.name_status) && !raw.is_empty()))
+    {
         body.push(end);
     }
+    body.extend_from_slice(&patches);
     // Git prints the commit id of a merge whether or not a path (or a hunk) is left to show.
     Ok((body, true))
 }
