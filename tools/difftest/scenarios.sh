@@ -1626,6 +1626,23 @@ s_fetch_prune_tags() {
     cat .git/FETCH_HEAD
 }
 
+s_fetch_explicit_autotag() {
+    g init -q --bare origin.git
+    g clone -q origin.git seed 2>/dev/null
+    (cd seed && echo a >a && g add a && g commit -qm one && g push -q origin HEAD:main 2>/dev/null)
+    v clone -q origin.git repo
+    (cd seed && tick && echo b >b && g add b && g commit -qm two && g tag -a -m ann v-ann && g tag v-light && g push -q origin HEAD:main --tags 2>/dev/null)
+    cd repo
+    v fetch origin refs/heads/main:refs/remotes/origin/main
+    v tag
+    (cd ../seed && tick && echo c >c && g add c && g commit -qm three && g tag v-three && g push -q origin HEAD:main --tags 2>/dev/null)
+    v fetch origin main
+    v tag
+    (cd ../seed && tick && echo d >d && g add d && g commit -qm four && g tag v-four && g push -q origin HEAD:main --tags 2>/dev/null)
+    v fetch origin refs/heads/main:refs/remotes/origin/main
+    v tag
+}
+
 s_packed_refs() {
     g init -q repo; cd repo
     echo a >a; g add a; g commit -qm one; g branch keep; g branch gone; g branch mv
@@ -16093,7 +16110,7 @@ if [ $# -eq 0 ]; then
 fi
 for s in "$@"; do
     case $s in
-        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_packed_refs_stale|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash|s_push_refspec_forms) run_scenario "$s" repo origin.git ;;
+        s_remote_fetch_push|s_ssh|s_http|s_pull|s_push_cases|s_pull_merge|s_fetch_prune_tags|s_fetch_explicit_autotag|s_packed_refs_stale|s_pull_rebase|s_pull_rebase_fork_point|s_pull_autostash|s_pull_rebase_conflict|s_pull_squash|s_push_refspec_forms) run_scenario "$s" repo origin.git ;;
         s_credential) run_scenario "$s" c_ok c5 ;;
         s_credential_post) run_scenario "$s" c_post ;;
         s_credential_keys) run_scenario "$s" c_exp c_quitfull ;;

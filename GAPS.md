@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 478 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 479 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-12, gate: 356 tests / 0 failed, 478 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-12, gate: 356 tests / 0 failed, 479 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -210,8 +210,7 @@ The command works for the common case; the listed options or edge cases are miss
   public, POSTs challenged) is retried like the discovery one (`s_credential_post`), but only fetch,
   clone and a first-POST refusal are compared for the failure text (`RPC failed; HTTP 401 curl 22 …`
   and `expected flush after ref listing`); a refused `receive-pack` POST is not compared.
-* **Network protocol** — v2 capabilities other than `object-format=sha1` are not implemented;
-  git follows tags after a fetch with an explicit refspec where rivet does not.
+* **Network protocol** — v2 capabilities other than `object-format=sha1` are not implemented.
 * **`update-ref --stdin`** — `symref-update`, `symref-create`, `symref-delete` and `symref-verify` (line and `-z` framing, git's validation text, the `ref`/`oid` old values, `symref-delete`/`-verify` refused in deref mode, a symref update through a symbolic ref pointing both the named ref and the end of the chain at the target), `option no-deref` for the next command only, and `-0`/`--batch-updates` (what holds is applied, the rest comes back as `rejected <ref> <new> <old> <reason>` with `refname conflict`, `incorrect old value provided`, `reference does not exist`, `reference already exists` and `expected symref but found regular ref`, checked when the batch commits) are compared with git (`s_update_ref_symref`), and so are C-quoted fields in line mode (`s_update_ref_quoted`); `delete` removes the ref while holding its lock (`RefStore::delete_holding`). Not done: the duplicate and old-value checks of a symref update through a chain are only verified for a plain symbolic ref. `for-each-ref %(symref)` follows a chain of symbolic refs to the ref it ends on (five hops, as git) and takes `refname`'s modifiers (`:short`, `:lstrip=`, `:rstrip=`; `s_for_each_ref_symref_chain`).
 * **`commit-tree`** — `-S`/`--gpg-sign` is refused by name (`commit-tree: signing (-S) is not supported`, exit 128; `commit_tree_refusals.rs`).
 * **`diff-tree`** — `--stdin` (one commit, `<commit> <parent>...` or `<tree> <tree>` per line; a line that names nothing is echoed; `error: Need exactly two trees, separated by a space`, `Object <id> not a tree`), `--numstat` (also `-z`), `--patch-with-raw`, `--patch-with-stat` and `--full-index`, and the combinations of `--raw`, `--numstat`, `--stat` and `-p` (blank line, NUL under `-z`, before the patch) are compared with git (`s_diff_tree_opts`). `-M[<n>]`/`--find-renames[=<n>]`, `-C[<n>]`/`--find-copies[=<n>]`, `--find-copies-harder` and `--no-renames` are compared with git for the raw, `--name-status`, `--name-only`, `-z`, `--stat`, `--numstat` and `-p` outputs (`R<nnn>`/`C<nnn>`, `copy from/to`, `similarity index`, a deleted file copied twice is renamed to the last destination; `s_diff_tree_renames`). `-c`/`--cc` is refused by name (`diff-tree: <option> is not implemented`, exit 128; `diff_tree_refusals.rs`). Not done for renames: `-B` break detection, `diff.renameLimit` beyond the fixed 1000 x 1000, a copy source filtered by a path limit under `--find-copies-harder` is only checked for the plain path-prefix case, `diff -C`/`--find-copies[=<n>]` copies from modified files (`s_diff_find_copies`) and `diff --find-copies-harder` from every file of the old side (`s_diff_find_copies_harder`). `-p` of a symlink replaced by a regular file (or the reverse) prints git's deletion followed by an addition, in `diff`, `diff-tree`, `show` and `log -p` alike (`s_diff_mode_swap`; `FileDiff::split` is filled where the diff is built, so the raw, name-status and stat outputs keep their single `T` entry). `diff-index` and `diff-files` do not exist as commands. `--first-parent` is accepted and changes nothing, as in git 2.x without `-m`.

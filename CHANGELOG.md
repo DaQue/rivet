@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-12 — `fetch <remote> <src>:<dst>`: a command-line refspec with a destination follows the tags that point at fetched history, lists them in `FETCH_HEAD` as `not-for-merge`, and skips tags already present locally, as git does (`s_fetch_explicit_autotag`).
 * 2026-11-12 — `diff`/`log`/`show --color`: a space before a tab in the indent of an added line is painted with the whitespace colour as git does (`s_diff_color_space_before_tab`).
 * 2026-11-11 — `diff -C[<n>]` / `--find-copies[=<n>]`: an added file is paired with the best deleted or modified file (`C<nnn>` in `--name-status`, `copy from`/`copy to` in the patch, `a => b` in `--stat`), a bad score is `error: invalid argument to find-copies` (exit 129); `diff A..B` with one range word no longer reads it as a path (`s_diff_find_copies`).
 * 2026-11-11 — `ls-remote -o` / `--server-option` against a local repository is accepted and ignored as in git (a missing value is git's `switch `o' requires a value` / `option `server-option' requires a value`, exit 129); a network URL or bundle file is still refused by name (`s_ls_remote_server_option`).

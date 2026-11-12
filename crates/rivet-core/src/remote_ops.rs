@@ -561,10 +561,14 @@ impl Repository {
         // Tags that point at history we now have follow along.
         if request.tags == TagMode::Auto
             && !request.dry_run
-            && (configured
-                .iter()
-                .any(|s| s.is_pattern() && !s.dst.is_empty())
-                && !explicit)
+            && if explicit {
+                // git sets `autotags` for a command-line refspec that names a destination.
+                specs.iter().any(|s| !s.dst.is_empty())
+            } else {
+                configured
+                    .iter()
+                    .any(|s| s.is_pattern() && !s.dst.is_empty())
+            }
         {
             let mut tag_wants = Vec::new();
             let mut tag_maps = Vec::new();
@@ -573,6 +577,10 @@ impl Repository {
                 .filter(|r| r.name.starts_with(b"refs/tags/"))
             {
                 if mappings.iter().any(|m| m.src == r.name) {
+                    continue;
+                }
+                // Git follows only tags it does not have yet.
+                if RefName::from_bytes(&r.name).is_ok_and(|n| self.refs().exists(&n)) {
                     continue;
                 }
                 let target = r.peeled.unwrap_or(r.oid);
@@ -588,7 +596,7 @@ impl Repository {
                     oid: r.oid,
                     force: false,
                     for_merge: false,
-                    listed: false,
+                    listed: true,
                 });
             }
             if !tag_wants.is_empty() {
