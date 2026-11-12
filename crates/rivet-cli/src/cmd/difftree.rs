@@ -350,7 +350,6 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
             "-c" => opts.combined = 1,
             "--cc" => {
                 opts.combined = 2;
-                opts.patch = true;
             }
             "--no-renames" => {
                 opts.rename_score = None;
@@ -405,6 +404,12 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
             }
             other => positional.push(other),
         }
+    }
+    // `--cc` implies `-p` only while no other output format was asked for.
+    if opts.combined == 2
+        && !(opts.raw || opts.stat || opts.numstat || opts.name_only || opts.name_status)
+    {
+        opts.patch = true;
     }
     // As in Git, `--find-copies-harder` turns copy detection on whatever else was said.
     if opts.harder {
@@ -588,89 +593,10 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                 }
             }
             if text_mode {
-                let empty = rivet_core::object::hash_object(format, ObjectKind::Tree, b"")?.0;
-                let mut options = rivet_core::DiffOptions::new();
-                options.detect_binary = true;
-                let mut diff = rivet_core::tree_diff(
-                    format,
-                    old.unwrap_or(empty),
-                    new,
-                    repository.odb(),
-                    &options,
-                )?;
-                if !specs.is_empty() {
-                    let keep: Vec<bool> = diff
-                        .files
-                        .iter()
-                        .map(|file| {
-                            specs.iter().any(|spec| {
-                                rivet_core::ops::pathspec_matches(file.path(), spec.as_bstr())
-                            })
-                        })
-                        .collect();
-                    let mut at = 0;
-                    diff.files.retain(|_| {
-                        at += 1;
-                        keep[at - 1]
-                    });
-                    let mut at = 0;
-                    diff.stats.retain(|_| {
-                        at += 1;
-                        keep[at - 1]
-                    });
-                }
-                let copied = if opts.rename_score.is_some() {
-                    pair_files(&repository, &opts, old, specs, &mut diff)?
-                } else {
-                    Vec::new()
-                };
+                let (diff, copied) = text_diff(&repository, &opts, specs, old, new)?;
                 any = !diff.is_empty();
                 if any && !opts.silent {
-                    if opts.numstat {
-                        for (stat, file) in diff.stats.iter().zip(&diff.files) {
-                            if stat.is_binary {
-                                body.extend_from_slice(b"-\t-\t");
-                            } else {
-                                body.extend_from_slice(
-                                    format!("{}\t{}\t", stat.added, stat.deleted).as_bytes(),
-                                );
-                            }
-                            match (&file.old_path, file.is_rename(), opts.nul) {
-                                (Some(old), true, true) => {
-                                    body.push(b'\0');
-                                    body.extend_from_slice(old);
-                                    body.push(b'\0');
-                                    body.extend_from_slice(file.path());
-                                }
-                                (Some(old), true, false) => {
-                                    let (qo, qn) = (
-                                        rivet_core::ops::quote_path(old.as_bstr(), false),
-                                        rivet_core::ops::quote_path(file.path(), false),
-                                    );
-                                    if qo.as_slice() != old.as_slice()
-                                        || qn.as_slice() != file.path()
-                                    {
-                                        body.extend_from_slice(&qo);
-                                        body.extend_from_slice(b" => ");
-                                        body.extend_from_slice(&qn);
-                                    } else {
-                                        body.extend_from_slice(&rivet_core::pprint_rename(
-                                            old,
-                                            file.path(),
-                                        ));
-                                    }
-                                }
-                                (_, _, true) => body.extend_from_slice(&stat.path),
-                                (_, _, false) => body.extend_from_slice(
-                                    &rivet_core::ops::quote_path(stat.path.as_bstr(), false),
-                                ),
-                            }
-                            body.push(end);
-                        }
-                    }
-                    if opts.stat {
-                        rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut body)?;
-                    }
+                    write_stats(&repository, &opts, &diff, &mut body)?;
                     if opts.patch {
                         // The blank line between the other formats and the patch ends in NUL under -z.
                         if !body.is_empty() {
@@ -1148,6 +1074,104 @@ pub(super) fn name_copies(patch: &[u8], copies: &[BString]) -> Vec<u8> {
     out
 }
 
+/// The tree diff behind `--stat`, `--numstat` and `-p`, limited by the paths and with the renames
+/// or copies paired; the second value names the destinations that are copies.
+fn text_diff(
+    repository: &Repository,
+    opts: &Opts,
+    specs: &[BString],
+    old: Option<ObjectId>,
+    new: ObjectId,
+) -> Result<(rivet_core::TreeDiff, Vec<BString>)> {
+    let format = repository.format();
+    let empty = rivet_core::object::hash_object(format, ObjectKind::Tree, b"")?.0;
+    let mut options = rivet_core::DiffOptions::new();
+    options.detect_binary = true;
+    let mut diff = rivet_core::tree_diff(
+        format,
+        old.unwrap_or(empty),
+        new,
+        repository.odb(),
+        &options,
+    )?;
+    if !specs.is_empty() {
+        let keep: Vec<bool> = diff
+            .files
+            .iter()
+            .map(|file| {
+                specs
+                    .iter()
+                    .any(|spec| rivet_core::ops::pathspec_matches(file.path(), spec.as_bstr()))
+            })
+            .collect();
+        let mut at = 0;
+        diff.files.retain(|_| {
+            at += 1;
+            keep[at - 1]
+        });
+        let mut at = 0;
+        diff.stats.retain(|_| {
+            at += 1;
+            keep[at - 1]
+        });
+    }
+    let copied = if opts.rename_score.is_some() {
+        pair_files(repository, opts, old, specs, &mut diff)?
+    } else {
+        Vec::new()
+    };
+    Ok((diff, copied))
+}
+
+/// `--numstat` then `--stat` of a diff, as one block of text.
+fn write_stats(
+    repository: &Repository,
+    opts: &Opts,
+    diff: &rivet_core::TreeDiff,
+    body: &mut Vec<u8>,
+) -> Result<()> {
+    let end = if opts.nul { b'\0' } else { b'\n' };
+    if opts.numstat {
+        for (stat, file) in diff.stats.iter().zip(&diff.files) {
+            if stat.is_binary {
+                body.extend_from_slice(b"-\t-\t");
+            } else {
+                body.extend_from_slice(format!("{}\t{}\t", stat.added, stat.deleted).as_bytes());
+            }
+            match (&file.old_path, file.is_rename(), opts.nul) {
+                (Some(old), true, true) => {
+                    body.push(b'\0');
+                    body.extend_from_slice(old);
+                    body.push(b'\0');
+                    body.extend_from_slice(file.path());
+                }
+                (Some(old), true, false) => {
+                    let (qo, qn) = (
+                        rivet_core::ops::quote_path(old.as_bstr(), false),
+                        rivet_core::ops::quote_path(file.path(), false),
+                    );
+                    if qo.as_slice() != old.as_slice() || qn.as_slice() != file.path() {
+                        body.extend_from_slice(&qo);
+                        body.extend_from_slice(b" => ");
+                        body.extend_from_slice(&qn);
+                    } else {
+                        body.extend_from_slice(&rivet_core::pprint_rename(old, file.path()));
+                    }
+                }
+                (_, _, true) => body.extend_from_slice(&stat.path),
+                (_, _, false) => {
+                    body.extend_from_slice(&rivet_core::ops::quote_path(stat.path.as_bstr(), false))
+                }
+            }
+            body.push(end);
+        }
+    }
+    if opts.stat {
+        rivet_core::format_stat_sized(diff, Some(repository.odb()), body)?;
+    }
+    Ok(())
+}
+
 /// `-c` / `--cc` over a merge: the paths that differ from every parent. `-c` prints them in
 /// Git's combined raw format (`::<modes> <ids> <statuses>\t<path>`), `--cc` the dense combined
 /// patch with the hunks that no parent agrees with.
@@ -1160,11 +1184,8 @@ fn combined_body(
     zero_id: &dyn Fn(&Option<ObjectId>) -> String,
 ) -> Result<(Vec<u8>, bool)> {
     let dense = opts.combined == 2;
-    if dense && (opts.raw || opts.stat || opts.numstat || opts.name_only || opts.name_status)
-        || !dense
-            && (opts.stat
-                || opts.numstat
-                || (opts.patch && (opts.raw || opts.name_only || opts.name_status)))
+    if dense && (opts.name_only || opts.name_status)
+        || opts.patch && (opts.raw || opts.name_only || opts.name_status)
     {
         anyhow::bail!("diff-tree: this output format with a combined diff is not implemented");
     }
@@ -1182,6 +1203,14 @@ fn combined_body(
     }
     let mut body: Vec<u8> = Vec::new();
     let end = if opts.nul { b'\0' } else { b'\n' };
+    // `--stat` and `--numstat` are the diff against the first parent, shown ahead of the rest.
+    if (opts.stat || opts.numstat) && !opts.silent {
+        let (diff, _) = text_diff(repository, opts, specs, Some(trees[0]), new)?;
+        if !diff.is_empty() {
+            write_stats(repository, opts, &diff, &mut body)?;
+        }
+    }
+    let mut separate = !body.is_empty();
     for first in &per[0] {
         let mut recs: Vec<&Rec> = vec![first];
         for other in &per[1..] {
@@ -1235,6 +1264,10 @@ fn combined_body(
             if hunks.is_empty() {
                 continue;
             }
+            // A blank line (NUL under `-z`) sets the patch off from the stat before it.
+            if std::mem::take(&mut separate) {
+                body.push(end);
+            }
             // The `index` line of a combined patch ignores `--abbrev`, as in git.
             let minimum = super::history::abbrev_minimum(repository, None);
             let short = |oid: &ObjectId| {
@@ -1270,6 +1303,10 @@ fn combined_body(
             body.extend_from_slice(&quoted);
             body.push(b'\n');
             body.extend_from_slice(&hunks);
+            continue;
+        }
+        // The stat formats stand in for the raw lines unless `--raw` asks for them too.
+        if (opts.stat || opts.numstat) && !(opts.raw || opts.name_only || opts.name_status) {
             continue;
         }
         if opts.name_only {

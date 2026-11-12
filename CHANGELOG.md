@@ -90,3 +90,4 @@
 * 2026-11-12 — `log --graph --first-parent` and `--topo-order --first-parent` order the commits by git's topological queue (`s_log_first_parent_topo`).
 * 2026-11-12 — `log --graph` over several root commits matches `/usr/bin/git` (same graph, exit 0); proven against git, the GAPS clause claiming exit 128 was stale and is removed.
 * 2026-11-12 — `gc` and `update-index --no-split-index` leave `sharedindex.*` files alone, matching `/usr/bin/git` (probed: 2 shared indexes before and after each); the GAPS "Not done" clause described matching behaviour and is removed.
+* 2026-11-12 — `diff-tree -c` and `--cc` with `--stat` / `--numstat` print the diff against the first parent (no raw lines unless `--raw`), and `--cc` implies `-p` only without another format (`s_diff_tree_combined_stat`).

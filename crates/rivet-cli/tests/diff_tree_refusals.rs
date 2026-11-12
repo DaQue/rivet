@@ -47,8 +47,8 @@ fn unimplemented_combined_formats_are_refused_by_name_and_print_nothing() {
 
     for args in [
         ["diff-tree", "-c", "--patch-with-raw", "HEAD"],
-        ["diff-tree", "-c", "--stat", "HEAD"],
-        ["diff-tree", "--cc", "--stat", "HEAD"],
+        ["diff-tree", "--cc", "--name-only", "HEAD"],
+        ["diff-tree", "--cc", "--name-status", "HEAD"],
     ] {
         let out = run(&dir, &args);
         assert_eq!(out.status.code(), Some(128), "{args:?}");

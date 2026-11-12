@@ -13010,6 +13010,30 @@ s_diff_tree_combined_patch() {
     v diff-tree -c HEAD
 }
 
+# diff-tree -c / --cc with --stat / --numstat: git diffs the first parent for them.
+s_diff_tree_combined_stat() {
+    v init -q -b main repo; cd repo
+    seq 1 12 >f; echo x >g; mkdir sub; seq 1 5 >sub/h; v add .; tick; v commit -q -m base
+    v checkout -q -b side
+    sed -i 's/^2$/two/;s/^11$/eleven-s/' f; sed -i 's/^3$/s3/' sub/h; tick; v commit -q -a -m side
+    v checkout -q main
+    sed -i 's/^6$/six/;s/^11$/eleven-m/' f; echo y >>g; tick; v commit -q -a -m main
+    tick; v merge -q side >/dev/null 2>&1 || true
+    sed -i '/^<<<<<<<\|^=======\|^>>>>>>>/d;/eleven-s/d' f; v add -A; tick; v commit -q -m conflicted
+    v diff-tree -c --stat HEAD
+    v diff-tree -c --numstat HEAD
+    v diff-tree -c -p --stat HEAD
+    v diff-tree -c --patch-with-stat HEAD
+    v diff-tree -c --raw --stat HEAD
+    v diff-tree -c --raw --numstat HEAD
+    v diff-tree -c --stat -z HEAD
+    v diff-tree -c --numstat -z HEAD
+    v diff-tree -c --stat HEAD -- sub
+    v diff-tree --cc --stat HEAD
+    v diff-tree --cc --numstat HEAD
+    v diff-tree --cc --raw HEAD
+}
+
 # diff-tree -M / -C / --find-copies-harder, scores and thresholds, against git.
 s_diff_tree_renames() {
     v init -q repo; cd repo
