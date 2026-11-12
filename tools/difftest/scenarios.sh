@@ -13096,6 +13096,21 @@ s_stash_staged() {
     ss_repo; v stash push -S; echo "b2" >>b; v add b; v stash push -S -m second; v stash list; v stash pop; v stash pop; ss_state; cd ..
 }
 
+s_stash_staged_binary() {
+    local n=0
+    sb_repo() {
+        n=$((n + 1)); v init -q r$n; cd r$n
+        echo text >t; printf 'old\0bin\n' >b; v add .; tick; v commit -q -m base
+        printf 'new\0bin\n' >b; printf 'x\0y\n' >nb; echo more >>t; v add b nb t
+        tick
+    }
+    sb_state() { v status --porcelain; v ls-files -s; v stash list; v diff --cached --stat; v diff --stat; od -c b | head -3; ls; }
+    sb_repo; v stash push --staged; sb_state; g rev-parse 'stash^{tree}' 'stash^2^{tree}'; v stash pop --index; sb_state; cd ..
+    sb_repo; printf 'newer\0bin\n' >b; v stash push --staged; sb_state; cd ..
+    sb_repo; rm nb; v stash push --staged; sb_state; cd ..
+    sb_repo; v stash push --staged -- b; sb_state; cd ..
+}
+
 s_mktree() {
     v init -q repo; cd repo
     echo a >a; echo b >b; mkdir d; echo c >d/c

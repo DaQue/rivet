@@ -1144,21 +1144,36 @@ fn push_staged(
     let mut options = rivet_core::DiffOptions::new();
     options.detect_binary = true;
     options.context(1);
-    let diff = rivet_core::tree_diff(
+    let mut diff = rivet_core::tree_diff(
         repository.format(),
         head_tree,
         staged_tree,
         repository.odb(),
         &options,
     )?;
-    if diff.files.iter().any(|file| {
-        file.is_binary
-            || file.old_mode == Some(rivet_core::object::EntryMode::Commit)
+    let is_gitlink = |file: &rivet_core::FileDiff| {
+        file.old_mode == Some(rivet_core::object::EntryMode::Commit)
             || file.new_mode == Some(rivet_core::object::EntryMode::Commit)
-    }) {
+    };
+    // A binary file that is added or modified is taken out of the work tree by putting `HEAD`'s
+    // blob back, which is what reversing git's binary patch does; it must still match the index.
+    let binary_path = |file: &rivet_core::FileDiff| -> Option<BString> {
+        if file.is_binary && !file.is_deleted && !is_gitlink(file) {
+            file.new_path.clone()
+        } else {
+            None
+        }
+    };
+    if diff
+        .files
+        .iter()
+        .any(|file| is_gitlink(file) || (file.is_binary && binary_path(file).is_none()))
+    {
         eprintln!("fatal: stash --staged of a binary file or a submodule is not implemented");
         return Ok(128);
     }
+    let binary_paths: Vec<BString> = diff.files.iter().filter_map(binary_path).collect();
+    diff.files.retain(|file| !file.is_binary);
     let mut patch = Vec::new();
     rivet_core::format_unified(&diff, repository.format(), &mut patch)?;
 
@@ -1193,6 +1208,19 @@ fn push_staged(
         println!("Saved working directory and index state {message}");
     }
 
+    for path in &binary_paths {
+        let message = match work_map.get(path) {
+            None => format!("error: {path}: No such file or directory"),
+            Some(work) if Some(work) != index_map.get(path) => format!(
+                "error: the patch applies to '{path}' ({}), which does not match the current contents.\nerror: {path}: patch does not apply",
+                work.1
+            ),
+            Some(_) => continue,
+        };
+        eprintln!("{message}");
+        eprintln!("Cannot remove worktree changes");
+        return Ok(128);
+    }
     let patches = parse(&patch, 1).map_err(|error| anyhow::anyhow!("{error}"))?;
     let worktree_only = ApplyOptions {
         reverse: true,
@@ -1204,6 +1232,9 @@ fn push_staged(
         }
         eprintln!("Cannot remove worktree changes");
         return Ok(128);
+    }
+    if !binary_paths.is_empty() {
+        repository.restore_paths(Some(head_tree), &binary_paths, false, true, false)?;
     }
     if !args.keep_index {
         let paths: std::collections::BTreeSet<BString> = head_map

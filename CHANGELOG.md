@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-12 — `stash push --staged` / `-S` with a staged binary file (added or modified): the stash is made and the file goes back to `HEAD`'s blob, an unstaged change to it is git's `the patch applies to ...` error and `Cannot remove worktree changes` (`s_stash_staged_binary`).
 * 2026-11-12 — `diff-tree -c` / `--cc` over a merge: the paths that differ from every parent as combined raw lines (`::<modes> <ids> MM\t<path>`, `--name-only`, `--name-status`, `-z`, `--abbrev`, `-s`) or as the dense combined patch, a non-merge compared as usual (`s_diff_tree_combined`).
 * 2026-11-12 — `fetch <remote> <src>:<dst>`: a command-line refspec with a destination follows the tags that point at fetched history, lists them in `FETCH_HEAD` as `not-for-merge`, and skips tags already present locally, as git does (`s_fetch_explicit_autotag`).
 * 2026-11-12 — `diff`/`log`/`show --color`: a space before a tab in the indent of an added line is painted with the whitespace colour as git does (`s_diff_color_space_before_tab`).
