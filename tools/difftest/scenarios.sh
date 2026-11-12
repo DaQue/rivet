@@ -5752,6 +5752,26 @@ s_log_graph_marks() {
     v log --graph --oneline --left-only --left-right main...side
 }
 
+s_log_first_parent_topo() {
+    v init -q repo; cd repo
+    tick; echo 0 >f; v add f; v commit -q -m base
+    v switch -q -c side
+    tick; echo a >a; v add a; v commit -q -m side-a
+    tick; echo b >b; v add b; v commit -q -m side-b
+    v switch -q main
+    tick; echo y >y; v add y; v commit -q -m main-y
+    v switch -q -c topic
+    tick; echo t >t; v add t; v commit -q -m topic-t
+    v switch -q main
+    tick; v merge -q --no-ff --no-edit side >/dev/null
+    tick; echo z >z; v add z; v commit -q -m main-z
+    v switch -q topic
+    tick; v merge -q --no-ff --no-edit main >/dev/null
+    v log --graph --first-parent --format=%s --all
+    v log --graph --first-parent --oneline --all
+    v log --topo-order --first-parent --format=%s --all
+}
+
 s_log_graph_date_order() {
     v init -q repo; cd repo
     tick; echo 0 >f; v add f; v commit -q -m base

@@ -518,8 +518,14 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
         }
     }
     let graph_date_order = args.graph && args.date_order && !args.topo_order;
-    if graph_date_order && !args.author_date_order {
-        // Walked by date, then ordered by git's `--date-order` queue below.
+    // `--first-parent` with a topological order: git sorts the first-parent walk with its own
+    // LIFO, which differs from the order rivet's walk produces.
+    let first_parent_topo = args.first_parent
+        && (args.topo_order || args.graph)
+        && !args.date_order
+        && !args.author_date_order;
+    if (graph_date_order && !args.author_date_order) || first_parent_topo {
+        // Walked by date, then ordered by git's topological queue below.
         options.sort(SortOrder::Date);
     } else if args.topo_order || (args.graph && !args.author_date_order) {
         options.sort(SortOrder::Topo);
@@ -547,14 +553,14 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     }
 
     let mut oids = rivet_core::revwalk::walk_oids(repository.odb(), &starts, &options)?;
-    if graph_date_order && !args.author_date_order {
+    if (graph_date_order && !args.author_date_order) || first_parent_topo {
         let parsed: HashSet<ObjectId> = oids.iter().copied().collect();
-        oids = super::gitwalk::sort_topologically(
-            &repository,
-            oids,
-            super::gitwalk::TopoOrder::CommitDate,
-            &parsed,
-        )?;
+        let order = if first_parent_topo {
+            super::gitwalk::TopoOrder::Graph
+        } else {
+            super::gitwalk::TopoOrder::CommitDate
+        };
+        oids = super::gitwalk::sort_topologically(&repository, oids, order, &parsed)?;
     }
     let mut same = HashSet::new();
     if side_filter {
