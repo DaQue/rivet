@@ -82,3 +82,4 @@
 * 2026-11-11 — `diff --raw` and `-p`/`--patch`/`-u`: `:<mode> <mode> <id> <id> <status>\t<path>` lines (abbreviated ids, `--no-abbrev`, zeros for an unhashed work-tree side, `R<nnn>`/`C<nnn>`/`T`), a blank line before a following patch, `--name-only`/`--name-status` win (`s_diff_raw`).
 * 2026-11-12 — `log --graph --date-order` orders the commits by git's date queue (a topological order by committer date) instead of the `--topo-order` stack (`s_log_graph_date_order`).
 * 2026-11-12 — `log --graph --first-parent` and `--topo-order --first-parent` order the commits by git's topological queue (`s_log_first_parent_topo`).
+* 2026-11-12 — `log --graph` over several root commits matches `/usr/bin/git` (same graph, exit 0); proven against git, the GAPS clause claiming exit 128 was stale and is removed.

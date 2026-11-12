@@ -105,7 +105,7 @@ The command works for the common case; the listed options or edge cases are miss
   for the conflicted-path output of `diff`; `log --first-parent` diffs a merge against its first parent and an
   empty `--format=` works (`s_log_first_parent_merge_diff`); the last of `--oneline` / `--pretty` / `--format`
   wins and `--oneline` abbreviates the `commit` line of a later layout (`s_log_layout_order`, `s_show_oneline`; read
-  from the raw command line); `--graph` over several root commits exits 128 by design.
+  from the raw command line).
 * **`rev-list`** — `--cherry-pick` and `--cherry-mark` work (`s_rev_list_cherry`; `--cherry`, the synonym for `--right-only --cherry-mark --no-merges`, `s_rev_list_cherry_synonym`). `log --cherry-pick`, `--left-only` and `--right-only` filter as `rev-list` does (`s_log_cherry_pick`); `log --left-right` and `%m` work (`s_log_left_right`), and so does `log --boundary` (`-` or `o` in a graph, after the commits, `s_log_boundary`). `--children` works (`s_rev_list_children`). `--left-right`, `--left-only`
   and `--right-only` work (`s_rev_list_left_right`), and so does `--ancestry-path` without a
   commit argument (`s_rev_list_ancestry_path`); `--ancestry-path=<commit>` keeps the commit, its
