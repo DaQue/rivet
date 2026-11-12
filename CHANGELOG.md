@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-12 — `repack --geometric=` with an empty value is git's `option `geometric' expects a numerical value` (exit 129), not the k/m/g text (`s_repack_geometric_empty`).
 * 2026-11-12 — `diff-tree -c -p` / `-u` over a merge prints `diff --combined` with every hunk some parent differs in; `--full-index` works with `-c`/`--cc`, the `index` line ignores `--abbrev`, and a merge whose combined patch is empty still prints its commit id as git does (`s_diff_tree_combined_patch`).
 * 2026-11-12 — `gc --auto`: when the packs `gc.bigPackThreshold` keeps number `gc.autoPackLimit` or more, only the largest pack is kept out of the repack, as git does (`s_gc_auto_big_pack_fallback`).
 * 2026-11-12 — `stash push --staged` / `-S` with a staged binary file (added or modified): the stash is made and the file goes back to `HEAD`'s blob, an unstaged change to it is git's `the patch applies to ...` error and `Cannot remove worktree changes` (`s_stash_staged_binary`).

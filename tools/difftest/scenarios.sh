@@ -3092,6 +3092,18 @@ s_repack_geometric_range() {
     v log --oneline
 }
 
+# An empty `--geometric=` value is git's `expects a numerical value`, not the k/m/g text of a
+# malformed one; the same holds for the separate-word form.
+s_repack_geometric_empty() {
+    v init -q repo; cd repo
+    echo base >b; v add b; tick; v commit -q -m base
+    v repack --geometric=
+    v repack --geometric ''
+    v repack --geometric=x
+    v repack --geometric=2
+    v log --oneline
+}
+
 # `--window` and `--depth` only tune the delta search: the value is read like any integer option
 # (k/m/g suffix, C int range), a bad one is git's exit 129 error, and the history is untouched.
 s_repack_window_depth() {

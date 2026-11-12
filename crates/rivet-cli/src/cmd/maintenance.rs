@@ -384,6 +384,10 @@ pub fn run_repack(global: &GlobalArgs, args: &RepackArgs) -> Result<i32> {
     }
     let geometric = match &args.geometric {
         None => None,
+        Some(text) if text.is_empty() => {
+            eprintln!("error: option `geometric' expects a numerical value");
+            return Ok(129);
+        }
         Some(text) => match parse_factor(text) {
             Ok(factor) => Some(factor),
             Err(FactorError::Syntax) => {
