@@ -12924,6 +12924,36 @@ s_diff_tree_stdin_limit() {
 " diff-tree --stdin -r --stat "$ONE" -- a
 }
 
+# diff-tree -c / --cc over a merge: the paths that differ from every parent, raw (`::` lines) or as
+# the dense combined patch; a non-merge is compared as usual.
+s_diff_tree_combined() {
+    v init -q -b main repo; cd repo
+    printf 'a\nb\nc\n' >f; echo x >g; v add .; tick; v commit -q -m base
+    v checkout -q -b side
+    printf 'a\nB\nc\n' >f; echo y >g; tick; v commit -q -a -m side
+    v checkout -q main
+    printf 'a\nb\nC\n' >f; echo z >h; v add h; tick; v commit -q -a -m main
+    tick; v merge -q side >/dev/null 2>&1 || true
+    printf 'a\nB\nC\n' >f; echo q >g; v add -A; tick; v commit -q -m merge
+    v diff-tree -c HEAD
+    v diff-tree -c -r HEAD
+    v diff-tree -c --abbrev HEAD
+    v diff-tree -c --abbrev=10 --no-commit-id HEAD
+    v diff-tree -c --name-only HEAD
+    v diff-tree -c --name-status HEAD
+    v diff-tree -c -z HEAD
+    v diff-tree -c -s HEAD
+    v diff-tree -c HEAD -- f
+    v diff-tree -c -m HEAD
+    v diff-tree --cc HEAD
+    v diff-tree --cc HEAD -- g
+    v diff-tree --cc -s HEAD
+    v diff-tree -c HEAD~1
+    v diff-tree --cc HEAD~1
+    vin "$(g rev-parse HEAD)
+" diff-tree --stdin -c
+}
+
 # diff-tree -M / -C / --find-copies-harder, scores and thresholds, against git.
 s_diff_tree_renames() {
     v init -q repo; cd repo

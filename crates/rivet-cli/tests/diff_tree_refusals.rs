@@ -1,6 +1,6 @@
-//! `diff-tree` refuses the options it does not implement by name and prints nothing. Git would
-//! print combined diffs, so there is no differential
-//! scenario for the refusal; the rest of `diff-tree` is the scenario `s_diff_tree`.
+//! `diff-tree` refuses the combined-diff formats it does not implement by name and prints nothing.
+//! Git would print them, so there is no differential scenario for the refusal; `-c` and `--cc`
+//! themselves are the scenario `s_diff_tree_combined`, the rest of `diff-tree` `s_diff_tree`.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -20,7 +20,7 @@ fn run(dir: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
-fn unimplemented_options_are_refused_by_name_and_print_nothing() {
+fn unimplemented_combined_formats_are_refused_by_name_and_print_nothing() {
     let dir = std::env::temp_dir().join(format!("rivet-diff-tree-refuse-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -28,15 +28,35 @@ fn unimplemented_options_are_refused_by_name_and_print_nothing() {
     std::fs::write(dir.join("a"), "a\n").unwrap();
     assert!(run(&dir, &["add", "a"]).status.success());
     assert!(run(&dir, &["commit", "-q", "-m", "one"]).status.success());
+    assert!(
+        run(&dir, &["checkout", "-q", "-b", "side"])
+            .status
+            .success()
+    );
+    std::fs::write(dir.join("a"), "a\nside\n").unwrap();
+    assert!(
+        run(&dir, &["commit", "-q", "-a", "-m", "side"])
+            .status
+            .success()
+    );
+    assert!(run(&dir, &["checkout", "-q", "-"]).status.success());
+    std::fs::write(dir.join("b"), "b\n").unwrap();
+    assert!(run(&dir, &["add", "b"]).status.success());
+    assert!(run(&dir, &["commit", "-q", "-m", "main"]).status.success());
+    assert!(run(&dir, &["merge", "-q", "side"]).status.success());
 
-    for option in ["-c", "--cc"] {
-        let out = run(&dir, &["diff-tree", "-r", "--root", option, "HEAD"]);
-        assert_eq!(out.status.code(), Some(128), "{option}");
-        assert!(out.stdout.is_empty(), "{option}: stdout must stay empty");
+    for args in [
+        ["diff-tree", "-c", "-p", "HEAD"],
+        ["diff-tree", "-c", "--stat", "HEAD"],
+        ["diff-tree", "--cc", "--stat", "HEAD"],
+    ] {
+        let out = run(&dir, &args);
+        assert_eq!(out.status.code(), Some(128), "{args:?}");
+        assert!(out.stdout.is_empty(), "{args:?}: stdout must stay empty");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(
-            err.contains(&format!("diff-tree: {option} is not implemented")),
-            "{option}: {err}"
+            err.contains("with a combined diff is not implemented"),
+            "{args:?}: {err}"
         );
     }
     let _ = std::fs::remove_dir_all(&dir);

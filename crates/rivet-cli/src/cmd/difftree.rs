@@ -42,6 +42,8 @@ struct Opts {
     /// `-C` / `--find-copies-harder`.
     copies: bool,
     harder: bool,
+    /// `-c` (1) or `--cc` (2): a merge is compared with all its parents at once.
+    combined: u8,
 }
 
 /// A `-M<n>` / `-C<n>` score: `50%` is a percentage, bare digits are the digits of a fraction
@@ -345,8 +347,10 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
             "-z" => opts.nul = true,
             "--raw" => opts.raw = true,
             "--abbrev" => opts.abbrev = Some(None),
-            "-c" | "--cc" => {
-                anyhow::bail!("diff-tree: {word} is not implemented");
+            "-c" => opts.combined = 1,
+            "--cc" => {
+                opts.combined = 2;
+                opts.patch = true;
             }
             "--no-renames" => {
                 opts.rename_score = None;
@@ -447,7 +451,17 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
         let header = Some(oid.to_string().into_bytes());
         if parents.is_empty() {
             if opts.root {
-                jobs.push((header, None, *tree));
+                jobs.push((header, None, *tree, Vec::new()));
+            }
+        } else if parents.len() > 1 && opts.combined != 0 && !opts.merges {
+            let mut trees: Vec<ObjectId> = Vec::new();
+            for parent in parents {
+                if let Named::Commit(_, parent_tree, _) = name(&repository, &parent.to_string())? {
+                    trees.push(parent_tree);
+                }
+            }
+            if let Some((first, rest)) = trees.split_first() {
+                jobs.push((header, Some(*first), *tree, rest.to_vec()));
             }
         } else if parents.len() == 1 || opts.merges {
             for parent in parents {
@@ -455,7 +469,7 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                     Named::Commit(_, parent_tree, _) => parent_tree,
                     _ => continue,
                 };
-                jobs.push((header.clone(), Some(parent_tree), *tree));
+                jobs.push((header.clone(), Some(parent_tree), *tree, Vec::new()));
             }
         }
         Ok(jobs)
@@ -464,7 +478,12 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
     // (header, old tree, new tree) per comparison.
     let mut jobs: Vec<Job> = Vec::new();
     if named.len() == 2 {
-        jobs.push((None, Some(tree_of(&named[0])?), tree_of(&named[1])?));
+        jobs.push((
+            None,
+            Some(tree_of(&named[0])?),
+            tree_of(&named[1])?,
+            Vec::new(),
+        ));
     } else if let Some(first) = named.first() {
         match first {
             Named::Commit(oid, tree, parents) => jobs = commit_jobs(oid, tree, parents)?,
@@ -500,7 +519,24 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
     let render = |jobs: Vec<Job>| -> Result<Vec<u8>> {
         let specs: &[BString] = if limit_off.get() { &[] } else { &specs };
         let mut out: Vec<u8> = Vec::new();
-        for (header, old, new) in jobs {
+        for (header, old, new, extra) in jobs {
+            if !extra.is_empty() {
+                let mut trees = vec![old.expect("a combined comparison has a first parent")];
+                trees.extend(extra);
+                let (body, found) =
+                    combined_body(&repository, &opts, specs, &trees, new, &zero_id)?;
+                if !found {
+                    continue;
+                }
+                if let Some(id) = header
+                    && !opts.no_commit_id
+                {
+                    out.extend_from_slice(&id);
+                    out.push(end);
+                }
+                out.extend_from_slice(&body);
+                continue;
+            }
             let mut body: Vec<u8> = Vec::new();
             let mut any = false;
             if want_raw {
@@ -717,6 +753,7 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                                 Some(ids[0].to_string().into_bytes()),
                                 Some(parent_tree),
                                 commit.tree,
+                                Vec::new(),
                             ));
                         }
                     }
@@ -739,6 +776,7 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
                         Some(format!("{} {}", ids[0], ids[1]).into_bytes()),
                         Some(ids[0]),
                         second,
+                        Vec::new(),
                     ));
                 }
                 other => {
@@ -756,8 +794,9 @@ pub fn run_diff_tree(global: &GlobalArgs, args: &DiffTreeArgs) -> Result<i32> {
     Ok(0)
 }
 
-/// One comparison: the header line (a commit id, or two tree ids), the old tree and the new tree.
-type Job = (Option<Vec<u8>>, Option<ObjectId>, ObjectId);
+/// One comparison: the header line (a commit id, or two tree ids), the old tree and the new tree;
+/// the last field holds the trees of a merge's other parents when `-c`/`--cc` compares them all.
+type Job = (Option<Vec<u8>>, Option<ObjectId>, ObjectId, Vec<ObjectId>);
 
 /// `--full-index`: every `index <old>..<new>` line of `patch` with the ids spelled out in full.
 fn widen_index_lines(
@@ -1107,6 +1146,153 @@ pub(super) fn name_copies(patch: &[u8], copies: &[BString]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// `-c` / `--cc` over a merge: the paths that differ from every parent. `-c` prints them in
+/// Git's combined raw format (`::<modes> <ids> <statuses>\t<path>`), `--cc` the dense combined
+/// patch with the hunks that no parent agrees with.
+fn combined_body(
+    repository: &Repository,
+    opts: &Opts,
+    specs: &[BString],
+    trees: &[ObjectId],
+    new: ObjectId,
+    zero_id: &dyn Fn(&Option<ObjectId>) -> String,
+) -> Result<(Vec<u8>, bool)> {
+    let dense = opts.combined == 2;
+    if dense
+        && (opts.raw
+            || opts.stat
+            || opts.numstat
+            || opts.name_only
+            || opts.name_status
+            || opts.full_index)
+        || !dense && (opts.patch || opts.stat || opts.numstat)
+    {
+        anyhow::bail!("diff-tree: this output format with a combined diff is not implemented");
+    }
+    let mut per: Vec<Vec<Rec>> = Vec::new();
+    for tree in trees {
+        let mut walker = Walker {
+            repository,
+            recursive: opts.recursive || dense,
+            show_trees: opts.show_trees,
+            specs,
+            out: Vec::new(),
+        };
+        walker.walk(Some(*tree), Some(new), BStr::new(b""))?;
+        per.push(walker.out);
+    }
+    let mut body: Vec<u8> = Vec::new();
+    let end = if opts.nul { b'\0' } else { b'\n' };
+    for first in &per[0] {
+        let mut recs: Vec<&Rec> = vec![first];
+        for other in &per[1..] {
+            match other.iter().find(|rec| rec.path == first.path) {
+                Some(rec) => recs.push(rec),
+                None => break,
+            }
+        }
+        if recs.len() != per.len() {
+            continue;
+        }
+        if opts.silent {
+            // `-s` prints no paths, but the commit id still shows when some path differs.
+            return Ok((Vec::new(), true));
+        }
+        let path = if opts.nul {
+            first.path.to_vec()
+        } else {
+            rivet_core::ops::quote_path(first.path.as_bstr(), false).to_vec()
+        };
+        let statuses: Vec<u8> = recs.iter().map(|rec| rec.status).collect();
+        if dense {
+            let all_modes_equal = recs
+                .iter()
+                .all(|rec| rec.omode.is_some() && rec.omode == first.nmode);
+            let (Some(_), true) = (first.noid, all_modes_equal) else {
+                anyhow::bail!(
+                    "diff-tree: combined diff of an added, deleted or mode-changed path is not implemented"
+                );
+            };
+            let read = |oid: &ObjectId| -> Result<Vec<u8>> {
+                Ok(repository
+                    .odb()
+                    .read_typed(oid, ObjectKind::Blob)?
+                    .into_data())
+            };
+            let mut parents: Vec<Vec<u8>> = Vec::new();
+            for rec in &recs {
+                parents.push(read(&rec.ooid.expect("checked with the mode"))?);
+            }
+            let result = read(&first.noid.expect("checked above"))?;
+            if parents
+                .iter()
+                .chain(std::iter::once(&result))
+                .any(|data| rivet_core::diff::is_binary(data))
+            {
+                anyhow::bail!("diff-tree: combined diff of binary files is not implemented");
+            }
+            let parent_refs: Vec<&[u8]> = parents.iter().map(Vec::as_slice).collect();
+            let hunks = rivet_core::diff::combined::combined_hunks(&parent_refs, &result, 3);
+            if hunks.is_empty() {
+                continue;
+            }
+            let minimum = super::history::abbrev_minimum(repository, opts.abbrev.flatten());
+            let short = |oid: &ObjectId| {
+                repository
+                    .odb()
+                    .abbreviate(oid, minimum)
+                    .unwrap_or_else(|_| oid.to_string())
+            };
+            let olds: Vec<String> = recs
+                .iter()
+                .map(|rec| short(&rec.ooid.expect("checked with the mode")))
+                .collect();
+            let quoted = rivet_core::ops::quote_path(first.path.as_bstr(), false);
+            body.extend_from_slice(b"diff --cc ");
+            body.extend_from_slice(&quoted);
+            body.extend_from_slice(
+                format!(
+                    "\nindex {}..{}\n--- a/",
+                    olds.join(","),
+                    short(&first.noid.expect("checked above"))
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(&quoted);
+            body.extend_from_slice(b"\n+++ b/");
+            body.extend_from_slice(&quoted);
+            body.push(b'\n');
+            body.extend_from_slice(&hunks);
+            continue;
+        }
+        if opts.name_only {
+            body.extend_from_slice(&path);
+        } else if opts.name_status {
+            body.extend_from_slice(&statuses);
+            body.push(if opts.nul { b'\0' } else { b'\t' });
+            body.extend_from_slice(&path);
+        } else {
+            let mode = |mode: Option<EntryMode>| mode.map_or(0, EntryMode::to_u32);
+            body.push(b':');
+            for (at, rec) in recs.iter().enumerate() {
+                let lead = if at == 0 { ':' } else { ' ' };
+                body.extend_from_slice(format!("{lead}{:06o}", mode(rec.omode)).as_bytes());
+            }
+            body.extend_from_slice(format!(" {:06o}", mode(first.nmode)).as_bytes());
+            for rec in &recs {
+                body.extend_from_slice(format!(" {}", zero_id(&rec.ooid)).as_bytes());
+            }
+            body.extend_from_slice(format!(" {} ", zero_id(&first.noid)).as_bytes());
+            body.extend_from_slice(&statuses);
+            body.push(if opts.nul { b'\0' } else { b'\t' });
+            body.extend_from_slice(&path);
+        }
+        body.push(end);
+    }
+    let found = !body.is_empty();
+    Ok((body, found))
 }
 
 #[cfg(test)]

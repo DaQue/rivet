@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-12 — `diff-tree -c` / `--cc` over a merge: the paths that differ from every parent as combined raw lines (`::<modes> <ids> MM\t<path>`, `--name-only`, `--name-status`, `-z`, `--abbrev`, `-s`) or as the dense combined patch, a non-merge compared as usual (`s_diff_tree_combined`).
 * 2026-11-12 — `fetch <remote> <src>:<dst>`: a command-line refspec with a destination follows the tags that point at fetched history, lists them in `FETCH_HEAD` as `not-for-merge`, and skips tags already present locally, as git does (`s_fetch_explicit_autotag`).
 * 2026-11-12 — `diff`/`log`/`show --color`: a space before a tab in the indent of an added line is painted with the whitespace colour as git does (`s_diff_color_space_before_tab`).
 * 2026-11-11 — `diff -C[<n>]` / `--find-copies[=<n>]`: an added file is paired with the best deleted or modified file (`C<nnn>` in `--name-status`, `copy from`/`copy to` in the patch, `a => b` in `--stat`), a bad score is `error: invalid argument to find-copies` (exit 129); `diff A..B` with one range word no longer reads it as a path (`s_diff_find_copies`).
