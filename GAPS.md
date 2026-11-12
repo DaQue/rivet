@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 475 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 476 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-11, gate: 356 tests / 0 failed, 475 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-12, gate: 356 tests / 0 failed, 476 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -105,8 +105,8 @@ The command works for the common case; the listed options or edge cases are miss
   for the conflicted-path output of `diff`; `log --first-parent` diffs a merge against its first parent and an
   empty `--format=` works (`s_log_first_parent_merge_diff`); the last of `--oneline` / `--pretty` / `--format`
   wins and `--oneline` abbreviates the `commit` line of a later layout (`s_log_layout_order`, `s_show_oneline`; read
-  from the raw command line); `--graph` over several root commits exits 128 by design; `--graph` with `--date-order` or
-  `--first-parent` orders differently from git.
+  from the raw command line); `--graph` over several root commits exits 128 by design; `--graph` with `--first-parent`
+  orders differently from git.
 * **`rev-list`** — `--cherry-pick` and `--cherry-mark` work (`s_rev_list_cherry`; `--cherry`, the synonym for `--right-only --cherry-mark --no-merges`, `s_rev_list_cherry_synonym`). `log --cherry-pick`, `--left-only` and `--right-only` filter as `rev-list` does (`s_log_cherry_pick`); `log --left-right` and `%m` work (`s_log_left_right`), and so does `log --boundary` (`-` or `o` in a graph, after the commits, `s_log_boundary`). `--children` works (`s_rev_list_children`). `--left-right`, `--left-only`
   and `--right-only` work (`s_rev_list_left_right`), and so does `--ancestry-path` without a
   commit argument (`s_rev_list_ancestry_path`); `--ancestry-path=<commit>` keeps the commit, its

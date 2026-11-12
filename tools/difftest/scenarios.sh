@@ -5752,6 +5752,21 @@ s_log_graph_marks() {
     v log --graph --oneline --left-only --left-right main...side
 }
 
+s_log_graph_date_order() {
+    v init -q repo; cd repo
+    tick; echo 0 >f; v add f; v commit -q -m base
+    v switch -q -c side
+    tick; echo a >a; v add a; v commit -q -m side-a
+    tick; echo b >b; v add b; v commit -q -m side-b
+    v switch -q main
+    tick; echo y >y; v add y; v commit -q -m main-y
+    tick; v merge -q --no-ff --no-edit side >/dev/null
+    tick; echo z >z; v add z; v commit -q -m main-z
+    v log --graph --date-order --format=%s
+    v log --graph --date-order --oneline
+    v log --graph --date-order main~1..main
+}
+
 s_log_boundary() {
     v init -q repo; cd repo
     tick; echo 0 >f; v add f; v commit -q -m base

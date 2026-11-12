@@ -517,7 +517,11 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
             options.skip(n);
         }
     }
-    if args.topo_order || (args.graph && !args.author_date_order) {
+    let graph_date_order = args.graph && args.date_order && !args.topo_order;
+    if graph_date_order && !args.author_date_order {
+        // Walked by date, then ordered by git's `--date-order` queue below.
+        options.sort(SortOrder::Date);
+    } else if args.topo_order || (args.graph && !args.author_date_order) {
         options.sort(SortOrder::Topo);
     } else if args.author_date_order {
         options.sort(SortOrder::AuthorDate);
@@ -543,6 +547,15 @@ pub fn run_log(global: &GlobalArgs, args: &LogArgs) -> Result<i32> {
     }
 
     let mut oids = rivet_core::revwalk::walk_oids(repository.odb(), &starts, &options)?;
+    if graph_date_order && !args.author_date_order {
+        let parsed: HashSet<ObjectId> = oids.iter().copied().collect();
+        oids = super::gitwalk::sort_topologically(
+            &repository,
+            oids,
+            super::gitwalk::TopoOrder::CommitDate,
+            &parsed,
+        )?;
+    }
     let mut same = HashSet::new();
     if side_filter {
         (oids, same) = filter_sides(&repository, args, &cherry, &specs, oids)?;
