@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 481 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 482 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-12, gate: 356 tests / 0 failed, 481 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-12, gate: 356 tests / 0 failed, 482 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -144,7 +144,7 @@ The command works for the common case; the listed options or edge cases are miss
   the new pack, `.keep` and cruft packs left alone; `s_repack_geometric`), but compared as sets of objects: the
   order inside the rolled-up pack is rivet's own, no multi-pack-index is written, a malformed factor prints only
   the one-line error (exit 129, no usage text), and a factor outside a C `int` once `k`/`m`/`g` is applied (or too big for
-  any integer) is git's `value <text> for option `geometric' not in range [-2147483648,2147483647]` (`s_repack_geometric_range`). `--max-pack-size` and `--max-cruft-size` are read and warned about as git does (`s_repack_max_pack_size`, `s_repack_max_cruft_size`) but a pack is never split at the limit. `gc --auto` counts the packs `gc.bigPackThreshold` keeps toward `gc.autoPackLimit` and has no fallback to the largest pack alone; `repack -k` over several packs lists unreachable objects in a
+  any integer) is git's `value <text> for option `geometric' not in range [-2147483648,2147483647]` (`s_repack_geometric_range`). `--max-pack-size` and `--max-cruft-size` are read and warned about as git does (`s_repack_max_pack_size`, `s_repack_max_cruft_size`) but a pack is never split at the limit. `repack -k` over several packs lists unreachable objects in a
   different order from git.
 * **`bisect`** — `start --first-parent`, path arguments to `start` (commits that leave the paths alone are never tested; a merge identical to one parent follows only that parent) and `--reset-when-found[=original|found]` on `start` and `run` are compared with git, by hand and with `run` (`s_bisect_flags`: `BISECT_FIRST_PARENT`, `BISECT_NAMES`, `BISECT_RESET_WHEN_FOUND`, `Bisecting: -1 revisions left`, `No testable commit found` ending the bisection, a silent reset to the start or to the commit found, and the `BISECT_TERMS` file git leaves after a hand-driven finish). Not matched: a path that selects only part of a merge's history is simplified like git's default only for the cases in the scenario (no `--full-history`, no parent rewriting across non-merge commits).
   `visualize`/`view` run `log` over the bad commit and `^` each good one, with git's quirk that

@@ -1351,6 +1351,17 @@ fn write_cruft_pack(
 /// Any object that is reachable but unreadable aborts the run before a file is changed; I/O
 /// errors while writing the new pack likewise leave the old objects in place.
 pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
+    gc_with_pack_limit(repo, options, None)
+}
+
+/// [`gc`] as `gc --auto` runs it: `auto_pack_limit` is `gc.autoPackLimit`. When the packs that
+/// `gc.bigPackThreshold` keeps number that many or more, git drops the threshold and keeps only
+/// the largest pack, so the others are repacked into one.
+pub fn gc_with_pack_limit(
+    repo: &Repository,
+    options: &GcOptions,
+    auto_pack_limit: Option<usize>,
+) -> Result<GcReport> {
     let mut report = GcReport::default();
     let git_dir = repo.common_dir();
     let format = repo.format();
@@ -1374,7 +1385,31 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
     }
 
     // Classify packs: `.keep` packs are left alone and their objects are not repacked.
-    let big_pack_threshold = big_pack_threshold(repo)?;
+    let mut big_pack_threshold = big_pack_threshold(repo)?;
+    let pack_size = |checksum: ObjectId| {
+        std::fs::metadata(pack_dir.join(format!("pack-{checksum}.pack"))).map_or(0, |m| m.len())
+    };
+    // Only the largest pack stays out of the repack once too many packs are "big".
+    let mut largest_only: Option<ObjectId> = None;
+    if let Some(limit) = auto_pack_limit
+        && big_pack_threshold > 0
+        && odb
+            .packs()
+            .iter()
+            .filter(|p| pack_size(p.checksum()) >= big_pack_threshold)
+            .count()
+            >= limit
+    {
+        big_pack_threshold = 0;
+        let mut best = 0;
+        for pack in odb.packs() {
+            let size = pack_size(pack.checksum());
+            if size > best {
+                best = size;
+                largest_only = Some(pack.checksum());
+            }
+        }
+    }
     let mut keep_objects: HashSet<ObjectId> = HashSet::new();
     let mut removable: Vec<(PathBuf, ObjectId, Vec<ObjectId>, i64)> = Vec::new();
     let mut cruft: HashMap<ObjectId, i64> = HashMap::new();
@@ -1384,8 +1419,9 @@ pub fn gc(repo: &Repository, options: &GcOptions) -> Result<GcReport> {
         let pack_path = pack_dir.join(format!("{stem}.pack"));
         let oids = pack.oids()?;
         // `gc.bigPackThreshold`: a pack at least that large is kept like a `.keep` pack.
-        let big = big_pack_threshold > 0
-            && std::fs::metadata(&pack_path).map_or(0, |m| m.len()) >= big_pack_threshold;
+        let big = largest_only == Some(pack.checksum())
+            || (big_pack_threshold > 0
+                && std::fs::metadata(&pack_path).map_or(0, |m| m.len()) >= big_pack_threshold);
         if big || pack_dir.join(format!("{stem}.keep")).exists() {
             keep_objects.extend(oids);
         } else {

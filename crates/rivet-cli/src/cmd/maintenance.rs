@@ -251,7 +251,14 @@ pub fn run_gc(global: &GlobalArgs, args: &GcArgs) -> Result<i32> {
     };
     options.reflog_expire = reflog_setting("gc.reflogExpire", "90.days")?;
     options.reflog_expire_unreachable = reflog_setting("gc.reflogExpireUnreachable", "30.days")?;
-    rivet_core::gc::gc(&repository, &options)?;
+    let auto_pack_limit = if args.auto {
+        get("gc.autoPackLimit")
+            .and_then(|v| String::from_utf8_lossy(&v).trim().parse().ok())
+            .or(Some(50))
+    } else {
+        None
+    };
+    rivet_core::gc::gc_with_pack_limit(&repository, &options, auto_pack_limit)?;
     Ok(0)
 }
 

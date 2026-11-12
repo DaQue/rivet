@@ -7582,6 +7582,31 @@ s_gc_pre_auto_gc() {
     dump_hooklog
 }
 
+s_gc_auto_big_pack_fallback() {
+    g config --global gc.cruftPacks false
+    v init -q repo; cd repo
+    v config gc.autoDetach false
+    v config gc.auto 0
+    for i in 1 2 3 4 5; do
+        tick; seq 1 $((i * 500)) >f$i; v add f$i; v commit -q -m c$i
+        v repack -q
+    done
+    DROP_OUT='^size' v count-objects -v
+    v config gc.auto 6700
+    v config gc.autoPackLimit 3
+    # every pack is "big": git drops the threshold and keeps only the largest pack
+    v config gc.bigPackThreshold 1
+    v gc --auto
+    DROP_OUT='^size' v count-objects -v
+    v rev-list --all --objects | wc -l
+    v fsck 2>&1
+    # no pack is big any more: the pack limit alone repacks everything into one
+    v config gc.bigPackThreshold 1m
+    v config gc.autoPackLimit 1
+    v gc --auto
+    DROP_OUT='^size' v count-objects -v
+}
+
 s_gc_big_pack_threshold() {
     g config --global gc.cruftPacks false
     v init -q repo; cd repo
