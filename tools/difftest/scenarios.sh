@@ -11278,6 +11278,20 @@ s_diff_color() {
     v diff --color=always HEAD~1 HEAD --name-only
 }
 
+# A space before a tab in the indent of an added line is painted with the whitespace colour.
+s_diff_color_space_before_tab() {
+    v init -q repo; cd repo
+    printf 'a\n' >f
+    g add f; tick; g commit -q -m one
+    printf 'a\n \tb\n  \t  c\n\t \td  \n \t\n \t \t x\n\t\t \t\ty\n\t  z\n x\n\tw\n\t v\n' >f
+    v diff --color=always
+    v add f
+    v diff --color=always --cached
+    tick; g commit -q -m two
+    v log --color=always -p
+    v show --color=always
+}
+
 # `status` of a submodule checked out at another commit: ` M path` / `modified:   path (new commits)`.
 s_status_moved_submodule() {
     g config --global protocol.file.allow always

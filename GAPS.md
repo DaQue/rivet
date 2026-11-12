@@ -2,10 +2,10 @@
 
 rivet is a Git-compatible implementation, not a wrapper: every command below is compared
 against the real `git` binary by the differential suite in `tools/difftest/scenarios.sh`
-(currently 477 scenarios). This file lists what does **not** work yet, so that nobody has to
+(currently 478 scenarios). This file lists what does **not** work yet, so that nobody has to
 discover it by running a command that fails.
 
-Last checked 2026-11-12, gate: 356 tests / 0 failed, 477 scenarios / 0 failures, `fmt`,
+Last checked 2026-11-12, gate: 356 tests / 0 failed, 478 scenarios / 0 failures, `fmt`,
 `clippy -D warnings` and `doc` clean.
 
 Three different things get called "not working". They are separated here on purpose, because
@@ -101,7 +101,7 @@ The command works for the common case; the listed options or edge cases are miss
 * **`log`** — takes any number of revisions and ranges (`s_log_multi`); `--color` paints `-p` and
   `diff --color` the patch with git's default palette (`s_diff_color`), `--name-*` are plain as in git.
   `--stat` is painted too (`s_log_stat_color`; `log`, `show`, `diff`). Refused by name (Rust tests in
-  `tests/diff_color.rs`): any `color.diff` / `color.diff.<slot>` setting, a space before a tab in an added line (git highlights it), colour
+  `tests/diff_color.rs`): any `color.diff` / `color.diff.<slot>` setting, colour
   for the conflicted-path output of `diff`; `log --first-parent` diffs a merge against its first parent and an
   empty `--format=` works (`s_log_first_parent_merge_diff`); the last of `--oneline` / `--pretty` / `--format`
   wins and `--oneline` abbreviates the `commit` line of a later layout (`s_log_layout_order`, `s_show_oneline`; read

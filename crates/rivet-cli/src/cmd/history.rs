@@ -1680,8 +1680,8 @@ fn check_default_diff_colors(repository: &Repository) -> Result<()> {
 
 /// Paints the plain patch `format_unified` wrote the way `git diff --color=always` does with the
 /// default palette: bold file headers, cyan hunk headers, red removals, green additions, and a
-/// red background on trailing whitespace of an added line. A space before a tab in the indent of
-/// an added line is highlighted by git as well; that is refused rather than guessed.
+/// red background on trailing whitespace of an added line and on a space before a tab in its
+/// indent.
 fn colorize_stat(plain: &[u8], diff: &rivet_core::TreeDiff) -> Vec<u8> {
     const RESET: &[u8] = b"\x1b[m";
     const OLD: &[u8] = b"\x1b[31m";
@@ -1789,19 +1789,33 @@ fn colorize_patch(plain: &[u8]) -> Result<Vec<u8>> {
                 .copied()
                 .take_while(|b| matches!(b, b' ' | b'\t'))
                 .collect();
-            if indent
+            // The indent up to its last tab is written run by run: tabs bare, and a run of spaces
+            // (a space before a tab, git's `space-before-tab`) with the whitespace colour. A line
+            // of only whitespace is all trailing error.
+            let tabbed = indent
                 .iter()
-                .position(|&b| b == b' ')
-                .is_some_and(|space| indent[space..].contains(&b'\t'))
-            {
-                anyhow::bail!("not implemented: highlighting a space before a tab in a patch");
-            }
+                .rposition(|&b| b == b'\t')
+                .filter(|_| kept > 0)
+                .map(|tab| tab + 1);
             out.extend_from_slice(NEW);
             out.push(b'+');
             out.extend_from_slice(RESET);
-            if kept > 0 {
+            let mut from = 0;
+            if let Some(end) = tabbed {
+                for run in body[..end].chunk_by(|a, b| a == b) {
+                    if run[0] == b' ' {
+                        out.extend_from_slice(BAD);
+                        out.extend_from_slice(run);
+                        out.extend_from_slice(RESET);
+                    } else {
+                        out.extend_from_slice(run);
+                    }
+                }
+                from = end;
+            }
+            if kept > from {
                 out.extend_from_slice(NEW);
-                out.extend_from_slice(&body[..kept]);
+                out.extend_from_slice(&body[from..kept]);
                 out.extend_from_slice(RESET);
             }
             if kept < body.len() {

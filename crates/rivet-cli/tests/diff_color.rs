@@ -43,22 +43,20 @@ fn refused(dir: &Path, args: &[&str], needle: &str) {
 }
 
 #[test]
-fn a_space_before_a_tab_in_an_added_line_is_refused() {
+fn a_space_before_a_tab_in_an_added_line_is_painted() {
     let dir = repo("diff-color-sbt");
     std::fs::write(dir.join("f"), "a\n \tb\n").unwrap();
-    refused(
-        &dir,
-        &["diff", "--color=always"],
-        "highlighting a space before a tab",
-    );
-    // A tab before a space is not an error in git's default rule, so it is painted.
-    std::fs::write(dir.join("f"), "a\n\t b\n").unwrap();
     let out = run(
         env!("CARGO_BIN_EXE_rivet"),
         &dir,
         &["diff", "--color=always"],
     );
     assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("\x1b[32m+\x1b[m\x1b[41m \x1b[m\t\x1b[32mb\x1b[m"),
+        "{text:?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
