@@ -46,7 +46,7 @@ fn unimplemented_combined_formats_are_refused_by_name_and_print_nothing() {
     assert!(run(&dir, &["merge", "-q", "side"]).status.success());
 
     for args in [
-        ["diff-tree", "-c", "-p", "HEAD"],
+        ["diff-tree", "-c", "--patch-with-raw", "HEAD"],
         ["diff-tree", "-c", "--stat", "HEAD"],
         ["diff-tree", "--cc", "--stat", "HEAD"],
     ] {

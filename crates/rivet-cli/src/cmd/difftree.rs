@@ -1160,14 +1160,11 @@ fn combined_body(
     zero_id: &dyn Fn(&Option<ObjectId>) -> String,
 ) -> Result<(Vec<u8>, bool)> {
     let dense = opts.combined == 2;
-    if dense
-        && (opts.raw
-            || opts.stat
-            || opts.numstat
-            || opts.name_only
-            || opts.name_status
-            || opts.full_index)
-        || !dense && (opts.patch || opts.stat || opts.numstat)
+    if dense && (opts.raw || opts.stat || opts.numstat || opts.name_only || opts.name_status)
+        || !dense
+            && (opts.stat
+                || opts.numstat
+                || (opts.patch && (opts.raw || opts.name_only || opts.name_status)))
     {
         anyhow::bail!("diff-tree: this output format with a combined diff is not implemented");
     }
@@ -1175,7 +1172,7 @@ fn combined_body(
     for tree in trees {
         let mut walker = Walker {
             repository,
-            recursive: opts.recursive || dense,
+            recursive: opts.recursive || opts.patch,
             show_trees: opts.show_trees,
             specs,
             out: Vec::new(),
@@ -1206,7 +1203,7 @@ fn combined_body(
             rivet_core::ops::quote_path(first.path.as_bstr(), false).to_vec()
         };
         let statuses: Vec<u8> = recs.iter().map(|rec| rec.status).collect();
-        if dense {
+        if opts.patch {
             let all_modes_equal = recs
                 .iter()
                 .all(|rec| rec.omode.is_some() && rec.omode == first.nmode);
@@ -1234,12 +1231,16 @@ fn combined_body(
                 anyhow::bail!("diff-tree: combined diff of binary files is not implemented");
             }
             let parent_refs: Vec<&[u8]> = parents.iter().map(Vec::as_slice).collect();
-            let hunks = rivet_core::diff::combined::combined_hunks(&parent_refs, &result, 3);
+            let hunks = rivet_core::diff::combined::combined_hunks(&parent_refs, &result, 3, dense);
             if hunks.is_empty() {
                 continue;
             }
-            let minimum = super::history::abbrev_minimum(repository, opts.abbrev.flatten());
+            // The `index` line of a combined patch ignores `--abbrev`, as in git.
+            let minimum = super::history::abbrev_minimum(repository, None);
             let short = |oid: &ObjectId| {
+                if opts.full_index {
+                    return oid.to_string();
+                }
                 repository
                     .odb()
                     .abbreviate(oid, minimum)
@@ -1250,7 +1251,11 @@ fn combined_body(
                 .map(|rec| short(&rec.ooid.expect("checked with the mode")))
                 .collect();
             let quoted = rivet_core::ops::quote_path(first.path.as_bstr(), false);
-            body.extend_from_slice(b"diff --cc ");
+            body.extend_from_slice(if dense {
+                b"diff --cc "
+            } else {
+                b"diff --combined "
+            });
             body.extend_from_slice(&quoted);
             body.extend_from_slice(
                 format!(
@@ -1291,8 +1296,8 @@ fn combined_body(
         }
         body.push(end);
     }
-    let found = !body.is_empty();
-    Ok((body, found))
+    // Git prints the commit id of a merge whether or not a path (or a hunk) is left to show.
+    Ok((body, true))
 }
 
 #[cfg(test)]

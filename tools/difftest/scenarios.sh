@@ -12979,6 +12979,37 @@ s_diff_tree_combined() {
 " diff-tree --stdin -c
 }
 
+# diff-tree -c -p over a merge: the combined patch with every hunk some parent differs in (`diff
+# --combined`), --full-index, an `index` line that ignores --abbrev, and a clean merge whose --cc
+# patch is empty but whose commit id still shows.
+s_diff_tree_combined_patch() {
+    v init -q -b main repo; cd repo
+    seq 1 12 >f; echo x >g; mkdir sub; seq 1 5 >sub/h; v add .; tick; v commit -q -m base
+    v checkout -q -b side
+    sed -i 's/^2$/two/;s/^11$/eleven-s/' f; sed -i 's/^3$/s3/' sub/h; tick; v commit -q -a -m side
+    v checkout -q main
+    sed -i 's/^6$/six/;s/^11$/eleven-m/' f; echo y >>g; tick; v commit -q -a -m main
+    tick; v merge -q side >/dev/null 2>&1 || true
+    sed -i '/^<<<<<<<\|^=======\|^>>>>>>>/d;/eleven-s/d' f; v add -A; tick; v commit -q -m conflicted
+    v diff-tree -c -p HEAD
+    v diff-tree -c -p -r HEAD
+    v diff-tree -c -u --no-commit-id HEAD
+    v diff-tree -c -p --full-index HEAD
+    v diff-tree --cc --full-index HEAD
+    v diff-tree -c -p --abbrev=4 HEAD
+    v diff-tree --cc --abbrev=12 HEAD
+    v diff-tree -c -p -s HEAD
+    v diff-tree -c -p -z HEAD
+    v diff-tree -c -p HEAD -- sub
+    v diff-tree --cc HEAD
+    v checkout -q -b clean main~1
+    sed -i 's/^9$/nine/' f; tick; v commit -q -a -m other
+    tick; v merge -q side -m clean >/dev/null 2>&1 || true
+    v diff-tree --cc HEAD
+    v diff-tree -c -p HEAD
+    v diff-tree -c HEAD
+}
+
 # diff-tree -M / -C / --find-copies-harder, scores and thresholds, against git.
 s_diff_tree_renames() {
     v init -q repo; cd repo

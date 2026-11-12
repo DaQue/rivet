@@ -1954,6 +1954,7 @@ fn unmerged_chunk(
             &[&a, &b],
             data,
             options.context,
+            true,
         ));
         return Ok((out, true));
     }

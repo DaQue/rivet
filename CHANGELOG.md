@@ -1,5 +1,6 @@
 # Changelog
 
+* 2026-11-12 — `diff-tree -c -p` / `-u` over a merge prints `diff --combined` with every hunk some parent differs in; `--full-index` works with `-c`/`--cc`, the `index` line ignores `--abbrev`, and a merge whose combined patch is empty still prints its commit id as git does (`s_diff_tree_combined_patch`).
 * 2026-11-12 — `gc --auto`: when the packs `gc.bigPackThreshold` keeps number `gc.autoPackLimit` or more, only the largest pack is kept out of the repack, as git does (`s_gc_auto_big_pack_fallback`).
 * 2026-11-12 — `stash push --staged` / `-S` with a staged binary file (added or modified): the stash is made and the file goes back to `HEAD`'s blob, an unstaged change to it is git's `the patch applies to ...` error and `Cannot remove worktree changes` (`s_stash_staged_binary`).
 * 2026-11-12 — `diff-tree -c` / `--cc` over a merge: the paths that differ from every parent as combined raw lines (`::<modes> <ids> MM\t<path>`, `--name-only`, `--name-status`, `-z`, `--abbrev`, `-s`) or as the dense combined patch, a non-merge compared as usual (`s_diff_tree_combined`).

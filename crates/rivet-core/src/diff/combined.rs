@@ -95,7 +95,7 @@ fn give_context(s: &mut [Sline<'_>], cnt: usize, np: usize, context: usize) {
     }
 }
 
-fn make_hunks(s: &mut [Sline<'_>], cnt: usize, np: usize, context: usize) {
+fn make_hunks(s: &mut [Sline<'_>], cnt: usize, np: usize, context: usize, dense: bool) {
     let all_mask = (1u32 << np) - 1;
     let mark = 1u32 << np;
     for line in s.iter_mut().take(cnt + 1) {
@@ -167,7 +167,7 @@ fn make_hunks(s: &mut [Sline<'_>], cnt: usize, np: usize, context: usize) {
             }
             k += 1;
         }
-        if !has_interesting && same_diff != all_mask {
+        if dense && !has_interesting && same_diff != all_mask {
             for line in &mut s[hunk_begin..hunk_end.min(cnt + 1)] {
                 line.flag &= !mark;
             }
@@ -188,9 +188,11 @@ fn push_line(out: &mut Vec<u8>, prefix: &[u8], text: &[u8]) {
 /// The hunks of the combined diff of `result` against `parents`, or an empty vector when the
 /// dense filter leaves nothing to show.
 ///
+/// `dense` is `--cc`; without it (`-c`) every hunk in which some parent differs is kept.
+///
 /// `parents` holds the parents' contents (stage 2, then stage 3); the returned bytes start at the
 /// first `@@@` line.
-pub fn combined_hunks(parents: &[&[u8]], result: &[u8], context: usize) -> Vec<u8> {
+pub fn combined_hunks(parents: &[&[u8]], result: &[u8], context: usize, dense: bool) -> Vec<u8> {
     let np = parents.len();
     let res_lines: Vec<DiffLine<'_>> = split_lines(result);
     let cnt = res_lines.len();
@@ -265,7 +267,7 @@ pub fn combined_hunks(parents: &[&[u8]], result: &[u8], context: usize) -> Vec<u
     let mark = 1u32 << np;
     let no_pre_delete = 2u32 << np;
     let _ = all_mask;
-    make_hunks(&mut s, cnt, np, context);
+    make_hunks(&mut s, cnt, np, context, dense);
 
     let mut out = Vec::new();
     let mut lno = 0usize;
