@@ -11346,6 +11346,35 @@ s_diff_color_space_before_tab() {
     v show --color=always
 }
 
+# `color.diff.<slot>` repaints diff, log -p, show and --stat; a bad value is git's fatal.
+s_diff_color_palette() {
+    v init -q repo; cd repo
+    printf 'a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n' >f
+    g add f; tick; g commit -q -m one
+    printf 'a\nB \nc\nd\ne\nf\ng\nh\ni\nj\nk\nL\n \tx\n' >f
+    g config color.diff.meta 'bold blue'
+    g config color.diff.frag magenta
+    g config color.diff.func yellow
+    g config color.diff.old 'red bold'
+    g config color.diff.new '#00ff00'
+    g config color.diff.context cyan
+    g config color.diff.whitespace 'blue reverse'
+    v diff --color=always
+    v diff --color=always --stat
+    v diff --color=always --stat -p
+    g add f; tick; g commit -q -m two
+    v log --color=always -p
+    v show --color=always
+    g config color.diff.new normal
+    g config color.diff.old ''
+    g config color.diff.frag reset
+    g config color.diff.plain red
+    v show --color=always
+    g config color.diff.new bogus
+    v diff --color=always HEAD~1
+    v log --color=always -p
+}
+
 # `status` of a submodule checked out at another commit: ` M path` / `modified:   path (new commits)`.
 s_status_moved_submodule() {
     g config --global protocol.file.allow always

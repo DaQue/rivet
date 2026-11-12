@@ -61,7 +61,7 @@ fn a_space_before_a_tab_in_an_added_line_is_painted() {
 }
 
 #[test]
-fn a_configured_diff_palette_is_refused() {
+fn a_configured_diff_palette_is_applied_and_a_bad_one_is_git_fatal() {
     let dir = repo("diff-color-palette");
     std::fs::write(dir.join("f"), "b\n").unwrap();
     assert!(
@@ -69,17 +69,25 @@ fn a_configured_diff_palette_is_refused() {
             .status
             .success()
     );
+    let out = run(
+        env!("CARGO_BIN_EXE_rivet"),
+        &dir,
+        &["diff", "--color=always"],
+    );
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("\x1b[34m+\x1b[m\x1b[34mb\x1b[m"), "{text:?}");
+    assert!(
+        run("git", &dir, &["config", "color.diff.new", "bogus"])
+            .status
+            .success()
+    );
     refused(
         &dir,
         &["diff", "--color=always"],
-        "color.diff.new when painting a patch",
+        "error: invalid color value: bogus",
     );
-    refused(
-        &dir,
-        &["log", "--color=always", "-p"],
-        "color.diff.new when painting a patch",
-    );
-    // Without colour the setting is irrelevant.
+    // Without colour the setting is not consulted here.
     let out = run(env!("CARGO_BIN_EXE_rivet"), &dir, &["diff"]);
     assert!(out.status.success());
     let _ = std::fs::remove_dir_all(&dir);

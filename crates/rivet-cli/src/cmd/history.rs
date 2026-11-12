@@ -1399,7 +1399,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
                 let mut stat = Vec::new();
                 rivet_core::format_stat_sized(&diff, Some(repository.odb()), &mut stat)?;
                 if color {
-                    stat = colorize_stat(&stat, &diff);
+                    stat = colorize_stat(&stat, &diff, &diff_palette(&repository)?);
                 }
                 out.extend_from_slice(&stat);
                 if args.patch {
@@ -1413,7 +1413,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
                     patch = super::difftree::name_copies(&patch, &copied);
                 }
                 if color {
-                    patch = colorize_patch(&patch)?;
+                    patch = colorize_patch(&patch, &diff_palette(&repository)?)?;
                 }
                 out.extend_from_slice(&patch);
             }
@@ -1423,7 +1423,7 @@ pub fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> Result<i32> {
                 out = super::difftree::name_copies(&out, &copied);
             }
             if color {
-                out = colorize_patch(&out)?;
+                out = colorize_patch(&out, &diff_palette(&repository)?)?;
             }
         }
     } else {
@@ -1654,11 +1654,30 @@ enum DiffMode {
     NameStatus,
 }
 
-/// `color.diff` and `color.diff.<slot>` change what [`colorize_patch`] would write; it only knows
-/// git's defaults, so a repository that sets any of them is refused by name.
-fn check_default_diff_colors(repository: &Repository) -> Result<()> {
+/// The colours of `diff --color`: git's defaults with `color.diff.<slot>` applied on top.
+struct DiffPalette {
+    context: String,
+    meta: String,
+    frag: String,
+    func: String,
+    old: String,
+    new: String,
+    whitespace: String,
+}
+
+/// Reads `color.diff.<slot>` over git's default palette. A value git cannot parse is
+/// `error: invalid color value: <v>` plus `fatal: bad config variable '<key>' in file '<f>' at line N`.
+fn diff_palette(repository: &Repository) -> Result<DiffPalette> {
+    let mut palette = DiffPalette {
+        context: String::new(),
+        meta: "\x1b[1m".into(),
+        frag: "\x1b[36m".into(),
+        func: String::new(),
+        old: "\x1b[31m".into(),
+        new: "\x1b[32m".into(),
+        whitespace: "\x1b[41m".into(),
+    };
     for key in [
-        "color.diff",
         "color.diff.context",
         "color.diff.plain",
         "color.diff.meta",
@@ -1668,24 +1687,90 @@ fn check_default_diff_colors(repository: &Repository) -> Result<()> {
         "color.diff.new",
         "color.diff.whitespace",
     ] {
-        if repository
-            .config_value(BStr::new(key.as_bytes()))?
-            .is_some()
-        {
-            anyhow::bail!("not implemented: {key} when painting a patch");
+        let Some(value) = repository.config_value(BStr::new(key.as_bytes()))? else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&value).into_owned();
+        match pretty::parse_color_spec(&text) {
+            Some(sequence) => match key {
+                "color.diff.context" | "color.diff.plain" => palette.context = sequence,
+                "color.diff.meta" => palette.meta = sequence,
+                "color.diff.frag" => palette.frag = sequence,
+                "color.diff.func" => palette.func = sequence,
+                "color.diff.old" => palette.old = sequence,
+                "color.diff.new" => palette.new = sequence,
+                _ => palette.whitespace = sequence,
+            },
+            None => {
+                eprintln!("error: invalid color value: {text}");
+                anyhow::bail!("{}", bad_color_variable(repository, key));
+            }
         }
     }
-    Ok(())
+    Ok(palette)
+}
+
+/// git's `bad config variable '<key>' in file '<path>' at line N` for the last line of the
+/// repository's own config that sets `key`; a value from elsewhere reads `command-line config`.
+fn bad_color_variable(repository: &Repository, key: &str) -> String {
+    let config = repository.common_dir().join("config");
+    let (section, name) = key.rsplit_once('.').unwrap_or(("", key));
+    let section = section.to_ascii_lowercase();
+    let line = std::fs::read(&config).ok().and_then(|data| {
+        let mut found = None;
+        let mut in_section = false;
+        for (n, raw) in data.split(|b| *b == b'\n').enumerate() {
+            let text = String::from_utf8_lossy(raw);
+            let text = text.trim();
+            if let Some(header) = text.strip_prefix('[') {
+                let header = header.split(']').next().unwrap_or("");
+                let mut parts = header.splitn(2, char::is_whitespace);
+                let head = parts.next().unwrap_or("").to_ascii_lowercase();
+                let sub = parts
+                    .next()
+                    .map(|s| s.trim().trim_matches('"').to_ascii_lowercase());
+                let joined = match sub {
+                    Some(sub) => format!("{head}.{sub}"),
+                    None => head,
+                };
+                in_section = joined == section;
+            } else if in_section
+                && text
+                    .split('=')
+                    .next()
+                    .is_some_and(|k| k.trim().eq_ignore_ascii_case(name))
+            {
+                found = Some(n + 1);
+            }
+        }
+        found
+    });
+    let shown = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| config.strip_prefix(cwd).ok().map(|p| p.to_path_buf()))
+        .unwrap_or(config);
+    match line {
+        Some(line) => format!(
+            "bad config variable '{key}' in file '{}' at line {line}",
+            shown.display()
+        ),
+        None => format!("unable to parse '{key}' from command-line config"),
+    }
+}
+
+/// Fails as git does when a `color.diff.<slot>` value cannot be parsed.
+fn check_default_diff_colors(repository: &Repository) -> Result<()> {
+    diff_palette(repository).map(|_| ())
 }
 
 /// Paints the plain patch `format_unified` wrote the way `git diff --color=always` does with the
 /// default palette: bold file headers, cyan hunk headers, red removals, green additions, and a
 /// red background on trailing whitespace of an added line and on a space before a tab in its
 /// indent.
-fn colorize_stat(plain: &[u8], diff: &rivet_core::TreeDiff) -> Vec<u8> {
+fn colorize_stat(plain: &[u8], diff: &rivet_core::TreeDiff, palette: &DiffPalette) -> Vec<u8> {
     const RESET: &[u8] = b"\x1b[m";
-    const OLD: &[u8] = b"\x1b[31m";
-    const NEW: &[u8] = b"\x1b[32m";
+    let old = palette.old.as_bytes();
+    let new = palette.new.as_bytes();
     let paint = |out: &mut Vec<u8>, colour: &[u8], text: &[u8]| {
         if !text.is_empty() {
             out.extend_from_slice(colour);
@@ -1711,9 +1796,9 @@ fn colorize_stat(plain: &[u8], diff: &rivet_core::TreeDiff) -> Vec<u8> {
                     .rposition(|&b| !b.is_ascii_digit())
                     .map_or(0, |at| at + 1);
                 out.extend_from_slice(&body[..old_at]);
-                paint(&mut out, OLD, &body[old_at..arrow]);
+                paint(&mut out, old, &body[old_at..arrow]);
                 out.extend_from_slice(b" -> ");
-                paint(&mut out, NEW, &body[arrow + 4..]);
+                paint(&mut out, new, &body[arrow + 4..]);
                 out.extend_from_slice(b" bytes");
             } else {
                 out.extend_from_slice(text);
@@ -1727,8 +1812,8 @@ fn colorize_stat(plain: &[u8], diff: &rivet_core::TreeDiff) -> Vec<u8> {
             let split = text.len() - marks;
             let plus = text[split..].iter().take_while(|&&b| b == b'+').count();
             out.extend_from_slice(&text[..split]);
-            paint(&mut out, NEW, &text[split..split + plus]);
-            paint(&mut out, OLD, &text[split + plus..]);
+            paint(&mut out, new, &text[split..split + plus]);
+            paint(&mut out, old, &text[split + plus..]);
         }
         if line.ends_with(b"\n") {
             out.push(b'\n');
@@ -1737,13 +1822,15 @@ fn colorize_stat(plain: &[u8], diff: &rivet_core::TreeDiff) -> Vec<u8> {
     out
 }
 
-fn colorize_patch(plain: &[u8]) -> Result<Vec<u8>> {
+fn colorize_patch(plain: &[u8], palette: &DiffPalette) -> Result<Vec<u8>> {
     const RESET: &[u8] = b"\x1b[m";
-    const BOLD: &[u8] = b"\x1b[1m";
-    const FRAG: &[u8] = b"\x1b[36m";
-    const OLD: &[u8] = b"\x1b[31m";
-    const NEW: &[u8] = b"\x1b[32m";
-    const BAD: &[u8] = b"\x1b[41m";
+    let meta = palette.meta.as_bytes();
+    let frag = palette.frag.as_bytes();
+    let old = palette.old.as_bytes();
+    let new = palette.new.as_bytes();
+    let ws = palette.whitespace.as_bytes();
+    let ctx = palette.context.as_bytes();
+    let func = palette.func.as_bytes();
     let mut out = Vec::with_capacity(plain.len() * 2);
     let mut in_hunk = false;
     for line in plain.split_inclusive(|&b| b == b'\n') {
@@ -1760,7 +1847,7 @@ fn colorize_patch(plain: &[u8]) -> Result<Vec<u8>> {
             if text.starts_with(b"Binary files ") {
                 out.extend_from_slice(text);
             } else {
-                out.extend_from_slice(BOLD);
+                out.extend_from_slice(meta);
                 out.extend_from_slice(text);
                 out.extend_from_slice(RESET);
             }
@@ -1770,12 +1857,14 @@ fn colorize_patch(plain: &[u8]) -> Result<Vec<u8>> {
                 .windows(2)
                 .position(|w| w == b"@@")
                 .map_or(text.len(), |at| at + 3 + 2);
-            out.extend_from_slice(FRAG);
+            out.extend_from_slice(frag);
             out.extend_from_slice(&text[..end]);
             out.extend_from_slice(RESET);
             if end < text.len() {
+                out.extend_from_slice(ctx);
                 out.push(b' ');
                 out.extend_from_slice(RESET);
+                out.extend_from_slice(func);
                 out.extend_from_slice(&text[end + 1..]);
                 out.extend_from_slice(RESET);
             }
@@ -1797,14 +1886,14 @@ fn colorize_patch(plain: &[u8]) -> Result<Vec<u8>> {
                 .rposition(|&b| b == b'\t')
                 .filter(|_| kept > 0)
                 .map(|tab| tab + 1);
-            out.extend_from_slice(NEW);
+            out.extend_from_slice(new);
             out.push(b'+');
             out.extend_from_slice(RESET);
             let mut from = 0;
             if let Some(end) = tabbed {
                 for run in body[..end].chunk_by(|a, b| a == b) {
                     if run[0] == b' ' {
-                        out.extend_from_slice(BAD);
+                        out.extend_from_slice(ws);
                         out.extend_from_slice(run);
                         out.extend_from_slice(RESET);
                     } else {
@@ -1814,20 +1903,21 @@ fn colorize_patch(plain: &[u8]) -> Result<Vec<u8>> {
                 from = end;
             }
             if kept > from {
-                out.extend_from_slice(NEW);
+                out.extend_from_slice(new);
                 out.extend_from_slice(&body[from..kept]);
                 out.extend_from_slice(RESET);
             }
             if kept < body.len() {
-                out.extend_from_slice(BAD);
+                out.extend_from_slice(ws);
                 out.extend_from_slice(&body[kept..]);
                 out.extend_from_slice(RESET);
             }
         } else if text.starts_with(b"-") {
-            out.extend_from_slice(OLD);
+            out.extend_from_slice(old);
             out.extend_from_slice(text);
             out.extend_from_slice(RESET);
         } else {
+            out.extend_from_slice(ctx);
             out.extend_from_slice(text);
             out.extend_from_slice(RESET);
         }
@@ -1859,7 +1949,7 @@ fn write_diff(
         DiffMode::ColorStat => {
             let mut plain = Vec::new();
             rivet_core::format_stat_sized(diff, Some(repository.odb()), &mut plain)?;
-            out.extend_from_slice(&colorize_stat(&plain, diff));
+            out.extend_from_slice(&colorize_stat(&plain, diff, &diff_palette(repository)?));
         }
         DiffMode::Patch => {
             let mut plain = Vec::new();
@@ -1870,7 +1960,7 @@ fn write_diff(
             let mut plain = Vec::new();
             rivet_core::format_unified(diff, repository.format(), &mut plain)?;
             let plain = super::difftree::name_copies(&plain, copied);
-            out.extend_from_slice(&colorize_patch(&plain)?);
+            out.extend_from_slice(&colorize_patch(&plain, &diff_palette(repository)?)?);
         }
     }
     Ok(())
