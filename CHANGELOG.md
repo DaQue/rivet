@@ -84,3 +84,4 @@
 * 2026-11-12 — `log --graph --date-order` orders the commits by git's date queue (a topological order by committer date) instead of the `--topo-order` stack (`s_log_graph_date_order`).
 * 2026-11-12 — `log --graph --first-parent` and `--topo-order --first-parent` order the commits by git's topological queue (`s_log_first_parent_topo`).
 * 2026-11-12 — `log --graph` over several root commits matches `/usr/bin/git` (same graph, exit 0); proven against git, the GAPS clause claiming exit 128 was stale and is removed.
+* 2026-11-12 — `gc` and `update-index --no-split-index` leave `sharedindex.*` files alone, matching `/usr/bin/git` (probed: 2 shared indexes before and after each); the GAPS "Not done" clause described matching behaviour and is removed.
